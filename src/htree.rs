@@ -114,13 +114,30 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
 }
 
 #[test]
-fn test() {
+fn test_simple() {
+    // empty
     let mut tree = HTree::new();
-    tree.validate();
-    tree.insert(50, "Hello");
-    tree.insert(25, "World!");
-    tree.insert(75, "Everyone!");
+    assert_eq!(tree.hash(), 0);
     tree.validate();
 
-    println!("{}", tree.hash());
+    // 1 value
+    tree.insert(50, "Hello");
+    tree.validate();
+    let hash1 = tree.hash();
+    assert_ne!(hash1, 0);
+
+    // 2 values
+    tree.insert(25, "World!");
+    tree.validate();
+    let hash2 = tree.hash();
+    assert_ne!(hash2, 0);
+    assert_ne!(hash2, hash1);
+
+    // 3 values
+    tree.insert(75, "Everyone!");
+    tree.validate();
+    let hash3 = tree.hash();
+    assert_ne!(hash3, 0);
+    assert_ne!(hash3, hash1);
+    assert_ne!(hash3, hash2);
 }
