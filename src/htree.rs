@@ -141,3 +141,24 @@ fn test_simple() {
     assert_ne!(hash3, hash1);
     assert_ne!(hash3, hash2);
 }
+
+#[test]
+fn test_compare() {
+    let mut tree1 = HTree::new();
+    for (key, value) in [(25, "World!"), (50, "Hello"), (75, "Everyone!")] {
+        tree1.insert(key, value);
+    }
+
+    let mut tree2 = HTree::new();
+    for (key, value) in [(75, "Everyone!"), (50, "Hello"), (25, "World!")] {
+        tree2.insert(key, value);
+    }
+
+    let mut tree3 = HTree::new();
+    for (key, value) in [(75, "Everyone!"), (25, "World!"), (50, "Hello")] {
+        tree3.insert(key, value);
+    }
+
+    assert_eq!(tree1.hash(), tree2.hash());
+    assert_eq!(tree1.hash(), tree3.hash());
+}
