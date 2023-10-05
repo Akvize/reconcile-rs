@@ -220,3 +220,33 @@ fn test_compare() {
     assert_eq!(tree1.hash(), tree2.hash());
     assert_eq!(tree1.hash(), tree3.hash());
 }
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rng, SeedableRng, seq::SliceRandom};
+
+    #[test]
+    fn big_test() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut tree = super::HTree::new();
+        let mut key_values = Vec::new();
+
+        // add some
+        for _ in 0..1000 {
+            let key: u64 = rng.gen();
+            let value: u64 = rng.gen();
+            tree.insert(key, value);
+            tree.validate();
+            key_values.push((key, value));
+        }
+
+        // remove some
+        key_values.shuffle(&mut rng);
+        for _ in 0..100 {
+            let (key, value) = key_values.pop().unwrap();
+            let value2 = tree.remove(&key);
+            tree.validate();
+            assert_eq!(value2, Some(value));
+        }
+    }
+}
