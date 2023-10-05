@@ -1,6 +1,6 @@
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::cmp::Ordering;
 
 struct Node<K, V> {
     hash: u64,
@@ -43,9 +43,7 @@ pub struct HTree<K, V> {
 
 impl<K, V> Default for HTree<K, V> {
     fn default() -> Self {
-        HTree {
-            root: None,
-        }
+        HTree { root: None }
     }
 }
 
@@ -62,13 +60,17 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        fn aux<K: Hash + Ord, V: Hash>(anchor: &mut Option<Box<Node<K, V>>>, key: K, value: V) -> (u64, Option<V>) {
+        fn aux<K: Hash + Ord, V: Hash>(
+            anchor: &mut Option<Box<Node<K, V>>>,
+            key: K,
+            value: V,
+        ) -> (u64, Option<V>) {
             if let Some(node) = anchor {
                 match key.cmp(&node.key) {
                     Ordering::Equal => {
                         let (diff_hash, old_node) = node.replace(value);
                         (diff_hash, Some(old_node))
-                    },
+                    }
                     Ordering::Less => {
                         let (diff_hash, old_node) = aux(&mut node.left, key, value);
                         node.hash ^= diff_hash;
@@ -99,7 +101,10 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             node.left = ret.right.take();
             ret
         }
-        fn aux<K: Hash + Ord, V>(anchor: &mut Option<Box<Node<K, V>>>, key: &K) -> (u64, Option<V>) {
+        fn aux<K: Hash + Ord, V>(
+            anchor: &mut Option<Box<Node<K, V>>>,
+            key: &K,
+        ) -> (u64, Option<V>) {
             if let Some(node) = anchor {
                 match key.cmp(&node.key) {
                     Ordering::Equal => {
@@ -119,10 +124,10 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                                     right.left = Some(left);
                                     *anchor = Some(right);
                                 }
-                            },
+                            }
                         };
                         ret
-                    },
+                    }
                     Ordering::Less => {
                         let (diff_hash, old_node) = aux(&mut node.left, key);
                         node.hash ^= diff_hash;
@@ -142,7 +147,11 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn validate(&self) {
-        fn aux<K: Hash + Ord, V: Hash>(anchor: &Option<Box<Node<K, V>>>, min: Option<&K>, max: Option<&K>) -> u64 {
+        fn aux<K: Hash + Ord, V: Hash>(
+            anchor: &Option<Box<Node<K, V>>>,
+            min: Option<&K>,
+            max: Option<&K>,
+        ) -> u64 {
             if let Some(node) = anchor {
                 if let Some(min) = min {
                     if &node.key < min {
@@ -203,7 +212,6 @@ fn test_simple() {
     tree.validate();
     let hash4 = tree.hash();
     assert_eq!(hash4, hash2);
-
 }
 
 #[test]
@@ -229,7 +237,7 @@ fn test_compare() {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng, seq::SliceRandom};
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
 
     #[test]
     fn big_test() {
