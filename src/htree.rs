@@ -84,6 +84,57 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         aux(&mut self.root, key, value).1
     }
 
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        fn leftmost<K, V>(mut node: &mut Box<Node<K, V>>) -> Box<Node<K, V>> {
+            while node.left.as_mut().unwrap().left.is_some() {
+                node = node.left.as_mut().unwrap();
+            }
+            let mut ret = node.left.take().unwrap();
+            node.left = ret.right.take();
+            ret
+        }
+        fn aux<K: Hash + Ord, V>(anchor: &mut Option<Box<Node<K, V>>>, key: &K) -> (u64, Option<V>) {
+            if let Some(node) = anchor {
+                match key.cmp(&node.key) {
+                    Ordering::Equal => {
+                        let mut node = anchor.take().unwrap();
+                        let ret = (node.hash, Some(node.value));
+                        match (node.left.take(), node.right.take()) {
+                            (None, None) => (),
+                            (None, Some(right)) => *anchor = Some(right),
+                            (Some(left), None) => *anchor = Some(left),
+                            (Some(left), Some(mut right)) => {
+                                if right.left.is_some() {
+                                    let mut next_node = leftmost(&mut right);
+                                    next_node.left = Some(left);
+                                    next_node.right = Some(right);
+                                    *anchor = Some(next_node);
+                                } else {
+                                    right.left = Some(left);
+                                    *anchor = Some(right);
+                                }
+                            },
+                        };
+                        ret
+                    },
+                    Ordering::Less => {
+                        let (diff_hash, old_node) = aux(&mut node.left, key);
+                        node.hash ^= diff_hash;
+                        (diff_hash, old_node)
+                    }
+                    Ordering::Greater => {
+                        let (diff_hash, old_node) = aux(&mut node.right, key);
+                        node.hash ^= diff_hash;
+                        (diff_hash, old_node)
+                    }
+                }
+            } else {
+                (0, None)
+            }
+        }
+        aux(&mut self.root, key).1
+    }
+
     pub fn validate(&self) {
         fn aux<K: Hash + Ord, V: Hash>(anchor: &Option<Box<Node<K, V>>>, min: Option<&K>, max: Option<&K>) -> u64 {
             if let Some(node) = anchor {
@@ -140,6 +191,13 @@ fn test_simple() {
     assert_ne!(hash3, 0);
     assert_ne!(hash3, hash1);
     assert_ne!(hash3, hash2);
+
+    // back to 2 values
+    tree.remove(&75);
+    tree.validate();
+    let hash4 = tree.hash();
+    assert_eq!(hash4, hash2);
+
 }
 
 #[test]
