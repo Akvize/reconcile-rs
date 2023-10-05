@@ -41,11 +41,17 @@ pub struct HTree<K, V> {
     root: Option<Box<Node<K, V>>>,
 }
 
-impl<K: Hash + Ord, V: Hash> HTree<K, V> {
-    pub fn new() -> Self {
+impl<K, V> Default for HTree<K, V> {
+    fn default() -> Self {
         HTree {
             root: None,
         }
+    }
+}
+
+impl<K: Hash + Ord, V: Hash> HTree<K, V> {
+    pub fn new() -> Self {
+        Default::default()
     }
 
     pub fn hash(&self) -> u64 {
