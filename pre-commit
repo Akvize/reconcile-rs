@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# To handle partially committed files, we must copy the staged changes to a
+# separate location. See also https://stackoverflow.com/a/36793330
+TEMPDIR=$(mktemp -d)
+trap 'rm -rf "$TEMPDIR"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
+git checkout-index --prefix="$TEMPDIR/" -af
+
+# keep using the same target/ directory, not a new one in the temporary directory
+# this avoids re-parsing everything from scratching every time we run the script
+GIT_ROOT=$(git rev-parse --show-toplevel)
+export CARGO_TARGET_DIR="${GIT_ROOT}/target"
+
+echo "Running cargo fmt"
+(cd $TEMPDIR; cargo fmt --check)
+echo "Running cargo clippy"
+(cd $TEMPDIR; cargo clippy --all -- --deny warnings)
