@@ -59,14 +59,43 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
-        fn aux<K: Ord, V, R: RangeBounds<K>>(node: &Option<Box<Node<K, V>>>, range: &R) -> u64 {
+        fn aux<K: Ord, V, R: RangeBounds<K>>(
+            node: &Option<Box<Node<K, V>>>,
+            range: &R,
+            subtree_lower_bound: Option<&K>,
+            subtree_upper_bound: Option<&K>,
+        ) -> u64 {
             if let Some(node) = node {
+                let lower_bound_included = match range.start_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => {
+                        if let Some(subtree_upper_bound) = subtree_upper_bound {
+                            key < subtree_upper_bound
+                        } else {
+                            false
+                        }
+                    }
+                };
+                let upper_bound_included = match range.end_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => {
+                        if let Some(subtree_lower_bound) = subtree_lower_bound {
+                            key > subtree_lower_bound
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if lower_bound_included && upper_bound_included {
+                    return node.tree_hash;
+                }
+
                 let mut ret = 0;
                 if match range.start_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
                 } {
-                    ret ^= aux(&node.left, range);
+                    ret ^= aux(&node.left, range, subtree_lower_bound, Some(&node.key));
                 }
                 if range.contains(&node.key) {
                     ret ^= node.self_hash;
@@ -75,14 +104,14 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
                 } {
-                    ret ^= aux(&node.right, range);
+                    ret ^= aux(&node.right, range, Some(&node.key), subtree_upper_bound);
                 }
                 ret
             } else {
                 0
             }
         }
-        aux(&self.root, &range)
+        aux(&self.root, &range, None, None)
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
