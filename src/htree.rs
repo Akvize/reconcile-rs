@@ -70,8 +70,8 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 let lower_bound_included = match range.start_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => {
-                        if let Some(subtree_upper_bound) = subtree_upper_bound {
-                            key < subtree_upper_bound
+                        if let Some(subtree_lower_bound) = subtree_lower_bound {
+                            key < subtree_lower_bound
                         } else {
                             false
                         }
@@ -81,8 +81,8 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 let upper_bound_included = match range.end_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => {
-                        if let Some(subtree_lower_bound) = subtree_lower_bound {
-                            key > subtree_lower_bound
+                        if let Some(subtree_upper_bound) = subtree_upper_bound {
+                            key > subtree_upper_bound
                         } else {
                             false
                         }
