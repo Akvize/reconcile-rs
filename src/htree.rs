@@ -153,6 +153,19 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         aux(&self.root, &range, None, None)
     }
 
+    pub fn position(&self, key: &K) -> Option<usize> {
+        fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> Option<usize> {
+            match key.cmp(&node.key) {
+                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).or(Some(0)),
+                Ordering::Less => node.left.as_ref().and_then(|left| aux(left, key)),
+                Ordering::Greater => node.right.as_ref().and_then(|right| {
+                    aux(right, key).map(|index| node.tree_size - right.tree_size + index)
+                }),
+            }
+        }
+        self.root.as_ref().and_then(|node| aux(node, key))
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         fn aux<K: Hash + Ord, V: Hash>(
             anchor: &mut Option<Box<Node<K, V>>>,
