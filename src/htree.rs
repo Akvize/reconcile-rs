@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::{Bound, RangeBounds};
 
 struct Node<K, V> {
     key: K,
@@ -57,11 +58,31 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         Default::default()
     }
 
-    pub fn hash(&self) -> u64 {
-        match &self.root {
-            Some(node) => node.tree_hash,
-            None => 0,
+    pub fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
+        fn aux<K: Ord, V, R: RangeBounds<K>>(node: &Option<Box<Node<K, V>>>, range: &R) -> u64 {
+            if let Some(node) = node {
+                let mut ret = 0;
+                if match range.start_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
+                } {
+                    ret ^= aux(&node.left, range);
+                }
+                if range.contains(&node.key) {
+                    ret ^= node.self_hash;
+                }
+                if match range.end_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
+                } {
+                    ret ^= aux(&node.right, range);
+                }
+                ret
+            } else {
+                0
+            }
         }
+        aux(&self.root, &range)
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -201,26 +222,26 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
 fn test_simple() {
     // empty
     let mut tree = HTree::new();
-    assert_eq!(tree.hash(), 0);
+    assert_eq!(tree.hash(..), 0);
     tree.validate();
 
     // 1 value
     tree.insert(50, "Hello");
     tree.validate();
-    let hash1 = tree.hash();
+    let hash1 = tree.hash(..);
     assert_ne!(hash1, 0);
 
     // 2 values
     tree.insert(25, "World!");
     tree.validate();
-    let hash2 = tree.hash();
+    let hash2 = tree.hash(..);
     assert_ne!(hash2, 0);
     assert_ne!(hash2, hash1);
 
     // 3 values
     tree.insert(75, "Everyone!");
     tree.validate();
-    let hash3 = tree.hash();
+    let hash3 = tree.hash(..);
     assert_ne!(hash3, 0);
     assert_ne!(hash3, hash1);
     assert_ne!(hash3, hash2);
@@ -228,7 +249,7 @@ fn test_simple() {
     // back to 2 values
     tree.remove(&75);
     tree.validate();
-    let hash4 = tree.hash();
+    let hash4 = tree.hash(..);
     assert_eq!(hash4, hash2);
 }
 
@@ -249,8 +270,8 @@ fn test_compare() {
         tree3.insert(key, value);
     }
 
-    assert_eq!(tree1.hash(), tree2.hash());
-    assert_eq!(tree1.hash(), tree3.hash());
+    assert_eq!(tree1.hash(..), tree2.hash(..));
+    assert_eq!(tree1.hash(..), tree3.hash(..));
 }
 
 #[cfg(test)]
@@ -272,7 +293,7 @@ mod tests {
             tree.insert(key, value);
             tree.validate();
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree.hash(), expected_hash);
+            assert_eq!(tree.hash(..), expected_hash);
             key_values.push((key, value));
         }
 
@@ -284,7 +305,7 @@ mod tests {
             tree.validate();
             assert_eq!(value2, Some(value));
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree.hash(), expected_hash);
+            assert_eq!(tree.hash(..), expected_hash);
         }
     }
 }
