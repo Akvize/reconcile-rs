@@ -421,6 +421,15 @@ mod tests {
         assert_ne!(tree.hash(..mid), tree.hash(..));
         assert_eq!(tree.hash(..mid) ^ tree.hash(mid..), tree.hash(..));
 
+        // check at() with first and last indexes
+        let first = tree.at(0);
+        assert_eq!(
+            key_values.iter().map(|(key, _)| key).min(),
+            Some(&first.key)
+        );
+        let last = tree.at(tree.len() - 1);
+        assert_eq!(key_values.iter().map(|(key, _)| key).max(), Some(&last.key));
+
         // remove some
         key_values.shuffle(&mut rng);
         for _ in 0..1000 {
