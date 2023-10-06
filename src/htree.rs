@@ -430,6 +430,12 @@ mod tests {
         let last = tree.at(tree.len() - 1);
         assert_eq!(key_values.iter().map(|(key, _)| key).max(), Some(&last.key));
 
+        // check for at/position consistency
+        let key = key_values[0].0;
+        let index = tree.position(&key).unwrap();
+        assert_ne!(index, 0);
+        assert_eq!(tree.root.as_ref().unwrap().at(index).key, key);
+
         // remove some
         key_values.shuffle(&mut rng);
         for _ in 0..1000 {
