@@ -10,6 +10,7 @@ struct Node<K, V> {
     left: Option<Box<Node<K, V>>>,
     right: Option<Box<Node<K, V>>>,
     tree_hash: u64,
+    tree_size: usize,
 }
 
 fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
@@ -29,6 +30,7 @@ impl<K: Hash, V: Hash> Node<K, V> {
             left: None,
             right: None,
             tree_hash: hash,
+            tree_size: 1,
         }
     }
 
@@ -138,11 +140,17 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                     Ordering::Less => {
                         let (diff_hash, old_node) = aux(&mut node.left, key, value);
                         node.tree_hash ^= diff_hash;
+                        if old_node.is_none() {
+                            node.tree_size += 1;
+                        }
                         (diff_hash, old_node)
                     }
                     Ordering::Greater => {
                         let (diff_hash, old_node) = aux(&mut node.right, key, value);
                         node.tree_hash ^= diff_hash;
+                        if old_node.is_none() {
+                            node.tree_size += 1;
+                        }
                         (diff_hash, old_node)
                     }
                 }
@@ -161,14 +169,18 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             if node.left.as_mut().unwrap().left.is_some() {
                 let ret = take_leftmost(node.left.as_mut().unwrap());
                 node.tree_hash ^= ret.self_hash;
+                node.tree_size -= 1;
                 ret
             } else {
                 let mut leftmost = node.left.take().unwrap();
                 node.tree_hash ^= leftmost.self_hash;
+                node.tree_size -= 1;
                 if let Some(right) = leftmost.right.take() {
                     leftmost.tree_hash ^= right.tree_hash;
+                    leftmost.tree_size -= right.tree_size;
                     node.left = Some(right);
                 }
+                assert_eq!(leftmost.tree_size, 1);
                 assert_eq!(leftmost.self_hash, leftmost.tree_hash);
                 leftmost
             }
@@ -190,11 +202,13 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                                 if right.left.is_some() {
                                     let mut next_node = take_leftmost(&mut right);
                                     next_node.tree_hash ^= left.tree_hash ^ right.tree_hash;
+                                    next_node.tree_size += left.tree_size + right.tree_size;
                                     next_node.left = Some(left);
                                     next_node.right = Some(right);
                                     *anchor = Some(next_node);
                                 } else {
                                     right.tree_hash ^= left.tree_hash;
+                                    right.tree_size += left.tree_size;
                                     right.left = Some(left);
                                     *anchor = Some(right);
                                 }
@@ -205,11 +219,17 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                     Ordering::Less => {
                         let (diff_hash, old_node) = aux(&mut node.left, key);
                         node.tree_hash ^= diff_hash;
+                        if old_node.is_some() {
+                            node.tree_size -= 1;
+                        }
                         (diff_hash, old_node)
                     }
                     Ordering::Greater => {
                         let (diff_hash, old_node) = aux(&mut node.right, key);
                         node.tree_hash ^= diff_hash;
+                        if old_node.is_some() {
+                            node.tree_size -= 1;
+                        }
                         (diff_hash, old_node)
                     }
                 }
@@ -225,7 +245,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             anchor: &Option<Box<Node<K, V>>>,
             min: Option<&K>,
             max: Option<&K>,
-        ) -> u64 {
+        ) -> (u64, usize) {
             if let Some(node) = anchor {
                 if let Some(min) = min {
                     if &node.key < min {
@@ -241,15 +261,19 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 if self_hash != node.self_hash {
                     panic!("Self hashing invariant violated");
                 }
-                let left_hash = aux(&node.left, min, Some(&node.key));
-                let right_hash = aux(&node.right, Some(&node.key), max);
+                let (left_hash, left_size) = aux(&node.left, min, Some(&node.key));
+                let (right_hash, right_size) = aux(&node.right, Some(&node.key), max);
                 let tree_hash = left_hash ^ right_hash ^ self_hash;
                 if tree_hash != node.tree_hash {
                     panic!("Tree hashing invariant violated");
                 }
-                tree_hash
+                let tree_size = left_size + right_size + 1;
+                if tree_size != node.tree_size {
+                    panic!("Tree size invariant violated");
+                }
+                (tree_hash, tree_size)
             } else {
-                0
+                (0, 0)
             }
         }
         aux(&self.root, None, None);
