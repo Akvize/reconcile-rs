@@ -166,6 +166,21 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         self.root.as_ref().and_then(|node| aux(node, key))
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    pub fn len(&self) -> usize {
+        self.root
+            .as_ref()
+            .map(|node| node.tree_size)
+            .unwrap_or_default()
+    }
+
+    pub fn at(&self, index: usize) -> &Node<K, V> {
+        self.root.as_ref().unwrap().at(index)
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         fn aux<K: Hash + Ord, V: Hash>(
             anchor: &mut Option<Box<Node<K, V>>>,
