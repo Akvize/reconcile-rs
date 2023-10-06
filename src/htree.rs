@@ -335,6 +335,12 @@ mod tests {
             key_values.push((key, value));
         }
 
+        // check for partial ranges
+        let mid = u64::MAX / 2;
+        assert_ne!(tree.hash(mid..), tree.hash(..));
+        assert_ne!(tree.hash(..mid), tree.hash(..));
+        assert_eq!(tree.hash(..mid) ^ tree.hash(mid..), tree.hash(..));
+
         // remove some
         key_values.shuffle(&mut rng);
         for _ in 0..1000 {
