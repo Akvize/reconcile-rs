@@ -66,6 +66,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             subtree_upper_bound: Option<&K>,
         ) -> u64 {
             if let Some(node) = node {
+                // check if the lower-bound is included in the range
                 let lower_bound_included = match range.start_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => {
@@ -76,6 +77,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                         }
                     }
                 };
+                // check if the upper-bound is included in the range
                 let upper_bound_included = match range.end_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => {
@@ -86,24 +88,31 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                         }
                     }
                 };
+                // if both lower and upper bounds are included in the range, just use the tree hash invariant
                 if lower_bound_included && upper_bound_included {
                     return node.tree_hash;
                 }
+                // otherwise, recurse in the relevant sub-trees
 
                 let mut ret = 0;
+                // check if the left sub-tree is partially covered by the range
                 if match range.start_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
                 } {
+                    // recurse left
                     ret ^= aux(&node.left, range, subtree_lower_bound, Some(&node.key));
                 }
+                // check if the node itself is included in the range
                 if range.contains(&node.key) {
                     ret ^= node.self_hash;
                 }
+                // check if the right sub-tree is partially covered by the range
                 if match range.end_bound() {
                     Bound::Unbounded => true,
                     Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
                 } {
+                    // recurse right
                     ret ^= aux(&node.right, range, Some(&node.key), subtree_upper_bound);
                 }
                 ret
