@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
-struct Node<K, V> {
+pub struct Node<K, V> {
     key: K,
     value: V,
     self_hash: u64,
@@ -42,6 +42,34 @@ impl<K: Hash, V: Hash> Node<K, V> {
         let diff_hash = new_hash ^ old_hash;
         self.tree_hash ^= diff_hash;
         (diff_hash, old_value)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn len(&self) -> usize {
+        self.tree_size
+    }
+
+    pub fn at(&self, mut index: usize) -> &Node<K, V> {
+        if index >= self.tree_size {
+            panic!(
+                "index out of bounds: the len is {} but the index is {index}",
+                self.tree_size
+            );
+        }
+        if let Some(left) = self.left.as_ref() {
+            if index < left.tree_size {
+                return left.at(index);
+            } else {
+                index -= left.tree_size;
+            }
+        }
+        if index == 0 {
+            return self;
+        }
+        self.right.as_ref().unwrap().at(index - 1)
     }
 }
 
