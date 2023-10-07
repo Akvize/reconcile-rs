@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
+#[derive(Debug)]
 pub struct Node<K, V> {
     key: K,
     value: V,
@@ -73,6 +74,7 @@ impl<K: Hash, V: Hash> Node<K, V> {
     }
 }
 
+#[derive(Debug)]
 pub struct HTree<K, V> {
     root: Option<Box<Node<K, V>>>,
 }
