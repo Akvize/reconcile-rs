@@ -168,6 +168,21 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         self.root.as_ref().and_then(|node| aux(node, key))
     }
 
+    pub fn insertion_position(&self, key: &K) -> usize {
+        fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> usize {
+            match key.cmp(&node.key) {
+                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).unwrap_or(0),
+                Ordering::Less => node.left.as_ref().map(|left| aux(left, key)).unwrap_or(0),
+                Ordering::Greater => node
+                    .right
+                    .as_ref()
+                    .map(|right| node.tree_size - right.tree_size + aux(right, key))
+                    .unwrap_or(node.tree_size),
+            }
+        }
+        self.root.as_ref().map(|node| aux(node, key)).unwrap_or(0)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
@@ -437,6 +452,11 @@ mod tests {
         let index = tree.position(&key).unwrap();
         assert_ne!(index, 0);
         assert_eq!(tree.root.as_ref().unwrap().at(index).key, key);
+
+        // test insertion_position
+        assert_eq!(tree.insertion_position(&key), tree.position(&key).unwrap());
+        assert_eq!(tree.insertion_position(&0), 0);
+        assert_eq!(tree.insertion_position(&u64::MAX), tree.len());
 
         // remove some
         key_values.shuffle(&mut rng);
