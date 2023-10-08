@@ -85,6 +85,13 @@ impl<K, V> Default for HTree<K, V> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Diff<'a, K> {
+    InSelf((Bound<&'a K>, Bound<&'a K>)),
+    InOther((Bound<&'a K>, Bound<&'a K>)),
+    InBoth((Bound<&'a K>, Bound<&'a K>)),
+}
+
 impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     pub fn new() -> Self {
         Default::default()
@@ -351,6 +358,84 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         }
         aux(&self.root, None, None);
     }
+
+    pub fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<'a, K>> {
+        fn aux<'a, K: Hash + Ord, V: Hash>(
+            self_: &'a HTree<K, V>,
+            other: &'a HTree<K, V>,
+            range: (Bound<&'a K>, Bound<&'a K>),
+            output: &mut Vec<Diff<'a, K>>,
+        ) {
+            match (self_.hash(range), other.hash(range)) {
+                (a, b) if a == b => return,
+                (_, 0) => {
+                    output.push(Diff::InSelf(range));
+                    return;
+                }
+                (0, _) => {
+                    output.push(Diff::InOther(range));
+                    return;
+                }
+                (_, _) => (),
+            }
+            let (start_bound, end_bound) = range;
+            let self_start_index = match start_bound {
+                Bound::Unbounded => 0,
+                Bound::Included(key) => self_.insertion_position(key),
+                Bound::Excluded(_) => unreachable!(),
+            };
+            let self_end_index = match end_bound {
+                Bound::Unbounded => self_.len(),
+                Bound::Included(_) => unreachable!(),
+                Bound::Excluded(key) => self_.insertion_position(key),
+            };
+            let other_start_index = match start_bound {
+                Bound::Unbounded => 0,
+                Bound::Included(key) => other.insertion_position(key),
+                Bound::Excluded(_) => unreachable!(),
+            };
+            let other_end_index = match end_bound {
+                Bound::Unbounded => other.len(),
+                Bound::Included(_) => unreachable!(),
+                Bound::Excluded(key) => other.insertion_position(key),
+            };
+            let self_count = self_end_index - self_start_index;
+            let other_count = other_end_index - other_start_index;
+            match (self_count, other_count) {
+                (0, 0) => unreachable!(),          // both hashes would be 0, and thus equal
+                (0, _) | (_, 0) => unreachable!(), // detected above since hashes equal to 0
+                (1, 1) => {
+                    // either the same key with different
+                    // values, or two different keys; in
+                    // any cases, the range should be
+                    // exchanged
+                    output.push(Diff::InBoth(range));
+                }
+                (a, _) => {
+                    let mid_key = if a == 1 {
+                        // recurse w.r.t. other
+                        &other
+                            .at(other_start_index + (other_end_index - other_start_index) / 2)
+                            .key
+                    } else {
+                        // recurse w.r.t. self
+                        &self_
+                            .at(self_start_index + (self_end_index - self_start_index) / 2)
+                            .key
+                    };
+                    // recurse left
+                    let left_range = (start_bound, Bound::Excluded(mid_key));
+                    aux(self_, other, left_range, output);
+                    // recurse right
+                    let right_range = (Bound::Included(mid_key), end_bound);
+                    aux(self_, other, right_range, output);
+                }
+            }
+        }
+        let mut ret = Vec::new();
+        aux(self, other, (Bound::Unbounded, Bound::Unbounded), &mut ret);
+        ret
+    }
 }
 
 #[test]
@@ -407,6 +492,21 @@ fn test_compare() {
 
     assert_eq!(tree1.hash(..), tree2.hash(..));
     assert_eq!(tree1.hash(..), tree3.hash(..));
+
+    assert_eq!(tree1.diff(&tree1), vec![]);
+
+    let mut tree4 = HTree::new();
+    for (key, value) in [(75, "Everyone!"), (25, "World!"), (40, "Hello")] {
+        tree4.insert(key, value);
+    }
+
+    assert_eq!(
+        tree1.diff(&tree4),
+        vec![
+            Diff::InOther((Bound::Included(&40), Bound::Excluded(&50))),
+            Diff::InSelf((Bound::Included(&50), Bound::Excluded(&75)))
+        ]
+    );
 }
 
 #[cfg(test)]
