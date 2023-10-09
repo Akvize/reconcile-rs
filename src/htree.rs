@@ -497,6 +497,50 @@ impl<K, V> IntoIterator for HTree<K, V> {
     }
 }
 
+pub struct IterRef<'a, K, V> {
+    stack: Vec<(&'a Node<K, V>, bool)>,
+}
+
+impl<'a, K, V> Iterator for IterRef<'a, K, V> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((node, left_explored)) = self.stack.pop() {
+            if !left_explored {
+                if let Some(left) = node.left.as_ref() {
+                    self.stack.push((left, false));
+                    return self.next();
+                }
+            }
+            if let Some(right) = node.right.as_ref() {
+                self.stack.push((right, false));
+            }
+            Some((&node.key, &node.value))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = IterRef<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        IterRef {
+            stack: self
+                .root
+                .iter()
+                .map(|node| (node.as_ref(), false))
+                .collect(),
+        }
+    }
+}
+
+impl<K, V> HTree<K, V> {
+    pub fn iter(&self) -> IterRef<'_, K, V> {
+        self.into_iter()
+    }
+}
+
 #[test]
 fn test_simple() {
     // empty
