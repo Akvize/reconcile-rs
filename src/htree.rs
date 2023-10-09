@@ -438,6 +438,18 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 }
 
+impl<K, V> PartialEq for HTree<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.root.as_ref(), other.root.as_ref()) {
+            (Some(self_), Some(other)) => self_.tree_hash == other.tree_hash,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<K, V> Eq for HTree<K, V> {}
+
 impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
     fn from_iter<T>(iter: T) -> Self
     where
@@ -491,13 +503,17 @@ fn test_compare() {
     let tree1 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
     let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
     let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+    let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
 
     assert_eq!(tree1.hash(..), tree2.hash(..));
     assert_eq!(tree1.hash(..), tree3.hash(..));
 
+    assert_eq!(tree1, tree2);
+    assert_eq!(tree1, tree3);
+    assert_ne!(tree1, tree4);
+
     assert_eq!(tree1.diff(&tree1), vec![]);
 
-    let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
     assert_eq!(
         tree1.diff(&tree4),
         vec![
