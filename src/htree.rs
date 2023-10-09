@@ -587,16 +587,19 @@ fn test_compare() {
     let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
     let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
     let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+    let tree5 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
     assert_eq!(tree1.hash(..), tree1.hash(..));
     assert_eq!(tree1.hash(..), tree2.hash(..));
     assert_eq!(tree1.hash(..), tree3.hash(..));
     assert_ne!(tree1.hash(..), tree4.hash(..));
+    assert_ne!(tree1.hash(..), tree5.hash(..));
 
     assert_eq!(tree1, tree1);
     assert_eq!(tree1, tree2);
     assert_eq!(tree1, tree3);
     assert_ne!(tree1, tree4);
+    assert_ne!(tree1, tree5);
 
     assert_eq!(tree1.diff(&tree1), vec![]);
     assert_eq!(tree1.diff(&tree2), vec![]);
@@ -607,6 +610,10 @@ fn test_compare() {
             Diff::InOther((Bound::Included(&40), Bound::Excluded(&50))),
             Diff::InSelf((Bound::Included(&50), Bound::Excluded(&75)))
         ]
+    );
+    assert_eq!(
+        tree1.diff(&tree5),
+        vec![Diff::InBoth((Bound::Included(&75), Bound::Unbounded))]
     );
 }
 
