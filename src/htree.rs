@@ -96,71 +96,6 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         Default::default()
     }
 
-    pub fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
-        fn aux<K: Ord, V, R: RangeBounds<K>>(
-            node: &Option<Box<Node<K, V>>>,
-            range: &R,
-            subtree_lower_bound: Option<&K>,
-            subtree_upper_bound: Option<&K>,
-        ) -> u64 {
-            if let Some(node) = node {
-                // check if the lower-bound is included in the range
-                let lower_bound_included = match range.start_bound() {
-                    Bound::Unbounded => true,
-                    Bound::Included(key) | Bound::Excluded(key) => {
-                        if let Some(subtree_lower_bound) = subtree_lower_bound {
-                            key < subtree_lower_bound
-                        } else {
-                            false
-                        }
-                    }
-                };
-                // check if the upper-bound is included in the range
-                let upper_bound_included = match range.end_bound() {
-                    Bound::Unbounded => true,
-                    Bound::Included(key) | Bound::Excluded(key) => {
-                        if let Some(subtree_upper_bound) = subtree_upper_bound {
-                            key > subtree_upper_bound
-                        } else {
-                            false
-                        }
-                    }
-                };
-                // if both lower and upper bounds are included in the range, just use the tree hash invariant
-                if lower_bound_included && upper_bound_included {
-                    return node.tree_hash;
-                }
-                // otherwise, recurse in the relevant sub-trees
-
-                let mut ret = 0;
-                // check if the left sub-tree is partially covered by the range
-                if match range.start_bound() {
-                    Bound::Unbounded => true,
-                    Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
-                } {
-                    // recurse left
-                    ret ^= aux(&node.left, range, subtree_lower_bound, Some(&node.key));
-                }
-                // check if the node itself is included in the range
-                if range.contains(&node.key) {
-                    ret ^= node.self_hash;
-                }
-                // check if the right sub-tree is partially covered by the range
-                if match range.end_bound() {
-                    Bound::Unbounded => true,
-                    Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
-                } {
-                    // recurse right
-                    ret ^= aux(&node.right, range, Some(&node.key), subtree_upper_bound);
-                }
-                ret
-            } else {
-                0
-            }
-        }
-        aux(&self.root, &range, None, None)
-    }
-
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> Option<usize> {
             match key.cmp(&node.key) {
@@ -174,34 +109,8 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         self.root.as_ref().and_then(|node| aux(node, key))
     }
 
-    pub fn insertion_position(&self, key: &K) -> usize {
-        fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> usize {
-            match key.cmp(&node.key) {
-                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).unwrap_or(0),
-                Ordering::Less => node.left.as_ref().map(|left| aux(left, key)).unwrap_or(0),
-                Ordering::Greater => node
-                    .right
-                    .as_ref()
-                    .map(|right| node.tree_size - right.tree_size + aux(right, key))
-                    .unwrap_or(node.tree_size),
-            }
-        }
-        self.root.as_ref().map(|node| aux(node, key)).unwrap_or(0)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
-    }
-
-    pub fn len(&self) -> usize {
-        self.root
-            .as_ref()
-            .map(|node| node.tree_size)
-            .unwrap_or_default()
-    }
-
-    pub fn at(&self, index: usize) -> &Node<K, V> {
-        self.root.as_ref().unwrap().at(index)
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -468,6 +377,108 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HTree<K, V> {
     }
 }
 
+trait HashRangeQueryable {
+    type Key;
+    fn hash<R: RangeBounds<Self::Key>>(&self, range: R) -> u64;
+    fn insertion_position(&self, key: &Self::Key) -> usize;
+    fn key_at(&self, index: usize) -> &Self::Key;
+    fn len(&self) -> usize;
+}
+
+impl<K: Ord + Hash, V: Hash> HashRangeQueryable for HTree<K, V> {
+    type Key = K;
+    fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
+        fn aux<K: Ord, V, R: RangeBounds<K>>(
+            node: &Option<Box<Node<K, V>>>,
+            range: &R,
+            subtree_lower_bound: Option<&K>,
+            subtree_upper_bound: Option<&K>,
+        ) -> u64 {
+            if let Some(node) = node {
+                // check if the lower-bound is included in the range
+                let lower_bound_included = match range.start_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => {
+                        if let Some(subtree_lower_bound) = subtree_lower_bound {
+                            key < subtree_lower_bound
+                        } else {
+                            false
+                        }
+                    }
+                };
+                // check if the upper-bound is included in the range
+                let upper_bound_included = match range.end_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => {
+                        if let Some(subtree_upper_bound) = subtree_upper_bound {
+                            key > subtree_upper_bound
+                        } else {
+                            false
+                        }
+                    }
+                };
+                // if both lower and upper bounds are included in the range, just use the tree hash invariant
+                if lower_bound_included && upper_bound_included {
+                    return node.tree_hash;
+                }
+                // otherwise, recurse in the relevant sub-trees
+
+                let mut ret = 0;
+                // check if the left sub-tree is partially covered by the range
+                if match range.start_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
+                } {
+                    // recurse left
+                    ret ^= aux(&node.left, range, subtree_lower_bound, Some(&node.key));
+                }
+                // check if the node itself is included in the range
+                if range.contains(&node.key) {
+                    ret ^= node.self_hash;
+                }
+                // check if the right sub-tree is partially covered by the range
+                if match range.end_bound() {
+                    Bound::Unbounded => true,
+                    Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
+                } {
+                    // recurse right
+                    ret ^= aux(&node.right, range, Some(&node.key), subtree_upper_bound);
+                }
+                ret
+            } else {
+                0
+            }
+        }
+        aux(&self.root, &range, None, None)
+    }
+
+    fn insertion_position(&self, key: &K) -> usize {
+        fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> usize {
+            match key.cmp(&node.key) {
+                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).unwrap_or(0),
+                Ordering::Less => node.left.as_ref().map(|left| aux(left, key)).unwrap_or(0),
+                Ordering::Greater => node
+                    .right
+                    .as_ref()
+                    .map(|right| node.tree_size - right.tree_size + aux(right, key))
+                    .unwrap_or(node.tree_size),
+            }
+        }
+        self.root.as_ref().map(|node| aux(node, key)).unwrap_or(0)
+    }
+
+    fn key_at(&self, index: usize) -> &K {
+        &self.root.as_ref().unwrap().at(index).key
+    }
+
+    fn len(&self) -> usize {
+        self.root
+            .as_ref()
+            .map(|node| node.tree_size)
+            .unwrap_or_default()
+    }
+}
+
 trait Diffable {
     type Key;
     fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<'a, Self::Key>>;
@@ -530,14 +541,10 @@ impl<K: Hash + Ord, V: Hash> Diffable for HTree<K, V> {
                 (a, _) => {
                     let mid_key = if a == 1 {
                         // recurse w.r.t. other
-                        &other
-                            .at(other_start_index + (other_end_index - other_start_index) / 2)
-                            .key
+                        other.key_at(other_start_index + (other_end_index - other_start_index) / 2)
                     } else {
                         // recurse w.r.t. self
-                        &self_
-                            .at(self_start_index + (self_end_index - self_start_index) / 2)
-                            .key
+                        self_.key_at(self_start_index + (self_end_index - self_start_index) / 2)
                     };
                     // recurse left
                     let left_range = (start_bound, Bound::Excluded(mid_key));
@@ -629,6 +636,8 @@ fn test_compare() {
 mod tests {
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
+    use super::HashRangeQueryable;
+
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -654,14 +663,15 @@ mod tests {
         assert_ne!(tree.hash(..mid), tree.hash(..));
         assert_eq!(tree.hash(..mid) ^ tree.hash(mid..), tree.hash(..));
 
-        // check at() with first and last indexes
-        let first = tree.at(0);
+        // check key_at() with first and last indexes
         assert_eq!(
             key_values.iter().map(|(key, _)| key).min(),
-            Some(&first.key)
+            Some(tree.key_at(0))
         );
-        let last = tree.at(tree.len() - 1);
-        assert_eq!(key_values.iter().map(|(key, _)| key).max(), Some(&last.key));
+        assert_eq!(
+            key_values.iter().map(|(key, _)| key).max(),
+            Some(tree.key_at(tree.len() - 1))
+        );
 
         // check for at/position consistency
         let key = key_values[0].0;
