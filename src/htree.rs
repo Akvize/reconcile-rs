@@ -84,13 +84,6 @@ impl<K, V> Default for HTree<K, V> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Diff<'a, K> {
-    InSelf((Bound<&'a K>, Bound<&'a K>)),
-    InOther((Bound<&'a K>, Bound<&'a K>)),
-    InBoth((Bound<&'a K>, Bound<&'a K>)),
-}
-
 impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     pub fn new() -> Self {
         Default::default()
@@ -479,28 +472,35 @@ impl<K: Ord + Hash, V: Hash> HashRangeQueryable for HTree<K, V> {
     }
 }
 
-trait Diffable {
-    type Key;
-    fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<'a, Self::Key>>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Diff<K> {
+    InSelf((Bound<K>, Bound<K>)),
+    InOther((Bound<K>, Bound<K>)),
+    InBoth((Bound<K>, Bound<K>)),
 }
 
-impl<K: Hash + Ord, T: HashRangeQueryable<Key = K>> Diffable for T {
+trait Diffable {
+    type Key;
+    fn diff(&self, other: &Self) -> Vec<Diff<Self::Key>>;
+}
+
+impl<K: Clone + Hash + Ord, T: HashRangeQueryable<Key = K>> Diffable for T {
     type Key = K;
-    fn diff<'a>(&'a self, other: &'a T) -> Vec<Diff<'a, K>> {
-        fn aux<'a, K: Hash + Ord, T: HashRangeQueryable<Key = K>>(
+    fn diff(&self, other: &T) -> Vec<Diff<K>> {
+        fn aux<'a, K: Clone + Hash + Ord, T: HashRangeQueryable<Key = K>>(
             self_: &'a T,
             other: &'a T,
             range: (Bound<&'a K>, Bound<&'a K>),
-            output: &mut Vec<Diff<'a, K>>,
+            output: &mut Vec<Diff<K>>,
         ) {
             match (self_.hash(range), other.hash(range)) {
                 (a, b) if a == b => return,
                 (_, 0) => {
-                    output.push(Diff::InSelf(range));
+                    output.push(Diff::InSelf((range.0.cloned(), range.1.cloned())));
                     return;
                 }
                 (0, _) => {
-                    output.push(Diff::InOther(range));
+                    output.push(Diff::InOther((range.0.cloned(), range.1.cloned())));
                     return;
                 }
                 (_, _) => (),
@@ -536,7 +536,7 @@ impl<K: Hash + Ord, T: HashRangeQueryable<Key = K>> Diffable for T {
                     // values, or two different keys; in
                     // any cases, the range should be
                     // exchanged
-                    output.push(Diff::InBoth(range));
+                    output.push(Diff::InBoth((range.0.cloned(), range.1.cloned())));
                 }
                 (a, _) => {
                     let mid_key = if a == 1 {
@@ -622,13 +622,13 @@ fn test_compare() {
     assert_eq!(
         tree1.diff(&tree4),
         vec![
-            Diff::InOther((Bound::Included(&40), Bound::Excluded(&50))),
-            Diff::InSelf((Bound::Included(&50), Bound::Excluded(&75)))
+            Diff::InOther((Bound::Included(40), Bound::Excluded(50))),
+            Diff::InSelf((Bound::Included(50), Bound::Excluded(75)))
         ]
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![Diff::InBoth((Bound::Included(&75), Bound::Unbounded))]
+        vec![Diff::InBoth((Bound::Included(75), Bound::Unbounded))]
     );
 }
 
