@@ -384,11 +384,11 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
     }
 }
 
-pub struct Iter<K, V> {
+pub struct IntoIter<K, V> {
     stack: Vec<Box<Node<K, V>>>,
 }
 
-impl<K, V> Iterator for Iter<K, V> {
+impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(mut node) = self.stack.pop() {
@@ -410,19 +410,19 @@ impl<K, V> Iterator for Iter<K, V> {
 
 impl<K, V> IntoIterator for HTree<K, V> {
     type Item = (K, V);
-    type IntoIter = Iter<K, V>;
+    type IntoIter = IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
-        Iter {
+        IntoIter {
             stack: self.root.into_iter().collect(),
         }
     }
 }
 
-pub struct IterRef<'a, K, V> {
+pub struct Iter<'a, K, V> {
     stack: Vec<(&'a Node<K, V>, bool)>,
 }
 
-impl<'a, K, V> Iterator for IterRef<'a, K, V> {
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((node, left_explored)) = self.stack.pop() {
@@ -444,9 +444,9 @@ impl<'a, K, V> Iterator for IterRef<'a, K, V> {
 
 impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
     type Item = (&'a K, &'a V);
-    type IntoIter = IterRef<'a, K, V>;
+    type IntoIter = Iter<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
-        IterRef {
+        Iter {
             stack: self
                 .root
                 .iter()
@@ -457,7 +457,7 @@ impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
 }
 
 impl<K, V> HTree<K, V> {
-    pub fn iter(&self) -> IterRef<'_, K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.into_iter()
     }
 }
