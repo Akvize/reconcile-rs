@@ -438,6 +438,19 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 }
 
+impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (K, V)>,
+    {
+        let mut tree = HTree::new();
+        for (k, v) in iter {
+            tree.insert(k, v);
+        }
+        tree
+    }
+}
+
 #[test]
 fn test_simple() {
     // empty
@@ -475,31 +488,16 @@ fn test_simple() {
 
 #[test]
 fn test_compare() {
-    let mut tree1 = HTree::new();
-    for (key, value) in [(25, "World!"), (50, "Hello"), (75, "Everyone!")] {
-        tree1.insert(key, value);
-    }
-
-    let mut tree2 = HTree::new();
-    for (key, value) in [(75, "Everyone!"), (50, "Hello"), (25, "World!")] {
-        tree2.insert(key, value);
-    }
-
-    let mut tree3 = HTree::new();
-    for (key, value) in [(75, "Everyone!"), (25, "World!"), (50, "Hello")] {
-        tree3.insert(key, value);
-    }
+    let tree1 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+    let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+    let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
 
     assert_eq!(tree1.hash(..), tree2.hash(..));
     assert_eq!(tree1.hash(..), tree3.hash(..));
 
     assert_eq!(tree1.diff(&tree1), vec![]);
 
-    let mut tree4 = HTree::new();
-    for (key, value) in [(75, "Everyone!"), (25, "World!"), (40, "Hello")] {
-        tree4.insert(key, value);
-    }
-
+    let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
     assert_eq!(
         tree1.diff(&tree4),
         vec![
