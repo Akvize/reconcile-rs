@@ -588,15 +588,19 @@ fn test_compare() {
     let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
     let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
 
+    assert_eq!(tree1.hash(..), tree1.hash(..));
     assert_eq!(tree1.hash(..), tree2.hash(..));
     assert_eq!(tree1.hash(..), tree3.hash(..));
+    assert_ne!(tree1.hash(..), tree4.hash(..));
 
+    assert_eq!(tree1, tree1);
     assert_eq!(tree1, tree2);
     assert_eq!(tree1, tree3);
     assert_ne!(tree1, tree4);
 
     assert_eq!(tree1.diff(&tree1), vec![]);
-
+    assert_eq!(tree1.diff(&tree2), vec![]);
+    assert_eq!(tree1.diff(&tree3), vec![]);
     assert_eq!(
         tree1.diff(&tree4),
         vec![
