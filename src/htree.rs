@@ -463,6 +463,40 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
     }
 }
 
+pub struct Iter<K, V> {
+    stack: Vec<Box<Node<K, V>>>,
+}
+
+impl<K, V> Iterator for Iter<K, V> {
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(mut node) = self.stack.pop() {
+            if let Some(left) = node.left.take() {
+                self.stack.push(node);
+                self.stack.push(left);
+                self.next()
+            } else {
+                if let Some(right) = node.right.take() {
+                    self.stack.push(right);
+                }
+                Some((node.key, node.value))
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<K, V> IntoIterator for HTree<K, V> {
+    type Item = (K, V);
+    type IntoIter = Iter<K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        Iter {
+            stack: self.root.into_iter().collect(),
+        }
+    }
+}
+
 #[test]
 fn test_simple() {
     // empty
