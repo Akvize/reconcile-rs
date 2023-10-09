@@ -484,12 +484,12 @@ trait Diffable {
     fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<'a, Self::Key>>;
 }
 
-impl<K: Hash + Ord, V: Hash> Diffable for HTree<K, V> {
+impl<K: Hash + Ord, T: HashRangeQueryable<Key = K>> Diffable for T {
     type Key = K;
-    fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<'a, K>> {
-        fn aux<'a, K: Hash + Ord, V: Hash>(
-            self_: &'a HTree<K, V>,
-            other: &'a HTree<K, V>,
+    fn diff<'a>(&'a self, other: &'a T) -> Vec<Diff<'a, K>> {
+        fn aux<'a, K: Hash + Ord, T: HashRangeQueryable<Key = K>>(
+            self_: &'a T,
+            other: &'a T,
             range: (Bound<&'a K>, Bound<&'a K>),
             output: &mut Vec<Diff<'a, K>>,
         ) {
