@@ -74,7 +74,6 @@ impl<K: Hash, V: Hash> Node<K, V> {
     }
 }
 
-#[derive(Debug)]
 pub struct HTree<K, V> {
     root: Option<Box<Node<K, V>>>,
 }
@@ -538,6 +537,12 @@ impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
 impl<K, V> HTree<K, V> {
     pub fn iter(&self) -> IterRef<'_, K, V> {
         self.into_iter()
+    }
+}
+
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HTree<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
