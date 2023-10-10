@@ -48,14 +48,6 @@ impl<K: Hash, V: Hash> Node<K, V> {
         (diff_hash, old_value)
     }
 
-    pub fn is_empty(&self) -> bool {
-        false
-    }
-
-    pub fn len(&self) -> usize {
-        self.tree_size
-    }
-
     pub fn at(&self, mut index: usize) -> &Node<K, V> {
         if index >= self.tree_size {
             panic!(
