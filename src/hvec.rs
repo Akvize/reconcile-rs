@@ -1,4 +1,5 @@
 use std::hash::Hash;
+use std::iter::{zip, Zip};
 use std::ops::{Bound, RangeBounds};
 
 use crate::diff::HashRangeQueryable;
@@ -26,6 +27,10 @@ impl<K: Hash + Ord, V: Hash> HVec<K, V> {
         Default::default()
     }
 
+    pub fn position(&self, key: &K) -> Option<usize> {
+        self.keys.binary_search(key).ok()
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         match self.keys.binary_search(&key) {
             Result::Ok(index) => {
@@ -50,6 +55,55 @@ impl<K: Hash + Ord, V: Hash> HVec<K, V> {
             }
             Result::Err(_) => None,
         }
+    }
+}
+
+impl<K, V> PartialEq for HVec<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hashes == other.hashes
+    }
+}
+
+impl<K, V> Eq for HVec<K, V> {}
+
+impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HVec<K, V> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (K, V)>,
+    {
+        let mut vec = HVec::new();
+        for (k, v) in iter {
+            vec.insert(k, v);
+        }
+        vec
+    }
+}
+
+impl<K, V> IntoIterator for HVec<K, V> {
+    type Item = (K, V);
+    type IntoIter = Zip<std::vec::IntoIter<K>, std::vec::IntoIter<V>>;
+    fn into_iter(self) -> Self::IntoIter {
+        zip(self.keys, self.values)
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a HVec<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Zip<std::slice::Iter<'a, K>, std::slice::Iter<'a, V>>;
+    fn into_iter(self) -> Self::IntoIter {
+        zip(self.keys.iter(), self.values.iter())
+    }
+}
+
+impl<K, V> HVec<K, V> {
+    fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
+        self.into_iter()
+    }
+}
+
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HVec<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
