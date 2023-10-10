@@ -7,7 +7,7 @@ use crate::diff::{Diff, Diffable, HashRangeQueryable};
 use crate::range_compare::{range_compare, RangeOrdering};
 
 #[derive(Debug)]
-pub struct Node<K, V> {
+struct Node<K, V> {
     key: K,
     value: V,
     self_hash: u64,
