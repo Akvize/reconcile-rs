@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
 use crate::diff::{Diff, Diffable, HashRangeQueryable};
+use crate::hash::hash;
 use crate::range_compare::{range_compare, RangeOrdering};
 
 #[derive(Debug)]
@@ -15,13 +15,6 @@ struct Node<K, V> {
     right: Option<Box<Node<K, V>>>,
     tree_hash: u64,
     tree_size: usize,
-}
-
-fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 impl<K: Hash, V: Hash> Node<K, V> {
