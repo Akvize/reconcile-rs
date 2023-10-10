@@ -330,6 +330,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
         if let Some((node, left_explored)) = self.stack.pop() {
             if !left_explored {
                 if let Some(left) = node.left.as_ref() {
+                    self.stack.push((node, true));
                     self.stack.push((left, false));
                     return self.next();
                 }
