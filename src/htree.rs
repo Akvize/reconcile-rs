@@ -6,13 +6,19 @@ use crate::diff::{Diff, Diffable, HashRangeQueryable};
 use crate::hash::hash;
 use crate::range_compare::{range_compare, RangeOrdering};
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Direction {
+    Left = 0,
+    Right = 1,
+    None,
+}
+
 #[derive(Debug)]
 struct Node<K, V> {
     key: K,
     value: V,
     self_hash: u64,
-    left: Option<Box<Node<K, V>>>,
-    right: Option<Box<Node<K, V>>>,
+    children: [Option<Box<Node<K, V>>>; 2],
     tree_hash: u64,
     tree_size: usize,
 }
@@ -24,8 +30,7 @@ impl<K: Hash, V: Hash> Node<K, V> {
             key,
             value,
             self_hash: hash,
-            left: None,
-            right: None,
+            children: [None, None],
             tree_hash: hash,
             tree_size: 1,
         }
@@ -39,6 +44,16 @@ impl<K: Hash, V: Hash> Node<K, V> {
         let diff_hash = new_hash ^ old_hash;
         self.tree_hash ^= diff_hash;
         (diff_hash, old_value)
+    }
+}
+
+impl<K: Ord, V> Node<K, V> {
+    fn dir(&self, key: &K) -> Direction {
+        match key.cmp(&self.key) {
+            Ordering::Less => Direction::Left,
+            Ordering::Greater => Direction::Right,
+            Ordering::Equal => Direction::None,
+        }
     }
 }
 
@@ -66,7 +81,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         }
         let mut maybe_node = self.root.as_ref();
         while let Some(node) = maybe_node {
-            if let Some(left) = node.left.as_ref() {
+            if let Some(left) = node.children[0].as_ref() {
                 if index < left.tree_size {
                     maybe_node = Some(left);
                     continue;
@@ -78,19 +93,21 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 return node;
             }
             index -= 1;
-            maybe_node = node.right.as_ref();
+            maybe_node = node.children[1].as_ref();
         }
         unreachable!();
     }
 
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> Option<usize> {
-            match key.cmp(&node.key) {
-                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).or(Some(0)),
-                Ordering::Less => node.left.as_ref().and_then(|left| aux(left, key)),
-                Ordering::Greater => node.right.as_ref().and_then(|right| {
-                    aux(right, key).map(|index| node.tree_size - right.tree_size + index)
-                }),
+            match node.dir(key) {
+                Direction::None => node.children[0]
+                    .as_ref()
+                    .map(|left| left.tree_size)
+                    .or(Some(0)),
+                dir => node.children[dir as usize]
+                    .as_ref()
+                    .and_then(|node| aux(node, key)),
             }
         }
         self.root.as_ref().and_then(|node| aux(node, key))
@@ -103,21 +120,14 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             value: V,
         ) -> (u64, Option<V>) {
             if let Some(node) = anchor {
-                match key.cmp(&node.key) {
-                    Ordering::Equal => {
+                match node.dir(&key) {
+                    Direction::None => {
                         let (diff_hash, old_node) = node.replace(value);
                         (diff_hash, Some(old_node))
                     }
-                    Ordering::Less => {
-                        let (diff_hash, old_node) = aux(&mut node.left, key, value);
-                        node.tree_hash ^= diff_hash;
-                        if old_node.is_none() {
-                            node.tree_size += 1;
-                        }
-                        (diff_hash, old_node)
-                    }
-                    Ordering::Greater => {
-                        let (diff_hash, old_node) = aux(&mut node.right, key, value);
+                    dir => {
+                        let (diff_hash, old_node) =
+                            aux(&mut node.children[dir as usize], key, value);
                         node.tree_hash ^= diff_hash;
                         if old_node.is_none() {
                             node.tree_size += 1;
@@ -137,19 +147,19 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
         fn take_leftmost<K, V>(node: &mut Box<Node<K, V>>) -> Box<Node<K, V>> {
-            if node.left.as_mut().unwrap().left.is_some() {
-                let ret = take_leftmost(node.left.as_mut().unwrap());
+            if node.children[0].as_mut().unwrap().children[0].is_some() {
+                let ret = take_leftmost(node.children[0].as_mut().unwrap());
                 node.tree_hash ^= ret.self_hash;
                 node.tree_size -= 1;
                 ret
             } else {
-                let mut leftmost = node.left.take().unwrap();
+                let mut leftmost = node.children[0].take().unwrap();
                 node.tree_hash ^= leftmost.self_hash;
                 node.tree_size -= 1;
-                if let Some(right) = leftmost.right.take() {
+                if let Some(right) = leftmost.children[1].take() {
                     leftmost.tree_hash ^= right.tree_hash;
                     leftmost.tree_size -= right.tree_size;
-                    node.left = Some(right);
+                    node.children[0] = Some(right);
                 }
                 assert_eq!(leftmost.tree_size, 1);
                 assert_eq!(leftmost.self_hash, leftmost.tree_hash);
@@ -161,42 +171,34 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             key: &K,
         ) -> (u64, Option<V>) {
             if let Some(node) = anchor {
-                match key.cmp(&node.key) {
-                    Ordering::Equal => {
+                match node.dir(key) {
+                    Direction::None => {
                         let mut node = anchor.take().unwrap();
                         let ret = (node.self_hash, Some(node.value));
-                        match (node.left.take(), node.right.take()) {
+                        match (node.children[0].take(), node.children[1].take()) {
                             (None, None) => (),
                             (None, Some(right)) => *anchor = Some(right),
                             (Some(left), None) => *anchor = Some(left),
                             (Some(left), Some(mut right)) => {
-                                if right.left.is_some() {
+                                if right.children[0].is_some() {
                                     let mut next_node = take_leftmost(&mut right);
                                     next_node.tree_hash ^= left.tree_hash ^ right.tree_hash;
                                     next_node.tree_size += left.tree_size + right.tree_size;
-                                    next_node.left = Some(left);
-                                    next_node.right = Some(right);
+                                    next_node.children[0] = Some(left);
+                                    next_node.children[1] = Some(right);
                                     *anchor = Some(next_node);
                                 } else {
                                     right.tree_hash ^= left.tree_hash;
                                     right.tree_size += left.tree_size;
-                                    right.left = Some(left);
+                                    right.children[0] = Some(left);
                                     *anchor = Some(right);
                                 }
                             }
                         };
                         ret
                     }
-                    Ordering::Less => {
-                        let (diff_hash, old_node) = aux(&mut node.left, key);
-                        node.tree_hash ^= diff_hash;
-                        if old_node.is_some() {
-                            node.tree_size -= 1;
-                        }
-                        (diff_hash, old_node)
-                    }
-                    Ordering::Greater => {
-                        let (diff_hash, old_node) = aux(&mut node.right, key);
+                    dir => {
+                        let (diff_hash, old_node) = aux(&mut node.children[dir as usize], key);
                         node.tree_hash ^= diff_hash;
                         if old_node.is_some() {
                             node.tree_size -= 1;
@@ -232,8 +234,8 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 if self_hash != node.self_hash {
                     panic!("Self hashing invariant violated");
                 }
-                let (left_hash, left_size) = aux(&node.left, min, Some(&node.key));
-                let (right_hash, right_size) = aux(&node.right, Some(&node.key), max);
+                let (left_hash, left_size) = aux(&node.children[0], min, Some(&node.key));
+                let (right_hash, right_size) = aux(&node.children[1], Some(&node.key), max);
                 let tree_hash = left_hash ^ right_hash ^ self_hash;
                 if tree_hash != node.tree_hash {
                     panic!("Tree hashing invariant violated");
@@ -284,12 +286,12 @@ impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(mut node) = self.stack.pop() {
-            if let Some(left) = node.left.take() {
+            if let Some(left) = node.children[0].take() {
                 self.stack.push(node);
                 self.stack.push(left);
                 self.next()
             } else {
-                if let Some(right) = node.right.take() {
+                if let Some(right) = node.children[1].take() {
                     self.stack.push(right);
                 }
                 Some((node.key, node.value))
@@ -319,13 +321,13 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((node, left_explored)) = self.stack.pop() {
             if !left_explored {
-                if let Some(left) = node.left.as_ref() {
+                if let Some(left) = node.children[0].as_ref() {
                     self.stack.push((node, true));
                     self.stack.push((left, false));
                     return self.next();
                 }
             }
-            if let Some(right) = node.right.as_ref() {
+            if let Some(right) = node.children[1].as_ref() {
                 self.stack.push((right, false));
             }
             Some((&node.key, &node.value))
@@ -406,7 +408,12 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
                     Bound::Included(key) | Bound::Excluded(key) => key < &node.key,
                 } {
                     // recurse left
-                    ret ^= aux(&node.left, range, subtree_lower_bound, Some(&node.key));
+                    ret ^= aux(
+                        &node.children[0],
+                        range,
+                        subtree_lower_bound,
+                        Some(&node.key),
+                    );
                 }
                 // check if the node itself is included in the range
                 if range.contains(&node.key) {
@@ -418,7 +425,12 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
                     Bound::Included(key) | Bound::Excluded(key) => key > &node.key,
                 } {
                     // recurse right
-                    ret ^= aux(&node.right, range, Some(&node.key), subtree_upper_bound);
+                    ret ^= aux(
+                        &node.children[1],
+                        range,
+                        Some(&node.key),
+                        subtree_upper_bound,
+                    );
                 }
                 ret
             } else {
@@ -430,11 +442,16 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
 
     fn insertion_position(&self, key: &K) -> usize {
         fn aux<K: Hash + Ord, V: Hash>(node: &Node<K, V>, key: &K) -> usize {
-            match key.cmp(&node.key) {
-                Ordering::Equal => node.left.as_ref().map(|left| left.tree_size).unwrap_or(0),
-                Ordering::Less => node.left.as_ref().map(|left| aux(left, key)).unwrap_or(0),
-                Ordering::Greater => node
-                    .right
+            match node.dir(key) {
+                Direction::None => node.children[0]
+                    .as_ref()
+                    .map(|left| left.tree_size)
+                    .unwrap_or(0),
+                Direction::Left => node.children[0]
+                    .as_ref()
+                    .map(|left| aux(left, key))
+                    .unwrap_or(0),
+                Direction::Right => node.children[1]
                     .as_ref()
                     .map(|right| node.tree_size - right.tree_size + aux(right, key))
                     .unwrap_or(node.tree_size),
@@ -469,13 +486,13 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
                 return None;
             }
             if !left_explored {
-                if let Some(left) = node.left.as_ref() {
+                if let Some(left) = node.children[0].as_ref() {
                     self.stack.push((node, true));
                     self.stack.push((left, false));
                     return self.next();
                 }
             }
-            if let Some(right) = node.right.as_ref() {
+            if let Some(right) = node.children[1].as_ref() {
                 self.stack.push((right, false));
             }
             Some((&node.key, &node.value))
@@ -491,11 +508,11 @@ impl<K: Ord, V> HTree<K, V> {
         let mut maybe_node = self.root.as_ref();
         while let Some(node) = maybe_node {
             match range_compare(&node.key, &range) {
-                RangeOrdering::Less => maybe_node = node.right.as_ref(),
-                RangeOrdering::Greater => maybe_node = node.left.as_ref(),
+                RangeOrdering::Less => maybe_node = node.children[1].as_ref(),
+                RangeOrdering::Greater => maybe_node = node.children[0].as_ref(),
                 RangeOrdering::Inside => {
                     stack.push((node.as_ref(), true));
-                    maybe_node = node.left.as_ref();
+                    maybe_node = node.children[0].as_ref();
                 }
             }
         }
