@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 
@@ -7,7 +7,25 @@ use reconciliate::diff::Diffable;
 use reconciliate::htree::HTree;
 use reconciliate::hvec::HVec;
 
-const NUMBER_OF_ELEMENTS: i32 = 100000;
+const NUMBER_OF_ELEMENTS: u32 = 1000000;
+const ITERATIONS_BETWEEN_TIME_CHECKS: u32 = 100;
+const RUNTIME_TARGET: Duration = Duration::from_secs(1);
+
+fn bench<R, F: Fn() -> R>(name: &str, f: F) {
+    let now = Instant::now();
+    let mut iterations = 0u32;
+    loop {
+        for _ in 0..ITERATIONS_BETWEEN_TIME_CHECKS {
+            black_box(f());
+        }
+        iterations += ITERATIONS_BETWEEN_TIME_CHECKS;
+        let elapsed = Instant::now() - now;
+        if elapsed >= RUNTIME_TARGET {
+            println!("{:?} {name}", elapsed / iterations);
+            break;
+        }
+    }
+}
 
 fn bench_hvec() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -28,12 +46,7 @@ fn bench_hvec() {
     vec2.insert(key, value);
     assert_eq!(vec1.diff(&vec2).len(), 1);
 
-    let now = Instant::now();
-    const ITERATIONS: u32 = 10000;
-    for _ in 0..ITERATIONS {
-        black_box(black_box(&vec1).diff(black_box(&vec2)));
-    }
-    println!("{:?}", (Instant::now() - now) / ITERATIONS);
+    bench("hvec", || black_box(&vec1).diff(black_box(&vec2)));
 }
 
 fn bench_hvec_fast() {
@@ -55,12 +68,7 @@ fn bench_hvec_fast() {
     vec2.insert(key, value);
     assert_eq!(vec1.fast_diff(&vec2).len(), 1);
 
-    let now = Instant::now();
-    const ITERATIONS: u32 = 10000;
-    for _ in 0..ITERATIONS {
-        black_box(black_box(&vec1).fast_diff(black_box(&vec2)));
-    }
-    println!("{:?}", (Instant::now() - now) / ITERATIONS);
+    bench("hvec_fast", || black_box(&vec1).fast_diff(black_box(&vec2)));
 }
 
 fn bench_htree() {
@@ -82,12 +90,7 @@ fn bench_htree() {
     tree2.insert(key, value);
     assert_eq!(tree1.diff(&tree2).len(), 1);
 
-    let now = Instant::now();
-    const ITERATIONS: u32 = 100000;
-    for _ in 0..ITERATIONS {
-        black_box(black_box(&tree1).diff(black_box(&tree2)));
-    }
-    println!("{:?}", (Instant::now() - now) / ITERATIONS);
+    bench("htree", || black_box(&tree1).diff(black_box(&tree2)));
 }
 
 fn main() {
