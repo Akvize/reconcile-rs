@@ -185,37 +185,56 @@ fn test_simple() {
     assert_eq!(hash4, hash2);
 }
 
-#[test]
-fn test_compare() {
-    let vec1 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
-    let vec2 = HVec::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
-    let vec3 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
-    let vec4 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
-    let vec5 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
-
-    assert_eq!(vec1.hash(..), vec1.hash(..));
-    assert_eq!(vec1.hash(..), vec2.hash(..));
-    assert_eq!(vec1.hash(..), vec3.hash(..));
-    assert_ne!(vec1.hash(..), vec4.hash(..));
-    assert_ne!(vec1.hash(..), vec5.hash(..));
-
-    assert_eq!(vec1, vec1);
-    assert_eq!(vec1, vec2);
-    assert_eq!(vec1, vec3);
-    assert_ne!(vec1, vec4);
-    assert_ne!(vec1, vec5);
-}
-
 #[cfg(test)]
 mod tests {
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
-    use super::HashRangeQueryable;
+    use std::ops::Bound;
+
+    use crate::diff::{Diff, Diffable};
+
+    use super::{HVec, HashRangeQueryable};
+
+    #[test]
+    fn test_compare() {
+        let vec1 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+        let vec2 = HVec::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+        let vec3 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+        let vec4 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+        let vec5 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+
+        assert_eq!(vec1.hash(..), vec1.hash(..));
+        assert_eq!(vec1.hash(..), vec2.hash(..));
+        assert_eq!(vec1.hash(..), vec3.hash(..));
+        assert_ne!(vec1.hash(..), vec4.hash(..));
+        assert_ne!(vec1.hash(..), vec5.hash(..));
+
+        assert_eq!(vec1, vec1);
+        assert_eq!(vec1, vec2);
+        assert_eq!(vec1, vec3);
+        assert_ne!(vec1, vec4);
+        assert_ne!(vec1, vec5);
+
+        assert_eq!(vec1.diff(&vec1), vec![]);
+        assert_eq!(vec1.diff(&vec2), vec![]);
+        assert_eq!(vec1.diff(&vec3), vec![]);
+        assert_eq!(
+            vec1.diff(&vec4),
+            vec![
+                Diff::InOther((Bound::Included(40), Bound::Excluded(50))),
+                Diff::InSelf((Bound::Included(50), Bound::Excluded(75)))
+            ]
+        );
+        assert_eq!(
+            vec1.diff(&vec5),
+            vec![Diff::InBoth((Bound::Included(75), Bound::Unbounded))]
+        );
+    }
 
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut vec = super::HVec::new();
+        let mut vec = HVec::new();
         let mut key_values = Vec::new();
 
         let mut expected_hash = 0;
