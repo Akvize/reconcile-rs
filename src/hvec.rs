@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::hash::Hash;
 use std::iter::{zip, Zip};
 use std::ops::{Bound, RangeBounds};
@@ -290,5 +291,41 @@ mod tests {
             expected_hash ^= super::hash(&key, &value);
             assert_eq!(vec.hash(..), expected_hash);
         }
+    }
+}
+
+impl<K: Clone + Ord, V> HVec<K, V> {
+    pub fn fast_diff(&self, other: &Self) -> Vec<K> {
+        let mut ret = Vec::new();
+        let mut i = 0;
+        let mut j = 0;
+        while i < self.keys.len() && j < other.keys.len() {
+            match self.keys[i].cmp(&other.keys[j]) {
+                Ordering::Less => {
+                    ret.push(self.keys[i].clone());
+                    i += 1;
+                }
+                Ordering::Greater => {
+                    ret.push(other.keys[j].clone());
+                    j += 1;
+                }
+                Ordering::Equal => {
+                    if self.hashes[i] != other.hashes[j] {
+                        ret.push(self.keys[i].clone());
+                    }
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        while i < self.keys.len() {
+            ret.push(self.keys[i].clone());
+            i += 1;
+        }
+        while j < other.keys.len() {
+            ret.push(other.keys[j].clone());
+            j += 1;
+        }
+        ret
     }
 }

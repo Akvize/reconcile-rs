@@ -7,10 +7,12 @@ use reconciliate::diff::Diffable;
 use reconciliate::htree::HTree;
 use reconciliate::hvec::HVec;
 
+const NUMBER_OF_ELEMENTS: i32 = 100000;
+
 fn bench_hvec() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values = Vec::new();
-    for _ in 0..100000 {
+    for _ in 0..NUMBER_OF_ELEMENTS {
         let key: u64 = rng.gen();
         let value: u64 = rng.gen();
         key_values.push((key, value));
@@ -34,10 +36,37 @@ fn bench_hvec() {
     println!("{:?}", (Instant::now() - now) / ITERATIONS);
 }
 
+fn bench_hvec_fast() {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut key_values = Vec::new();
+    for _ in 0..NUMBER_OF_ELEMENTS {
+        let key: u64 = rng.gen();
+        let value: u64 = rng.gen();
+        key_values.push((key, value));
+    }
+
+    let vec1 = HVec::from_iter(key_values.iter().copied());
+    key_values.shuffle(&mut rng);
+    let mut vec2 = HVec::from_iter(key_values.iter().copied());
+    assert_eq!(vec1, vec2);
+
+    let key: u64 = rng.gen();
+    let value: u64 = rng.gen();
+    vec2.insert(key, value);
+    assert_eq!(vec1.fast_diff(&vec2).len(), 1);
+
+    let now = Instant::now();
+    const ITERATIONS: u32 = 10000;
+    for _ in 0..ITERATIONS {
+        black_box(black_box(&vec1).fast_diff(black_box(&vec2)));
+    }
+    println!("{:?}", (Instant::now() - now) / ITERATIONS);
+}
+
 fn bench_htree() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values = Vec::new();
-    for _ in 0..100000 {
+    for _ in 0..NUMBER_OF_ELEMENTS {
         let key: u64 = rng.gen();
         let value: u64 = rng.gen();
         key_values.push((key, value));
@@ -63,5 +92,6 @@ fn bench_htree() {
 
 fn main() {
     bench_hvec();
+    bench_hvec_fast();
     bench_htree();
 }
