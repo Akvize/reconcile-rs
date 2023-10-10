@@ -40,6 +40,17 @@ impl<K: Hash + Ord, V: Hash> HVec<K, V> {
             }
         }
     }
+
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        match self.keys.binary_search(key) {
+            Result::Ok(index) => {
+                self.keys.remove(index);
+                self.hashes.remove(index);
+                Some(self.values.remove(index))
+            }
+            Result::Err(_) => None,
+        }
+    }
 }
 
 fn ok_index(result: Result<usize, usize>) -> usize {
