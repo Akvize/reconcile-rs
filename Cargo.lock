@@ -62,7 +62,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-reconciliate"
+name = "reconciliate"
 version = "0.1.0"
 dependencies = [
  "rand",
