@@ -684,6 +684,11 @@ mod tests {
         assert_eq!(tree.insertion_position(&0), 0);
         assert_eq!(tree.insertion_position(&u64::MAX), tree.len());
 
+        let items: Vec<(u64, u64)> = tree.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(items.len(), key_values.len());
+        key_values.sort();
+        assert_eq!(items, key_values);
+
         // remove some
         key_values.shuffle(&mut rng);
         for _ in 0..1000 {
