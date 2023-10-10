@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
 use reconciliate::diff::Diffable;
 use reconciliate::htree::HTree;
@@ -27,17 +27,10 @@ fn bench<R, F: Fn() -> R>(name: &str, f: F) {
     }
 }
 
-fn bench_hvec() {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
-    for _ in 0..NUMBER_OF_ELEMENTS {
-        let key: u64 = rng.gen();
-        let value: u64 = rng.gen();
-        key_values.push((key, value));
-    }
-
+fn bench_hvec(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>) {
+    key_values.shuffle(rng);
     let vec1 = HVec::from_iter(key_values.iter().copied());
-    key_values.shuffle(&mut rng);
+    key_values.shuffle(rng);
     let mut vec2 = HVec::from_iter(key_values.iter().copied());
     assert_eq!(vec1, vec2);
 
@@ -49,17 +42,9 @@ fn bench_hvec() {
     bench("hvec", || black_box(&vec1).diff(black_box(&vec2)));
 }
 
-fn bench_hvec_fast() {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
-    for _ in 0..NUMBER_OF_ELEMENTS {
-        let key: u64 = rng.gen();
-        let value: u64 = rng.gen();
-        key_values.push((key, value));
-    }
-
+fn bench_hvec_fast(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>) {
     let vec1 = HVec::from_iter(key_values.iter().copied());
-    key_values.shuffle(&mut rng);
+    key_values.shuffle(rng);
     let mut vec2 = HVec::from_iter(key_values.iter().copied());
     assert_eq!(vec1, vec2);
 
@@ -71,17 +56,9 @@ fn bench_hvec_fast() {
     bench("hvec_fast", || black_box(&vec1).fast_diff(black_box(&vec2)));
 }
 
-fn bench_htree() {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
-    for _ in 0..NUMBER_OF_ELEMENTS {
-        let key: u64 = rng.gen();
-        let value: u64 = rng.gen();
-        key_values.push((key, value));
-    }
-
+fn bench_htree(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>) {
     let tree1 = HTree::from_iter(key_values.iter().copied());
-    key_values.shuffle(&mut rng);
+    key_values.shuffle(rng);
     let mut tree2 = HTree::from_iter(key_values.iter().copied());
     assert_eq!(tree1, tree2);
 
@@ -94,7 +71,15 @@ fn bench_htree() {
 }
 
 fn main() {
-    bench_hvec();
-    bench_hvec_fast();
-    bench_htree();
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut key_values = Vec::new();
+    for _ in 0..NUMBER_OF_ELEMENTS {
+        let key: u64 = rng.gen();
+        let value: u64 = rng.gen();
+        key_values.push((key, value));
+    }
+
+    bench_hvec(&mut rng, &mut key_values);
+    bench_hvec_fast(&mut rng, &mut key_values);
+    bench_htree(&mut rng, &mut key_values);
 }
