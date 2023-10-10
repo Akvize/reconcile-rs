@@ -47,26 +47,6 @@ impl<K: Hash, V: Hash> Node<K, V> {
         self.tree_hash ^= diff_hash;
         (diff_hash, old_value)
     }
-
-    pub fn at(&self, mut index: usize) -> &Node<K, V> {
-        if index >= self.tree_size {
-            panic!(
-                "index out of bounds: the len is {} but the index is {index}",
-                self.tree_size
-            );
-        }
-        if let Some(left) = self.left.as_ref() {
-            if index < left.tree_size {
-                return left.at(index);
-            } else {
-                index -= left.tree_size;
-            }
-        }
-        if index == 0 {
-            return self;
-        }
-        self.right.as_ref().unwrap().at(index - 1)
-    }
 }
 
 pub struct HTree<K, V> {
@@ -82,6 +62,32 @@ impl<K, V> Default for HTree<K, V> {
 impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    fn at(&self, mut index: usize) -> &Node<K, V> {
+        if index >= self.len() {
+            panic!(
+                "index out of bounds: the len is {} but the index is {index}",
+                self.len()
+            );
+        }
+        let mut maybe_node = self.root.as_ref();
+        while let Some(node) = maybe_node {
+            if let Some(left) = node.left.as_ref() {
+                if index < left.tree_size {
+                    maybe_node = Some(left);
+                    continue;
+                } else {
+                    index -= left.tree_size;
+                }
+            }
+            if index == 0 {
+                return node;
+            }
+            index -= 1;
+            maybe_node = node.right.as_ref();
+        }
+        unreachable!();
     }
 
     pub fn position(&self, key: &K) -> Option<usize> {
@@ -445,7 +451,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
     }
 
     fn key_at(&self, index: usize) -> &K {
-        &self.root.as_ref().unwrap().at(index).key
+        &self.at(index).key
     }
 
     fn len(&self) -> usize {
@@ -665,7 +671,7 @@ mod tests {
         let key = key_values[0].0;
         let index = tree.position(&key).unwrap();
         assert_ne!(index, 0);
-        assert_eq!(tree.root.as_ref().unwrap().at(index).key, key);
+        assert_eq!(tree.at(index).key, key);
 
         // test insertion_position
         assert_eq!(tree.insertion_position(&key), tree.position(&key).unwrap());
