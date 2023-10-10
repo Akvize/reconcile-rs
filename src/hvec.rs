@@ -100,3 +100,33 @@ impl<K: Ord, V> HashRangeQueryable for HVec<K, V> {
         unimplemented!();
     }
 }
+
+#[test]
+fn test_simple() {
+    // empty
+    let mut vec = HVec::new();
+    assert_eq!(vec.hash(..), 0);
+
+    // 1 value
+    vec.insert(50, "Hello");
+    let hash1 = vec.hash(..);
+    assert_ne!(hash1, 0);
+
+    // 2 values
+    vec.insert(25, "World!");
+    let hash2 = vec.hash(..);
+    assert_ne!(hash2, 0);
+    assert_ne!(hash2, hash1);
+
+    // 3 values
+    vec.insert(75, "Everyone!");
+    let hash3 = vec.hash(..);
+    assert_ne!(hash3, 0);
+    assert_ne!(hash3, hash1);
+    assert_ne!(hash3, hash2);
+
+    // back to 2 values
+    vec.remove(&75);
+    let hash4 = vec.hash(..);
+    assert_eq!(hash4, hash2);
+}
