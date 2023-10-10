@@ -485,10 +485,10 @@ trait Diffable {
     fn diff(&self, other: &Self) -> Vec<Diff<Self::Key>>;
 }
 
-impl<K: Clone + Hash + Ord, T: HashRangeQueryable<Key = K>> Diffable for T {
+impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
     type Key = K;
     fn diff(&self, other: &T) -> Vec<Diff<K>> {
-        fn aux<'a, K: Clone + Hash + Ord, T: HashRangeQueryable<Key = K>>(
+        fn aux<'a, K: Clone, T: HashRangeQueryable<Key = K>>(
             self_: &'a T,
             other: &'a T,
             range: (Bound<&'a K>, Bound<&'a K>),
