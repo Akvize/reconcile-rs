@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
 use crate::diff::{Diff, Diffable, HashRangeQueryable};
+use crate::range_compare::{range_compare, RangeOrdering};
 
 #[derive(Debug)]
 pub struct Node<K, V> {
@@ -466,30 +467,6 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
     range: R,
     stack: Vec<(&'a Node<K, V>, bool)>,
-}
-
-enum RangeOrdering {
-    Less,
-    Inside,
-    Greater,
-}
-
-fn range_compare<T: Ord, R: RangeBounds<T>>(item: &T, range: &R) -> RangeOrdering {
-    if match range.start_bound() {
-        Bound::Included(key) => item < key,
-        Bound::Excluded(key) => item <= key,
-        _ => false,
-    } {
-        return RangeOrdering::Less;
-    }
-    if match range.end_bound() {
-        Bound::Included(key) => item > key,
-        Bound::Excluded(key) => item >= key,
-        _ => false,
-    } {
-        return RangeOrdering::Greater;
-    }
-    RangeOrdering::Inside
 }
 
 impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
