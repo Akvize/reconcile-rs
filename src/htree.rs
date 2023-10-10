@@ -664,7 +664,7 @@ mod tests {
         let key = key_values[0].0;
         let index = tree.position(&key).unwrap();
         assert_ne!(index, 0);
-        assert_eq!(tree.at(index).key, key);
+        assert_eq!(tree.key_at(index), &key);
 
         // test insertion_position
         assert_eq!(tree.insertion_position(&key), tree.position(&key).unwrap());

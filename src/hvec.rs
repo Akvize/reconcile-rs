@@ -97,7 +97,7 @@ impl<K: Ord, V> HashRangeQueryable for HVec<K, V> {
     }
 
     fn len(&self) -> usize {
-        unimplemented!();
+        self.keys.len()
     }
 }
 
