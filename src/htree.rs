@@ -379,7 +379,7 @@ trait HashRangeQueryable {
     fn len(&self) -> usize;
 }
 
-impl<K: Ord + Hash, V: Hash> HashRangeQueryable for HTree<K, V> {
+impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
     type Key = K;
     fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
         fn aux<K: Ord, V, R: RangeBounds<K>>(
