@@ -184,3 +184,92 @@ fn test_simple() {
     let hash4 = vec.hash(..);
     assert_eq!(hash4, hash2);
 }
+
+#[test]
+fn test_compare() {
+    let vec1 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+    let vec2 = HVec::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+    let vec3 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+    let vec4 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+    let vec5 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+
+    assert_eq!(vec1.hash(..), vec1.hash(..));
+    assert_eq!(vec1.hash(..), vec2.hash(..));
+    assert_eq!(vec1.hash(..), vec3.hash(..));
+    assert_ne!(vec1.hash(..), vec4.hash(..));
+    assert_ne!(vec1.hash(..), vec5.hash(..));
+
+    assert_eq!(vec1, vec1);
+    assert_eq!(vec1, vec2);
+    assert_eq!(vec1, vec3);
+    assert_ne!(vec1, vec4);
+    assert_ne!(vec1, vec5);
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
+
+    use super::HashRangeQueryable;
+
+    #[test]
+    fn big_test() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut vec = super::HVec::new();
+        let mut key_values = Vec::new();
+
+        let mut expected_hash = 0;
+
+        // add some
+        for _ in 0..1000 {
+            let key: u64 = rng.gen();
+            let value: u64 = rng.gen();
+            vec.insert(key, value);
+            expected_hash ^= super::hash(&key, &value);
+            assert_eq!(vec.hash(..), expected_hash);
+            key_values.push((key, value));
+        }
+
+        // check for partial ranges
+        let mid = u64::MAX / 2;
+        assert_ne!(vec.hash(mid..), vec.hash(..));
+        assert_ne!(vec.hash(..mid), vec.hash(..));
+        assert_eq!(vec.hash(..mid) ^ vec.hash(mid..), vec.hash(..));
+
+        // check key_at() with first and last indexes
+        assert_eq!(
+            key_values.iter().map(|(key, _)| key).min(),
+            Some(vec.key_at(0))
+        );
+        assert_eq!(
+            key_values.iter().map(|(key, _)| key).max(),
+            Some(vec.key_at(vec.len() - 1))
+        );
+
+        // check for at/position consistency
+        let key = key_values[0].0;
+        let index = vec.position(&key).unwrap();
+        assert_ne!(index, 0);
+        assert_eq!(vec.key_at(index), &key);
+
+        // test insertion_position
+        assert_eq!(vec.insertion_position(&key), vec.position(&key).unwrap());
+        assert_eq!(vec.insertion_position(&0), 0);
+        assert_eq!(vec.insertion_position(&u64::MAX), vec.len());
+
+        let items: Vec<(u64, u64)> = vec.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(items.len(), key_values.len());
+        key_values.sort();
+        assert_eq!(items, key_values);
+
+        // remove some
+        key_values.shuffle(&mut rng);
+        for _ in 0..1000 {
+            let (key, value) = key_values.pop().unwrap();
+            let value2 = vec.remove(&key);
+            assert_eq!(value2, Some(value));
+            expected_hash ^= super::hash(&key, &value);
+            assert_eq!(vec.hash(..), expected_hash);
+        }
+    }
+}
