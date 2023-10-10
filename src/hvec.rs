@@ -72,11 +72,21 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HVec<K, V> {
     where
         T: IntoIterator<Item = (K, V)>,
     {
-        let mut vec = HVec::new();
-        for (k, v) in iter {
-            vec.insert(k, v);
+        let mut vec: Vec<_> = iter.into_iter().collect();
+        vec.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut keys = Vec::with_capacity(vec.len());
+        let mut values = Vec::with_capacity(vec.len());
+        let mut hashes = Vec::with_capacity(vec.len());
+        for (k, v) in vec {
+            hashes.push(hash(&k, &v));
+            keys.push(k);
+            values.push(v);
         }
-        vec
+        HVec {
+            keys,
+            values,
+            hashes,
+        }
     }
 }
 
