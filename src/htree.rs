@@ -634,6 +634,28 @@ impl<K: Ord, V> HTree<K, V> {
     }
 }
 
+pub fn reconciliate<K, V>(first: &mut HTree<K, V>, second: &mut HTree<K, V>)
+where
+    K: Clone + Hash + Ord,
+    V: Clone + Hash,
+{
+    for diff in first.diff(second) {
+        match diff {
+            Diff::InSelf(range) => {
+                for (k, v) in first.get_range(range) {
+                    second.insert(k.clone(), v.clone());
+                }
+            }
+            Diff::InOther(range) => {
+                for (k, v) in second.get_range(range) {
+                    first.insert(k.clone(), v.clone());
+                }
+            }
+            Diff::InBoth(_range) => unimplemented!(),
+        }
+    }
+}
+
 #[test]
 fn test_simple() {
     // empty
@@ -712,6 +734,20 @@ fn test_compare() {
     assert_eq!(range.collect::<Vec<_>>(), vec![(&40, &"Hello")]);
     let range = tree4.get_range((Bound::Included(50), Bound::Excluded(75)));
     assert_eq!(range.collect::<Vec<_>>(), vec![]);
+
+    let mut tree1 = tree1;
+    let mut tree4 = tree4;
+    reconciliate(&mut tree1, &mut tree4);
+    assert_eq!(tree1, tree4);
+    assert_eq!(
+        tree1.get_range(..).collect::<Vec<_>>(),
+        [
+            (&25, &"World!"),
+            (&40, &"Hello"),
+            (&50, &"Hello"),
+            (&75, &"Everyone!")
+        ]
+    )
 }
 
 #[cfg(test)]
