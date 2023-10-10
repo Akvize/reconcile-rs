@@ -562,6 +562,78 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
     }
 }
 
+pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
+    range: R,
+    stack: Vec<(&'a Node<K, V>, bool)>,
+}
+
+enum RangeOrdering {
+    Less,
+    Inside,
+    Greater,
+}
+
+fn range_compare<T: Ord, R: RangeBounds<T>>(item: &T, range: &R) -> RangeOrdering {
+    if match range.start_bound() {
+        Bound::Included(key) => item < key,
+        Bound::Excluded(key) => item <= key,
+        _ => false,
+    } {
+        return RangeOrdering::Less;
+    }
+    if match range.end_bound() {
+        Bound::Included(key) => item > key,
+        Bound::Excluded(key) => item >= key,
+        _ => false,
+    } {
+        return RangeOrdering::Greater;
+    }
+    RangeOrdering::Inside
+}
+
+impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((node, left_explored)) = self.stack.pop() {
+            if !self.range.contains(&node.key) {
+                self.stack.clear();
+                return None;
+            }
+            if !left_explored {
+                if let Some(left) = node.left.as_ref() {
+                    self.stack.push((node, true));
+                    self.stack.push((left, false));
+                    return self.next();
+                }
+            }
+            if let Some(right) = node.right.as_ref() {
+                self.stack.push((right, false));
+            }
+            Some((&node.key, &node.value))
+        } else {
+            None
+        }
+    }
+}
+
+impl<K: Ord, V> HTree<K, V> {
+    pub fn get_range<R: RangeBounds<K>>(&self, range: R) -> ItemRange<K, V, R> {
+        let mut stack = Vec::new();
+        let mut maybe_node = self.root.as_ref();
+        while let Some(node) = maybe_node {
+            match range_compare(&node.key, &range) {
+                RangeOrdering::Less => maybe_node = node.right.as_ref(),
+                RangeOrdering::Greater => maybe_node = node.left.as_ref(),
+                RangeOrdering::Inside => {
+                    stack.push((node.as_ref(), true));
+                    maybe_node = node.left.as_ref();
+                }
+            }
+        }
+        ItemRange { range, stack }
+    }
+}
+
 #[test]
 fn test_simple() {
     // empty
@@ -631,6 +703,15 @@ fn test_compare() {
         tree1.diff(&tree5),
         vec![Diff::InBoth((Bound::Included(75), Bound::Unbounded))]
     );
+
+    let range = tree1.get_range((Bound::Included(40), Bound::Excluded(50)));
+    assert_eq!(range.collect::<Vec<_>>(), vec![]);
+    let range = tree1.get_range((Bound::Included(50), Bound::Excluded(75)));
+    assert_eq!(range.collect::<Vec<_>>(), vec![(&50, &"Hello")]);
+    let range = tree4.get_range((Bound::Included(40), Bound::Excluded(50)));
+    assert_eq!(range.collect::<Vec<_>>(), vec![(&40, &"Hello")]);
+    let range = tree4.get_range((Bound::Included(50), Bound::Excluded(75)));
+    assert_eq!(range.collect::<Vec<_>>(), vec![]);
 }
 
 #[cfg(test)]
