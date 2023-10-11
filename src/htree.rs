@@ -19,6 +19,7 @@ struct Node<K, V> {
     value: V,
     self_hash: u64,
     children: [Option<Box<Node<K, V>>>; 2],
+    taller_subtree: Direction,
     tree_hash: u64,
     tree_size: usize,
 }
@@ -31,6 +32,7 @@ impl<K: Hash, V: Hash> Node<K, V> {
             value,
             self_hash: hash,
             children: [None, None],
+            taller_subtree: Direction::None,
             tree_hash: hash,
             tree_size: 1,
         }
@@ -214,11 +216,15 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn validate(&self) {
+        // return:
+        // - the cumulated hash of the sub-tree
+        // - the number of nodes of the sub-tree
+        // - the height of the sub-tree
         fn aux<K: Hash + Ord, V: Hash>(
             anchor: &Option<Box<Node<K, V>>>,
             min: Option<&K>,
             max: Option<&K>,
-        ) -> (u64, usize) {
+        ) -> (u64, usize, usize) {
             if let Some(node) = anchor {
                 if let Some(min) = min {
                     if &node.key < min {
@@ -234,8 +240,10 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 if self_hash != node.self_hash {
                     panic!("Self hashing invariant violated");
                 }
-                let (left_hash, left_size) = aux(&node.children[0], min, Some(&node.key));
-                let (right_hash, right_size) = aux(&node.children[1], Some(&node.key), max);
+                let (left_hash, left_size, left_height) =
+                    aux(&node.children[0], min, Some(&node.key));
+                let (right_hash, right_size, right_height) =
+                    aux(&node.children[1], Some(&node.key), max);
                 let tree_hash = left_hash ^ right_hash ^ self_hash;
                 if tree_hash != node.tree_hash {
                     panic!("Tree hashing invariant violated");
@@ -244,9 +252,15 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 if tree_size != node.tree_size {
                     panic!("Tree size invariant violated");
                 }
-                (tree_hash, tree_size)
+                match node.taller_subtree {
+                    Direction::None => assert_eq!(left_height, right_height),
+                    Direction::Left => assert_eq!(left_height, right_height + 1),
+                    Direction::Right => assert_eq!(left_height + 1, right_height),
+                }
+                let tree_height = left_height.max(right_height);
+                (tree_hash, tree_size, tree_height)
             } else {
-                (0, 0)
+                (0, 0, 0)
             }
         }
         aux(&self.root, None, None);
