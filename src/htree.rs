@@ -84,13 +84,23 @@ fn rotate<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) {
     // remove the node from anchor
     let mut node = anchor.take().unwrap();
     // remove the child to be used as the new root from its parent
-    let mut new_root = node.children[-dir as usize].take().unwrap();
+    let mut child = node.children[-dir as usize].take().unwrap();
+    node.tree_hash ^= child.tree_hash;
+    node.tree_size -= child.tree_size;
     // move one sub-tree of the new root to the freed side of the parent
-    node.children[-dir as usize] = new_root.children[dir as usize].take();
+    if let Some(grandchild) = child.children[dir as usize].take() {
+        child.tree_hash ^= grandchild.tree_hash;
+        child.tree_size -= grandchild.tree_size;
+        node.tree_hash ^= grandchild.tree_hash;
+        node.tree_size += grandchild.tree_size;
+        node.children[-dir as usize] = Some(grandchild);
+    }
     // re-root the node at the child
-    new_root.children[dir as usize] = Some(node);
+    child.tree_hash ^= node.tree_hash;
+    child.tree_size += node.tree_size;
+    child.children[dir as usize] = Some(node);
     // set the new-root
-    *anchor = Some(new_root);
+    *anchor = Some(child);
 }
 
 /// Restore the AVL tree invariant at `anchor`, that says that the different in height of the left
