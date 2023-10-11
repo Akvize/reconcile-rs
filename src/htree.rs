@@ -838,60 +838,87 @@ fn test_compare() {
 mod tests {
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
-    use super::HashRangeQueryable;
+    use crate::diff::{Diff, Diffable, HashRangeQueryable};
+
+    use super::HTree;
 
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut tree = super::HTree::new();
+        let mut tree1 = HTree::new();
         let mut key_values = Vec::new();
 
         let mut expected_hash = 0;
 
         // add some
         for _ in 0..1000 {
-            let key: u64 = rng.gen();
+            let key: u64 = rng.gen::<u64>();
             let value: u64 = rng.gen();
-            let old = tree.insert(key, value);
+            let old = tree1.insert(key, value);
             assert!(old.is_none());
-            tree.check_invariants();
+            tree1.check_invariants();
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree.hash(..), expected_hash);
+            assert_eq!(tree1.hash(..), expected_hash);
             key_values.push((key, value));
         }
 
         // in the tree, the items should now be sorted
         key_values.sort();
 
+        let mut tree2 = HTree::from_iter(key_values.iter().copied());
+        assert_eq!(tree1, tree2);
+
         // check for partial ranges
-        let mid = u64::MAX / 2;
-        assert_ne!(tree.hash(mid..), tree.hash(..));
-        assert_ne!(tree.hash(..mid), tree.hash(..));
-        assert_eq!(tree.hash(..mid) ^ tree.hash(mid..), tree.hash(..));
+        let mid = key_values[key_values.len() / 2].0;
+        assert_ne!(tree1.hash(mid..), tree1.hash(..));
+        assert_ne!(tree1.hash(..mid), tree1.hash(..));
+        assert_eq!(tree1.hash(..mid) ^ tree1.hash(mid..), tree1.hash(..));
 
         for _ in 0..100 {
             let index = rng.gen::<usize>() % key_values.len();
             let key = key_values[index].0;
-            assert_eq!(*tree.key_at(index), key);
-            assert_eq!(tree.position(&key), Some(index));
-            assert_eq!(tree.insertion_position(&key), index);
+            assert_eq!(*tree1.key_at(index), key);
+            assert_eq!(tree1.position(&key), Some(index));
+            assert_eq!(tree1.insertion_position(&key), index);
         }
-        assert_eq!(tree.insertion_position(&0), 0);
-        assert_eq!(tree.insertion_position(&u64::MAX), tree.len());
+        assert_eq!(tree1.insertion_position(&0), 0);
+        assert_eq!(tree1.insertion_position(&u64::MAX), tree1.len());
 
-        let items: Vec<(u64, u64)> = tree.iter().map(|(&k, &v)| (k, v)).collect();
+        // test iteration
+        let items: Vec<(u64, u64)> = tree1.iter().map(|(&k, &v)| (k, v)).collect();
         assert_eq!(items.len(), key_values.len());
         assert_eq!(items, key_values);
+
+        // test diff
+        let key: u64 = rng.gen::<u64>();
+        let value: u64 = rng.gen();
+        let old = tree2.insert(key, value);
+        assert!(old.is_none());
+        let mut diffs1 = Vec::new();
+        let mut diffs2 = Vec::new();
+        let mut segments = tree1.start_diff();
+        while !segments.is_empty() {
+            segments = tree2.diff_round(&mut diffs2, segments);
+            segments = tree1.diff_round(&mut diffs1, segments);
+        }
+        assert_eq!(diffs1.len(), 0);
+        assert_eq!(diffs2.len(), 1);
+        if let Diff::InSelf(range) = diffs2[0] {
+            let items: Vec<_> = tree2.get_range(range).collect();
+            assert_eq!(items, vec![(&key, &value)]);
+        } else {
+            panic!("Expected Diff::Inself(_), got {:?}", diffs2[0]);
+        }
 
         // remove some
         key_values.shuffle(&mut rng);
         for _ in 0..1000 {
             let (key, value) = key_values.pop().unwrap();
-            let value2 = tree.remove(&key);
-            tree.check_invariants();
+            let value2 = tree1.remove(&key);
+            tree1.check_invariants();
             assert_eq!(value2, Some(value));
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree.hash(..), expected_hash);
+            assert_eq!(tree1.hash(..), expected_hash);
         }
     }
 }
