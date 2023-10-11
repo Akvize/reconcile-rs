@@ -251,9 +251,10 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                     .as_ref()
                     .map(|left| left.tree_size)
                     .or(Some(0)),
-                dir => node.children[dir as usize]
-                    .as_ref()
-                    .and_then(|node| aux(node, key)),
+                Direction::Left => node.children[0].as_ref().and_then(|left| aux(left, key)),
+                Direction::Right => node.children[1].as_ref().and_then(|right| {
+                    aux(right, key).map(|index| node.tree_size - right.tree_size + index)
+                }),
             }
         }
         self.root.as_ref().and_then(|node| aux(node, key))
