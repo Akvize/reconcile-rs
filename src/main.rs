@@ -21,17 +21,24 @@ fn bench<R, F: Fn() -> R>(name: &str, f: F) {
         iterations += ITERATIONS_BETWEEN_TIME_CHECKS;
         let elapsed = Instant::now() - now;
         if elapsed >= RUNTIME_TARGET {
-            println!("{:?} {name}", elapsed / iterations);
+            println!("{name}: {:?}", elapsed / iterations);
             break;
         }
     }
 }
 
 fn bench_hvec(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, value: u64) {
+    let now = Instant::now();
     key_values.shuffle(rng);
     let vec1 = HVec::from_iter(key_values.iter().copied());
     key_values.shuffle(rng);
     let mut vec2 = HVec::from_iter(key_values.iter().copied());
+    let elapsed = (Instant::now() - now) / 2;
+    println!(
+        "hvec: {} elements inserted in {elapsed:?}",
+        key_values.len()
+    );
+
     assert_eq!(vec1, vec2);
     vec2.insert(key, value);
     assert_eq!(vec1.diff(&vec2).len(), 1);
@@ -40,9 +47,16 @@ fn bench_hvec(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, valu
 }
 
 fn bench_hvec_fast(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, value: u64) {
+    let now = Instant::now();
     let vec1 = HVec::from_iter(key_values.iter().copied());
     key_values.shuffle(rng);
     let mut vec2 = HVec::from_iter(key_values.iter().copied());
+    let elapsed = (Instant::now() - now) / 2;
+    println!(
+        "hvec_fast: {} elements inserted in {elapsed:?}",
+        key_values.len()
+    );
+
     assert_eq!(vec1, vec2);
     vec2.insert(key, value);
     assert_eq!(vec1.fast_diff(&vec2).len(), 1);
@@ -51,9 +65,16 @@ fn bench_hvec_fast(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64,
 }
 
 fn bench_htree(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, value: u64) {
+    let now = Instant::now();
     let tree1 = HTree::from_iter(key_values.iter().copied());
     key_values.shuffle(rng);
     let mut tree2 = HTree::from_iter(key_values.iter().copied());
+    let elapsed = (Instant::now() - now) / 2;
+    println!(
+        "htree: {} elements inserted in {elapsed:?}",
+        key_values.len()
+    );
+
     assert_eq!(tree1, tree2);
     tree2.insert(key, value);
     assert_eq!(tree1.diff(&tree2).len(), 1);
