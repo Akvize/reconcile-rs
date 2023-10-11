@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::hash::Hash;
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Neg, RangeBounds};
 
 use crate::diff::{Diff, Diffable, HashRangeQueryable};
 use crate::hash::hash;
@@ -11,6 +11,17 @@ enum Direction {
     Left = 0,
     Right = 1,
     None,
+}
+
+impl Neg for Direction {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        match self {
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+            Direction::None => Direction::None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -55,6 +66,128 @@ impl<K: Ord, V> Node<K, V> {
             Ordering::Less => Direction::Left,
             Ordering::Greater => Direction::Right,
             Ordering::Equal => Direction::None,
+        }
+    }
+}
+
+/// Rotate the sub-tree rooted at `anchor`.
+///
+/// This will move the node at `anchor` downwards, in the provided direction `dir`. The child in
+/// the opposite direction will be moved at `anchor`. The parent originally at `anchor` will then
+/// be moved itself as a child of this new root. Room for doing this is done by moving the
+/// corresponding sub-tree rooted at the child to the parent, where the child has been removed.
+///
+/// Seriously, just look at the diagram at Wikipedia, it will make more sense:
+/// https://en.wikipedia.org/wiki/AVL_tree#Simple_rotation
+fn rotate<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) {
+    assert_ne!(dir, Direction::None);
+    // remove the node from anchor
+    let mut node = anchor.take().unwrap();
+    // remove the child to be used as the new root from its parent
+    let mut new_root = node.children[-dir as usize].take().unwrap();
+    // move one sub-tree of the new root to the freed side of the parent
+    node.children[-dir as usize] = new_root.children[dir as usize].take();
+    // re-root the node at the child
+    new_root.children[dir as usize] = Some(node);
+    // set the new-root
+    *anchor = Some(new_root);
+}
+
+/// Restore the AVL tree invariant at `anchor`, that says that the different in height of the left
+/// and right part of the sub-tree rooted at `anchor` is at most one.
+///
+/// This needs to be call after a node has been inserted or removed from the tree and the height of
+/// the sub-tree rooted at `anchor` has changed. It returns `true` when the rebalanced sub-tree
+/// still has a height change (increase for an insertion, decrease for deletion).
+///
+/// `dir` indicates either the direction where a node has been inserted, or the direction opposite to
+/// where a node has been removed
+fn rebalance<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) -> bool {
+    let node = anchor.as_mut().unwrap();
+    if node.taller_subtree == Direction::None {
+        // Case 1: the node was balanced
+        // the node becomes unbalanced
+        node.taller_subtree = dir;
+        // the height of the sub-tree rooted at node is increased
+        true
+    } else if node.taller_subtree != dir {
+        // Case 2: the node was unbalanced in the other direction
+        // the node becomes balanced
+        node.taller_subtree = Direction::None;
+        // the height of the sub-tree rooted at node stays the same
+        false
+    } else {
+        // Case 3: the node was already unbalanced in the same direction, need to rebalance
+        // NOTE: since the sub-tree is unbalanced in this redirection, there is always a child here
+        let child = node.children[dir as usize].as_mut().unwrap();
+        // The basic goal is to bring the child up one node, by rotating in the place of its
+        // parent. The other parent's sub-tree, and the child's two sub-trees must then be
+        // re-rooted appropriately
+        if child.taller_subtree == Direction::None {
+            // Sub-case 1: the child is currently balanced
+            // NOTE: this does not happen during insertion
+            // In this case, simply rotating child in place of its parent. One of the sub-trees of
+            // the child will be re-rooted at the parent; with the rotation, the resulting sub-tree
+            // of the child will see its height increased by one. The other sub-tree of the child
+            // will stay rooted at the child, and the height of the resulting sub-tree will thus
+            // be reduced by one. After the deletion and rebalancing, the unbalance is thus inverted.
+            //
+            // the unbalance is inverted
+            child.taller_subtree = -dir;
+            // the parent is moved down once, and one of the sub-trees of the child is re-rooted
+            // here; that new sub-tree is taller that stays rooted at the parent, so it causes
+            // unbalance
+            node.taller_subtree = dir;
+            // perform the actual rotation
+            rotate(anchor, -dir);
+            // the height decreases after the rebalancing
+            true
+        } else if child.taller_subtree == dir {
+            // Sub-case 2: the child is currently balanced in the same direction as the parent
+            // By keeping the longer sub-tree with the child, and re-rooting the shorter sub-tree
+            // of the child to the parent after the rotation, the total height will be decreased by
+            // one, and both nodes become balanced
+            child.taller_subtree = Direction::None;
+            node.taller_subtree = Direction::None;
+            rotate(anchor, -dir);
+            // the change in height is absorbed by the rebalancing
+            false
+        } else {
+            // Sub-case 3: the child is currently balanced in the opposite direction as the parent
+            // Simply moving the sub-trees as in the previous sub-cases will not be enough. Indeed,
+            // the taller sub-tree of the child would be re-rooted at the parent, with the parent
+            // at the same depth as the original position of the child, the total height is not
+            // changed. Thus, we need to look at the grand-child on the taller side to perform two
+            // rotations, one to rebalance the child, one to rebalance the parent.
+            //
+            // We still need to look at the grandchild to know the resulting unbalances of parent
+            // and child after rebalancing
+            let grandchild = child.children[-dir as usize].as_mut().unwrap();
+            if grandchild.taller_subtree == Direction::None {
+                // Sub-sub-case 1: the grand-child is balanced
+                // NOTE: just like sub-case 1, this does not happen during insertion
+                grandchild.taller_subtree = Direction::None;
+                child.taller_subtree = Direction::None;
+                node.taller_subtree = Direction::None;
+            } else if grandchild.taller_subtree == dir {
+                // Sub-sub-case 2: the grand-child is unbalanced in the same direction as the
+                // parent is, and in the opposite direction to the child
+                grandchild.taller_subtree = Direction::None;
+                child.taller_subtree = Direction::None;
+                node.taller_subtree = -dir;
+            } else {
+                // Sub-sub-case 3: the grand-child is unbalanced in the opposite direction to the
+                // parent, and in the same direction as the child is
+                grandchild.taller_subtree = Direction::None;
+                child.taller_subtree = dir;
+                node.taller_subtree = Direction::None;
+            }
+            // rebalance the child (by replacing it with grandchild)
+            rotate(&mut node.children[dir as usize], dir);
+            // rebalance the parent (by replacing it with grandchild in its turn)
+            rotate(anchor, -dir);
+            // the change in height is absorbed by the rebalancing
+            false
         }
     }
 }
@@ -116,32 +249,37 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        // return:
+        // - hash difference
+        // - the node that was at key, if any
+        // - whether the height has increased in the sub-tree
         fn aux<K: Hash + Ord, V: Hash>(
             anchor: &mut Option<Box<Node<K, V>>>,
             key: K,
             value: V,
-        ) -> (u64, Option<V>) {
+        ) -> (u64, Option<V>, bool) {
             if let Some(node) = anchor {
                 match node.dir(&key) {
                     Direction::None => {
                         let (diff_hash, old_node) = node.replace(value);
-                        (diff_hash, Some(old_node))
+                        (diff_hash, Some(old_node), false)
                     }
                     dir => {
-                        let (diff_hash, old_node) =
+                        let (diff_hash, old_node, height_increased) =
                             aux(&mut node.children[dir as usize], key, value);
                         node.tree_hash ^= diff_hash;
                         if old_node.is_none() {
                             node.tree_size += 1;
                         }
-                        (diff_hash, old_node)
+                        let height_increased = height_increased && rebalance(anchor, dir);
+                        (diff_hash, old_node, height_increased)
                     }
                 }
             } else {
                 let node = Box::new(Node::new(key, value));
                 let hash = node.self_hash;
                 *anchor = Some(node);
-                (hash, None)
+                (hash, None, true)
             }
         }
         aux(&mut self.root, key, value).1
