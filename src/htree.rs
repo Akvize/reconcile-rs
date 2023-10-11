@@ -107,8 +107,9 @@ fn rotate<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) {
 /// and right part of the sub-tree rooted at `anchor` is at most one.
 ///
 /// This needs to be call after a node has been inserted or removed from the tree and the height of
-/// the sub-tree rooted at `anchor` has changed. It returns `true` when the rebalanced sub-tree
-/// still has a height change (increase for an insertion, decrease for deletion).
+/// the sub-tree rooted at `anchor` has changed. For an insertion, it returns `true` when the
+/// height of the sub-tree has increased; for a deletion, it returns `false` when the height has
+/// decreased.
 ///
 /// `dir` indicates either the direction where a node has been inserted, or the direction opposite to
 /// where a node has been removed
@@ -118,13 +119,13 @@ fn rebalance<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) -> bool
         // Case 1: the node was balanced
         // the node becomes unbalanced
         node.taller_subtree = dir;
-        // the height of the sub-tree rooted at node is increased
+        // height of the sub-tree rooted at node is increased (insertion) / unchanged (deletion)
         true
     } else if node.taller_subtree != dir {
         // Case 2: the node was unbalanced in the other direction
         // the node becomes balanced
         node.taller_subtree = Direction::None;
-        // the height of the sub-tree rooted at node stays the same
+        // height of the sub-tree rooted at node is unchanged (insertion) / decreased (deletion)
         false
     } else {
         // Case 3: the node was already unbalanced in the same direction, need to rebalance
@@ -150,7 +151,7 @@ fn rebalance<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) -> bool
             node.taller_subtree = dir;
             // perform the actual rotation
             rotate(anchor, -dir);
-            // the height decreases after the rebalancing
+            // the height decreases (deletion) after the rebalancing
             true
         } else if child.taller_subtree == dir {
             // Sub-case 2: the child is currently balanced in the same direction as the parent
@@ -160,7 +161,7 @@ fn rebalance<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) -> bool
             child.taller_subtree = Direction::None;
             node.taller_subtree = Direction::None;
             rotate(anchor, -dir);
-            // the change in height is absorbed by the rebalancing
+            // the change in height is absorbed by the rebalancing (insertion) / not (deletion)
             false
         } else {
             // Sub-case 3: the child is currently balanced in the opposite direction as the parent
@@ -196,7 +197,7 @@ fn rebalance<K, V>(anchor: &mut Option<Box<Node<K, V>>>, dir: Direction) -> bool
             rotate(&mut node.children[dir as usize], dir);
             // rebalance the parent (by replacing it with grandchild in its turn)
             rotate(anchor, -dir);
-            // the change in height is absorbed by the rebalancing
+            // the change in height is absorbed by the rebalancing (insertion) / not (deletion)
             false
         }
     }
@@ -296,16 +297,26 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        fn take_leftmost<K, V>(node: &mut Box<Node<K, V>>) -> Box<Node<K, V>> {
+        // return:
+        // - the leftmost node removed from the tree
+        // - whether the height of the tree has decreased
+        fn take_leftmost<K, V>(anchor: &mut Option<Box<Node<K, V>>>) -> (Box<Node<K, V>>, bool) {
+            let node = anchor.as_mut().unwrap();
             if node.children[0].as_mut().unwrap().children[0].is_some() {
-                let ret = take_leftmost(node.children[0].as_mut().unwrap());
+                let (ret, height_decreased) = take_leftmost(&mut node.children[0]);
                 node.tree_hash ^= ret.self_hash;
                 node.tree_size -= 1;
-                ret
+                // we have removed a node from the left sub-tree, whose height might have
+                // decreased, so we rebalance on the right
+                let height_decreased = height_decreased && !rebalance(anchor, Direction::Right);
+                (ret, height_decreased)
             } else {
+                // splice the leftmost node
+                // remove the leftmost node and its (right) sub-tree
                 let mut leftmost = node.children[0].take().unwrap();
                 node.tree_hash ^= leftmost.self_hash;
                 node.tree_size -= 1;
+                // re-root the leftmost node's (right) sub-tree to its parent's left
                 if let Some(right) = leftmost.children[1].take() {
                     leftmost.tree_hash ^= right.tree_hash;
                     leftmost.tree_size -= right.tree_size;
@@ -313,51 +324,75 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 }
                 assert_eq!(leftmost.tree_size, 1);
                 assert_eq!(leftmost.self_hash, leftmost.tree_hash);
-                leftmost
+                // whether the leftmost node had a (right) sub-tree or not, the height of the
+                // sub-tree rooted at seen from its parent has decreased by one
+                let height_decreased = !rebalance(anchor, Direction::Right);
+                (leftmost, height_decreased)
             }
         }
+        // return:
+        // - hash difference
+        // - the removed value, if any
+        // - hether the height has decreased in the sub-tree
         fn aux<K: Hash + Ord, V>(
             anchor: &mut Option<Box<Node<K, V>>>,
             key: &K,
-        ) -> (u64, Option<V>) {
+        ) -> (u64, Option<V>, bool) {
             if let Some(node) = anchor {
                 match node.dir(key) {
                     Direction::None => {
                         let mut node = anchor.take().unwrap();
-                        let ret = (node.self_hash, Some(node.value));
                         match (node.children[0].take(), node.children[1].take()) {
-                            (None, None) => (),
-                            (None, Some(right)) => *anchor = Some(right),
-                            (Some(left), None) => *anchor = Some(left),
+                            (None, None) => (node.self_hash, Some(node.value), true),
+                            (None, Some(right)) => {
+                                *anchor = Some(right);
+                                (node.self_hash, Some(node.value), true)
+                            }
+                            (Some(left), None) => {
+                                *anchor = Some(left);
+                                (node.self_hash, Some(node.value), true)
+                            }
                             (Some(left), Some(mut right)) => {
                                 if right.children[0].is_some() {
-                                    let mut next_node = take_leftmost(&mut right);
+                                    // this is ugly, but it's easier than making take_leftmost work
+                                    // differently
+                                    let mut tmp = Some(right);
+                                    let (mut next_node, height_decreased) = take_leftmost(&mut tmp);
+                                    let right = tmp.unwrap();
                                     next_node.tree_hash ^= left.tree_hash ^ right.tree_hash;
                                     next_node.tree_size += left.tree_size + right.tree_size;
                                     next_node.children[0] = Some(left);
                                     next_node.children[1] = Some(right);
+                                    next_node.taller_subtree = node.taller_subtree;
                                     *anchor = Some(next_node);
+                                    let height_decreased =
+                                        height_decreased && !rebalance(anchor, Direction::Left);
+                                    (node.self_hash, Some(node.value), height_decreased)
                                 } else {
                                     right.tree_hash ^= left.tree_hash;
                                     right.tree_size += left.tree_size;
                                     right.children[0] = Some(left);
+                                    right.taller_subtree = node.taller_subtree;
                                     *anchor = Some(right);
+                                    let height_decreased = !rebalance(anchor, Direction::Left);
+                                    (node.self_hash, Some(node.value), height_decreased)
                                 }
                             }
-                        };
-                        ret
+                        }
                     }
                     dir => {
-                        let (diff_hash, old_node) = aux(&mut node.children[dir as usize], key);
+                        let (diff_hash, old_node, height_decreased) =
+                            aux(&mut node.children[dir as usize], key);
                         node.tree_hash ^= diff_hash;
                         if old_node.is_some() {
                             node.tree_size -= 1;
                         }
-                        (diff_hash, old_node)
+                        let height_decreased = height_decreased && !rebalance(anchor, -dir);
+                        (diff_hash, old_node, height_decreased)
                     }
                 }
             } else {
-                (0, None)
+                (0, None, false)
             }
         }
         aux(&mut self.root, key).1
