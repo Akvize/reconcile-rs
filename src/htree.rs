@@ -723,20 +723,35 @@ where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
+    let mut new_first = Vec::new();
+    let mut new_second = Vec::new();
     for diff in first.diff(second) {
         match diff {
             Diff::InSelf(range) => {
                 for (k, v) in first.get_range(range) {
-                    second.insert(k.clone(), v.clone());
+                    new_second.push((k.clone(), v.clone()))
                 }
             }
             Diff::InOther(range) => {
                 for (k, v) in second.get_range(range) {
-                    first.insert(k.clone(), v.clone());
+                    new_first.push((k.clone(), v.clone()));
                 }
             }
-            Diff::InBoth(_range) => unimplemented!(),
+            Diff::InBoth(range) => {
+                for (k, v) in first.get_range(range) {
+                    new_second.push((k.clone(), v.clone()));
+                }
+                for (k, v) in second.get_range(range) {
+                    new_first.push((k.clone(), v.clone()));
+                }
+            }
         }
+    }
+    for (k, v) in new_first {
+        first.insert(k, v);
+    }
+    for (k, v) in new_second {
+        second.insert(k, v);
     }
 }
 
@@ -800,14 +815,11 @@ fn test_compare() {
     assert_eq!(tree1.diff(&tree3), vec![]);
     assert_eq!(
         tree1.diff(&tree4),
-        vec![
-            Diff::InOther((Bound::Included(40), Bound::Excluded(50))),
-            Diff::InSelf((Bound::Included(50), Bound::Excluded(75)))
-        ]
+        vec![Diff::InBoth((Bound::Included(&40), Bound::Excluded(&75))),]
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![Diff::InBoth((Bound::Included(75), Bound::Unbounded))]
+        vec![Diff::InBoth((Bound::Included(&75), Bound::Unbounded))]
     );
 
     let range = tree1.get_range((Bound::Included(40), Bound::Excluded(50)));
