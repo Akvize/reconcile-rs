@@ -35,33 +35,19 @@ fn bench_hvec(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, valu
     let mut vec2 = HVec::from_iter(key_values.iter().copied());
     let elapsed = (Instant::now() - now) / 2;
     println!(
-        "hvec: {} elements inserted in {elapsed:?}",
+        "HVec::from_iter  {} elements inserted in {elapsed:?}",
         key_values.len()
     );
 
     assert_eq!(vec1, vec2);
     vec2.insert(key, value);
     assert_eq!(vec1.diff(&vec2).len(), 1);
-
-    bench("hvec", || black_box(&vec1).diff(black_box(&vec2)));
-}
-
-fn bench_hvec_fast(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, value: u64) {
-    let now = Instant::now();
-    let vec1 = HVec::from_iter(key_values.iter().copied());
-    key_values.shuffle(rng);
-    let mut vec2 = HVec::from_iter(key_values.iter().copied());
-    let elapsed = (Instant::now() - now) / 2;
-    println!(
-        "hvec_fast: {} elements inserted in {elapsed:?}",
-        key_values.len()
-    );
-
-    assert_eq!(vec1, vec2);
-    vec2.insert(key, value);
     assert_eq!(vec1.fast_diff(&vec2).len(), 1);
 
-    bench("hvec_fast", || black_box(&vec1).fast_diff(black_box(&vec2)));
+    bench("HVec::diff", || black_box(&vec1).diff(black_box(&vec2)));
+    bench("HVec::fast_diff", || {
+        black_box(&vec1).fast_diff(black_box(&vec2))
+    });
 }
 
 fn bench_htree(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, value: u64) {
@@ -71,7 +57,7 @@ fn bench_htree(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, val
     let mut tree2 = HTree::from_iter(key_values.iter().copied());
     let elapsed = (Instant::now() - now) / 2;
     println!(
-        "htree: {} elements inserted in {elapsed:?}",
+        "HTree::from_iter  {} elements inserted in {elapsed:?}",
         key_values.len()
     );
 
@@ -79,7 +65,7 @@ fn bench_htree(rng: &mut StdRng, key_values: &mut Vec<(u64, u64)>, key: u64, val
     tree2.insert(key, value);
     assert_eq!(tree1.diff(&tree2).len(), 1);
 
-    bench("htree", || black_box(&tree1).diff(black_box(&tree2)));
+    bench("HTree::diff", || black_box(&tree1).diff(black_box(&tree2)));
 }
 
 fn main() {
@@ -94,6 +80,5 @@ fn main() {
     let value: u64 = rng.gen();
 
     bench_hvec(&mut rng, &mut key_values, key, value);
-    bench_hvec_fast(&mut rng, &mut key_values, key, value);
     bench_htree(&mut rng, &mut key_values, key, value);
 }
