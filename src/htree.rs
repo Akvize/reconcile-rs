@@ -215,7 +215,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         aux(&mut self.root, key).1
     }
 
-    pub fn validate(&self) {
+    pub fn check_invariants(&self) {
         // return:
         // - the cumulated hash of the sub-tree
         // - the number of nodes of the sub-tree
@@ -258,7 +258,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                     Direction::Right => assert_eq!(left_height + 1, right_height),
                 }
                 let tree_height = left_height.max(right_height);
-                (tree_hash, tree_size, tree_height)
+                (tree_hash, tree_size, 1 + tree_height)
             } else {
                 (0, 0, 0)
             }
@@ -561,24 +561,24 @@ fn test_simple() {
     // empty
     let mut tree = HTree::new();
     assert_eq!(tree.hash(..), 0);
-    tree.validate();
+    tree.check_invariants();
 
     // 1 value
     tree.insert(50, "Hello");
-    tree.validate();
+    tree.check_invariants();
     let hash1 = tree.hash(..);
     assert_ne!(hash1, 0);
 
     // 2 values
     tree.insert(25, "World!");
-    tree.validate();
+    tree.check_invariants();
     let hash2 = tree.hash(..);
     assert_ne!(hash2, 0);
     assert_ne!(hash2, hash1);
 
     // 3 values
     tree.insert(75, "Everyone!");
-    tree.validate();
+    tree.check_invariants();
     let hash3 = tree.hash(..);
     assert_ne!(hash3, 0);
     assert_ne!(hash3, hash1);
@@ -586,7 +586,7 @@ fn test_simple() {
 
     // back to 2 values
     tree.remove(&75);
-    tree.validate();
+    tree.check_invariants();
     let hash4 = tree.hash(..);
     assert_eq!(hash4, hash2);
 }
@@ -669,7 +669,7 @@ mod tests {
             let key: u64 = rng.gen();
             let value: u64 = rng.gen();
             tree.insert(key, value);
-            tree.validate();
+            tree.check_invariants();
             expected_hash ^= super::hash(&key, &value);
             assert_eq!(tree.hash(..), expected_hash);
             key_values.push((key, value));
@@ -712,7 +712,7 @@ mod tests {
         for _ in 0..1000 {
             let (key, value) = key_values.pop().unwrap();
             let value2 = tree.remove(&key);
-            tree.validate();
+            tree.check_invariants();
             assert_eq!(value2, Some(value));
             expected_hash ^= super::hash(&key, &value);
             assert_eq!(tree.hash(..), expected_hash);
