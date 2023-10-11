@@ -859,36 +859,27 @@ mod tests {
             key_values.push((key, value));
         }
 
+        // in the tree, the items should now be sorted
+        key_values.sort();
+
         // check for partial ranges
         let mid = u64::MAX / 2;
         assert_ne!(tree.hash(mid..), tree.hash(..));
         assert_ne!(tree.hash(..mid), tree.hash(..));
         assert_eq!(tree.hash(..mid) ^ tree.hash(mid..), tree.hash(..));
 
-        // check key_at() with first and last indexes
-        assert_eq!(
-            key_values.iter().map(|(key, _)| key).min(),
-            Some(tree.key_at(0))
-        );
-        assert_eq!(
-            key_values.iter().map(|(key, _)| key).max(),
-            Some(tree.key_at(tree.len() - 1))
-        );
-
-        // check for at/position consistency
-        let key = key_values[0].0;
-        let index = tree.position(&key).unwrap();
-        assert_ne!(index, 0);
-        assert_eq!(tree.key_at(index), &key);
-
-        // test insertion_position
-        assert_eq!(tree.insertion_position(&key), tree.position(&key).unwrap());
+        for _ in 0..100 {
+            let index = rng.gen::<usize>() % key_values.len();
+            let key = key_values[index].0;
+            assert_eq!(*tree.key_at(index), key);
+            assert_eq!(tree.position(&key), Some(index));
+            assert_eq!(tree.insertion_position(&key), index);
+        }
         assert_eq!(tree.insertion_position(&0), 0);
         assert_eq!(tree.insertion_position(&u64::MAX), tree.len());
 
         let items: Vec<(u64, u64)> = tree.iter().map(|(&k, &v)| (k, v)).collect();
         assert_eq!(items.len(), key_values.len());
-        key_values.sort();
         assert_eq!(items, key_values);
 
         // remove some
