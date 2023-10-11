@@ -33,12 +33,8 @@ pub trait Diffable {
         diffs: &mut Vec<Diff<&'a Self::Key>>,
         segments: Vec<HashSegment<'a, Self::Key>>,
     ) -> Vec<HashSegment<'a, Self::Key>>;
-    fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<&'a Self::Key>>;
-}
 
-impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
-    type Key = K;
-    fn diff<'a>(&'a self, other: &'a T) -> Vec<Diff<&'a K>> {
+    fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<&'a Self::Key>> {
         let mut diffs1 = Vec::new();
         let mut diffs2 = Vec::new();
         let mut segments = self.start_diff();
@@ -55,6 +51,10 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         }
         diffs1
     }
+}
+
+impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
+    type Key = K;
 
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>> {
         vec![HashSegment {
