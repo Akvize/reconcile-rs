@@ -851,7 +851,8 @@ mod tests {
         for _ in 0..1000 {
             let key: u64 = rng.gen();
             let value: u64 = rng.gen();
-            tree.insert(key, value);
+            let old = tree.insert(key, value);
+            assert!(old.is_none());
             tree.check_invariants();
             expected_hash ^= super::hash(&key, &value);
             assert_eq!(tree.hash(..), expected_hash);
