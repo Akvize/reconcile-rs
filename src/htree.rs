@@ -727,17 +727,17 @@ where
     let mut new_second = Vec::new();
     for diff in first.diff(second) {
         match diff {
-            Diff::InSelf(range) => {
+            Diff::LocalOnly(range) => {
                 for (k, v) in first.get_range(range) {
                     new_second.push((k.clone(), v.clone()))
                 }
             }
-            Diff::InOther(range) => {
+            Diff::RemoteOnly(range) => {
                 for (k, v) in second.get_range(range) {
                     new_first.push((k.clone(), v.clone()));
                 }
             }
-            Diff::InBoth(range) => {
+            Diff::Conflict(range) => {
                 for (k, v) in first.get_range(range) {
                     new_second.push((k.clone(), v.clone()));
                 }
@@ -815,11 +815,11 @@ fn test_compare() {
     assert_eq!(tree1.diff(&tree3), vec![]);
     assert_eq!(
         tree1.diff(&tree4),
-        vec![Diff::InBoth((Bound::Included(&40), Bound::Excluded(&75))),]
+        vec![Diff::Conflict((Bound::Included(&40), Bound::Excluded(&75))),]
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![Diff::InBoth((Bound::Included(&75), Bound::Unbounded))]
+        vec![Diff::Conflict((Bound::Included(&75), Bound::Unbounded))]
     );
 
     let range = tree1.get_range((Bound::Included(40), Bound::Excluded(50)));
@@ -915,7 +915,7 @@ mod tests {
         }
         assert_eq!(diffs1.len(), 0);
         assert_eq!(diffs2.len(), 1);
-        if let Diff::InSelf(range) = diffs2[0] {
+        if let Diff::LocalOnly(range) = diffs2[0] {
             let items: Vec<_> = tree2.get_range(range).collect();
             assert_eq!(items, vec![(&key, &value)]);
         } else {

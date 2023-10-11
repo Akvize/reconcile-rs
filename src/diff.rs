@@ -20,9 +20,9 @@ pub struct HashSegment<'a, K> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Diff<K> {
-    InSelf((Bound<K>, Bound<K>)),
-    InOther((Bound<K>, Bound<K>)),
-    InBoth((Bound<K>, Bound<K>)),
+    LocalOnly((Bound<K>, Bound<K>)),
+    RemoteOnly((Bound<K>, Bound<K>)),
+    Conflict((Bound<K>, Bound<K>)),
 }
 
 pub trait Diffable {
@@ -34,17 +34,17 @@ pub trait Diffable {
         segments: Vec<HashSegment<'a, Self::Key>>,
     ) -> Vec<HashSegment<'a, Self::Key>>;
 
-    fn diff<'a>(&'a self, other: &'a Self) -> Vec<Diff<&'a Self::Key>> {
+    fn diff<'a>(&'a self, remote: &'a Self) -> Vec<Diff<&'a Self::Key>> {
         let mut diffs1 = Vec::new();
         let mut diffs2 = Vec::new();
         let mut segments = self.start_diff();
         while !segments.is_empty() {
-            segments = other.diff_round(&mut diffs2, segments);
+            segments = remote.diff_round(&mut diffs2, segments);
             segments = self.diff_round(&mut diffs1, segments);
         }
         for diff in diffs2 {
-            if let Diff::InSelf(range) = diff {
-                diffs1.push(Diff::InOther(range));
+            if let Diff::LocalOnly(range) = diff {
+                diffs1.push(Diff::RemoteOnly(range));
             } else {
                 diffs1.push(diff);
             }
@@ -76,10 +76,10 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
             if hash == local_hash {
                 continue;
             } else if hash == 0 {
-                diffs.push(Diff::InSelf(range));
+                diffs.push(Diff::LocalOnly(range));
                 continue;
             } else if local_hash == 0 {
-                // present on other side; bounce back to the remote
+                // present on remote; bounce back to the remote
                 ret.push(HashSegment {
                     range,
                     hash: 0,
@@ -103,7 +103,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 // handled by the hash checks above
                 unreachable!();
             } else if size == 1 && local_size == 1 {
-                diffs.push(Diff::InBoth(range));
+                diffs.push(Diff::Conflict(range));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
                 ret.push(HashSegment {
