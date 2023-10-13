@@ -6,12 +6,18 @@ use clap::Parser;
 use futures::future::{select, Either};
 use rand::{Rng, SeedableRng};
 use rmp_serde::{decode, Serializer};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-use reconciliate::diff::{Diffable, HashSegment};
+use reconciliate::diff::{Diff, Diffable, HashSegment};
 use reconciliate::htree::HTree;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum Message<K, V> {
+    HashSegments(Vec<HashSegment<K>>),
+    Updates(Vec<(K, V)>),
+}
 
 async fn answer_queries(
     socket: Arc<UdpSocket>,
@@ -25,30 +31,63 @@ async fn answer_queries(
             warn!("Buffer too small for message, discarded");
             continue;
         }
-        let segments: Vec<HashSegment<u64>> = decode::from_slice(&recv_buf[..size]).unwrap();
-        debug!("got {} segments {} bytes from {peer}", segments.len(), size);
-        let mut diffs = Vec::new();
-        let segments = {
-            let guard = tree.read().unwrap();
-            guard.diff_round(&mut diffs, segments)
-        };
-        if !segments.is_empty() {
-            send_buf.clear();
-            segments
-                .serialize(&mut Serializer::new(&mut send_buf))
-                .unwrap();
-            debug!(
-                "sending {} segments {} bytes to {peer}",
-                segments.len(),
-                send_buf.len()
-            );
-            socket.send_to(&send_buf, &peer).await?;
-        }
-        if !diffs.is_empty() {
-            info!("Found diffs: {diffs:?}");
-        }
-        if segments.is_empty() {
-            break Ok(());
+        let message: Message<u64, u64> = decode::from_slice(&recv_buf[..size]).unwrap();
+        match message {
+            Message::HashSegments(segments) => {
+                debug!("got {} segments {} bytes from {peer}", segments.len(), size);
+                let mut diffs = Vec::new();
+                let segments = {
+                    let guard = tree.read().unwrap();
+                    guard.diff_round(&mut diffs, segments)
+                };
+                if !segments.is_empty() {
+                    send_buf.clear();
+                    let n_segments = segments.len();
+                    Message::HashSegments::<u64, u64>(segments)
+                        .serialize(&mut Serializer::new(&mut send_buf))
+                        .unwrap();
+                    debug!(
+                        "sending {n_segments} segments {} bytes to {peer}",
+                        send_buf.len()
+                    );
+                    socket.send_to(&send_buf, &peer).await?;
+                }
+                if !diffs.is_empty() {
+                    let mut updates = Vec::new();
+                    {
+                        let guard = tree.read().unwrap();
+                        info!("Found diffs: {diffs:?}");
+                        for diff in diffs {
+                            match diff {
+                                Diff::LocalOnly(range) => {
+                                    for (k, v) in guard.get_range(&range) {
+                                        updates.push((*k, *v));
+                                    }
+                                }
+                                Diff::RemoteOnly(_range) => unimplemented!(),
+                                Diff::Conflict(_range) => unimplemented!(),
+                            }
+                        }
+                    }
+                    send_buf.clear();
+                    let n_updates = updates.len();
+                    Message::Updates(updates)
+                        .serialize(&mut Serializer::new(&mut send_buf))
+                        .unwrap();
+                    debug!(
+                        "sending {n_updates} updates {} bytes to {peer}",
+                        send_buf.len()
+                    );
+                    socket.send_to(&send_buf, &peer).await?;
+                }
+            }
+            Message::Updates(updates) => {
+                debug!("got {} updates {} bytes from {peer}", updates.len(), size);
+                let mut guard = tree.write().unwrap();
+                for (k, v) in updates {
+                    guard.insert(k, v);
+                }
+            }
         }
     }
 }
@@ -65,7 +104,7 @@ async fn send_queries(
             guard.start_diff()
         };
         send_buf.clear();
-        segments
+        Message::HashSegments::<u64, u64>(segments)
             .serialize(&mut Serializer::new(&mut send_buf))
             .unwrap();
         debug!("start_diff {} bytes to {other_addr}", send_buf.len());
