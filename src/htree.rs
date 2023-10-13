@@ -218,7 +218,21 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         Default::default()
     }
 
-    fn at(&self, mut index: usize) -> &Node<K, V> {
+    fn node_at_key<'a>(&'a self, key: &'a K) -> Option<&'a Node<K, V>> {
+        fn aux<'a, K: Hash + Ord, V: Hash>(
+            node: &'a Node<K, V>,
+            key: &'a K,
+        ) -> Option<&'a Node<K, V>> {
+            match node.dir(key) {
+                Direction::None => Some(node),
+                Direction::Left => node.children[0].as_ref().and_then(|left| aux(left, key)),
+                Direction::Right => node.children[1].as_ref().and_then(|right| aux(right, key)),
+            }
+        }
+        self.root.as_ref().and_then(|node| aux(node, key))
+    }
+
+    fn node_at_index(&self, mut index: usize) -> &Node<K, V> {
         if index >= self.len() {
             panic!(
                 "index out of bounds: the len is {} but the index is {index}",
@@ -242,6 +256,10 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             maybe_node = node.children[1].as_ref();
         }
         unreachable!();
+    }
+
+    pub fn get<'a>(&'a self, key: &'a K) -> Option<&'a V> {
+        self.node_at_key(key).map(|node| &node.value)
     }
 
     pub fn position(&self, key: &K) -> Option<usize> {
@@ -679,7 +697,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
     }
 
     fn key_at(&self, index: usize) -> &K {
-        &self.at(index).key
+        &self.node_at_index(index).key
     }
 
     fn len(&self) -> usize {
@@ -835,11 +853,17 @@ fn test_compare() {
     assert_eq!(tree1.diff(&tree3), vec![]);
     assert_eq!(
         tree1.diff(&tree4),
-        vec![Diff::Conflict((Bound::Included(40), Bound::Excluded(75))),]
+        vec![
+            Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),
+            Diff::RemoteOnly((Bound::Included(40), Bound::Excluded(75)))
+        ]
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![Diff::Conflict((Bound::Included(75), Bound::Unbounded))]
+        vec![
+            Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),
+            Diff::RemoteOnly((Bound::Included(75), Bound::Unbounded))
+        ]
     );
 
     let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));

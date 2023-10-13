@@ -105,7 +105,14 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 // handled by the hash checks above
                 unreachable!();
             } else if size == 1 && local_size == 1 {
-                diffs.push(Diff::Conflict((start_bound, end_bound)));
+                // ask the remote to send us the conflicting item
+                ret.push(HashSegment {
+                    range: (start_bound.clone(), end_bound.clone()),
+                    hash: 0,
+                    size: 0,
+                });
+                // send the conflicting item to the remote
+                diffs.push(Diff::LocalOnly((start_bound, end_bound)));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
                 ret.push(HashSegment {

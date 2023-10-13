@@ -85,6 +85,13 @@ async fn answer_queries(
                 debug!("got {} updates {} bytes from {peer}", updates.len(), size);
                 let mut guard = tree.write().unwrap();
                 for (k, v) in updates {
+                    if let Some(cur) = guard.get(&k) {
+                        // conflict resolution
+                        if &v > cur {
+                            guard.insert(k, v);
+                            continue;
+                        }
+                    }
                     guard.insert(k, v);
                 }
                 info!("Updated state; global hash is now {}", guard.hash(&..));
