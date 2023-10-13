@@ -21,11 +21,7 @@ pub struct HashSegment<K> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Diff<K> {
-    LocalOnly((Bound<K>, Bound<K>)),
-    RemoteOnly((Bound<K>, Bound<K>)),
-    Conflict((Bound<K>, Bound<K>)),
-}
+pub struct Diff<K>(pub (Bound<K>, Bound<K>));
 
 type Diffs<K> = Vec<Diff<K>>;
 
@@ -73,7 +69,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
             if hash == local_hash {
                 continue;
             } else if hash == 0 {
-                diffs.push(Diff::LocalOnly(range));
+                diffs.push(Diff(range));
                 continue;
             } else if local_hash == 0 {
                 // present on remote; bounce back to the remote
@@ -107,7 +103,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     size: 0,
                 });
                 // send the conflicting item to the remote
-                diffs.push(Diff::LocalOnly((start_bound, end_bound)));
+                diffs.push(Diff((start_bound, end_bound)));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
                 ret.push(HashSegment {

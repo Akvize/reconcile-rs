@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-use reconciliate::diff::{Diff, Diffable, HashRangeQueryable, HashSegment};
+use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -58,14 +58,8 @@ async fn answer_queries(
                         let guard = tree.read().unwrap();
                         info!("Found diffs: {diffs:?}");
                         for diff in diffs {
-                            match diff {
-                                Diff::LocalOnly(range) => {
-                                    for (k, v) in guard.get_range(&range) {
-                                        updates.push((*k, *v));
-                                    }
-                                }
-                                Diff::RemoteOnly(_range) => unimplemented!(),
-                                Diff::Conflict(_range) => unimplemented!(),
+                            for (k, v) in guard.get_range(&diff.0) {
+                                updates.push((*k, *v));
                             }
                         }
                     }

@@ -232,15 +232,15 @@ mod tests {
         assert_eq!(
             vec1.diff(&vec4),
             (
-                vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),],
-                vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75)))],
+                vec![Diff((Bound::Included(40), Bound::Excluded(75))),],
+                vec![Diff((Bound::Included(40), Bound::Excluded(75)))],
             ),
         );
         assert_eq!(
             vec1.diff(&vec5),
             (
-                vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),],
-                vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded))],
+                vec![Diff((Bound::Included(75), Bound::Unbounded)),],
+                vec![Diff((Bound::Included(75), Bound::Unbounded))],
             ),
         );
     }

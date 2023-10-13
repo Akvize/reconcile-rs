@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::hash::Hash;
 use std::ops::{Bound, Neg, RangeBounds};
 
-use crate::diff::{Diff, Diffable, HashRangeQueryable};
+use crate::diff::{Diffable, HashRangeQueryable};
 use crate::hash::hash;
 use crate::range_compare::{range_compare, RangeOrdering};
 
@@ -765,21 +765,13 @@ where
     let mut new_second = Vec::new();
     let (diffs1, diffs2) = first.diff(second);
     for diff in diffs1 {
-        if let Diff::LocalOnly(range) = diff {
-            for (k, v) in first.get_range(&range) {
-                new_second.push((k.clone(), v.clone()))
-            }
-        } else {
-            unimplemented!();
+        for (k, v) in first.get_range(&diff.0) {
+            new_second.push((k.clone(), v.clone()))
         }
     }
     for diff in diffs2 {
-        if let Diff::LocalOnly(range) = diff {
-            for (k, v) in second.get_range(&range) {
-                new_first.push((k.clone(), v.clone()))
-            }
-        } else {
-            unimplemented!();
+        for (k, v) in second.get_range(&diff.0) {
+            new_first.push((k.clone(), v.clone()))
         }
     }
     for (k, v) in new_first {
@@ -790,110 +782,112 @@ where
     }
 }
 
-#[test]
-fn test_simple() {
-    // empty
-    let mut tree = HTree::new();
-    assert_eq!(tree.hash(&..), 0);
-    tree.check_invariants();
-
-    // 1 value
-    tree.insert(50, "Hello");
-    tree.check_invariants();
-    let hash1 = tree.hash(&..);
-    assert_ne!(hash1, 0);
-
-    // 2 values
-    tree.insert(25, "World!");
-    tree.check_invariants();
-    let hash2 = tree.hash(&..);
-    assert_ne!(hash2, 0);
-    assert_ne!(hash2, hash1);
-
-    // 3 values
-    tree.insert(75, "Everyone!");
-    tree.check_invariants();
-    let hash3 = tree.hash(&..);
-    assert_ne!(hash3, 0);
-    assert_ne!(hash3, hash1);
-    assert_ne!(hash3, hash2);
-
-    // back to 2 values
-    tree.remove(&75);
-    tree.check_invariants();
-    let hash4 = tree.hash(&..);
-    assert_eq!(hash4, hash2);
-}
-
-#[test]
-fn test_compare() {
-    let tree1 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
-    let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
-    let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
-    let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
-    let tree5 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
-
-    assert_eq!(tree1.hash(&..), tree1.hash(&..));
-    assert_eq!(tree1.hash(&..), tree2.hash(&..));
-    assert_eq!(tree1.hash(&..), tree3.hash(&..));
-    assert_ne!(tree1.hash(&..), tree4.hash(&..));
-    assert_ne!(tree1.hash(&..), tree5.hash(&..));
-
-    assert_eq!(tree1, tree1);
-    assert_eq!(tree1, tree2);
-    assert_eq!(tree1, tree3);
-    assert_ne!(tree1, tree4);
-    assert_ne!(tree1, tree5);
-
-    assert_eq!(tree1.diff(&tree1), (vec![], vec![]));
-    assert_eq!(tree1.diff(&tree2), (vec![], vec![]));
-    assert_eq!(tree1.diff(&tree3), (vec![], vec![]));
-    assert_eq!(
-        tree1.diff(&tree4),
-        (
-            vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),],
-            vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75)))],
-        ),
-    );
-    assert_eq!(
-        tree1.diff(&tree5),
-        (
-            vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),],
-            vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded))],
-        ),
-    );
-
-    let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));
-    assert_eq!(range.collect::<Vec<_>>(), vec![]);
-    let range = tree1.get_range(&(Bound::Included(50), Bound::Excluded(75)));
-    assert_eq!(range.collect::<Vec<_>>(), vec![(&50, &"Hello")]);
-    let range = tree4.get_range(&(Bound::Included(40), Bound::Excluded(50)));
-    assert_eq!(range.collect::<Vec<_>>(), vec![(&40, &"Hello")]);
-    let range = tree4.get_range(&(Bound::Included(50), Bound::Excluded(75)));
-    assert_eq!(range.collect::<Vec<_>>(), vec![]);
-
-    let mut tree1 = tree1;
-    let mut tree4 = tree4;
-    reconciliate(&mut tree1, &mut tree4);
-    assert_eq!(tree1, tree4);
-    assert_eq!(
-        tree1.get_range(&..).collect::<Vec<_>>(),
-        [
-            (&25, &"World!"),
-            (&40, &"Hello"),
-            (&50, &"Hello"),
-            (&75, &"Everyone!")
-        ]
-    )
-}
-
 #[cfg(test)]
 mod tests {
+    use std::ops::Bound;
+
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
     use crate::diff::{Diff, Diffable, HashRangeQueryable};
 
-    use super::HTree;
+    use super::{reconciliate, HTree};
+
+    #[test]
+    fn test_simple() {
+        // empty
+        let mut tree = HTree::new();
+        assert_eq!(tree.hash(&..), 0);
+        tree.check_invariants();
+
+        // 1 value
+        tree.insert(50, "Hello");
+        tree.check_invariants();
+        let hash1 = tree.hash(&..);
+        assert_ne!(hash1, 0);
+
+        // 2 values
+        tree.insert(25, "World!");
+        tree.check_invariants();
+        let hash2 = tree.hash(&..);
+        assert_ne!(hash2, 0);
+        assert_ne!(hash2, hash1);
+
+        // 3 values
+        tree.insert(75, "Everyone!");
+        tree.check_invariants();
+        let hash3 = tree.hash(&..);
+        assert_ne!(hash3, 0);
+        assert_ne!(hash3, hash1);
+        assert_ne!(hash3, hash2);
+
+        // back to 2 values
+        tree.remove(&75);
+        tree.check_invariants();
+        let hash4 = tree.hash(&..);
+        assert_eq!(hash4, hash2);
+    }
+
+    #[test]
+    fn test_compare() {
+        let tree1 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+        let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+        let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+        let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+        let tree5 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+
+        assert_eq!(tree1.hash(&..), tree1.hash(&..));
+        assert_eq!(tree1.hash(&..), tree2.hash(&..));
+        assert_eq!(tree1.hash(&..), tree3.hash(&..));
+        assert_ne!(tree1.hash(&..), tree4.hash(&..));
+        assert_ne!(tree1.hash(&..), tree5.hash(&..));
+
+        assert_eq!(tree1, tree1);
+        assert_eq!(tree1, tree2);
+        assert_eq!(tree1, tree3);
+        assert_ne!(tree1, tree4);
+        assert_ne!(tree1, tree5);
+
+        assert_eq!(tree1.diff(&tree1), (vec![], vec![]));
+        assert_eq!(tree1.diff(&tree2), (vec![], vec![]));
+        assert_eq!(tree1.diff(&tree3), (vec![], vec![]));
+        assert_eq!(
+            tree1.diff(&tree4),
+            (
+                vec![Diff((Bound::Included(40), Bound::Excluded(75))),],
+                vec![Diff((Bound::Included(40), Bound::Excluded(75)))],
+            ),
+        );
+        assert_eq!(
+            tree1.diff(&tree5),
+            (
+                vec![Diff((Bound::Included(75), Bound::Unbounded)),],
+                vec![Diff((Bound::Included(75), Bound::Unbounded))],
+            ),
+        );
+
+        let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));
+        assert_eq!(range.collect::<Vec<_>>(), vec![]);
+        let range = tree1.get_range(&(Bound::Included(50), Bound::Excluded(75)));
+        assert_eq!(range.collect::<Vec<_>>(), vec![(&50, &"Hello")]);
+        let range = tree4.get_range(&(Bound::Included(40), Bound::Excluded(50)));
+        assert_eq!(range.collect::<Vec<_>>(), vec![(&40, &"Hello")]);
+        let range = tree4.get_range(&(Bound::Included(50), Bound::Excluded(75)));
+        assert_eq!(range.collect::<Vec<_>>(), vec![]);
+
+        let mut tree1 = tree1;
+        let mut tree4 = tree4;
+        reconciliate(&mut tree1, &mut tree4);
+        assert_eq!(tree1, tree4);
+        assert_eq!(
+            tree1.get_range(&..).collect::<Vec<_>>(),
+            [
+                (&25, &"World!"),
+                (&40, &"Hello"),
+                (&50, &"Hello"),
+                (&75, &"Everyone!")
+            ]
+        )
+    }
 
     #[test]
     fn big_test() {
@@ -956,12 +950,8 @@ mod tests {
         }
         assert_eq!(diffs1.len(), 0);
         assert_eq!(diffs2.len(), 1);
-        if let Diff::LocalOnly(range) = diffs2[0] {
-            let items: Vec<_> = tree2.get_range(&range).collect();
-            assert_eq!(items, vec![(&key, &value)]);
-        } else {
-            panic!("Expected Diff::Inself(_), got {:?}", diffs2[0]);
-        }
+        let items: Vec<_> = tree2.get_range(&diffs2[0].0).collect();
+        assert_eq!(items, vec![(&key, &value)]);
 
         // remove some
         key_values.shuffle(&mut rng);
