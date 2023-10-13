@@ -761,24 +761,16 @@ where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
-    let mut new_first = Vec::new();
-    let mut new_second = Vec::new();
     let (diffs1, diffs2) = first.diff(second);
     for diff in diffs1 {
         for (k, v) in first.get_range(&diff) {
-            new_second.push((k.clone(), v.clone()))
+            second.insert(k.clone(), v.clone());
         }
     }
     for diff in diffs2 {
         for (k, v) in second.get_range(&diff) {
-            new_first.push((k.clone(), v.clone()))
+            first.insert(k.clone(), v.clone());
         }
-    }
-    for (k, v) in new_first {
-        first.insert(k, v);
-    }
-    for (k, v) in new_second {
-        second.insert(k, v);
     }
 }
 
