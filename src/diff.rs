@@ -110,22 +110,31 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 });
             } else {
                 // NOTE: end_index - start_index ≥ 2
-                let mid_index = start_index + (end_index - start_index) / 2;
-                assert_ne!(mid_index, start_index);
-                assert_ne!(mid_index, end_index);
-                let mid_key = self.key_at(mid_index);
-                let left_range = (start_bound, Bound::Excluded(mid_key.clone()));
-                ret.push(HashSegment {
-                    hash: self.hash(&left_range),
-                    range: left_range,
-                    size: mid_index - start_index,
-                });
-                let right_range = (Bound::Included(mid_key.clone()), end_bound);
-                ret.push(HashSegment {
-                    hash: self.hash(&right_range),
-                    range: right_range,
-                    size: end_index - mid_index,
-                });
+                let step = 1.max((end_index - start_index) / 16);
+                let mut cur_bound = start_bound;
+                let mut cur_index = start_index;
+                loop {
+                    let next_index = cur_index + step;
+                    if next_index >= end_index {
+                        let range = (cur_bound, end_bound);
+                        ret.push(HashSegment {
+                            hash: self.hash(&range),
+                            range,
+                            size: end_index - cur_index,
+                        });
+                        break;
+                    } else {
+                        let next_key = self.key_at(next_index);
+                        let range = (cur_bound, Bound::Excluded(next_key.clone()));
+                        ret.push(HashSegment {
+                            hash: self.hash(&range),
+                            range,
+                            size: next_index - cur_index,
+                        });
+                        cur_bound = Bound::Included(next_key.clone());
+                        cur_index = next_index;
+                    }
+                }
             }
         }
         ret
