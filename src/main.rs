@@ -25,7 +25,8 @@ async fn answer_queries(
     socket: Arc<UdpSocket>,
     tree: Arc<RwLock<HTree<u64, u64>>>,
 ) -> Result<(), std::io::Error> {
-    let mut recv_buf = [0; BUFFER_SIZE];
+    // extra byte that easily detect when the buffer is too small
+    let mut recv_buf = [0; BUFFER_SIZE + 1];
     let mut send_buf = Vec::new();
     // infinite loop
     loop {
