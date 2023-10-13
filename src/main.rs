@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-use reconciliate::diff::{Diff, Diffable, HashSegment};
+use reconciliate::diff::{Diff, Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -87,6 +87,7 @@ async fn answer_queries(
                 for (k, v) in updates {
                     guard.insert(k, v);
                 }
+                info!("Updated state; global hash is now {}", guard.hash(&..));
             }
         }
     }
@@ -144,6 +145,7 @@ async fn main() {
         tree.insert(key, value);
     }
 
+    info!("Global hash is {}", tree.hash(&..));
     let state = Arc::new(RwLock::new(tree));
 
     let handle_recv = tokio::spawn(answer_queries(Arc::clone(&socket), Arc::clone(&state)));
