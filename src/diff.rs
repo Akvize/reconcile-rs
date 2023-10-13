@@ -1,5 +1,7 @@
 use std::ops::{Bound, RangeBounds};
 
+use serde::{Deserialize, Serialize};
+
 pub trait HashRangeQueryable {
     type Key;
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
@@ -11,7 +13,7 @@ pub trait HashRangeQueryable {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HashSegment<K> {
     range: (Bound<K>, Bound<K>),
     hash: u64,
