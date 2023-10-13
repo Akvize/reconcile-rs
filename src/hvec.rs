@@ -226,22 +226,22 @@ mod tests {
         assert_ne!(vec1, vec4);
         assert_ne!(vec1, vec5);
 
-        assert_eq!(vec1.diff(&vec1), vec![]);
-        assert_eq!(vec1.diff(&vec2), vec![]);
-        assert_eq!(vec1.diff(&vec3), vec![]);
+        assert_eq!(vec1.diff(&vec1), (vec![], vec![]));
+        assert_eq!(vec1.diff(&vec2), (vec![], vec![]));
+        assert_eq!(vec1.diff(&vec3), (vec![], vec![]));
         assert_eq!(
             vec1.diff(&vec4),
-            vec![
-                Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),
-                Diff::RemoteOnly((Bound::Included(40), Bound::Excluded(75)))
-            ]
+            (
+                vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),],
+                vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75)))],
+            ),
         );
         assert_eq!(
             vec1.diff(&vec5),
-            vec![
-                Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),
-                Diff::RemoteOnly((Bound::Included(75), Bound::Unbounded))
-            ]
+            (
+                vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),],
+                vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded))],
+            ),
         );
     }
 

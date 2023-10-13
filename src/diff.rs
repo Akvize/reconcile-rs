@@ -27,6 +27,8 @@ pub enum Diff<K> {
     Conflict((Bound<K>, Bound<K>)),
 }
 
+type Diffs<K> = Vec<Diff<K>>;
+
 pub trait Diffable {
     type Key;
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>>;
@@ -36,7 +38,7 @@ pub trait Diffable {
         segments: Vec<HashSegment<Self::Key>>,
     ) -> Vec<HashSegment<Self::Key>>;
 
-    fn diff(&self, remote: &Self) -> Vec<Diff<Self::Key>> {
+    fn diff(&self, remote: &Self) -> (Diffs<Self::Key>, Diffs<Self::Key>) {
         let mut diffs1 = Vec::new();
         let mut diffs2 = Vec::new();
         let mut segments = self.start_diff();
@@ -44,14 +46,7 @@ pub trait Diffable {
             segments = remote.diff_round(&mut diffs2, segments);
             segments = self.diff_round(&mut diffs1, segments);
         }
-        for diff in diffs2 {
-            if let Diff::LocalOnly(range) = diff {
-                diffs1.push(Diff::RemoteOnly(range));
-            } else {
-                diffs1.push(diff);
-            }
-        }
-        diffs1
+        (diffs1, diffs2)
     }
 }
 

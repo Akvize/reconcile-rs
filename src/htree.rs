@@ -763,26 +763,23 @@ where
 {
     let mut new_first = Vec::new();
     let mut new_second = Vec::new();
-    for diff in first.diff(second) {
-        match diff {
-            Diff::LocalOnly(range) => {
-                for (k, v) in first.get_range(&range) {
-                    new_second.push((k.clone(), v.clone()))
-                }
+    let (diffs1, diffs2) = first.diff(second);
+    for diff in diffs1 {
+        if let Diff::LocalOnly(range) = diff {
+            for (k, v) in first.get_range(&range) {
+                new_second.push((k.clone(), v.clone()))
             }
-            Diff::RemoteOnly(range) => {
-                for (k, v) in second.get_range(&range) {
-                    new_first.push((k.clone(), v.clone()));
-                }
+        } else {
+            unimplemented!();
+        }
+    }
+    for diff in diffs2 {
+        if let Diff::LocalOnly(range) = diff {
+            for (k, v) in second.get_range(&range) {
+                new_first.push((k.clone(), v.clone()))
             }
-            Diff::Conflict(range) => {
-                for (k, v) in first.get_range(&range) {
-                    new_second.push((k.clone(), v.clone()));
-                }
-                for (k, v) in second.get_range(&range) {
-                    new_first.push((k.clone(), v.clone()));
-                }
-            }
+        } else {
+            unimplemented!();
         }
     }
     for (k, v) in new_first {
@@ -848,22 +845,22 @@ fn test_compare() {
     assert_ne!(tree1, tree4);
     assert_ne!(tree1, tree5);
 
-    assert_eq!(tree1.diff(&tree1), vec![]);
-    assert_eq!(tree1.diff(&tree2), vec![]);
-    assert_eq!(tree1.diff(&tree3), vec![]);
+    assert_eq!(tree1.diff(&tree1), (vec![], vec![]));
+    assert_eq!(tree1.diff(&tree2), (vec![], vec![]));
+    assert_eq!(tree1.diff(&tree3), (vec![], vec![]));
     assert_eq!(
         tree1.diff(&tree4),
-        vec![
-            Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),
-            Diff::RemoteOnly((Bound::Included(40), Bound::Excluded(75)))
-        ]
+        (
+            vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75))),],
+            vec![Diff::LocalOnly((Bound::Included(40), Bound::Excluded(75)))],
+        ),
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![
-            Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),
-            Diff::RemoteOnly((Bound::Included(75), Bound::Unbounded))
-        ]
+        (
+            vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded)),],
+            vec![Diff::LocalOnly((Bound::Included(75), Bound::Unbounded))],
+        ),
     );
 
     let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));
