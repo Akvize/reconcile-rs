@@ -62,40 +62,32 @@ async fn answer_queries(
                 let guard = tree.read().unwrap();
                 guard.diff_round(&mut diffs, segments)
             };
+            let mut messages = Vec::new();
             if !segments.is_empty() {
-                send_buf.clear();
-                let n_segments = segments.len();
+                debug!("Split in {} segments", segments.len());
                 for segment in segments {
-                    Message::HashSegment::<u64, u64>(segment)
-                        .serialize(&mut Serializer::new(&mut send_buf))
-                        .unwrap();
+                    messages.push(Message::HashSegment::<u64, u64>(segment))
                 }
-                debug!(
-                    "sending {n_segments} segments {} bytes to {peer}",
-                    send_buf.len()
-                );
-                socket.send_to(&send_buf, &peer).await?;
             }
             if !diffs.is_empty() {
-                let mut updates = Vec::new();
-                {
-                    let guard = tree.read().unwrap();
-                    info!("Found diffs: {diffs:?}");
-                    for diff in diffs {
-                        for (k, v) in guard.get_range(&diff) {
-                            updates.push((*k, *v));
-                        }
+                let guard = tree.read().unwrap();
+                info!("Found diffs: {diffs:?}");
+                for diff in diffs {
+                    for (k, v) in guard.get_range(&diff) {
+                        messages.push(Message::Update((*k, *v)));
                     }
                 }
+            }
+            if !messages.is_empty() {
                 send_buf.clear();
-                let n_updates = updates.len();
-                for update in updates {
-                    Message::Update(update)
+                let n_messages = messages.len();
+                for message in messages {
+                    message
                         .serialize(&mut Serializer::new(&mut send_buf))
                         .unwrap();
                 }
                 debug!(
-                    "sending {n_updates} updates {} bytes to {peer}",
+                    "sending {n_messages} messages {} bytes to {peer}",
                     send_buf.len()
                 );
                 socket.send_to(&send_buf, &peer).await?;
