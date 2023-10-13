@@ -8,6 +8,7 @@ use rand::{Rng, SeedableRng};
 use rmp_serde::{decode, Serializer};
 use serde::Serialize;
 use tokio::net::UdpSocket;
+use tracing::{debug, info, warn};
 
 use reconciliate::diff::{Diffable, HashSegment};
 use reconciliate::htree::HTree;
@@ -21,11 +22,11 @@ async fn answer_queries(
     loop {
         let (size, peer) = socket.recv_from(&mut recv_buf).await?;
         if size == recv_buf.len() {
-            println!("Buffer too small for message, discarded");
+            warn!("Buffer too small for message, discarded");
             continue;
         }
         let segments: Vec<HashSegment<u64>> = decode::from_slice(&recv_buf[..size]).unwrap();
-        println!("got {} segments {} bytes from {peer}", segments.len(), size);
+        debug!("got {} segments {} bytes from {peer}", segments.len(), size);
         let mut diffs = Vec::new();
         let segments = {
             let guard = tree.read().unwrap();
@@ -36,7 +37,7 @@ async fn answer_queries(
             segments
                 .serialize(&mut Serializer::new(&mut send_buf))
                 .unwrap();
-            println!(
+            debug!(
                 "sending {} segments {} bytes to {peer}",
                 segments.len(),
                 send_buf.len()
@@ -44,7 +45,7 @@ async fn answer_queries(
             socket.send_to(&send_buf, &peer).await?;
         }
         if !diffs.is_empty() {
-            println!("Found diffs: {diffs:?}");
+            info!("Found diffs: {diffs:?}");
         }
         if segments.is_empty() {
             break Ok(());
@@ -67,7 +68,7 @@ async fn send_queries(
         segments
             .serialize(&mut Serializer::new(&mut send_buf))
             .unwrap();
-        println!("start_diff {} bytes to {other_addr}", send_buf.len());
+        debug!("start_diff {} bytes to {other_addr}", send_buf.len());
         socket.send_to(&send_buf, &other_addr).await?;
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -78,6 +79,8 @@ struct Args {
     listen_addr: SocketAddr,
     other_addr: SocketAddr,
     elements: usize,
+    #[arg(short, long, default_value_t = tracing::Level::INFO)]
+    log_level: tracing::Level,
 }
 
 #[tokio::main]
@@ -86,9 +89,13 @@ async fn main() {
         listen_addr,
         other_addr,
         elements,
+        log_level,
     } = Args::parse();
+
+    tracing_subscriber::fmt().with_max_level(log_level).init();
+
     let socket = Arc::new(UdpSocket::bind(listen_addr).await.unwrap());
-    println!("Listening on: {}", socket.local_addr().unwrap());
+    info!("Listening on: {}", socket.local_addr().unwrap());
 
     let mut tree = HTree::new();
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
