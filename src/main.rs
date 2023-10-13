@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use bincode::{DefaultOptions, Deserializer, Serializer};
 use clap::Parser;
 use futures::future::{select, Either};
 use rand::{Rng, SeedableRng};
-use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
@@ -28,6 +28,7 @@ async fn answer_queries(
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
     let mut send_buf = Vec::new();
+    let my_options = DefaultOptions::new();
     // infinite loop
     loop {
         let (size, peer) = socket.recv_from(&mut recv_buf).await?;
@@ -38,13 +39,15 @@ async fn answer_queries(
         debug!("got {} bytes from {peer}", size);
         let mut segments = Vec::new();
         let mut updates = Vec::new();
-        let mut deserializer = Deserializer::new(&recv_buf[..size]);
+        let mut deserializer = Deserializer::from_slice(&recv_buf[..size], my_options);
         // read messages in buffer
         loop {
             let res = Message::deserialize(&mut deserializer);
-            if let Err(rmp_serde::decode::Error::InvalidMarkerRead(ref error)) = res {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                    break;
+            if let Err(kind) = res.as_ref() {
+                if let bincode::ErrorKind::Io(err) = kind.as_ref() {
+                    if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                        break;
+                    }
                 }
             }
             let message: Message<u64, u64> = res.unwrap();
@@ -87,7 +90,7 @@ async fn answer_queries(
                 for message in messages {
                     let last_size = send_buf.len();
                     message
-                        .serialize(&mut Serializer::new(&mut send_buf))
+                        .serialize(&mut Serializer::new(&mut send_buf, my_options))
                         .unwrap();
                     if send_buf.len() > BUFFER_SIZE {
                         socket.send_to(&send_buf[..last_size], &peer).await?;
@@ -122,6 +125,7 @@ async fn send_queries(
     other_addr: SocketAddr,
     tree: Arc<RwLock<HTree<u64, u64>>>,
 ) -> Result<(), std::io::Error> {
+    let my_options = DefaultOptions::new();
     let mut send_buf = Vec::new();
     loop {
         let segments = {
@@ -131,7 +135,7 @@ async fn send_queries(
         send_buf.clear();
         for segment in segments {
             Message::HashSegment::<u64, u64>(segment)
-                .serialize(&mut Serializer::new(&mut send_buf))
+                .serialize(&mut Serializer::new(&mut send_buf, my_options))
                 .unwrap();
         }
         debug!("start_diff {} bytes to {other_addr}", send_buf.len());
