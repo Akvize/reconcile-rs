@@ -12,8 +12,8 @@ pub trait HashRangeQueryable {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HashSegment<'a, K> {
-    range: (Bound<&'a K>, Bound<&'a K>),
+pub struct HashSegment<K> {
+    range: (Bound<K>, Bound<K>),
     hash: u64,
     size: usize,
 }
@@ -28,13 +28,13 @@ pub enum Diff<K> {
 pub trait Diffable {
     type Key;
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>>;
-    fn diff_round<'a>(
-        &'a self,
-        diffs: &mut Vec<Diff<&'a Self::Key>>,
-        segments: Vec<HashSegment<'a, Self::Key>>,
-    ) -> Vec<HashSegment<'a, Self::Key>>;
+    fn diff_round(
+        &self,
+        diffs: &mut Vec<Diff<Self::Key>>,
+        segments: Vec<HashSegment<Self::Key>>,
+    ) -> Vec<HashSegment<Self::Key>>;
 
-    fn diff<'a>(&'a self, remote: &'a Self) -> Vec<Diff<&'a Self::Key>> {
+    fn diff(&self, remote: &Self) -> Vec<Diff<Self::Key>> {
         let mut diffs1 = Vec::new();
         let mut diffs2 = Vec::new();
         let mut segments = self.start_diff();
@@ -64,11 +64,11 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         }]
     }
 
-    fn diff_round<'a>(
-        &'a self,
-        diffs: &mut Vec<Diff<&'a Self::Key>>,
-        segments: Vec<HashSegment<'a, Self::Key>>,
-    ) -> Vec<HashSegment<'a, Self::Key>> {
+    fn diff_round(
+        &self,
+        diffs: &mut Vec<Diff<Self::Key>>,
+        segments: Vec<HashSegment<Self::Key>>,
+    ) -> Vec<HashSegment<Self::Key>> {
         let mut ret = Vec::new();
         for segment in segments {
             let HashSegment { range, hash, size } = segment;
@@ -88,12 +88,12 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 continue;
             }
             let (start_bound, end_bound) = range;
-            let start_index = match start_bound {
+            let start_index = match start_bound.as_ref() {
                 Bound::Unbounded => 0,
                 Bound::Included(key) => self.insertion_position(key),
                 Bound::Excluded(_) => unimplemented!(),
             };
-            let end_index = match end_bound {
+            let end_index = match end_bound.as_ref() {
                 Bound::Unbounded => self.len(),
                 Bound::Included(_) => unimplemented!(),
                 Bound::Excluded(key) => self.insertion_position(key),
@@ -103,11 +103,11 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 // handled by the hash checks above
                 unreachable!();
             } else if size == 1 && local_size == 1 {
-                diffs.push(Diff::Conflict(range));
+                diffs.push(Diff::Conflict((start_bound, end_bound)));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
                 ret.push(HashSegment {
-                    range,
+                    range: (start_bound, end_bound),
                     hash: local_hash,
                     size: local_size,
                 });
@@ -117,16 +117,16 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 assert_ne!(mid_index, start_index);
                 assert_ne!(mid_index, end_index);
                 let mid_key = self.key_at(mid_index);
-                let left_range = (start_bound, Bound::Excluded(mid_key));
+                let left_range = (start_bound, Bound::Excluded(mid_key.clone()));
                 ret.push(HashSegment {
-                    range: left_range,
                     hash: self.hash(&left_range),
+                    range: left_range,
                     size: mid_index - start_index,
                 });
-                let right_range = (Bound::Included(mid_key), end_bound);
+                let right_range = (Bound::Included(mid_key.clone()), end_bound);
                 ret.push(HashSegment {
-                    range: right_range,
                     hash: self.hash(&right_range),
+                    range: right_range,
                     size: end_index - mid_index,
                 });
             }

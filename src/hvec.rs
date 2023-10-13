@@ -231,11 +231,11 @@ mod tests {
         assert_eq!(vec1.diff(&vec3), vec![]);
         assert_eq!(
             vec1.diff(&vec4),
-            vec![Diff::Conflict((Bound::Included(&40), Bound::Excluded(&75))),]
+            vec![Diff::Conflict((Bound::Included(40), Bound::Excluded(75))),]
         );
         assert_eq!(
             vec1.diff(&vec5),
-            vec![Diff::Conflict((Bound::Included(&75), Bound::Unbounded))]
+            vec![Diff::Conflict((Bound::Included(75), Bound::Unbounded))]
         );
     }
 

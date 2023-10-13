@@ -835,11 +835,11 @@ fn test_compare() {
     assert_eq!(tree1.diff(&tree3), vec![]);
     assert_eq!(
         tree1.diff(&tree4),
-        vec![Diff::Conflict((Bound::Included(&40), Bound::Excluded(&75))),]
+        vec![Diff::Conflict((Bound::Included(40), Bound::Excluded(75))),]
     );
     assert_eq!(
         tree1.diff(&tree5),
-        vec![Diff::Conflict((Bound::Included(&75), Bound::Unbounded))]
+        vec![Diff::Conflict((Bound::Included(75), Bound::Unbounded))]
     );
 
     let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));
