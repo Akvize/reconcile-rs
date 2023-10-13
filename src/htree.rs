@@ -691,7 +691,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
 }
 
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
-    range: R,
+    range: &'a R,
     stack: Vec<(&'a Node<K, V>, bool)>,
 }
 
@@ -721,11 +721,11 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
 }
 
 impl<K: Ord, V> HTree<K, V> {
-    pub fn get_range<R: RangeBounds<K>>(&self, range: R) -> ItemRange<K, V, R> {
+    pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
         let mut stack = Vec::new();
         let mut maybe_node = self.root.as_ref();
         while let Some(node) = maybe_node {
-            match range_compare(&node.key, &range) {
+            match range_compare(&node.key, range) {
                 RangeOrdering::Less => maybe_node = node.children[1].as_ref(),
                 RangeOrdering::Greater => maybe_node = node.children[0].as_ref(),
                 RangeOrdering::Inside => {
@@ -748,20 +748,20 @@ where
     for diff in first.diff(second) {
         match diff {
             Diff::LocalOnly(range) => {
-                for (k, v) in first.get_range(range) {
+                for (k, v) in first.get_range(&range) {
                     new_second.push((k.clone(), v.clone()))
                 }
             }
             Diff::RemoteOnly(range) => {
-                for (k, v) in second.get_range(range) {
+                for (k, v) in second.get_range(&range) {
                     new_first.push((k.clone(), v.clone()));
                 }
             }
             Diff::Conflict(range) => {
-                for (k, v) in first.get_range(range) {
+                for (k, v) in first.get_range(&range) {
                     new_second.push((k.clone(), v.clone()));
                 }
-                for (k, v) in second.get_range(range) {
+                for (k, v) in second.get_range(&range) {
                     new_first.push((k.clone(), v.clone()));
                 }
             }
@@ -842,13 +842,13 @@ fn test_compare() {
         vec![Diff::Conflict((Bound::Included(&75), Bound::Unbounded))]
     );
 
-    let range = tree1.get_range((Bound::Included(40), Bound::Excluded(50)));
+    let range = tree1.get_range(&(Bound::Included(40), Bound::Excluded(50)));
     assert_eq!(range.collect::<Vec<_>>(), vec![]);
-    let range = tree1.get_range((Bound::Included(50), Bound::Excluded(75)));
+    let range = tree1.get_range(&(Bound::Included(50), Bound::Excluded(75)));
     assert_eq!(range.collect::<Vec<_>>(), vec![(&50, &"Hello")]);
-    let range = tree4.get_range((Bound::Included(40), Bound::Excluded(50)));
+    let range = tree4.get_range(&(Bound::Included(40), Bound::Excluded(50)));
     assert_eq!(range.collect::<Vec<_>>(), vec![(&40, &"Hello")]);
-    let range = tree4.get_range((Bound::Included(50), Bound::Excluded(75)));
+    let range = tree4.get_range(&(Bound::Included(50), Bound::Excluded(75)));
     assert_eq!(range.collect::<Vec<_>>(), vec![]);
 
     let mut tree1 = tree1;
@@ -856,7 +856,7 @@ fn test_compare() {
     reconciliate(&mut tree1, &mut tree4);
     assert_eq!(tree1, tree4);
     assert_eq!(
-        tree1.get_range(..).collect::<Vec<_>>(),
+        tree1.get_range(&..).collect::<Vec<_>>(),
         [
             (&25, &"World!"),
             (&40, &"Hello"),
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(diffs1.len(), 0);
         assert_eq!(diffs2.len(), 1);
         if let Diff::LocalOnly(range) = diffs2[0] {
-            let items: Vec<_> = tree2.get_range(range).collect();
+            let items: Vec<_> = tree2.get_range(&range).collect();
             assert_eq!(items, vec![(&key, &value)]);
         } else {
             panic!("Expected Diff::Inself(_), got {:?}", diffs2[0]);
