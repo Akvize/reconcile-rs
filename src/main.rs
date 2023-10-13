@@ -13,6 +13,8 @@ use tracing::{debug, info, warn};
 use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
 
+const BUFFER_SIZE: usize = 4096;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K, V> {
     HashSegment(HashSegment<K>),
@@ -23,7 +25,7 @@ async fn answer_queries(
     socket: Arc<UdpSocket>,
     tree: Arc<RwLock<HTree<u64, u64>>>,
 ) -> Result<(), std::io::Error> {
-    let mut recv_buf = [0; 4096];
+    let mut recv_buf = [0; BUFFER_SIZE];
     let mut send_buf = Vec::new();
     // infinite loop
     loop {
@@ -79,18 +81,21 @@ async fn answer_queries(
                 }
             }
             if !messages.is_empty() {
+                debug!("sending {} messages to {peer}", messages.len());
                 send_buf.clear();
-                let n_messages = messages.len();
                 for message in messages {
+                    let last_size = send_buf.len();
                     message
                         .serialize(&mut Serializer::new(&mut send_buf))
                         .unwrap();
+                    if send_buf.len() > BUFFER_SIZE {
+                        socket.send_to(&send_buf[..last_size], &peer).await?;
+                        debug!("sent {} bytes to {peer}", send_buf.len());
+                        send_buf.drain(..last_size);
+                    }
                 }
-                debug!(
-                    "sending {n_messages} messages {} bytes to {peer}",
-                    send_buf.len()
-                );
                 socket.send_to(&send_buf, &peer).await?;
+                debug!("sent {} bytes to {peer}", send_buf.len());
             }
         }
         if !updates.is_empty() {
