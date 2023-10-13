@@ -58,7 +58,7 @@ async fn answer_queries(
                         let guard = tree.read().unwrap();
                         info!("Found diffs: {diffs:?}");
                         for diff in diffs {
-                            for (k, v) in guard.get_range(&diff.0) {
+                            for (k, v) in guard.get_range(&diff) {
                                 updates.push((*k, *v));
                             }
                         }

@@ -20,17 +20,14 @@ pub struct HashSegment<K> {
     size: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Diff<K>(pub (Bound<K>, Bound<K>));
-
-type Diffs<K> = Vec<Diff<K>>;
+type Diffs<K> = Vec<(Bound<K>, Bound<K>)>;
 
 pub trait Diffable {
     type Key;
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>>;
     fn diff_round(
         &self,
-        diffs: &mut Vec<Diff<Self::Key>>,
+        diffs: &mut Diffs<Self::Key>,
         segments: Vec<HashSegment<Self::Key>>,
     ) -> Vec<HashSegment<Self::Key>>;
 
@@ -59,7 +56,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
 
     fn diff_round(
         &self,
-        diffs: &mut Vec<Diff<Self::Key>>,
+        diffs: &mut Diffs<Self::Key>,
         segments: Vec<HashSegment<Self::Key>>,
     ) -> Vec<HashSegment<Self::Key>> {
         let mut ret = Vec::new();
@@ -69,7 +66,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
             if hash == local_hash {
                 continue;
             } else if hash == 0 {
-                diffs.push(Diff(range));
+                diffs.push(range);
                 continue;
             } else if local_hash == 0 {
                 // present on remote; bounce back to the remote
@@ -103,7 +100,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     size: 0,
                 });
                 // send the conflicting item to the remote
-                diffs.push(Diff((start_bound, end_bound)));
+                diffs.push((start_bound, end_bound));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
                 ret.push(HashSegment {

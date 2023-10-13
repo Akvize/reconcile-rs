@@ -765,12 +765,12 @@ where
     let mut new_second = Vec::new();
     let (diffs1, diffs2) = first.diff(second);
     for diff in diffs1 {
-        for (k, v) in first.get_range(&diff.0) {
+        for (k, v) in first.get_range(&diff) {
             new_second.push((k.clone(), v.clone()))
         }
     }
     for diff in diffs2 {
-        for (k, v) in second.get_range(&diff.0) {
+        for (k, v) in second.get_range(&diff) {
             new_first.push((k.clone(), v.clone()))
         }
     }
@@ -788,7 +788,7 @@ mod tests {
 
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
-    use crate::diff::{Diff, Diffable, HashRangeQueryable};
+    use crate::diff::{Diffable, HashRangeQueryable};
 
     use super::{reconciliate, HTree};
 
@@ -853,15 +853,15 @@ mod tests {
         assert_eq!(
             tree1.diff(&tree4),
             (
-                vec![Diff((Bound::Included(40), Bound::Excluded(75))),],
-                vec![Diff((Bound::Included(40), Bound::Excluded(75)))],
+                vec![(Bound::Included(40), Bound::Excluded(75))],
+                vec![(Bound::Included(40), Bound::Excluded(75))],
             ),
         );
         assert_eq!(
             tree1.diff(&tree5),
             (
-                vec![Diff((Bound::Included(75), Bound::Unbounded)),],
-                vec![Diff((Bound::Included(75), Bound::Unbounded))],
+                vec![(Bound::Included(75), Bound::Unbounded)],
+                vec![(Bound::Included(75), Bound::Unbounded)],
             ),
         );
 
@@ -950,7 +950,7 @@ mod tests {
         }
         assert_eq!(diffs1.len(), 0);
         assert_eq!(diffs2.len(), 1);
-        let items: Vec<_> = tree2.get_range(&diffs2[0].0).collect();
+        let items: Vec<_> = tree2.get_range(&diffs2[0]).collect();
         assert_eq!(items, vec![(&key, &value)]);
 
         // remove some

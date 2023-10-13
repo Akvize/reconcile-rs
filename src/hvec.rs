@@ -202,7 +202,7 @@ mod tests {
 
     use std::ops::Bound;
 
-    use crate::diff::{Diff, Diffable};
+    use crate::diff::Diffable;
 
     use super::{HVec, HashRangeQueryable};
 
@@ -232,15 +232,15 @@ mod tests {
         assert_eq!(
             vec1.diff(&vec4),
             (
-                vec![Diff((Bound::Included(40), Bound::Excluded(75))),],
-                vec![Diff((Bound::Included(40), Bound::Excluded(75)))],
+                vec![(Bound::Included(40), Bound::Excluded(75))],
+                vec![(Bound::Included(40), Bound::Excluded(75))],
             ),
         );
         assert_eq!(
             vec1.diff(&vec5),
             (
-                vec![Diff((Bound::Included(75), Bound::Unbounded)),],
-                vec![Diff((Bound::Included(75), Bound::Unbounded))],
+                vec![(Bound::Included(75), Bound::Unbounded)],
+                vec![(Bound::Included(75), Bound::Unbounded)],
             ),
         );
     }
