@@ -136,7 +136,7 @@ impl<K: Ord, V> HVec<K, V> {
 
     fn index_range_of_key_range<R: RangeBounds<K>>(
         &self,
-        range: R,
+        range: &R,
     ) -> (Bound<usize>, Bound<usize>) {
         (
             self.index_bound_of_key_bound(range.start_bound()),
@@ -147,7 +147,7 @@ impl<K: Ord, V> HVec<K, V> {
 
 impl<K: Ord, V> HashRangeQueryable for HVec<K, V> {
     type Key = K;
-    fn hash<R: RangeBounds<Self::Key>>(&self, range: R) -> u64 {
+    fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64 {
         self.hashes[self.index_range_of_key_range(range)]
             .iter()
             .fold(0, |acc, val| acc ^ val)
@@ -170,29 +170,29 @@ impl<K: Ord, V> HashRangeQueryable for HVec<K, V> {
 fn test_simple() {
     // empty
     let mut vec = HVec::new();
-    assert_eq!(vec.hash(..), 0);
+    assert_eq!(vec.hash(&..), 0);
 
     // 1 value
     vec.insert(50, "Hello");
-    let hash1 = vec.hash(..);
+    let hash1 = vec.hash(&..);
     assert_ne!(hash1, 0);
 
     // 2 values
     vec.insert(25, "World!");
-    let hash2 = vec.hash(..);
+    let hash2 = vec.hash(&..);
     assert_ne!(hash2, 0);
     assert_ne!(hash2, hash1);
 
     // 3 values
     vec.insert(75, "Everyone!");
-    let hash3 = vec.hash(..);
+    let hash3 = vec.hash(&..);
     assert_ne!(hash3, 0);
     assert_ne!(hash3, hash1);
     assert_ne!(hash3, hash2);
 
     // back to 2 values
     vec.remove(&75);
-    let hash4 = vec.hash(..);
+    let hash4 = vec.hash(&..);
     assert_eq!(hash4, hash2);
 }
 
@@ -214,11 +214,11 @@ mod tests {
         let vec4 = HVec::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
         let vec5 = HVec::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
-        assert_eq!(vec1.hash(..), vec1.hash(..));
-        assert_eq!(vec1.hash(..), vec2.hash(..));
-        assert_eq!(vec1.hash(..), vec3.hash(..));
-        assert_ne!(vec1.hash(..), vec4.hash(..));
-        assert_ne!(vec1.hash(..), vec5.hash(..));
+        assert_eq!(vec1.hash(&..), vec1.hash(&..));
+        assert_eq!(vec1.hash(&..), vec2.hash(&..));
+        assert_eq!(vec1.hash(&..), vec3.hash(&..));
+        assert_ne!(vec1.hash(&..), vec4.hash(&..));
+        assert_ne!(vec1.hash(&..), vec5.hash(&..));
 
         assert_eq!(vec1, vec1);
         assert_eq!(vec1, vec2);
@@ -253,15 +253,15 @@ mod tests {
             let value: u64 = rng.gen();
             vec.insert(key, value);
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(vec.hash(..), expected_hash);
+            assert_eq!(vec.hash(&..), expected_hash);
             key_values.push((key, value));
         }
 
         // check for partial ranges
         let mid = u64::MAX / 2;
-        assert_ne!(vec.hash(mid..), vec.hash(..));
-        assert_ne!(vec.hash(..mid), vec.hash(..));
-        assert_eq!(vec.hash(..mid) ^ vec.hash(mid..), vec.hash(..));
+        assert_ne!(vec.hash(&(mid..)), vec.hash(&..));
+        assert_ne!(vec.hash(&..mid), vec.hash(&..));
+        assert_eq!(vec.hash(&..mid) ^ vec.hash(&(mid..)), vec.hash(&..));
 
         // check key_at() with first and last indexes
         assert_eq!(
@@ -296,7 +296,7 @@ mod tests {
             let value2 = vec.remove(&key);
             assert_eq!(value2, Some(value));
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(vec.hash(..), expected_hash);
+            assert_eq!(vec.hash(&..), expected_hash);
         }
     }
 }

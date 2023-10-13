@@ -583,7 +583,7 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HTree<K, V> {
 
 impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
     type Key = K;
-    fn hash<R: RangeBounds<K>>(&self, range: R) -> u64 {
+    fn hash<R: RangeBounds<K>>(&self, range: &R) -> u64 {
         fn aux<K: Ord, V, R: RangeBounds<K>>(
             node: &Option<Box<Node<K, V>>>,
             range: &R,
@@ -655,7 +655,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
                 0
             }
         }
-        aux(&self.root, &range, None, None)
+        aux(&self.root, range, None, None)
     }
 
     fn insertion_position(&self, key: &K) -> usize {
@@ -779,26 +779,26 @@ where
 fn test_simple() {
     // empty
     let mut tree = HTree::new();
-    assert_eq!(tree.hash(..), 0);
+    assert_eq!(tree.hash(&..), 0);
     tree.check_invariants();
 
     // 1 value
     tree.insert(50, "Hello");
     tree.check_invariants();
-    let hash1 = tree.hash(..);
+    let hash1 = tree.hash(&..);
     assert_ne!(hash1, 0);
 
     // 2 values
     tree.insert(25, "World!");
     tree.check_invariants();
-    let hash2 = tree.hash(..);
+    let hash2 = tree.hash(&..);
     assert_ne!(hash2, 0);
     assert_ne!(hash2, hash1);
 
     // 3 values
     tree.insert(75, "Everyone!");
     tree.check_invariants();
-    let hash3 = tree.hash(..);
+    let hash3 = tree.hash(&..);
     assert_ne!(hash3, 0);
     assert_ne!(hash3, hash1);
     assert_ne!(hash3, hash2);
@@ -806,7 +806,7 @@ fn test_simple() {
     // back to 2 values
     tree.remove(&75);
     tree.check_invariants();
-    let hash4 = tree.hash(..);
+    let hash4 = tree.hash(&..);
     assert_eq!(hash4, hash2);
 }
 
@@ -818,11 +818,11 @@ fn test_compare() {
     let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
     let tree5 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
-    assert_eq!(tree1.hash(..), tree1.hash(..));
-    assert_eq!(tree1.hash(..), tree2.hash(..));
-    assert_eq!(tree1.hash(..), tree3.hash(..));
-    assert_ne!(tree1.hash(..), tree4.hash(..));
-    assert_ne!(tree1.hash(..), tree5.hash(..));
+    assert_eq!(tree1.hash(&..), tree1.hash(&..));
+    assert_eq!(tree1.hash(&..), tree2.hash(&..));
+    assert_eq!(tree1.hash(&..), tree3.hash(&..));
+    assert_ne!(tree1.hash(&..), tree4.hash(&..));
+    assert_ne!(tree1.hash(&..), tree5.hash(&..));
 
     assert_eq!(tree1, tree1);
     assert_eq!(tree1, tree2);
@@ -890,7 +890,7 @@ mod tests {
             assert!(old.is_none());
             tree1.check_invariants();
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree1.hash(..), expected_hash);
+            assert_eq!(tree1.hash(&..), expected_hash);
             key_values.push((key, value));
         }
 
@@ -902,9 +902,9 @@ mod tests {
 
         // check for partial ranges
         let mid = key_values[key_values.len() / 2].0;
-        assert_ne!(tree1.hash(mid..), tree1.hash(..));
-        assert_ne!(tree1.hash(..mid), tree1.hash(..));
-        assert_eq!(tree1.hash(..mid) ^ tree1.hash(mid..), tree1.hash(..));
+        assert_ne!(tree1.hash(&(mid..)), tree1.hash(&..));
+        assert_ne!(tree1.hash(&..mid), tree1.hash(&..));
+        assert_eq!(tree1.hash(&..mid) ^ tree1.hash(&(mid..)), tree1.hash(&..));
 
         for _ in 0..100 {
             let index = rng.gen::<usize>() % key_values.len();
@@ -950,7 +950,7 @@ mod tests {
             tree1.check_invariants();
             assert_eq!(value2, Some(value));
             expected_hash ^= super::hash(&key, &value);
-            assert_eq!(tree1.hash(..), expected_hash);
+            assert_eq!(tree1.hash(&..), expected_hash);
         }
     }
 }

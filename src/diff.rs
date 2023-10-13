@@ -2,7 +2,7 @@ use std::ops::{Bound, RangeBounds};
 
 pub trait HashRangeQueryable {
     type Key;
-    fn hash<R: RangeBounds<Self::Key>>(&self, range: R) -> u64;
+    fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
     fn insertion_position(&self, key: &Self::Key) -> usize;
     fn key_at(&self, index: usize) -> &Self::Key;
     fn len(&self) -> usize;
@@ -59,7 +59,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>> {
         vec![HashSegment {
             range: (Bound::Unbounded, Bound::Unbounded),
-            hash: self.hash(..),
+            hash: self.hash(&..),
             size: self.len(),
         }]
     }
@@ -72,7 +72,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         let mut ret = Vec::new();
         for segment in segments {
             let HashSegment { range, hash, size } = segment;
-            let local_hash = self.hash(range);
+            let local_hash = self.hash(&range);
             if hash == local_hash {
                 continue;
             } else if hash == 0 {
@@ -120,13 +120,13 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 let left_range = (start_bound, Bound::Excluded(mid_key));
                 ret.push(HashSegment {
                     range: left_range,
-                    hash: self.hash(left_range),
+                    hash: self.hash(&left_range),
                     size: mid_index - start_index,
                 });
                 let right_range = (Bound::Included(mid_key), end_bound);
                 ret.push(HashSegment {
                     range: right_range,
-                    hash: self.hash(right_range),
+                    hash: self.hash(&right_range),
                     size: end_index - mid_index,
                 });
             }
