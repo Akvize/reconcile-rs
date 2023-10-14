@@ -720,16 +720,16 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((node, left_explored)) = self.stack.pop() {
-            if !self.range.contains(&node.key) {
-                self.stack.clear();
-                return None;
-            }
             if !left_explored {
                 if let Some(left) = node.children[0].as_ref() {
                     self.stack.push((node, true));
                     self.stack.push((left, false));
                     return self.next();
                 }
+            }
+            if !self.range.contains(&node.key) {
+                self.stack.clear();
+                return None;
             }
             if let Some(right) = node.children[1].as_ref() {
                 self.stack.push((right, false));
