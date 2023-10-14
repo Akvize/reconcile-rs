@@ -167,13 +167,14 @@ async fn main() {
     let socket = Arc::new(UdpSocket::bind(listen_addr).await.unwrap());
     info!("Listening on: {}", socket.local_addr().unwrap());
 
-    let mut tree = HTree::new();
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut key_values = Vec::new();
     for _ in 0..elements {
         let key: u64 = rng.gen::<u64>();
         let value: u64 = rng.gen();
-        tree.insert(key, value);
+        key_values.push((key, value));
     }
+    let tree = HTree::from_iter(key_values.into_iter());
 
     info!("Global hash is {}", tree.hash(&..));
     let state = Arc::new(RwLock::new(tree));
