@@ -779,7 +779,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Bound;
+    use std::ops::{Bound, RangeBounds};
 
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
@@ -930,6 +930,39 @@ mod tests {
         let items: Vec<(u64, u64)> = tree1.iter().map(|(&k, &v)| (k, v)).collect();
         assert_eq!(items.len(), key_values.len());
         assert_eq!(items, key_values);
+
+        // test get_range
+        let from_index = rng.gen_range(0..key_values.len());
+        let to_index = rng.gen_range(from_index..key_values.len());
+        let from_key = tree1.key_at(from_index);
+        let to_key = tree1.key_at(to_index);
+        fn test_range<
+            R: RangeBounds<u64>,
+            SI: std::slice::SliceIndex<[(u64, u64)], Output = [(u64, u64)]>,
+        >(
+            key_values: &Vec<(u64, u64)>,
+            tree: &HTree<u64, u64>,
+            range: R,
+            slice_index: SI,
+        ) {
+            assert_eq!(
+                tree.get_range(&range)
+                    .map(|(k, v)| (*k, *v))
+                    .collect::<Vec<_>>(),
+                key_values[slice_index]
+            );
+        }
+        test_range(&key_values, &tree1, from_key..to_key, from_index..to_index);
+        test_range(
+            &key_values,
+            &tree1,
+            from_key..=to_key,
+            from_index..=to_index,
+        );
+        test_range(&key_values, &tree1, ..to_key, ..to_index);
+        test_range(&key_values, &tree1, ..=to_key, ..=to_index);
+        test_range(&key_values, &tree1, from_key.., from_index..);
+        test_range(&key_values, &tree1, .., ..);
 
         // test diff
         let key: u64 = rng.gen::<u64>();
