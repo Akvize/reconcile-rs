@@ -486,10 +486,13 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
     where
         T: IntoIterator<Item = (K, V)>,
     {
+        let mut tree = HTree::new();
         let mut items: Vec<_> = iter.into_iter().collect();
+        if items.is_empty() {
+            return tree;
+        }
         items.sort_by(|a, b| a.0.cmp(&b.0));
         let mut items: Vec<_> = items.into_iter().map(Some).collect();
-        let mut tree = HTree::new();
         let mut parts = vec![&mut items[..]];
         let mut new_parts = Vec::new();
         while !parts.is_empty() {
