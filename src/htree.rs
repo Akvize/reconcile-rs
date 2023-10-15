@@ -58,6 +58,7 @@ impl<K, V> Node<K, V> {
         value: V,
         hash: u64,
         right_child: Option<Box<Node<K, V>>>,
+        diff_hash: u64,
     ) -> InsertionTuple<K, V> {
         assert_eq!(self.children.is_none(), right_child.is_none());
         if self.keys.is_full() {
@@ -78,19 +79,18 @@ impl<K, V> Node<K, V> {
             let mid_key = self.keys.pop().unwrap();
             let mid_value = self.values.pop().unwrap();
             let mid_hash = self.hashes.pop().unwrap();
-            // update invariants
-            right_sibling.refresh_hash_size();
-            self.refresh_hash_size();
             // do the insert
-            if index <= mid {
-                let ret = self.insert(index, key, value, hash, right_child);
-                assert!(ret.is_none())
+            let to_insert = if index <= mid {
+                self.insert(index, key, value, hash, right_child, diff_hash)
             } else {
-                let ret = right_sibling.insert(index - mid - 1, key, value, hash, right_child);
-                assert!(ret.is_none())
-            }
+                right_sibling.insert(index - mid - 1, key, value, hash, right_child, diff_hash)
+            };
+            assert!(to_insert.is_none());
             assert!(!self.keys.is_empty());
             assert!(!right_sibling.keys.is_empty());
+            // update invariants
+            self.refresh_hash_size();
+            right_sibling.refresh_hash_size();
             Some((mid_key, mid_value, mid_hash, right_sibling))
         } else {
             // just insert
@@ -98,11 +98,9 @@ impl<K, V> Node<K, V> {
             self.values.insert(index, value);
             self.hashes.insert(index, hash);
             self.tree_size += 1;
-            self.tree_hash ^= hash;
+            self.tree_hash ^= diff_hash;
             if let Some(right_child) = right_child {
                 assert!(self.children.is_some());
-                self.tree_size += right_child.tree_size;
-                self.tree_hash ^= right_child.tree_hash;
                 self.children
                     .as_mut()
                     .unwrap()
@@ -195,19 +193,21 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                 Err(index) => {
                     if let Some(children) = node.children.as_mut() {
                         // internal node
-                        let (to_insert, diff_hash, ret) = aux(&mut children[index], key, value);
-                        // insert in node additional things from below, if any
-                        let to_insert = to_insert.and_then(|(key, value, hash, right_child)| {
-                            node.insert(index, key, value, hash, Some(right_child))
-                        });
-                        node.refresh_hash_size();
+                        let (mut to_insert, diff_hash, ret) = aux(&mut children[index], key, value);
+                        if let Some((key, value, hash, right_child)) = to_insert {
+                            to_insert =
+                                node.insert(index, key, value, hash, Some(right_child), diff_hash)
+                        } else {
+                            if ret.is_none() {
+                                node.tree_size += 1;
+                            }
+                            node.tree_hash ^= diff_hash;
+                        }
                         (to_insert, diff_hash, ret)
                     } else {
-                        // leaf node
+                        // leaf
                         let hash = hash(&key, &value);
-                        // insert in node
-                        let to_insert = node.insert(index, key, value, hash, None);
-                        node.refresh_hash_size();
+                        let to_insert = node.insert(index, key, value, hash, None, hash);
                         (to_insert, hash, None)
                     }
                 }
