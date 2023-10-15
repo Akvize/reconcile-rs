@@ -289,7 +289,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             }
             assert_eq!(cum_hash, node.tree_hash, "hash invariant violated");
             assert_eq!(tot_size, node.tree_size, "size invariant violated");
-            (cum_hash, tot_size, max_height)
+            (cum_hash, tot_size, max_height + 1)
         }
         aux(&self.root, None, None);
     }
