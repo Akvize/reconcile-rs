@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -5,25 +7,31 @@ use std::time::Duration;
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use clap::Parser;
 use futures::future::{select, Either};
-use rand::{Rng, SeedableRng};
-use serde::{Deserialize, Serialize};
+use rand::{
+    distributions::{Alphanumeric, DistString},
+    SeedableRng,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
 use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
 
-const BUFFER_SIZE: usize = 4096;
+const BUFFER_SIZE: usize = 65536;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-enum Message<K, V> {
+enum Message<K: Serialize, V: Serialize> {
     HashSegment(HashSegment<K>),
     Update((K, V)),
 }
 
-async fn answer_queries(
+async fn answer_queries<
+    K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
+    V: Clone + DeserializeOwned + Hash + Serialize,
+>(
     socket: Arc<UdpSocket>,
-    tree: Arc<RwLock<HTree<u64, u64>>>,
+    tree: Arc<RwLock<HTree<K, V>>>,
 ) -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
@@ -50,7 +58,7 @@ async fn answer_queries(
                     }
                 }
             }
-            let message: Message<u64, u64> = res.unwrap();
+            let message: Message<K, V> = res.unwrap();
             match message {
                 Message::HashSegment(segment) => {
                     segments.push(segment);
@@ -72,7 +80,7 @@ async fn answer_queries(
             if !segments.is_empty() {
                 debug!("Split in {} segments", segments.len());
                 for segment in segments {
-                    messages.push(Message::HashSegment::<u64, u64>(segment))
+                    messages.push(Message::HashSegment::<K, V>(segment))
                 }
             }
             if !diffs.is_empty() {
@@ -80,7 +88,7 @@ async fn answer_queries(
                 info!("Found diffs: {diffs:?}");
                 for diff in diffs {
                     for (k, v) in guard.get_range(&diff) {
-                        messages.push(Message::Update((*k, *v)));
+                        messages.push(Message::Update((k.clone(), v.clone())));
                     }
                 }
             }
@@ -106,13 +114,16 @@ async fn answer_queries(
             debug!("got {} updates", updates.len());
             let mut guard = tree.write().unwrap();
             for (k, v) in updates {
-                if let Some(cur) = guard.get(&k) {
-                    // conflict resolution
-                    if &v > cur {
+                // conflict resolution
+                // TODO
+                /*
+                if let Some(_) = guard.get(&k) {
+                    if true {
                         guard.insert(k, v);
                         continue;
                     }
                 }
+                */
                 guard.insert(k, v);
             }
             info!("Updated state; global hash is now {}", guard.hash(&..));
@@ -120,10 +131,10 @@ async fn answer_queries(
     }
 }
 
-async fn send_queries(
+async fn send_queries<K: Clone + Hash + Ord + Serialize, V: Serialize + Hash>(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
-    tree: Arc<RwLock<HTree<u64, u64>>>,
+    tree: Arc<RwLock<HTree<K, V>>>,
 ) -> Result<(), std::io::Error> {
     let my_options = DefaultOptions::new();
     let mut send_buf = Vec::new();
@@ -134,7 +145,7 @@ async fn send_queries(
         };
         send_buf.clear();
         for segment in segments {
-            Message::HashSegment::<u64, u64>(segment)
+            Message::HashSegment::<K, V>(segment)
                 .serialize(&mut Serializer::new(&mut send_buf, my_options))
                 .unwrap();
         }
@@ -170,8 +181,8 @@ async fn main() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values = Vec::new();
     for _ in 0..elements {
-        let key: u64 = rng.gen::<u64>();
-        let value: u64 = rng.gen();
+        let key: String = Alphanumeric.sample_string(&mut rng, 100);
+        let value: String = Alphanumeric.sample_string(&mut rng, 1000);
         key_values.push((key, value));
     }
     let tree = HTree::from_iter(key_values.into_iter());
