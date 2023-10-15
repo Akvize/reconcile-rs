@@ -1,6 +1,6 @@
 use std::ops::{Bound, RangeBounds};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum RangeOrdering {
     Less,
     Inside,

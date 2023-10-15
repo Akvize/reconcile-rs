@@ -450,20 +450,24 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
             // otherwise, recurse in the relevant sub-trees
 
             let mut cum_hash = 0;
-            for i in 0..node.keys.len() {
+            let mut i = 0;
+            while i < node.keys.len() && range_compare(&node.keys[i], range) == RangeOrdering::Less
+            {
+                i += 1;
+            }
+            while i < node.keys.len()
+                && range_compare(&node.keys[i], range) == RangeOrdering::Inside
+            {
                 let cur_bound = Some(&node.keys[i]);
-                // handle previous sub-tree
                 if let Some(children) = node.children.as_ref() {
                     cum_hash ^= aux(&children[i], range, lower_bound, cur_bound);
                 }
-                // the node itself
-                if range.contains(&node.keys[i]) {
-                    cum_hash ^= node.hashes[i];
-                }
+                cum_hash ^= node.hashes[i];
                 lower_bound = cur_bound;
+                i += 1;
             }
             if let Some(children) = node.children.as_ref() {
-                cum_hash ^= aux(children.last().unwrap(), range, lower_bound, upper_bound);
+                cum_hash ^= aux(&children[i], range, lower_bound, upper_bound);
             }
             cum_hash
         }
