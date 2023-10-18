@@ -569,7 +569,7 @@ impl<K: Ord, V> HTree<K, V> {
                     }
                 }
             }
-            node = &children.last().as_ref().unwrap();
+            node = children.last().as_ref().unwrap();
         }
         // traverse leaf node
         for i in 0..node.keys.len() {
