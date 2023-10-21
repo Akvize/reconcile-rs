@@ -1,10 +1,12 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use rand::{
     distributions::{Alphanumeric, DistString},
@@ -28,11 +30,12 @@ enum Message<K: Serialize, V: Serialize> {
 async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
+    F: Fn(&V, V) -> V,
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
     tree: Arc<RwLock<HTree<K, V>>>,
-) -> Result<(), std::io::Error> {
+    conflict_handler: F)  -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
     let mut send_buf = Vec::new();
@@ -116,17 +119,10 @@ async fn answer_queries<
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
                 let mut guard = tree.write().unwrap();
-                for (k, v) in updates {
-                    // conflict resolution
-                    // TODO
-                    /*
-                    if let Some(_) = guard.get(&k) {
-                        if true {
-                            guard.insert(k, v);
-                            continue;
-                        }
+                for (k, mut v) in updates {
+                    if let Some(old_v) = guard.get(&k) {
+                        v = conflict_handler(old_v, v);
                     }
-                    */
                     guard.insert(k, v);
                 }
                 info!("Updated state; global hash is now {}", guard.hash(&..));
@@ -180,15 +176,23 @@ async fn main() {
     let mut key_values = Vec::new();
     for _ in 0..elements {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
-        let value: String = Alphanumeric.sample_string(&mut rng, 1000);
+        let value = chrono::offset::Utc::now().to_string();
         key_values.push((key, value));
     }
     let tree = HTree::from_iter(key_values.into_iter());
 
     info!("Global hash is {}", tree.hash(&..));
     let state = Arc::new(RwLock::new(tree));
+    let conflict_handler = |old_v: &String, v: String| -> String {
+        if DateTime::<Utc>::from_str(old_v).unwrap() < DateTime::<Utc>::from_str(&v).unwrap() {
+            debug!("Keeping local val {old_v}, dropping remote val {v}");
+            return old_v.clone();
+        }
+        debug!("Replacing local val {old_v} with remote val {v}");
+        v
+    };
 
-    answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state))
+    answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state), conflict_handler)
         .await
         .unwrap();
 }
