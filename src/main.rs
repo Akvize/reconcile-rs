@@ -30,7 +30,7 @@ enum Message<K: Serialize, V: Serialize> {
 async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    F: Fn(&V, V) -> Option<V>,
+    F: Fn(&K, &V, V) -> Option<V>,
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
@@ -121,7 +121,7 @@ async fn answer_queries<
                 let mut guard = tree.write().unwrap();
                 for (k, v) in updates {
                     if let Some(local_v) = guard.get(&k) {
-                        if let Some(v) = conflict_handler(local_v, v) {
+                        if let Some(v) = conflict_handler(&k, local_v, v) {
                             guard.insert(k, v);
                         }
                     } else {
@@ -186,12 +186,12 @@ async fn main() {
 
     info!("Global hash is {}", tree.hash(&..));
     let state = Arc::new(RwLock::new(tree));
-    let conflict_handler = |local_v: &String, v: String| -> Option<String> {
-        if DateTime::<Utc>::from_str(local_v).unwrap() < DateTime::<Utc>::from_str(&v).unwrap() {
-            debug!("Keeping local val {local_v}, dropping remote val {v}");
+    let conflict_handler = |k: &String, local_v: &String, v: String| -> Option<String> {
+        if DateTime::<Utc>::from_str(local_v).unwrap() > DateTime::<Utc>::from_str(&v).unwrap() {
+            debug!("Key {k} - Keeping local value {local_v}, dropping remote value {v}");
             return None;
         }
-        debug!("Replacing local val {local_v} with remote val {v}");
+        debug!("Key {k} - Replacing local value {local_v} with remote value {v}");
         Some(v)
     };
 
