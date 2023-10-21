@@ -32,14 +32,14 @@ pub trait Diffable {
     ) -> Vec<HashSegment<Self::Key>>;
 
     fn diff(&self, remote: &Self) -> (Diffs<Self::Key>, Diffs<Self::Key>) {
-        let mut diffs1 = Vec::new();
-        let mut diffs2 = Vec::new();
+        let mut local_diffs = Vec::new();
+        let mut remote_diffs = Vec::new();
         let mut segments = self.start_diff();
         while !segments.is_empty() {
-            segments = remote.diff_round(&mut diffs2, segments);
-            segments = self.diff_round(&mut diffs1, segments);
+            segments = remote.diff_round(&mut remote_diffs, segments);
+            segments = self.diff_round(&mut local_diffs, segments);
         }
-        (diffs1, diffs2)
+        (local_diffs, remote_diffs)
     }
 }
 
