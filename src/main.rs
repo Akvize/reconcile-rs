@@ -193,7 +193,9 @@ async fn main() {
         }
         debug!("Key {k} - Replacing local value {local_v} with remote value {v}");
         Some(v)
-    };
+    };  // Should the user be able to choose between
+        //  * providing a conflict handler or
+        //  * using a "standard" handler based on timestamping? 
 
     answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state), conflict_handler)
         .await
