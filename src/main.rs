@@ -12,7 +12,7 @@ use rand::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, trace};
 
 use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
@@ -46,7 +46,7 @@ async fn answer_queries<
                 warn!("Buffer too small for message, discarded");
                 continue;
             }
-            debug!("got {} bytes from {peer}", size);
+            trace!("got {} bytes from {peer}", size);
             let mut segments = Vec::new();
             let mut updates = Vec::new();
             let mut deserializer = Deserializer::from_slice(&recv_buf[..size], my_options);
@@ -72,7 +72,7 @@ async fn answer_queries<
             }
             // handle messages
             if !segments.is_empty() {
-                debug!("got {} segments", segments.len());
+                trace!("got {} segments", segments.len());
                 let mut diffs = Vec::new();
                 let segments = {
                     let guard = tree.read().unwrap();
@@ -146,7 +146,7 @@ async fn answer_queries<
                     .serialize(&mut Serializer::new(&mut send_buf, my_options))
                     .unwrap();
             }
-            debug!("start_diff {} bytes to {other_addr}", send_buf.len());
+            trace!("start_diff {} bytes to {other_addr}", send_buf.len());
             socket.send_to(&send_buf, &other_addr).await?;
             last_activity = Some(Instant::now());
         }
