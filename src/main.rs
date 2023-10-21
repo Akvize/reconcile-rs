@@ -30,7 +30,7 @@ enum Message<K: Serialize, V: Serialize> {
 async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    F: Fn(&V, V) -> V,
+    F: Fn(&V, V) -> Option<V>,
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
@@ -119,11 +119,14 @@ async fn answer_queries<
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
                 let mut guard = tree.write().unwrap();
-                for (k, mut v) in updates {
-                    if let Some(old_v) = guard.get(&k) {
-                        v = conflict_handler(old_v, v);
+                for (k, v) in updates {
+                    if let Some(local_v) = guard.get(&k) {
+                        if let Some(v) = conflict_handler(local_v, v) {
+                            guard.insert(k, v);
+                        }
+                    } else {
+                        guard.insert(k, v);
                     }
-                    guard.insert(k, v);
                 }
                 info!("Updated state; global hash is now {}", guard.hash(&..));
             }
@@ -183,13 +186,13 @@ async fn main() {
 
     info!("Global hash is {}", tree.hash(&..));
     let state = Arc::new(RwLock::new(tree));
-    let conflict_handler = |old_v: &String, v: String| -> String {
-        if DateTime::<Utc>::from_str(old_v).unwrap() < DateTime::<Utc>::from_str(&v).unwrap() {
-            debug!("Keeping local val {old_v}, dropping remote val {v}");
-            return old_v.clone();
+    let conflict_handler = |local_v: &String, v: String| -> Option<String> {
+        if DateTime::<Utc>::from_str(local_v).unwrap() < DateTime::<Utc>::from_str(&v).unwrap() {
+            debug!("Keeping local val {local_v}, dropping remote val {v}");
+            return None;
         }
-        debug!("Replacing local val {old_v} with remote val {v}");
-        v
+        debug!("Replacing local val {local_v} with remote val {v}");
+        Some(v)
     };
 
     answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state), conflict_handler)
