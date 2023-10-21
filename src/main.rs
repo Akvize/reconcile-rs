@@ -133,7 +133,7 @@ async fn answer_queries<
             }
         }
         let is_active = last_activity
-            .map(|last_activity| Instant::now() - last_activity < Duration::from_secs(1))
+            .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10))
             .unwrap_or(false);
         if !is_active {
             let segments = {
