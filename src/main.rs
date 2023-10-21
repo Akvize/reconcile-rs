@@ -17,7 +17,7 @@ use tracing::{debug, info, warn, trace};
 use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
 use reconciliate::htree::HTree;
 
-const BUFFER_SIZE: usize = 65536;
+const BUFFER_SIZE: usize = 60000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K: Serialize, V: Serialize> {
