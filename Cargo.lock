@@ -432,6 +432,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "range-cmp"
+version = "0.1.0"
+source = "git+https://github.com/Akvize/range-cmp#cdcc461176bc07a2ba1733cf773d07231b8cb6eb"
+
+[[package]]
 name = "reconciliate"
 version = "0.1.0"
 dependencies = [
@@ -440,6 +445,7 @@ dependencies = [
  "clap",
  "futures",
  "rand",
+ "range-cmp",
  "serde",
  "tokio",
  "tracing",
