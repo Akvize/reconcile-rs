@@ -24,8 +24,8 @@ pub async fn run<
     V: Clone + DeserializeOwned + Hash + Serialize,
     R: Reconcilable<Key = K, Value = V>,
 >(
-    socket: &UdpSocket,
-    other_addr: &SocketAddr,
+    socket: UdpSocket,
+    other_addr: SocketAddr,
     mut reconcilable: R,
 ) -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small

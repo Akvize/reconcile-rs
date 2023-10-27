@@ -61,7 +61,7 @@ async fn main() {
     let rhtree =
         RHTree::new(tree).with_conflict_handler(conflict_handler);
 
-    reconcile_service::run(&socket, &other_addr, rhtree)
+    reconcile_service::run(socket, other_addr, rhtree)
         .await
         .unwrap();
 }
