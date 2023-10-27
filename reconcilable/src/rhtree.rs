@@ -5,28 +5,28 @@ use htree::HTree;
 
 use crate::Reconcilable;
 
-pub struct ReconcilableHTree<K, V> {
+pub struct RHTree<K, V> {
     tree: HTree<K, V>,
     conflict_handler: Option<fn(&K, &V, V) -> Option<V>>,
 }
 
-impl<K: Hash + Ord, V: Hash> ReconcilableHTree<K, V> {
+impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
     pub fn new(tree: HTree<K, V>) -> Self {
-        ReconcilableHTree {
+        RHTree {
             tree: tree,
             conflict_handler: None,
         }
     }
 
     pub fn with_conflict_handler(self, conflict_handler: fn(&K, &V, V) -> Option<V>) -> Self {
-        ReconcilableHTree {
+        RHTree {
             tree: self.tree,
             conflict_handler: Some(conflict_handler),
         }
     }
 }
 
-impl<K, V> Reconcilable for ReconcilableHTree<K, V>
+impl<K, V> Reconcilable for RHTree<K, V>
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
@@ -63,7 +63,7 @@ where
 }
 
 impl<K: Hash + Ord, V: Hash> HashRangeQueryable
-    for ReconcilableHTree<K, V>
+    for RHTree<K, V>
 {
     type Key = K;
 

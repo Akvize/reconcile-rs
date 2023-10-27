@@ -11,7 +11,7 @@ use rand::{
 };
 
 use reconcile_service;
-use reconcilable::reconcilable_htree::ReconcilableHTree;
+use reconcilable::rhtree::RHTree;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
 
@@ -59,7 +59,7 @@ async fn main() {
        //  * providing a conflict handler or
        //  * using a "standard" handler based on timestamping?
     let rhtree =
-        ReconcilableHTree::new(tree).with_conflict_handler(conflict_handler);
+        RHTree::new(tree).with_conflict_handler(conflict_handler);
 
     reconcile_service::run(&socket, &other_addr, rhtree)
         .await

@@ -1,4 +1,4 @@
-pub mod reconcilable_htree;
+pub mod rhtree;
 
 use diff::{Diffs, Diffable};
 
