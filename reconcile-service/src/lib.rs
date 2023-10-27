@@ -12,7 +12,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, trace, warn};
 
-const BUFFER_SIZE: usize = 60000;
+const BUFFER_SIZE: usize = 65507;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K: Serialize, V: Serialize> {
