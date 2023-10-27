@@ -3,10 +3,11 @@ use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
+use diff::{Diffable, HashRangeQueryable};
+use hash::hash;
 use range_cmp::{RangeComparable, RangeOrdering};
 
-use crate::diff::{Diffable, HashRangeQueryable};
-use crate::hash::hash;
+pub mod hash;
 
 const B: usize = 6;
 const MAX_CAPACITY: usize = 2 * B - 1;
@@ -430,13 +431,10 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
 
             let mut cum_hash = 0;
             let mut i = 0;
-            while i < node.keys.len() && node.keys[i].range_cmp(range) == RangeOrdering::Below
-            {
+            while i < node.keys.len() && node.keys[i].range_cmp(range) == RangeOrdering::Below {
                 i += 1;
             }
-            while i < node.keys.len()
-                && node.keys[i].range_cmp(range) == RangeOrdering::Inside
-            {
+            while i < node.keys.len() && node.keys[i].range_cmp(range) == RangeOrdering::Inside {
                 let cur_bound = Some(&node.keys[i]);
                 if let Some(children) = node.children.as_ref() {
                     cum_hash ^= aux(&children[i], range, lower_bound, cur_bound);

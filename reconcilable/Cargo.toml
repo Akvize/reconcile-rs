@@ -1,0 +1,10 @@
+[package]
+name = "reconcilable"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+diff = { version = "0.1.0", path = "../diff" }
+htree = { version = "0.1.0", path = "../htree" }

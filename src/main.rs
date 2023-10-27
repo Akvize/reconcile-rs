@@ -8,18 +8,18 @@ use std::time::{Duration, Instant};
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use diff::{Diffable, HashRangeQueryable, HashSegment};
+use htree::HTree;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
-use reconciliate::reconcilable::Reconcilable;
-use reconciliate::reconcilable_htree::ReconcilableHTree;
+
+use reconcilable::reconcilable_htree::ReconcilableHTree;
+use reconcilable::Reconcilable;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn, trace};
-
-use reconciliate::diff::{Diffable, HashRangeQueryable, HashSegment};
-use reconciliate::htree::HTree;
+use tracing::{debug, info, trace, warn};
 
 const BUFFER_SIZE: usize = 60000;
 
@@ -32,12 +32,12 @@ enum Message<K: Serialize, V: Serialize> {
 async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>
+    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>,
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
-    state: Arc<RwLock<R>>) 
-    -> Result<(), std::io::Error> {
+    state: Arc<RwLock<R>>,
+) -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
     let mut send_buf = Vec::new();
@@ -184,12 +184,12 @@ async fn main() {
         }
         debug!("Key {k} - Replacing local value {local_v} with remote value {v}");
         Some(v)
-    };  // Should the user be able to choose between
-        //  * providing a conflict handler or
-        //  * using a "standard" handler based on timestamping? 
-    let reconcilable_htree = ReconcilableHTree::new(tree)
-        .with_conflict_handler(Some(conflict_handler));
-    
+    }; // Should the user be able to choose between
+       //  * providing a conflict handler or
+       //  * using a "standard" handler based on timestamping?
+    let reconcilable_htree =
+        ReconcilableHTree::new(tree).with_conflict_handler(Some(conflict_handler));
+
     let state = Arc::new(RwLock::new(reconcilable_htree));
 
     answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state))

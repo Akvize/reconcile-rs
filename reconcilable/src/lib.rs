@@ -1,4 +1,6 @@
-use crate::diff::Diffs;
+pub mod reconcilable_htree;
+
+use diff::Diffs;
 
 pub trait Reconcilable {
     type Key;
