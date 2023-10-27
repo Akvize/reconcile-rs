@@ -16,6 +16,7 @@ htree = { version = "0.1.0", path = "htree" }
 rand = "0.8.5"
 range-cmp = { git = "https://github.com/Akvize/range-cmp", version = "0.1.0" }
 reconcilable = { version = "0.1.0", path = "reconcilable" }
+reconcile-service = { version = "0.1.0", path = "reconcile-service" }
 serde = { version = "1.0.188", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "net", "time"] }
 tracing = "0.1.37"
