@@ -33,22 +33,23 @@ where
 {
     type Value = V;
 
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> u64 {
+    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64> {
+        let mut updated = false;
         for (k, v) in updates {
             match self.tree.get(&k) {
                 Some(local_v) => {
                     self.conflict_handler
-                        .as_ref() // default behavior in case of conflict: no forced insertion
-                        .map(|ch| ch(&k, local_v, v))
-                        .flatten()
-                        .map(|v| self.tree.insert(k, v));
-                }
-                None => {
-                    self.tree.insert(k, v);
-                }
-            }
+                    .as_ref() // default behavior in case of conflict: no forced insertion
+                    .map(|ch| ch(&k, local_v, v))
+                    .flatten()
+                },
+                None => Some(v),
+            }.map(|v| {
+                self.tree.insert(k, v);
+                updated = true;
+            });
         }
-        self.tree.hash(&..)
+        updated.then(|| self.tree.hash(&..))
     }
 
     fn send_updates(&self, diffs: diff::Diffs<Self::Key>) -> Vec<(Self::Key, Self::Value)> {

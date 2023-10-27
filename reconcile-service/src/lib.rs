@@ -107,8 +107,8 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
-                let signature = reconcilable.reconcile(updates);
-                info!("Updated state; global hash is now {}", signature);
+                reconcilable.reconcile(updates)
+                    .map(|h| info!("Updated state; global hash is now {}", h));
             }
         }
         let is_active = last_activity
