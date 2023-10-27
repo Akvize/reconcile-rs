@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
@@ -36,7 +35,7 @@ async fn main() {
 
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
-    let socket = Arc::new(UdpSocket::bind(listen_addr).await.unwrap());
+    let socket = UdpSocket::bind(listen_addr).await.unwrap();
     info!("Listening on: {}", socket.local_addr().unwrap());
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -59,12 +58,10 @@ async fn main() {
     }; // Should the user be able to choose between
        //  * providing a conflict handler or
        //  * using a "standard" handler based on timestamping?
-    let reconcilable_htree =
+    let rhtree =
         ReconcilableHTree::new(tree).with_conflict_handler(Some(conflict_handler));
 
-    let state = Arc::new(RwLock::new(reconcilable_htree));
-
-    reconcile_service::run(Arc::clone(&socket), other_addr, Arc::clone(&state))
+    reconcile_service::run(&socket, &other_addr, rhtree)
         .await
         .unwrap();
 }

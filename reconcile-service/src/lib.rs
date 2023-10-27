@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
@@ -25,9 +24,9 @@ pub async fn run<
     V: Clone + DeserializeOwned + Hash + Serialize,
     R: Reconcilable<Key = K, Value = V>,
 >(
-    socket: Arc<UdpSocket>,
-    other_addr: SocketAddr,
-    state: Arc<RwLock<R>>,
+    socket: &UdpSocket,
+    other_addr: &SocketAddr,
+    mut reconcilable: R,
 ) -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
@@ -70,10 +69,7 @@ pub async fn run<
             if !segments.is_empty() {
                 trace!("got {} segments", segments.len());
                 let mut diffs = Vec::new();
-                let segments = {
-                    let guard = state.read().unwrap();
-                    guard.diff_round(&mut diffs, segments)
-                };
+                let segments = reconcilable.diff_round(&mut diffs, segments);
                 let mut messages = Vec::new();
                 if !segments.is_empty() {
                     debug!("Split in {} segments", segments.len());
@@ -82,10 +78,9 @@ pub async fn run<
                     }
                 }
                 if !diffs.is_empty() {
-                    let guard = state.read().unwrap();
                     info!("Found {} diffs", diffs.len());
                     debug!("Diffs: {diffs:?}");
-                    for update in guard.send_updates(diffs) {
+                    for update in reconcilable.send_updates(diffs) {
                         messages.push(Message::Update(update));
                     }
                 }
@@ -112,8 +107,7 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
-                let mut guard = state.write().unwrap();
-                let signature = guard.reconcile(updates);
+                let signature = reconcilable.reconcile(updates);
                 info!("Updated state; global hash is now {}", signature);
             }
         }
@@ -121,10 +115,7 @@ pub async fn run<
             .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10000))
             .unwrap_or(false);
         if !is_active {
-            let segments = {
-                let guard = state.read().unwrap();
-                guard.start_diff()
-            };
+            let segments = reconcilable.start_diff();
             send_buf.clear();
             for segment in segments {
                 Message::HashSegment::<K, V>(segment)
