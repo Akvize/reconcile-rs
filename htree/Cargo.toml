@@ -9,3 +9,7 @@ edition = "2021"
 arrayvec = "0.7.4"
 diff = { version = "0.1.0", path = "../diff" }
 range-cmp = { git = "https://github.com/Akvize/range-cmp", version = "0.1.0" }
+
+[dev-dependencies]
+diff = { path = "../diff" }
+rand = "0.8.5"
