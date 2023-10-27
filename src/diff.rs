@@ -20,7 +20,7 @@ pub struct HashSegment<K> {
     size: usize,
 }
 
-type Diffs<K> = Vec<(Bound<K>, Bound<K>)>;
+pub type Diffs<K> = Vec<(Bound<K>, Bound<K>)>;
 
 pub trait Diffable {
     type Key;
