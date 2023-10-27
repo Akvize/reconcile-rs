@@ -12,6 +12,8 @@ use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
+use reconciliate::reconcilable::Reconcilable;
+use reconciliate::reconcilable_htree::ReconcilableHTree;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn, trace};
@@ -30,12 +32,12 @@ enum Message<K: Serialize, V: Serialize> {
 async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    F: Fn(&K, &V, V) -> Option<V>,
+    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,
-    tree: Arc<RwLock<HTree<K, V>>>,
-    conflict_handler: F)  -> Result<(), std::io::Error> {
+    state: Arc<RwLock<R>>) 
+    -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
     let mut send_buf = Vec::new();
@@ -78,7 +80,7 @@ async fn answer_queries<
                 trace!("got {} segments", segments.len());
                 let mut diffs = Vec::new();
                 let segments = {
-                    let guard = tree.read().unwrap();
+                    let guard = state.read().unwrap();
                     guard.diff_round(&mut diffs, segments)
                 };
                 let mut messages = Vec::new();
@@ -89,12 +91,10 @@ async fn answer_queries<
                     }
                 }
                 if !diffs.is_empty() {
-                    let guard = tree.read().unwrap();
+                    let guard = state.read().unwrap();
                     info!("Found diffs: {diffs:?}");
-                    for diff in diffs {
-                        for (k, v) in guard.get_range(&diff) {
-                            messages.push(Message::Update((k.clone(), v.clone())));
-                        }
+                    for update in guard.send_updates(diffs) {
+                        messages.push(Message::Update(update));
                     }
                 }
                 if !messages.is_empty() {
@@ -118,17 +118,9 @@ async fn answer_queries<
             }
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
-                let mut guard = tree.write().unwrap();
-                for (k, v) in updates {
-                    if let Some(local_v) = guard.get(&k) {
-                        if let Some(v) = conflict_handler(&k, local_v, v) {
-                            guard.insert(k, v);
-                        }
-                    } else {
-                        guard.insert(k, v);
-                    }
-                }
-                info!("Updated state; global hash is now {}", guard.hash(&..));
+                let mut guard = state.write().unwrap();
+                let signature = guard.reconcile(updates);
+                info!("Updated state; global hash is now {}", signature);
             }
         }
         let is_active = last_activity
@@ -136,7 +128,7 @@ async fn answer_queries<
             .unwrap_or(false);
         if !is_active {
             let segments = {
-                let guard = tree.read().unwrap();
+                let guard = state.read().unwrap();
                 guard.start_diff()
             };
             send_buf.clear();
@@ -185,7 +177,6 @@ async fn main() {
     let tree = HTree::from_iter(key_values.into_iter());
 
     info!("Global hash is {}", tree.hash(&..));
-    let state = Arc::new(RwLock::new(tree));
     let conflict_handler = |k: &String, local_v: &String, v: String| -> Option<String> {
         if DateTime::<Utc>::from_str(local_v).unwrap() > DateTime::<Utc>::from_str(&v).unwrap() {
             debug!("Key {k} - Keeping local value {local_v}, dropping remote value {v}");
@@ -196,8 +187,12 @@ async fn main() {
     };  // Should the user be able to choose between
         //  * providing a conflict handler or
         //  * using a "standard" handler based on timestamping? 
+    let reconcilable_htree = ReconcilableHTree::new(tree)
+        .with_conflict_handler(Some(conflict_handler));
+    
+    let state = Arc::new(RwLock::new(reconcilable_htree));
 
-    answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state), conflict_handler)
+    answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state))
         .await
         .unwrap();
 }

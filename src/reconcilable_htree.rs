@@ -1,5 +1,5 @@
 use core::hash::Hash;
-use crate::{htree::HTree, reconcilable::Reconcilable};
+use crate::{htree::HTree, reconcilable::Reconcilable, diff::HashRangeQueryable};
 
 pub struct ReconcilableHTree<K, V, C: Fn(&K, &V, V) -> Option<V>> {
     tree: HTree<K, V>,
@@ -7,8 +7,8 @@ pub struct ReconcilableHTree<K, V, C: Fn(&K, &V, V) -> Option<V>> {
 }
 
 impl<K: Hash + Ord, V: Hash, C: Fn(&K, &V, V) -> Option<V>> ReconcilableHTree<K, V, C> {
-    pub fn new() -> Self {
-        ReconcilableHTree { tree: HTree::default(), conflict_handler: None }
+    pub fn new(tree: HTree<K, V>) -> Self {
+        ReconcilableHTree { tree: tree, conflict_handler: None }
     }
 
     pub fn with_conflict_handler(self, conflict_handler: Option<C>) -> Self {
@@ -21,7 +21,7 @@ impl<K, V, C> Reconcilable for ReconcilableHTree<K, V, C>
     type Key = K;
     type Value = V;
 
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) {
+    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> u64 {
         for (k, v) in updates {
             match self.tree.get(&k) { 
                 Some(local_v) => {
@@ -33,6 +33,7 @@ impl<K, V, C> Reconcilable for ReconcilableHTree<K, V, C>
                 None => { self.tree.insert(k, v); },
             }
         }
+        self.tree.hash(&..)
     }
 
     fn send_updates(&self, diffs: crate::diff::Diffs<Self::Key>) -> Vec<(Self::Key, Self::Value)> {
@@ -44,4 +45,13 @@ impl<K, V, C> Reconcilable for ReconcilableHTree<K, V, C>
         }
         ret
     }
+}
+
+impl<K: Hash + Ord, V: Hash, C: Fn(&K, &V, V) -> Option<V>> HashRangeQueryable for ReconcilableHTree<K, V, C> {
+    type Key = K;
+    
+    fn hash<R: std::ops::RangeBounds<Self::Key>>(&self, range: &R) -> u64 { self.tree.hash(range) }
+    fn insertion_position(&self, key: &Self::Key) -> usize { self.tree.insertion_position(key) }
+    fn key_at(&self, index: usize) -> &Self::Key { self.tree.key_at(index) }
+    fn len(&self) -> usize { self.tree.len() }
 }
