@@ -59,7 +59,7 @@ async fn main() {
        //  * providing a conflict handler or
        //  * using a "standard" handler based on timestamping?
     let rhtree =
-        ReconcilableHTree::new(tree).with_conflict_handler(Some(conflict_handler));
+        ReconcilableHTree::new(tree).with_conflict_handler(conflict_handler);
 
     reconcile_service::run(&socket, &other_addr, rhtree)
         .await

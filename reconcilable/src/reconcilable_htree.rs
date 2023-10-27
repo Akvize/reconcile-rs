@@ -5,12 +5,12 @@ use htree::HTree;
 
 use crate::Reconcilable;
 
-pub struct ReconcilableHTree<K, V, C: Fn(&K, &V, V) -> Option<V>> {
+pub struct ReconcilableHTree<K, V> {
     tree: HTree<K, V>,
-    conflict_handler: Option<C>,
+    conflict_handler: Option<fn(&K, &V, V) -> Option<V>>,
 }
 
-impl<K: Hash + Ord, V: Hash, C: Fn(&K, &V, V) -> Option<V>> ReconcilableHTree<K, V, C> {
+impl<K: Hash + Ord, V: Hash> ReconcilableHTree<K, V> {
     pub fn new(tree: HTree<K, V>) -> Self {
         ReconcilableHTree {
             tree: tree,
@@ -18,19 +18,18 @@ impl<K: Hash + Ord, V: Hash, C: Fn(&K, &V, V) -> Option<V>> ReconcilableHTree<K,
         }
     }
 
-    pub fn with_conflict_handler(self, conflict_handler: Option<C>) -> Self {
+    pub fn with_conflict_handler(self, conflict_handler: fn(&K, &V, V) -> Option<V>) -> Self {
         ReconcilableHTree {
             tree: self.tree,
-            conflict_handler,
+            conflict_handler: Some(conflict_handler),
         }
     }
 }
 
-impl<K, V, C> Reconcilable for ReconcilableHTree<K, V, C>
+impl<K, V> Reconcilable for ReconcilableHTree<K, V>
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
-    C: Fn(&K, &V, V) -> Option<V>,
 {
     type Value = V;
 
@@ -63,8 +62,8 @@ where
     }
 }
 
-impl<K: Hash + Ord, V: Hash, C: Fn(&K, &V, V) -> Option<V>> HashRangeQueryable
-    for ReconcilableHTree<K, V, C>
+impl<K: Hash + Ord, V: Hash> HashRangeQueryable
+    for ReconcilableHTree<K, V>
 {
     type Key = K;
 
