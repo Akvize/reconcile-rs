@@ -543,23 +543,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "reconcile-service"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "chrono",
- "clap",
- "diff",
- "htree",
- "rand",
- "reconcilable",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "reconciliate"
+name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
@@ -577,6 +561,22 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "reconcile-service"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "chrono",
+ "clap",
+ "diff",
+ "htree",
+ "rand",
+ "reconcilable",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
