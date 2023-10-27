@@ -118,7 +118,7 @@ pub async fn run<
             }
         }
         let is_active = last_activity
-            .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10))
+            .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10000))
             .unwrap_or(false);
         if !is_active {
             let segments = {
