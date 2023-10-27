@@ -98,13 +98,15 @@ pub async fn run<
                             .serialize(&mut Serializer::new(&mut send_buf, my_options))
                             .unwrap();
                         if send_buf.len() > BUFFER_SIZE {
+                            debug!("sending {} bytes to {peer}", last_size);
                             socket.send_to(&send_buf[..last_size], &peer).await?;
-                            debug!("sent {} bytes to {peer}", send_buf.len());
+                            debug!("sent {} bytes to {peer}", last_size);
                             send_buf.drain(..last_size);
                         }
                     }
+                    debug!("sending last {} bytes to {peer}", send_buf.len());
                     socket.send_to(&send_buf, &peer).await?;
-                    debug!("sent {} bytes to {peer}", send_buf.len());
+                    debug!("sent last {} bytes to {peer}", send_buf.len());
                     last_activity = Some(Instant::now());
                 }
             }
