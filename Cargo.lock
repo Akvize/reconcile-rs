@@ -445,8 +445,9 @@ dependencies = [
 
 [[package]]
 name = "range-cmp"
-version = "0.1.0"
-source = "git+https://github.com/Akvize/range-cmp#cdcc461176bc07a2ba1733cf773d07231b8cb6eb"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "638a43da05ea92dd280bce4654221cc350fd8e78e77f205c55fbb7ce9040d20f"
 
 [[package]]
 name = "reconcilable"
