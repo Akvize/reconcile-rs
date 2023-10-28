@@ -30,17 +30,6 @@ pub trait Diffable {
         diffs: &mut Diffs<Self::Key>,
         segments: Vec<HashSegment<Self::Key>>,
     ) -> Vec<HashSegment<Self::Key>>;
-
-    fn diff(&self, remote: &Self) -> (Diffs<Self::Key>, Diffs<Self::Key>) {
-        let mut local_diffs = Vec::new();
-        let mut remote_diffs = Vec::new();
-        let mut segments = self.start_diff();
-        while !segments.is_empty() {
-            segments = remote.diff_round(&mut remote_diffs, segments);
-            segments = self.diff_round(&mut local_diffs, segments);
-        }
-        (local_diffs, remote_diffs)
-    }
 }
 
 impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
