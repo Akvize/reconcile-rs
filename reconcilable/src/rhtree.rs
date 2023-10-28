@@ -1,7 +1,7 @@
 use core::hash::Hash;
 
 use diff::HashRangeQueryable;
-use htree::HTree;
+use htree::{HTree, Iter};
 
 use crate::Reconcilable;
 
@@ -41,6 +41,20 @@ impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
 
     pub fn remove(&mut self, _key: &K) -> Option<V> {
         self.tree.remove(_key)
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a RHTree<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.tree.into_iter()
+    }
+}
+
+impl<K, V> RHTree<K, V> {
+    pub fn iter(&self) -> Iter<K, V> {
+        self.into_iter()
     }
 }
 
