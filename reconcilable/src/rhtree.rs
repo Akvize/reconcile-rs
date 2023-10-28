@@ -13,10 +13,10 @@ pub struct RHTree<K, V> {
 }
 
 impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
-    pub fn new(tree: HTree<K, V>) -> Self {
+    pub fn from(tree: HTree<K, V>) -> Self {
         RHTree {
             tree,
-            conflict_handler: None,
+            ..Default::default()
         }
     }
 
@@ -25,6 +25,12 @@ impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
             tree: self.tree,
             conflict_handler: Some(conflict_handler),
         }
+    }
+}
+
+impl<K: Hash + Ord, V: Hash> Default for RHTree<K, V> {
+    fn default() -> Self {
+        RHTree { tree: HTree::default(), conflict_handler: None }
     }
 }
 
