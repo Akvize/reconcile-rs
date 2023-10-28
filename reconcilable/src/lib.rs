@@ -1,9 +1,8 @@
 pub mod reconcilable_htree;
 
-use diff::Diffs;
+use diff::{Diffs, Diffable};
 
-pub trait Reconcilable {
-    type Key;
+pub trait Reconcilable: Diffable {
     type Value;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> u64;

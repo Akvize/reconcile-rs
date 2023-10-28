@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
-use diff::{Diffable, HashSegment};
+use diff::HashSegment;
 
 use reconcilable::Reconcilable;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -23,7 +23,7 @@ enum Message<K: Serialize, V: Serialize> {
 pub async fn answer_queries<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>,
+    R: Reconcilable<Key = K, Value = V>,
 >(
     socket: Arc<UdpSocket>,
     other_addr: SocketAddr,

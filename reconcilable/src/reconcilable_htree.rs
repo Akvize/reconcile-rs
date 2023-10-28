@@ -32,7 +32,6 @@ where
     V: Clone + Hash,
     C: Fn(&K, &V, V) -> Option<V>,
 {
-    type Key = K;
     type Value = V;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> u64 {
