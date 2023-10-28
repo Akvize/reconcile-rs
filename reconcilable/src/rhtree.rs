@@ -26,6 +26,22 @@ impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
             conflict_handler: Some(conflict_handler),
         }
     }
+
+    pub fn get<'a>(&'a self, key: &'a K) -> Option<&'a V> {
+        self.tree.get(key)
+    }
+
+    pub fn position(&self, key: &K) -> Option<usize> {
+        self.tree.position(key)
+    }
+
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.tree.insert(key, value)
+    }
+
+    pub fn remove(&mut self, _key: &K) -> Option<V> {
+        self.tree.remove(_key)
+    }
 }
 
 impl<K: Hash + Ord, V: Hash> Default for RHTree<K, V> {
