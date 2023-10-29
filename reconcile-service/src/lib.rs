@@ -20,7 +20,7 @@ enum Message<K: Serialize, V: Serialize> {
     Update((K, V)),
 }
 
-pub async fn answer_queries<
+pub async fn run<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
     R: Reconcilable<Key = K, Value = V>,

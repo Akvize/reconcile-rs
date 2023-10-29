@@ -64,7 +64,7 @@ async fn main() {
 
     let state = Arc::new(RwLock::new(reconcilable_htree));
 
-    reconcile_service::answer_queries(Arc::clone(&socket), other_addr, Arc::clone(&state))
+    reconcile_service::run(Arc::clone(&socket), other_addr, Arc::clone(&state))
         .await
         .unwrap();
 }
