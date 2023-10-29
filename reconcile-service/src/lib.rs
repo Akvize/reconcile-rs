@@ -83,7 +83,8 @@ pub async fn run<
                 }
                 if !diffs.is_empty() {
                     let guard = state.read().unwrap();
-                    info!("Found diffs: {diffs:?}");
+                    info!("Found {} diffs", diffs.len());
+                    debug!("Diffs: {diffs:?}");
                     for update in guard.send_updates(diffs) {
                         messages.push(Message::Update(update));
                     }
