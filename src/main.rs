@@ -11,7 +11,6 @@ use rand::{
 };
 
 use reconcilable::rhtree::RHTree;
-use reconcile_service;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
 

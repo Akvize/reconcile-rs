@@ -107,9 +107,9 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("got {} updates", updates.len());
-                reconcilable
-                    .reconcile(updates)
-                    .map(|h| info!("Updated state; global hash is now {}", h));
+                if let Some(h) = reconcilable.reconcile(updates) {
+                    info!("Updated state; global hash is now {}", h);
+                }
             }
         }
         let is_active = last_activity

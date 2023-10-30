@@ -5,20 +5,22 @@ use htree::HTree;
 
 use crate::Reconcilable;
 
+type ConflictHandler<K, V> = fn(&K, &V, V) -> Option<V>;
+
 pub struct RHTree<K, V> {
     tree: HTree<K, V>,
-    conflict_handler: Option<fn(&K, &V, V) -> Option<V>>,
+    conflict_handler: Option<ConflictHandler<K, V>>,
 }
 
 impl<K: Hash + Ord, V: Hash> RHTree<K, V> {
     pub fn new(tree: HTree<K, V>) -> Self {
         RHTree {
-            tree: tree,
+            tree,
             conflict_handler: None,
         }
     }
 
-    pub fn with_conflict_handler(self, conflict_handler: fn(&K, &V, V) -> Option<V>) -> Self {
+    pub fn with_conflict_handler(self, conflict_handler: ConflictHandler<K, V>) -> Self {
         RHTree {
             tree: self.tree,
             conflict_handler: Some(conflict_handler),
@@ -36,19 +38,17 @@ where
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64> {
         let mut updated = false;
         for (k, v) in updates {
-            match self.tree.get(&k) {
+            if let Some(v) = match self.tree.get(&k) {
                 Some(local_v) => {
                     self.conflict_handler
                         .as_ref() // default behavior in case of conflict: no forced insertion
-                        .map(|ch| ch(&k, local_v, v))
-                        .flatten()
+                        .and_then(|ch| ch(&k, local_v, v))
                 }
                 None => Some(v),
-            }
-            .map(|v| {
+            } {
                 self.tree.insert(k, v);
                 updated = true;
-            });
+            }
         }
         updated.then(|| self.tree.hash(&..))
     }
