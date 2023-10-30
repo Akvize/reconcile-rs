@@ -1,0 +1,9 @@
+[package]
+name = "examples"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[[example]]
+name = "rhtree_service"
+path = "rhtree_service.rs"

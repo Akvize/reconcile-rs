@@ -11,6 +11,7 @@ members = [
     "reconcilable",
     "reconcile-service",
     "local-reconcile",
+    "examples",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -26,5 +27,3 @@ reconcile-service = { version = "0.1.0", path = "reconcile-service" }
 tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "net", "time"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
-
-[dev-dependencies]
