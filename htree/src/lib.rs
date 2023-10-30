@@ -608,7 +608,7 @@ where
 mod tests {
     use std::ops::{Bound, RangeBounds};
 
-    use diff::{HashRangeQueryable, Diffable};
+    use diff::{Diffable, HashRangeQueryable};
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
     use super::{reconciliate, HTree};

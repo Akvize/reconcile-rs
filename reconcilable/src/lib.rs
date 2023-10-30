@@ -1,6 +1,6 @@
 pub mod rhtree;
 
-use diff::{Diffs, Diffable};
+use diff::{Diffable, Diffs};
 
 pub trait Reconcilable: Diffable {
     type Value;

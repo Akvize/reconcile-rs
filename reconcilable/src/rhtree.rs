@@ -39,12 +39,13 @@ where
             match self.tree.get(&k) {
                 Some(local_v) => {
                     self.conflict_handler
-                    .as_ref() // default behavior in case of conflict: no forced insertion
-                    .map(|ch| ch(&k, local_v, v))
-                    .flatten()
-                },
+                        .as_ref() // default behavior in case of conflict: no forced insertion
+                        .map(|ch| ch(&k, local_v, v))
+                        .flatten()
+                }
                 None => Some(v),
-            }.map(|v| {
+            }
+            .map(|v| {
                 self.tree.insert(k, v);
                 updated = true;
             });
@@ -63,9 +64,7 @@ where
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HashRangeQueryable
-    for RHTree<K, V>
-{
+impl<K: Hash + Ord, V: Hash> HashRangeQueryable for RHTree<K, V> {
     type Key = K;
 
     fn hash<R: std::ops::RangeBounds<Self::Key>>(&self, range: &R) -> u64 {

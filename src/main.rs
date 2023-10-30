@@ -10,8 +10,8 @@ use rand::{
     SeedableRng,
 };
 
-use reconcile_service;
 use reconcilable::rhtree::RHTree;
+use reconcile_service;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
 
@@ -58,8 +58,7 @@ async fn main() {
     }; // Should the user be able to choose between
        //  * providing a conflict handler or
        //  * using a "standard" handler based on timestamping?
-    let rhtree =
-        RHTree::new(tree).with_conflict_handler(conflict_handler);
+    let rhtree = RHTree::new(tree).with_conflict_handler(conflict_handler);
 
     reconcile_service::run(socket, other_addr, rhtree)
         .await
