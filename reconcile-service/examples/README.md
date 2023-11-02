@@ -3,10 +3,10 @@
 This directory contains one (eventually more) example showcasing various capabilities of
 the `reconcile` crate.
 
-The [`rhtree_service`](rhtree_service.rs) example can be executed with:
+The [`demo`](demo.rs) example can be executed with:
 
 ```
-cargo run --release --example rhtree_service 127.0.0.1:8080 127.0.0.1:8081 100000
+cargo run --release --example demo 127.0.0.1:8080 127.0.0.1:8081 100000
 ```
 
 If you've got an example you'd like to see here, please feel free to open an
