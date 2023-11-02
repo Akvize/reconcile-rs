@@ -60,7 +60,10 @@ impl<K, V> RHTree<K, V> {
 
 impl<K: Hash + Ord, V: Hash> Default for RHTree<K, V> {
     fn default() -> Self {
-        RHTree { tree: HTree::default(), conflict_handler: None }
+        RHTree {
+            tree: HTree::default(),
+            conflict_handler: None,
+        }
     }
 }
 

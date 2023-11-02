@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use diff::{Diffs, Diffable};
+use diff::{Diffable, Diffs};
 use htree::HTree;
 
 pub fn diff<K, D: Diffable<Key = K>>(local: &D, remote: &D) -> (Diffs<K>, Diffs<K>) {
@@ -36,9 +36,9 @@ where
 mod tests {
     use std::ops::Bound;
 
+    use super::*;
     use diff::HashRangeQueryable;
     use htree::HTree;
-    use super::*;
 
     #[test]
     fn test_compare() {
