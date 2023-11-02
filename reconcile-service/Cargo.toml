@@ -14,11 +14,7 @@ tracing = "0.1.40"
 [dev-dependencies]
 chrono = "0.4.31"
 clap = { version = "4.4.6", features = ["derive"] }
-diff = { version = "0.1.0", path = "../diff" }
 htree = { version = "0.1.0", path = "../htree" }
 rand = "0.8.5"
-reconcilable = { version = "0.1.0", path = "../reconcilable" }
-reconcile-service = { version = "0.1.0", path = "../reconcile-service" }
-tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "net", "time"] }
-tracing = "0.1.37"
+tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing-subscriber = "0.3.17"

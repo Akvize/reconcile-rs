@@ -468,7 +468,6 @@ dependencies = [
  "htree",
  "rand",
  "reconcilable",
- "reconcile-service",
  "serde",
  "tokio",
  "tracing",

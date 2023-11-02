@@ -9,5 +9,4 @@ diff = { version = "0.1.0", path = "../diff" }
 range-cmp = "0.1.1"
 
 [dev-dependencies]
-diff = { path = "../diff" }
 rand = "0.8.5"
