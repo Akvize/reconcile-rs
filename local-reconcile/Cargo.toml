@@ -1,8 +1,0 @@
-[package]
-name = "local-reconcile"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-diff = { version = "0.1.0", path = "../diff" }
-htree = { version = "0.1.0", path = "../htree" }
