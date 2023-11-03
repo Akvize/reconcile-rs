@@ -76,18 +76,22 @@ where
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64> {
         let mut updated = false;
+        // here, using `Option::map` is clearer than using `if let Some(…) =` because of the
+        // long match expression
+        #[allow(clippy::option_map_unit_fn)]
         for (k, v) in updates {
-            if let Some(v) = match self.tree.get(&k) {
+            match self.tree.get(&k) {
                 Some(local_v) => {
                     self.conflict_handler
                         .as_ref() // default behavior in case of conflict: no forced insertion
                         .and_then(|ch| ch(&k, local_v, v))
                 }
                 None => Some(v),
-            } {
+            }
+            .map(|v| {
                 self.tree.insert(k, v);
                 updated = true;
-            }
+            });
         }
         updated.then(|| self.tree.hash(&..))
     }
