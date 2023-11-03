@@ -727,16 +727,16 @@ mod tests {
         let value: u64 = rng.gen();
         let old = tree2.insert(key, value);
         assert!(old.is_none());
-        let mut diffs1 = Vec::new();
-        let mut diffs2 = Vec::new();
+        let mut diff_ranges1 = Vec::new();
+        let mut diff_ranges2 = Vec::new();
         let mut segments = tree1.start_diff();
         while !segments.is_empty() {
-            segments = tree2.diff_round(&mut diffs2, segments);
-            segments = tree1.diff_round(&mut diffs1, segments);
+            segments = tree2.diff_round(&mut diff_ranges2, segments);
+            segments = tree1.diff_round(&mut diff_ranges1, segments);
         }
-        assert_eq!(diffs1.len(), 0);
-        assert_eq!(diffs2.len(), 1);
-        let items: Vec<_> = tree2.get_range(&diffs2[0]).collect();
+        assert_eq!(diff_ranges1.len(), 0);
+        assert_eq!(diff_ranges2.len(), 1);
+        let items: Vec<_> = tree2.get_range(&diff_ranges2[0]).collect();
         assert_eq!(items, vec![(&key, &value)]);
 
         // remove some

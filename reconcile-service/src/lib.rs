@@ -68,8 +68,8 @@ pub async fn run<
             // handle messages
             if !segments.is_empty() {
                 debug!("received {} segments", segments.len());
-                let mut diffs = Vec::new();
-                let segments = reconcilable.diff_round(&mut diffs, segments);
+                let mut diff_ranges = Vec::new();
+                let segments = reconcilable.diff_round(&mut diff_ranges, segments);
                 let mut messages = Vec::new();
                 if !segments.is_empty() {
                     debug!("returning {} segments", segments.len());
@@ -78,10 +78,10 @@ pub async fn run<
                         messages.push(Message::HashSegment::<K, V>(segment))
                     }
                 }
-                if !diffs.is_empty() {
-                    debug!("returning {} diffs", diffs.len());
-                    trace!("diffs: {diffs:?}");
-                    for update in reconcilable.send_updates(diffs) {
+                if !diff_ranges.is_empty() {
+                    debug!("returning {} diff_ranges", diff_ranges.len());
+                    trace!("diff_ranges: {diff_ranges:?}");
+                    for update in reconcilable.send_updates(diff_ranges) {
                         messages.push(Message::Update(update));
                     }
                 }

@@ -1,18 +1,18 @@
 use std::hash::Hash;
 use std::ops::Bound;
 
-use diff::{Diffable, Diffs, HashRangeQueryable};
+use diff::{DiffRanges, Diffable, HashRangeQueryable};
 use htree::HTree;
 
-pub fn diff<K, D: Diffable<Key = K>>(local: &D, remote: &D) -> (Diffs<K>, Diffs<K>) {
-    let mut local_diffs = Vec::new();
-    let mut remote_diffs = Vec::new();
+pub fn diff<K, D: Diffable<Key = K>>(local: &D, remote: &D) -> (DiffRanges<K>, DiffRanges<K>) {
+    let mut local_diff_ranges = Vec::new();
+    let mut remote_diff_ranges = Vec::new();
     let mut segments = local.start_diff();
     while !segments.is_empty() {
-        segments = remote.diff_round(&mut remote_diffs, segments);
-        segments = local.diff_round(&mut local_diffs, segments);
+        segments = remote.diff_round(&mut remote_diff_ranges, segments);
+        segments = local.diff_round(&mut local_diff_ranges, segments);
     }
-    (local_diffs, remote_diffs)
+    (local_diff_ranges, remote_diff_ranges)
 }
 
 pub fn reconcile<K, V>(local: &mut HTree<K, V>, remote: &mut HTree<K, V>)
@@ -20,13 +20,13 @@ where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
-    let (diffs1, diffs2) = diff(local, remote);
-    for diff in diffs1 {
+    let (diff_ranges1, diff_ranges2) = diff(local, remote);
+    for diff in diff_ranges1 {
         for (k, v) in local.get_range(&diff) {
             remote.insert(k.clone(), v.clone());
         }
     }
-    for diff in diffs2 {
+    for diff in diff_ranges2 {
         for (k, v) in remote.get_range(&diff) {
             local.insert(k.clone(), v.clone());
         }

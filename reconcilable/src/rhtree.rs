@@ -96,9 +96,12 @@ where
         updated.then(|| self.tree.hash(&..))
     }
 
-    fn send_updates(&self, diffs: diff::Diffs<Self::Key>) -> Vec<(Self::Key, Self::Value)> {
+    fn send_updates(
+        &self,
+        diff_ranges: diff::DiffRanges<Self::Key>,
+    ) -> Vec<(Self::Key, Self::Value)> {
         let mut ret: Vec<(K, V)> = Vec::new();
-        for diff in diffs {
+        for diff in diff_ranges {
             for (k, v) in self.tree.get_range(&diff) {
                 ret.push((k.clone(), v.clone()));
             }
