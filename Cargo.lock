@@ -452,7 +452,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "reconcile-service"
+name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "bincode",

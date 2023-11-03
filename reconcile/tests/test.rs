@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 
 use diff::HashRangeQueryable;
 use htree::HTree;
-use reconcile_service::ReconcileService;
+use reconcile::ReconcileService;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {

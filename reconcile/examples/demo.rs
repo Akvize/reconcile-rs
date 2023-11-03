@@ -10,7 +10,7 @@ use tracing::info;
 
 use diff::HashRangeQueryable;
 use htree::HTree;
-use reconcile_service::ReconcileService;
+use reconcile::ReconcileService;
 
 #[derive(Parser)]
 struct Args {
