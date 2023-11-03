@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 
 use diff::HashRangeQueryable;
 use htree::HTree;
-use reconcile::ReconcileService;
+use reconcile::Service;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
@@ -35,8 +35,8 @@ async fn test() {
     let tree2: HTree<String, (DateTime<Utc>, String)> = HTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = ReconcileService::new(tree1);
-    let service2 = ReconcileService::new(tree2);
+    let service1 = Service::new(tree1);
+    let service2 = Service::new(tree2);
     let task1 = tokio::spawn(service1.clone().run(socket1, addr2, |_, _, _| {}, |_| {}));
     let task2 = tokio::spawn(service2.clone().run(socket2, addr1, |_, _, _| {}, |_| {}));
 
