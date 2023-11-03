@@ -4,12 +4,12 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
-use diff::HashSegment;
-
-use reconcilable::Reconcilable;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, trace, warn};
+
+use diff::HashSegment;
+use reconcilable::Reconcilable;
 
 const BUFFER_SIZE: usize = 65507;
 

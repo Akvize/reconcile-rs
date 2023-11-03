@@ -3,16 +3,16 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use diff::HashRangeQueryable;
-use htree::HTree;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
-
-use reconcilable::rhtree::RHTree;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
+
+use diff::HashRangeQueryable;
+use htree::HTree;
+use reconcilable::rhtree::RHTree;
 
 #[derive(Parser)]
 struct Args {
