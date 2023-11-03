@@ -81,7 +81,7 @@ pub async fn run<
                 if !diff_ranges.is_empty() {
                     debug!("returning {} diff_ranges", diff_ranges.len());
                     trace!("diff_ranges: {diff_ranges:?}");
-                    for update in reconcilable.send_updates(diff_ranges) {
+                    for update in reconcilable.enumerate_diff_ranges(diff_ranges) {
                         messages.push(Message::Update(update));
                     }
                 }

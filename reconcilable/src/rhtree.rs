@@ -96,7 +96,7 @@ where
         updated.then(|| self.tree.hash(&..))
     }
 
-    fn send_updates(
+    fn enumerate_diff_ranges(
         &self,
         diff_ranges: diff::DiffRanges<Self::Key>,
     ) -> Vec<(Self::Key, Self::Value)> {
