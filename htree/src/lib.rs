@@ -1,13 +1,18 @@
 use std::cmp::Ordering;
-use std::hash::Hash;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
 use diff::HashRangeQueryable;
-use hash::hash;
 use range_cmp::{RangeComparable, RangeOrdering};
 
-pub mod hash;
+pub fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 
 const B: usize = 6;
 const MAX_CAPACITY: usize = 2 * B - 1;
