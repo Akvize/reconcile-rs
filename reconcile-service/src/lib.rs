@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, trace, warn};
 
-use diff::HashSegment;
+use diff::{Diffable, HashSegment};
 use reconcilable::Reconcilable;
 
 const BUFFER_SIZE: usize = 65507;
@@ -22,7 +22,7 @@ enum Message<K: Serialize, V: Serialize> {
 pub async fn run<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Serialize,
-    R: Reconcilable<Key = K, Value = V>,
+    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>,
 >(
     socket: UdpSocket,
     other_addr: SocketAddr,

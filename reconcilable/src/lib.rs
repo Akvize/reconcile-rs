@@ -2,10 +2,11 @@ use core::hash::Hash;
 
 use chrono::{DateTime, Utc};
 
-use diff::{DiffRanges, Diffable, HashRangeQueryable};
+use diff::{DiffRanges, HashRangeQueryable};
 use htree::HTree;
 
-pub trait Reconcilable: Diffable {
+pub trait Reconcilable {
+    type Key;
     type Value;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64>;
@@ -22,6 +23,7 @@ where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
+    type Key = K;
     type Value = TV<V>;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64> {
