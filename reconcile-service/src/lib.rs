@@ -69,12 +69,13 @@ pub async fn run<
             if !segments.is_empty() {
                 debug!("received {} segments", segments.len());
                 let mut diff_ranges = Vec::new();
-                let segments = reconcilable.diff_round(&mut diff_ranges, segments);
+                let mut out_segments = Vec::new();
+                reconcilable.diff_round(segments, &mut out_segments, &mut diff_ranges);
                 let mut messages = Vec::new();
-                if !segments.is_empty() {
-                    debug!("returning {} segments", segments.len());
-                    trace!("segments: {segments:?}");
-                    for segment in segments {
+                if !out_segments.is_empty() {
+                    debug!("returning {} segments", out_segments.len());
+                    trace!("segments: {out_segments:?}");
+                    for segment in out_segments {
                         messages.push(Message::HashSegment::<K, V>(segment))
                     }
                 }

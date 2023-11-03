@@ -1,3 +1,4 @@
+use std::iter::IntoIterator;
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
@@ -25,11 +26,13 @@ pub type DiffRanges<K> = Vec<(Bound<K>, Bound<K>)>;
 pub trait Diffable {
     type Key;
     fn start_diff(&self) -> Vec<HashSegment<Self::Key>>;
-    fn diff_round(
+    fn diff_round<I>(
         &self,
+        in_segments: I,
+        out_segments: &mut Vec<HashSegment<Self::Key>>,
         diff_ranges: &mut DiffRanges<Self::Key>,
-        segments: Vec<HashSegment<Self::Key>>,
-    ) -> Vec<HashSegment<Self::Key>>;
+    ) where
+        I: IntoIterator<Item = HashSegment<Self::Key>>;
 }
 
 impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
@@ -43,14 +46,16 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         }]
     }
 
-    fn diff_round(
+    fn diff_round<I>(
         &self,
+        in_segments: I,
+        out_segments: &mut Vec<HashSegment<Self::Key>>,
         diff_ranges: &mut DiffRanges<Self::Key>,
-        segments: Vec<HashSegment<Self::Key>>,
-    ) -> Vec<HashSegment<Self::Key>> {
-        let mut ret = Vec::new();
-        for segment in segments {
-            let HashSegment { range, hash, size } = segment;
+    ) where
+        I: IntoIterator<Item = HashSegment<Self::Key>>,
+    {
+        for segment in in_segments {
+            let HashSegment { range, hash, size } = segment.clone();
             let local_hash = self.hash(&range);
             if hash == local_hash {
                 continue;
@@ -59,7 +64,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 continue;
             } else if local_hash == 0 {
                 // present on remote; bounce back to the remote
-                ret.push(HashSegment {
+                out_segments.push(HashSegment {
                     range,
                     hash: 0,
                     size: 0,
@@ -83,7 +88,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 unreachable!();
             } else if size == 1 && local_size == 1 {
                 // ask the remote to send us the conflicting item
-                ret.push(HashSegment {
+                out_segments.push(HashSegment {
                     range: (start_bound.clone(), end_bound.clone()),
                     hash: 0,
                     size: 0,
@@ -92,7 +97,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 diff_ranges.push((start_bound, end_bound));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
-                ret.push(HashSegment {
+                out_segments.push(HashSegment {
                     range: (start_bound, end_bound),
                     hash: local_hash,
                     size: local_size,
@@ -106,7 +111,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     let next_index = cur_index + step;
                     if next_index >= end_index {
                         let range = (cur_bound, end_bound);
-                        ret.push(HashSegment {
+                        out_segments.push(HashSegment {
                             hash: self.hash(&range),
                             range,
                             size: end_index - cur_index,
@@ -115,7 +120,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     } else {
                         let next_key = self.key_at(next_index);
                         let range = (cur_bound, Bound::Excluded(next_key.clone()));
-                        ret.push(HashSegment {
+                        out_segments.push(HashSegment {
                             hash: self.hash(&range),
                             range,
                             size: next_index - cur_index,
@@ -126,6 +131,5 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 }
             }
         }
-        ret
     }
 }

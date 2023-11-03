@@ -7,10 +7,19 @@ use htree::HTree;
 pub fn diff<K, D: Diffable<Key = K>>(local: &D, remote: &D) -> (DiffRanges<K>, DiffRanges<K>) {
     let mut local_diff_ranges = Vec::new();
     let mut remote_diff_ranges = Vec::new();
-    let mut segments = local.start_diff();
-    while !segments.is_empty() {
-        segments = remote.diff_round(&mut remote_diff_ranges, segments);
-        segments = local.diff_round(&mut local_diff_ranges, segments);
+    let mut local_segments = local.start_diff();
+    let mut remote_segments = Vec::new();
+    while !local_segments.is_empty() {
+        remote.diff_round(
+            local_segments.drain(..),
+            &mut remote_segments,
+            &mut remote_diff_ranges,
+        );
+        local.diff_round(
+            remote_segments.drain(..),
+            &mut local_segments,
+            &mut local_diff_ranges,
+        );
     }
     (local_diff_ranges, remote_diff_ranges)
 }
