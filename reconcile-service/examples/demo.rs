@@ -9,7 +9,7 @@ use tokio::net::UdpSocket;
 use tracing::info;
 
 use diff::HashRangeQueryable;
-use reconcilable::rhtree::RHTree;
+use htree::HTree;
 
 #[derive(Parser)]
 struct Args {
@@ -35,17 +35,18 @@ async fn main() {
     info!("Listening on: {}", socket.local_addr().unwrap());
 
     // build collection
-    let mut rhtree = RHTree::new();
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut key_values = Vec::new();
     for _ in 0..elements {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
         let time = chrono::offset::Utc::now();
         let value = Alphanumeric.sample_string(&mut rng, 1000);
-        rhtree.insert(key, time, value);
+        key_values.push((key, (time, value)));
     }
-    info!("Global hash is {}", rhtree.hash(&..));
+    let tree = HTree::from_iter(key_values);
+    info!("Global hash is {}", tree.hash(&..));
 
-    reconcile_service::run(socket, other_addr, rhtree)
+    reconcile_service::run(socket, other_addr, tree)
         .await
         .unwrap();
 }
