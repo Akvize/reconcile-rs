@@ -28,9 +28,9 @@ pub trait Diffable {
     fn start_diff(&self) -> Vec<Self::ComparisonItem>;
     fn diff_round(
         &self,
-        in_segments: Vec<Self::ComparisonItem>,
-        out_segments: &mut Vec<Self::ComparisonItem>,
-        diff_ranges: &mut Vec<Self::DifferenceItem>,
+        in_comparison: Vec<Self::ComparisonItem>,
+        out_comparison: &mut Vec<Self::ComparisonItem>,
+        differences: &mut Vec<Self::DifferenceItem>,
     );
 }
 

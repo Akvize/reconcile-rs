@@ -139,7 +139,7 @@ impl<
             return;
         }
         trace!("received {} bytes from {peer}", size);
-        let mut segments = Vec::new();
+        let mut in_comparison = Vec::new();
         let mut updates = Vec::new();
         let mut deserializer = Deserializer::from_slice(&recv_buf[..size], DefaultOptions::new());
         // read messages in buffer
@@ -155,7 +155,7 @@ impl<
             let message: Message<K, V, C> = res.unwrap();
             match message {
                 Message::ComparisonItem(segment) => {
-                    segments.push(segment);
+                    in_comparison.push(segment);
                 }
                 Message::Update(update) => {
                     updates.push(update);
@@ -163,27 +163,27 @@ impl<
             }
         }
         // handle messages
-        if !segments.is_empty() {
-            debug!("received {} segments", segments.len());
-            let mut diff_ranges = Vec::new();
-            let mut out_segments = Vec::new();
+        if !in_comparison.is_empty() {
+            debug!("received {} segments", in_comparison.len());
+            let mut differences = Vec::new();
+            let mut out_comparison = Vec::new();
             {
                 let guard = self.map.read().unwrap();
-                guard.diff_round(segments, &mut out_segments, &mut diff_ranges);
+                guard.diff_round(in_comparison, &mut out_comparison, &mut differences);
             }
             let mut messages = Vec::new();
-            if !out_segments.is_empty() {
-                debug!("returning {} segments", out_segments.len());
-                trace!("segments: {out_segments:?}");
-                for segment in out_segments {
+            if !out_comparison.is_empty() {
+                debug!("returning {} segments", out_comparison.len());
+                trace!("segments: {out_comparison:?}");
+                for segment in out_comparison {
                     messages.push(Message::ComparisonItem::<K, V, C>(segment))
                 }
             }
-            if !diff_ranges.is_empty() {
-                debug!("returning {} diff_ranges", diff_ranges.len());
-                trace!("diff_ranges: {diff_ranges:?}");
+            if !differences.is_empty() {
+                debug!("returning {} diff_ranges", differences.len());
+                trace!("diff_ranges: {differences:?}");
                 let guard = self.map.read().unwrap();
-                for update in guard.enumerate_diff_ranges(diff_ranges) {
+                for update in guard.enumerate_diff_ranges(differences) {
                     messages.push(Message::Update(update));
                 }
             }
