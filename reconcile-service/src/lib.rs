@@ -41,7 +41,7 @@ pub async fn run<
                 warn!("Buffer too small for message, discarded");
                 continue;
             }
-            trace!("got {} bytes from {peer}", size);
+            trace!("received {} bytes from {peer}", size);
             let mut segments = Vec::new();
             let mut updates = Vec::new();
             let mut deserializer = Deserializer::from_slice(&recv_buf[..size], my_options);
@@ -67,19 +67,20 @@ pub async fn run<
             }
             // handle messages
             if !segments.is_empty() {
-                trace!("got {} segments", segments.len());
+                debug!("received {} segments", segments.len());
                 let mut diffs = Vec::new();
                 let segments = reconcilable.diff_round(&mut diffs, segments);
                 let mut messages = Vec::new();
                 if !segments.is_empty() {
-                    debug!("Split in {} segments", segments.len());
+                    debug!("returning {} segments", segments.len());
+                    trace!("segments: {segments:?}");
                     for segment in segments {
                         messages.push(Message::HashSegment::<K, V>(segment))
                     }
                 }
                 if !diffs.is_empty() {
-                    info!("Found {} diffs", diffs.len());
-                    debug!("Diffs: {diffs:?}");
+                    debug!("returning {} diffs", diffs.len());
+                    trace!("diffs: {diffs:?}");
                     for update in reconcilable.send_updates(diffs) {
                         messages.push(Message::Update(update));
                     }
@@ -93,20 +94,20 @@ pub async fn run<
                             .serialize(&mut Serializer::new(&mut send_buf, my_options))
                             .unwrap();
                         if send_buf.len() > BUFFER_SIZE {
-                            debug!("sending {} bytes to {peer}", last_size);
+                            trace!("sending {} bytes to {peer}", last_size);
                             socket.send_to(&send_buf[..last_size], &peer).await?;
-                            debug!("sent {} bytes to {peer}", last_size);
+                            trace!("sent {} bytes to {peer}", last_size);
                             send_buf.drain(..last_size);
                         }
                     }
-                    debug!("sending last {} bytes to {peer}", send_buf.len());
+                    trace!("sending last {} bytes to {peer}", send_buf.len());
                     socket.send_to(&send_buf, &peer).await?;
-                    debug!("sent last {} bytes to {peer}", send_buf.len());
+                    trace!("sent last {} bytes to {peer}", send_buf.len());
                     last_activity = Some(Instant::now());
                 }
             }
             if !updates.is_empty() {
-                debug!("got {} updates", updates.len());
+                debug!("received {} updates", updates.len());
                 if let Some(h) = reconcilable.reconcile(updates) {
                     info!("Updated state; global hash is now {}", h);
                 }
@@ -116,6 +117,7 @@ pub async fn run<
             .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10000))
             .unwrap_or(false);
         if !is_active {
+            debug!("no recent activity; initiating diff protocol");
             let segments = reconcilable.start_diff();
             send_buf.clear();
             for segment in segments {
