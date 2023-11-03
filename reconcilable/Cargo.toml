@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+chrono = "0.4.31"
 diff = { version = "0.1.0", path = "../diff" }
 htree = { version = "0.1.0", path = "../htree" }

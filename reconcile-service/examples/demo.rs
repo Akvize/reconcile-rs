@@ -1,17 +1,14 @@
 use std::net::SocketAddr;
-use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
 use clap::Parser;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
 use tokio::net::UdpSocket;
-use tracing::{debug, info};
+use tracing::info;
 
 use diff::HashRangeQueryable;
-use htree::HTree;
 use reconcilable::rhtree::RHTree;
 
 #[derive(Parser)]
@@ -37,25 +34,16 @@ async fn main() {
     let socket = UdpSocket::bind(listen_addr).await.unwrap();
     info!("Listening on: {}", socket.local_addr().unwrap());
 
+    // build collection
+    let mut rhtree = RHTree::new();
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
     for _ in 0..elements {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
-        let value = chrono::offset::Utc::now().to_string();
-        key_values.push((key, value));
+        let time = chrono::offset::Utc::now();
+        let value = Alphanumeric.sample_string(&mut rng, 1000);
+        rhtree.insert(key, time, value);
     }
-    let tree = HTree::from_iter(key_values.into_iter());
-
-    info!("Global hash is {}", tree.hash(&..));
-    let conflict_handler = |k: &String, local_v: &String, v: String| -> Option<String> {
-        if DateTime::<Utc>::from_str(local_v).unwrap() > DateTime::<Utc>::from_str(&v).unwrap() {
-            debug!("Key {k} - Keeping local value {local_v}, dropping remote value {v}");
-            return None;
-        }
-        debug!("Key {k} - Replacing local value {local_v} with remote value {v}");
-        Some(v)
-    };
-    let rhtree = RHTree::from(tree).with_conflict_handler(conflict_handler);
+    info!("Global hash is {}", rhtree.hash(&..));
 
     reconcile_service::run(socket, other_addr, rhtree)
         .await
