@@ -1,4 +1,3 @@
-use std::iter::IntoIterator;
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
@@ -21,24 +20,25 @@ pub struct HashSegment<K> {
     size: usize,
 }
 
-pub type DiffRanges<K> = Vec<(Bound<K>, Bound<K>)>;
+pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
 pub trait Diffable {
-    type Key;
-    fn start_diff(&self) -> Vec<HashSegment<Self::Key>>;
-    fn diff_round<I>(
+    type ComparisonItem;
+    type DifferenceItem;
+    fn start_diff(&self) -> Vec<Self::ComparisonItem>;
+    fn diff_round(
         &self,
-        in_segments: I,
-        out_segments: &mut Vec<HashSegment<Self::Key>>,
-        diff_ranges: &mut DiffRanges<Self::Key>,
-    ) where
-        I: IntoIterator<Item = HashSegment<Self::Key>>;
+        in_segments: Vec<Self::ComparisonItem>,
+        out_segments: &mut Vec<Self::ComparisonItem>,
+        diff_ranges: &mut Vec<Self::DifferenceItem>,
+    );
 }
 
 impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
-    type Key = K;
+    type ComparisonItem = HashSegment<K>;
+    type DifferenceItem = DiffRange<K>;
 
-    fn start_diff(&self) -> Vec<HashSegment<Self::Key>> {
+    fn start_diff(&self) -> Vec<Self::ComparisonItem> {
         vec![HashSegment {
             range: (Bound::Unbounded, Bound::Unbounded),
             hash: self.hash(&..),
@@ -46,25 +46,23 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         }]
     }
 
-    fn diff_round<I>(
+    fn diff_round(
         &self,
-        in_segments: I,
-        out_segments: &mut Vec<HashSegment<Self::Key>>,
-        diff_ranges: &mut DiffRanges<Self::Key>,
-    ) where
-        I: IntoIterator<Item = HashSegment<Self::Key>>,
-    {
-        for segment in in_segments {
+        in_comparison: Vec<Self::ComparisonItem>,
+        out_comparison: &mut Vec<Self::ComparisonItem>,
+        differences: &mut Vec<Self::DifferenceItem>,
+    ) {
+        for segment in in_comparison {
             let HashSegment { range, hash, size } = segment.clone();
             let local_hash = self.hash(&range);
             if hash == local_hash {
                 continue;
             } else if hash == 0 {
-                diff_ranges.push(range);
+                differences.push(range);
                 continue;
             } else if local_hash == 0 {
                 // present on remote; bounce back to the remote
-                out_segments.push(HashSegment {
+                out_comparison.push(HashSegment {
                     range,
                     hash: 0,
                     size: 0,
@@ -88,16 +86,16 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 unreachable!();
             } else if size == 1 && local_size == 1 {
                 // ask the remote to send us the conflicting item
-                out_segments.push(HashSegment {
+                out_comparison.push(HashSegment {
                     range: (start_bound.clone(), end_bound.clone()),
                     hash: 0,
                     size: 0,
                 });
                 // send the conflicting item to the remote
-                diff_ranges.push((start_bound, end_bound));
+                differences.push((start_bound, end_bound));
             } else if local_size == 1 {
                 // not enough information; bounce back to the remote
-                out_segments.push(HashSegment {
+                out_comparison.push(HashSegment {
                     range: (start_bound, end_bound),
                     hash: local_hash,
                     size: local_size,
@@ -111,7 +109,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     let next_index = cur_index + step;
                     if next_index >= end_index {
                         let range = (cur_bound, end_bound);
-                        out_segments.push(HashSegment {
+                        out_comparison.push(HashSegment {
                             hash: self.hash(&range),
                             range,
                             size: end_index - cur_index,
@@ -120,7 +118,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                     } else {
                         let next_key = self.key_at(next_index);
                         let range = (cur_bound, Bound::Excluded(next_key.clone()));
-                        out_segments.push(HashSegment {
+                        out_comparison.push(HashSegment {
                             hash: self.hash(&range),
                             range,
                             size: next_index - cur_index,

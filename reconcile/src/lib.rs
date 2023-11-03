@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use diff::{Diffable, HashSegment};
+use diff::Diffable;
 use reconcilable::{Map, Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
@@ -48,15 +48,18 @@ impl<K, V, M: Map<Key = K, Value = V>> Service<M> {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-enum Message<K: Serialize, V: Serialize> {
-    HashSegment(HashSegment<K>),
+enum Message<K: Serialize, V: Serialize, C: Serialize> {
+    ComparisonItem(C),
     Update((K, V)),
 }
 
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
         V: Clone + DeserializeOwned + Hash + Reconcilable + Serialize,
-        R: Map<Key = K, Value = V> + Diffable<Key = K>,
+        C: Debug + DeserializeOwned + Serialize,
+        D: Debug,
+        R: Map<Key = K, Value = V, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > Service<R>
 {
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
@@ -114,7 +117,7 @@ impl<
         };
         send_buf.clear();
         for segment in segments {
-            Message::HashSegment::<K, V>(segment)
+            Message::ComparisonItem::<K, V, C>(segment)
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
@@ -149,9 +152,9 @@ impl<
                     }
                 }
             }
-            let message: Message<K, V> = res.unwrap();
+            let message: Message<K, V, C> = res.unwrap();
             match message {
-                Message::HashSegment(segment) => {
+                Message::ComparisonItem(segment) => {
                     segments.push(segment);
                 }
                 Message::Update(update) => {
@@ -173,7 +176,7 @@ impl<
                 debug!("returning {} segments", out_segments.len());
                 trace!("segments: {out_segments:?}");
                 for segment in out_segments {
-                    messages.push(Message::HashSegment::<K, V>(segment))
+                    messages.push(Message::ComparisonItem::<K, V, C>(segment))
                 }
             }
             if !diff_ranges.is_empty() {

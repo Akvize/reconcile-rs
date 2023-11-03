@@ -1,22 +1,25 @@
 use std::hash::Hash;
 use std::ops::Bound;
 
-use diff::{DiffRanges, Diffable, HashRangeQueryable};
+use diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
 use htree::HTree;
 
-pub fn diff<K, D: Diffable<Key = K>>(local: &D, remote: &D) -> (DiffRanges<K>, DiffRanges<K>) {
+pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
+    local: &D,
+    remote: &D,
+) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>) {
     let mut local_diff_ranges = Vec::new();
     let mut remote_diff_ranges = Vec::new();
     let mut local_segments = local.start_diff();
     let mut remote_segments = Vec::new();
     while !local_segments.is_empty() {
         remote.diff_round(
-            local_segments.drain(..),
+            local_segments.drain(..).collect(),
             &mut remote_segments,
             &mut remote_diff_ranges,
         );
         local.diff_round(
-            remote_segments.drain(..),
+            remote_segments.drain(..).collect(),
             &mut local_segments,
             &mut local_diff_ranges,
         );
