@@ -180,6 +180,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         // return:
         // - a key and node to be inserted after the current node
+        // - the hash difference
         // - the value that was at key, if any
         fn aux<K: Hash + Ord, V: Hash>(
             node: &mut Node<K, V>,
