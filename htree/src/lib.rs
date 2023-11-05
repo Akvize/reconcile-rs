@@ -513,15 +513,41 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
     }
 }
 
-/* TODO
+enum IntoIterItem<K, V> {
+    Node(Box<Node<K, V>>),
+    Element(K, V),
+}
+
 pub struct IntoIter<K, V> {
-    stack: Vec<(Box<Node<K, V>>, usize)>,
+    stack: Vec<IntoIterItem<K, V>>,
 }
 
 impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        unimplemented!()
+        match self.stack.pop() {
+            Some(IntoIterItem::Node(mut node)) => {
+                if let Some(mut children) = node.children {
+                    self.stack.push(IntoIterItem::Node(children.pop().unwrap()));
+                    while !node.keys.is_empty() {
+                        let k = node.keys.pop().unwrap();
+                        let v = node.values.pop().unwrap();
+                        self.stack.push(IntoIterItem::Element(k, v));
+                        let c = children.pop().unwrap();
+                        self.stack.push(IntoIterItem::Node(c));
+                    }
+                } else {
+                    while !node.keys.is_empty() {
+                        let k = node.keys.pop().unwrap();
+                        let v = node.values.pop().unwrap();
+                        self.stack.push(IntoIterItem::Element(k, v));
+                    }
+                }
+                self.next()
+            }
+            Some(IntoIterItem::Element(k, v)) => Some((k, v)),
+            None => None,
+        }
     }
 }
 
@@ -529,10 +555,11 @@ impl<K, V> IntoIterator for HTree<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
-        unimplemented!()
+        IntoIter {
+            stack: vec![IntoIterItem::Node(self.root)],
+        }
     }
 }
-*/
 
 pub struct Iter<'a, K, V> {
     stack: Vec<(&'a Node<K, V>, usize)>,
@@ -960,6 +987,6 @@ mod tests {
             tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
             key_values
         );
-        // assert_eq!(tree.into_iter().collect::<Vec<_>>(), key_values);
+        assert_eq!(tree.into_iter().collect::<Vec<_>>(), key_values);
     }
 }
