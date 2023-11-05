@@ -358,9 +358,9 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        fn right_most_child<K, V>(node: &mut Node<K, V>) -> (K, V, u64) {
+        fn rightmost_child<K, V>(node: &mut Node<K, V>) -> (K, V, u64) {
             if let Some(children) = node.children.as_mut() {
-                let (k, v, h) = right_most_child(children.last_mut().unwrap());
+                let (k, v, h) = rightmost_child(children.last_mut().unwrap());
                 node.tree_size -= 1;
                 node.tree_hash ^= h;
                 node.rebalance_after_deletion(node.keys.len());
@@ -384,7 +384,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
                         // internal node
                         // we need to replace key, value hash with a new separator; we can find it
                         // in the left or right sub-tree
-                        let (prev_k, prev_v, prev_h) = right_most_child(&mut children[index]);
+                        let (prev_k, prev_v, prev_h) = rightmost_child(&mut children[index]);
                         node.keys[index] = prev_k;
                         let v = std::mem::replace(&mut node.values[index], prev_v);
                         let h = std::mem::replace(&mut node.hashes[index], prev_h);
