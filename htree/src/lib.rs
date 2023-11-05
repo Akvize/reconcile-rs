@@ -116,6 +116,150 @@ impl<K, V> Node<K, V> {
             None
         }
     }
+
+    fn rebalance_after_deletion(&mut self, index: usize) {
+        let children = self.children.as_mut().unwrap();
+        if children[index].keys.len() >= MIN_CAPACITY {
+            // nothing to do
+            return;
+        }
+        // need to restore minimum node size invariant
+        if index > 0 && children[index - 1].keys.len() > MIN_CAPACITY {
+            // steal left, rotate right
+            // take last separator (k, v, h) from left sibling
+            let left_sibling = children[index - 1].as_mut();
+            let k = left_sibling.keys.pop().unwrap();
+            let v = left_sibling.values.pop().unwrap();
+            let h = left_sibling.hashes.pop().unwrap();
+            left_sibling.tree_size -= 1;
+            left_sibling.tree_hash ^= h;
+            // take last child from left sibling if any
+            let c = left_sibling.children.as_mut().map(|children| {
+                let c = children.pop().unwrap();
+                left_sibling.tree_size -= c.tree_size;
+                left_sibling.tree_hash ^= c.tree_hash;
+                c
+            });
+            // NOTE: separator (k, v, h) is left of child c
+            // exchange sibling's separator with parent's separator
+            let k = std::mem::replace(&mut self.keys[index - 1], k);
+            let v = std::mem::replace(&mut self.values[index - 1], v);
+            let h = std::mem::replace(&mut self.hashes[index - 1], h);
+            // NOTE: separator (k, v, h) is now right of child c
+            // move separator (k, v, h) in current node
+            let current = children[index].as_mut();
+            current.keys.insert(0, k);
+            current.values.insert(0, v);
+            current.hashes.insert(0, h);
+            current.tree_size += 1;
+            current.tree_hash ^= h;
+            // move child c in current node if any
+            if let Some(c) = c {
+                current.tree_size += c.tree_size;
+                current.tree_hash ^= c.tree_hash;
+                current.children.as_mut().unwrap().insert(0, c);
+            }
+        } else if index + 1 < children.len() && children[index + 1].keys.len() > MIN_CAPACITY {
+            // steal right, rotate left
+            // take first separator (k, v, h) from right sibling
+            let right_sibling = children[index + 1].as_mut();
+            let k = right_sibling.keys.remove(0);
+            let v = right_sibling.values.remove(0);
+            let h = right_sibling.hashes.remove(0);
+            right_sibling.tree_size -= 1;
+            right_sibling.tree_hash ^= h;
+            // take first child from right sibling if any
+            let c = right_sibling.children.as_mut().map(|children| {
+                let c = children.remove(0);
+                right_sibling.tree_size -= c.tree_size;
+                right_sibling.tree_hash ^= c.tree_hash;
+                c
+            });
+            // NOTE: separator (k, v, h) is right of child c
+            // exchange (k, v, h) with separator
+            let k = std::mem::replace(&mut self.keys[index], k);
+            let v = std::mem::replace(&mut self.values[index], v);
+            let h = std::mem::replace(&mut self.hashes[index], h);
+            // NOTE: separator (k, v, h) is now left of child c
+            // move separator (k, v, h) in current node
+            let current = children[index].as_mut();
+            current.keys.push(k);
+            current.values.push(v);
+            current.hashes.push(h);
+            current.tree_size += 1;
+            current.tree_hash ^= h;
+            // move child c in current node if any
+            if let Some(c) = c {
+                current.tree_size += c.tree_size;
+                current.tree_hash ^= c.tree_hash;
+                current.children.as_mut().unwrap().push(c);
+            }
+        } else if index > 0 {
+            // merge current in its left sibling
+            let current = children.remove(index);
+            let left_sibling = children[index - 1].as_mut();
+            // move separator in left_sibling
+            let k = self.keys.remove(index - 1);
+            let v = self.values.remove(index - 1);
+            let h = self.hashes.remove(index - 1);
+            left_sibling.keys.push(k);
+            left_sibling.values.push(v);
+            left_sibling.hashes.push(h);
+            left_sibling.tree_size += 1;
+            left_sibling.tree_hash ^= h;
+            // move values of current in left_sibling
+            for k in current.keys {
+                left_sibling.keys.push(k);
+            }
+            for v in current.values {
+                left_sibling.values.push(v);
+            }
+            for h in current.hashes {
+                left_sibling.hashes.push(h);
+            }
+            if let Some(left_children) = left_sibling.children.as_mut() {
+                for c in current.children.unwrap() {
+                    left_children.push(c);
+                }
+                assert_eq!(left_children.len(), left_sibling.keys.len() + 1);
+            }
+            left_sibling.tree_size += current.tree_size;
+            left_sibling.tree_hash ^= current.tree_hash;
+        } else if index + 1 < children.len() {
+            // merge right sibling in the current
+            let right_sibling = children.remove(index + 1);
+            let current = children[index].as_mut();
+            // move separator in current node
+            let k = self.keys.remove(index);
+            let v = self.values.remove(index);
+            let h = self.hashes.remove(index);
+            current.keys.push(k);
+            current.values.push(v);
+            current.hashes.push(h);
+            current.tree_size += 1;
+            current.tree_hash ^= h;
+            // move values of right_sibling in current node
+            for k in right_sibling.keys {
+                current.keys.push(k);
+            }
+            for v in right_sibling.values {
+                current.values.push(v);
+            }
+            for h in right_sibling.hashes {
+                current.hashes.push(h);
+            }
+            if let Some(child_children) = current.children.as_mut() {
+                for c in right_sibling.children.unwrap() {
+                    child_children.push(c);
+                }
+                assert_eq!(child_children.len(), current.keys.len() + 1);
+            }
+            current.tree_size += right_sibling.tree_size;
+            current.tree_hash ^= right_sibling.tree_hash;
+        } else {
+            // root node, nothing to do
+        }
+    }
 }
 
 pub struct HTree<K, V> {
@@ -238,9 +382,69 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         ret
     }
 
-    pub fn remove(&mut self, _key: &K) -> Option<V> {
-        // TODO
-        unimplemented!();
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        fn right_most_child<K, V>(node: &mut Node<K, V>) -> (K, V, u64) {
+            if let Some(children) = node.children.as_mut() {
+                let (k, v, h) = right_most_child(children.last_mut().unwrap());
+                node.tree_size -= 1;
+                node.tree_hash ^= h;
+                node.rebalance_after_deletion(node.keys.len());
+                (k, v, h)
+            } else {
+                let k = node.keys.pop().unwrap();
+                let v = node.values.pop().unwrap();
+                let h = node.hashes.pop().unwrap();
+                node.tree_size -= 1;
+                node.tree_hash ^= h;
+                (k, v, h)
+            }
+        }
+        // return:
+        // - the hash diff
+        // - the value at the key that was removed, if there was one
+        fn aux<K: Ord, V>(node: &mut Node<K, V>, key: &K) -> (u64, Option<V>) {
+            match node.keys.binary_search(key) {
+                Ok(index) => {
+                    if let Some(children) = node.children.as_mut() {
+                        // internal node
+                        // we need to replace key, value hash with a new separator; we can find it
+                        // in the left or right sub-tree
+                        let (prev_k, prev_v, prev_h) = right_most_child(&mut children[index]);
+                        node.keys[index] = prev_k;
+                        let v = std::mem::replace(&mut node.values[index], prev_v);
+                        let h = std::mem::replace(&mut node.hashes[index], prev_h);
+                        node.tree_size -= 1;
+                        node.tree_hash ^= h;
+                        node.rebalance_after_deletion(index);
+                        (h, Some(v))
+                    } else {
+                        // leaf node
+                        node.keys.remove(index);
+                        let v = node.values.remove(index);
+                        let h = node.hashes.remove(index);
+                        node.tree_size -= 1;
+                        node.tree_hash ^= h;
+                        (h, Some(v))
+                    }
+                }
+                Err(index) => {
+                    if let Some(children) = node.children.as_mut() {
+                        // internal node
+                        let (diff_hash, ret) = aux(&mut children[index], key);
+                        if ret.is_some() {
+                            node.tree_size -= 1;
+                        }
+                        node.tree_hash ^= diff_hash;
+                        node.rebalance_after_deletion(index);
+                        (diff_hash, ret)
+                    } else {
+                        // leaf node
+                        (0, None)
+                    }
+                }
+            }
+        }
+        aux(&mut self.root, key).1
     }
 
     pub fn check_invariants(&self) {
@@ -648,13 +852,11 @@ mod tests {
         assert_ne!(hash3, hash1);
         assert_ne!(hash3, hash2);
 
-        /* TODO
         // back to 2 values
         tree.remove(&75);
         tree.check_invariants();
         let hash4 = tree.hash(&..);
         assert_eq!(hash4, hash2);
-        */
     }
 
     #[test]
@@ -757,7 +959,6 @@ mod tests {
 
         // remove some
         key_values.shuffle(&mut rng);
-        /* TODO
         for _ in 0..1000 {
             let (key, value) = key_values.pop().unwrap();
             let value2 = tree1.remove(&key);
@@ -766,6 +967,5 @@ mod tests {
             expected_hash ^= super::hash(&key, &value);
             assert_eq!(tree1.hash(&..), expected_hash);
         }
-        */
     }
 }
