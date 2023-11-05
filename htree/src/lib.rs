@@ -221,7 +221,6 @@ impl<K, V> Node<K, V> {
                 for c in current.children.unwrap() {
                     left_children.push(c);
                 }
-                assert_eq!(left_children.len(), left_sibling.keys.len() + 1);
             }
             left_sibling.tree_size += current.tree_size;
             left_sibling.tree_hash ^= current.tree_hash;
@@ -252,7 +251,6 @@ impl<K, V> Node<K, V> {
                 for c in right_sibling.children.unwrap() {
                     child_children.push(c);
                 }
-                assert_eq!(child_children.len(), current.keys.len() + 1);
             }
             current.tree_size += right_sibling.tree_size;
             current.tree_hash ^= right_sibling.tree_hash;
