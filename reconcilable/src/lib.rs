@@ -1,6 +1,7 @@
 use core::hash::Hash;
 
 use chrono::{DateTime, Utc};
+use tracing::info;
 
 use diff::{DiffRanges, HashRangeQueryable};
 use htree::HTree;
@@ -9,7 +10,7 @@ pub trait Reconcilable {
     type Key;
     type Value;
 
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64>;
+    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>);
     fn enumerate_diff_ranges(
         &self,
         diff_ranges: DiffRanges<Self::Key>,
@@ -26,7 +27,7 @@ where
     type Key = K;
     type Value = TV<V>;
 
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) -> Option<u64> {
+    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) {
         let mut updated = false;
         // here, using `Option::map` is clearer than using `if let Some(…) =` because of the
         // long match expression
@@ -47,7 +48,9 @@ where
                 updated = true;
             });
         }
-        updated.then(|| self.hash(&..))
+        if updated {
+            info!("Updated state; global hash is now {}", self.hash(&..));
+        }
     }
 
     fn enumerate_diff_ranges(

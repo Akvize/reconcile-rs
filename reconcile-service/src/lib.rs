@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use diff::{Diffable, HashSegment};
 use reconcilable::Reconcilable;
@@ -109,9 +109,7 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("received {} updates", updates.len());
-                if let Some(h) = reconcilable.reconcile(updates) {
-                    info!("Updated state; global hash is now {}", h);
-                }
+                reconcilable.reconcile(updates);
             }
         }
         let is_active = last_activity

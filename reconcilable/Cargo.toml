@@ -7,3 +7,4 @@ edition = "2021"
 chrono = { version = "0.4.31", features = ["serde"] }
 diff = { version = "0.1.0", path = "../diff" }
 htree = { version = "0.1.0", path = "../htree" }
+tracing = "0.1.40"
