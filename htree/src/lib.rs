@@ -942,4 +942,24 @@ mod tests {
             assert_eq!(tree1.hash(&..), expected_hash);
         }
     }
+
+    #[test]
+    fn test_iter() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut key_values = Vec::new();
+
+        // add some
+        for _ in 0..1000 {
+            let key: u64 = rng.gen::<u64>();
+            let value: u64 = rng.gen();
+            key_values.push((key, value));
+        }
+        let tree = HTree::from_iter(key_values.clone());
+        key_values.sort();
+        assert_eq!(
+            tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
+            key_values
+        );
+        // assert_eq!(tree.into_iter().collect::<Vec<_>>(), key_values);
+    }
 }
