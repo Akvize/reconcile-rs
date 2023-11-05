@@ -194,44 +194,23 @@ impl<K, V> Node<K, V> {
                 current.tree_hash ^= c.tree_hash;
                 current.children.as_mut().unwrap().push(c);
             }
-        } else if index > 0 {
-            // merge current in its left sibling
-            let current = children.remove(index);
-            let left_sibling = children[index - 1].as_mut();
-            // move separator in left_sibling
-            let k = self.keys.remove(index - 1);
-            let v = self.values.remove(index - 1);
-            let h = self.hashes.remove(index - 1);
-            left_sibling.keys.push(k);
-            left_sibling.values.push(v);
-            left_sibling.hashes.push(h);
-            left_sibling.tree_size += 1;
-            left_sibling.tree_hash ^= h;
-            // move values of current in left_sibling
-            for k in current.keys {
-                left_sibling.keys.push(k);
-            }
-            for v in current.values {
-                left_sibling.values.push(v);
-            }
-            for h in current.hashes {
-                left_sibling.hashes.push(h);
-            }
-            if let Some(left_children) = left_sibling.children.as_mut() {
-                for c in current.children.unwrap() {
-                    left_children.push(c);
-                }
-            }
-            left_sibling.tree_size += current.tree_size;
-            left_sibling.tree_hash ^= current.tree_hash;
-        } else if index + 1 < children.len() {
-            // merge right sibling in the current
-            let right_sibling = children.remove(index + 1);
-            let current = children[index].as_mut();
+        } else {
+            let merge_into = if index > 0 {
+                index - 1
+            } else if index + 1 < children.len() {
+                index
+            } else {
+                // root node, nothing to do
+                return;
+            };
+
+            // merge right sibling in the current node
+            let right_sibling = children.remove(merge_into + 1);
+            let current = children[merge_into].as_mut();
             // move separator in current node
-            let k = self.keys.remove(index);
-            let v = self.values.remove(index);
-            let h = self.hashes.remove(index);
+            let k = self.keys.remove(merge_into);
+            let v = self.values.remove(merge_into);
+            let h = self.hashes.remove(merge_into);
             current.keys.push(k);
             current.values.push(v);
             current.hashes.push(h);
@@ -254,8 +233,6 @@ impl<K, V> Node<K, V> {
             }
             current.tree_size += right_sibling.tree_size;
             current.tree_hash ^= right_sibling.tree_hash;
-        } else {
-            // root node, nothing to do
         }
     }
 }
