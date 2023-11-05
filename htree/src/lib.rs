@@ -256,13 +256,13 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             let mut max_height = 1;
             // check order
             if let Some(min) = min {
-                assert!(min <= &node.keys[0], "ord incriant invalid");
+                assert!(min <= &node.keys[0], "order invariant violated");
             }
             for i in 1..node.keys.len() {
-                assert!(node.keys[i - 1] <= node.keys[i], "ord incriant invalid");
+                assert!(node.keys[i - 1] <= node.keys[i], "order invariant violated");
             }
             if let Some(max) = max {
-                assert!(node.keys.last().unwrap() <= max, "ord incriant invalid");
+                assert!(node.keys.last().unwrap() <= max, "order invariant violated");
             }
             for i in 0..node.keys.len() {
                 // child before key
