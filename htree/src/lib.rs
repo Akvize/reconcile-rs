@@ -15,6 +15,7 @@ pub fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
 }
 
 const B: usize = 6;
+const MIN_CAPACITY: usize = B - 1;
 const MAX_CAPACITY: usize = 2 * B - 1;
 
 type InsertionTuple<K, V> = Option<(K, V, u64, Box<Node<K, V>>)>;
@@ -255,6 +256,14 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
             let mut cum_hash = 0;
             let mut tot_size = 0;
             let mut max_height = 1;
+            // check node size
+            if min.is_some() || max.is_some() {
+                // this is not the root
+                assert!(
+                    node.keys.len() >= MIN_CAPACITY,
+                    "minimum node size invariant violated"
+                );
+            }
             // check order
             if let Some(min) = min {
                 assert!(min <= &node.keys[0], "order invariant violated");
