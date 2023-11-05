@@ -957,10 +957,9 @@ mod tests {
         let items: Vec<_> = tree2.get_range(&diff_ranges2[0]).collect();
         assert_eq!(items, vec![(&key, &value)]);
 
-        // remove some
+        // remove everything one-by-one
         key_values.shuffle(&mut rng);
-        for _ in 0..1000 {
-            let (key, value) = key_values.pop().unwrap();
+        for (key, value) in key_values {
             let value2 = tree1.remove(&key);
             tree1.check_invariants();
             assert_eq!(value2, Some(value));
