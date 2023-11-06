@@ -9,7 +9,7 @@ use tokio::net::UdpSocket;
 use tracing::{debug, trace, warn};
 
 use diff::{Diffable, HashSegment};
-use reconcilable::Reconcilable;
+use reconcilable::{Map, Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
@@ -21,8 +21,8 @@ enum Message<K: Serialize, V: Serialize> {
 
 pub async fn run<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
-    V: Clone + DeserializeOwned + Hash + Serialize,
-    R: Reconcilable<Key = K, Value = V> + Diffable<Key = K>,
+    V: Clone + DeserializeOwned + Hash + Reconcilable + Serialize,
+    R: Map<Key = K, Value = V> + Diffable<Key = K>,
 >(
     socket: UdpSocket,
     other_addr: SocketAddr,
@@ -109,7 +109,15 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("received {} updates", updates.len());
-                reconcilable.reconcile(updates);
+                for (k, tv) in updates {
+                    if let Some(local_tv) = reconcilable.get(&k) {
+                        if local_tv.reconcile(&tv) == ReconciliationResult::KeepOther {
+                            reconcilable.insert(k, tv);
+                        }
+                    } else {
+                        reconcilable.insert(k, tv);
+                    }
+                }
             }
         }
         let is_active = last_activity

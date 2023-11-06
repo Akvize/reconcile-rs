@@ -5,38 +5,47 @@ use chrono::{DateTime, Utc};
 use diff::DiffRanges;
 use htree::HTree;
 
-pub trait Reconcilable {
-    type Key;
-    type Value;
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ReconciliationResult {
+    KeepSelf,
+    KeepOther,
+}
 
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>);
-    fn enumerate_diff_ranges(
-        &self,
-        diff_ranges: DiffRanges<Self::Key>,
-    ) -> Vec<(Self::Key, Self::Value)>;
+pub trait Reconcilable {
+    fn reconcile(&self, other: &Self) -> ReconciliationResult;
 }
 
 type TV<V> = (DateTime<Utc>, V);
 
-impl<K, V> Reconcilable for HTree<K, TV<V>>
+impl<V> Reconcilable for TV<V> {
+    fn reconcile(&self, other: &Self) -> ReconciliationResult {
+        if other.0 > self.0 {
+            ReconciliationResult::KeepOther
+        } else {
+            ReconciliationResult::KeepSelf
+        }
+    }
+}
+
+pub trait Map {
+    type Key;
+    type Value;
+
+    fn enumerate_diff_ranges(
+        &self,
+        diff_ranges: DiffRanges<Self::Key>,
+    ) -> Vec<(Self::Key, Self::Value)>;
+    fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value>;
+    fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
+}
+
+impl<K, V> Map for HTree<K, V>
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
     type Key = K;
-    type Value = TV<V>;
-
-    fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) {
-        for (k, tv) in updates {
-            if let Some(local_tv) = self.get(&k) {
-                if tv.0 > local_tv.0 {
-                    self.insert(k, tv);
-                }
-            } else {
-                self.insert(k, tv);
-            }
-        }
-    }
+    type Value = V;
 
     fn enumerate_diff_ranges(
         &self,
@@ -49,5 +58,13 @@ where
             }
         }
         ret
+    }
+
+    fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value> {
+        self.get(key)
+    }
+
+    fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value> {
+        self.insert(key, value)
     }
 }
