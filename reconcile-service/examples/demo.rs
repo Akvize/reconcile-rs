@@ -10,6 +10,7 @@ use tracing::info;
 
 use diff::HashRangeQueryable;
 use htree::HTree;
+use reconcile_service::ReconcileService;
 
 #[derive(Parser)]
 struct Args {
@@ -46,13 +47,14 @@ async fn main() {
     let tree = HTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    reconcile_service::run(
-        socket,
-        other_addr,
-        tree,
-        |_k, _v, _old_v| (),
-        |tree| info!("Updated state; global hash is now {}", tree.hash(&..)),
-    )
-    .await
-    .unwrap();
+    let mut service = ReconcileService::new(tree);
+    service
+        .run(
+            socket,
+            other_addr,
+            |_k, _v, _old_v| (),
+            |tree| info!("Updated state; global hash is now {}", tree.hash(&..)),
+        )
+        .await
+        .unwrap();
 }
