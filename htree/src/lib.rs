@@ -254,8 +254,8 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         Default::default()
     }
 
-    pub fn get<'a>(&'a self, key: &'a K) -> Option<&'a V> {
-        fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &'a K) -> Option<&'a V> {
+    pub fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
+        fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &K) -> Option<&'a V> {
             match node.keys.binary_search(key) {
                 Ok(index) => Some(&node.values[index]),
                 Err(index) => {
@@ -271,7 +271,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 
     pub fn position(&self, key: &K) -> Option<usize> {
-        fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &'a K) -> Option<usize> {
+        fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
                 for i in 0..node.keys.len() {
@@ -430,7 +430,7 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
         fn aux<'a, K: Hash + Ord, V: Hash>(
             node: &'a Node<K, V>,
             mut min: Option<&'a K>,
-            max: Option<&'a K>,
+            max: Option<&K>,
         ) -> (u64, usize, usize) {
             let mut cum_hash = 0;
             let mut tot_size = 0;
@@ -620,7 +620,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
             node: &'a Node<K, V>,
             range: &R,
             mut lower_bound: Option<&'a K>,
-            upper_bound: Option<&'a K>,
+            upper_bound: Option<&K>,
         ) -> u64 {
             // check if the lower-bound is included in the range
             let lower_bound_included = match range.start_bound() {
@@ -673,7 +673,7 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
     }
 
     fn insertion_position(&self, key: &K) -> usize {
-        fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &'a K) -> usize {
+        fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
                 for i in 0..node.keys.len() {
