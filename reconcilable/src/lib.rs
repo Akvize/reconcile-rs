@@ -1,9 +1,8 @@
 use core::hash::Hash;
 
 use chrono::{DateTime, Utc};
-use tracing::info;
 
-use diff::{DiffRanges, HashRangeQueryable};
+use diff::DiffRanges;
 use htree::HTree;
 
 pub trait Reconcilable {
@@ -28,7 +27,6 @@ where
     type Value = TV<V>;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) {
-        let mut updated = false;
         // here, using `Option::map` is clearer than using `if let Some(…) =` because of the
         // long match expression
         #[allow(clippy::option_map_unit_fn)]
@@ -43,13 +41,7 @@ where
                 }
                 None => Some(tv),
             }
-            .map(|v| {
-                self.insert(k, v);
-                updated = true;
-            });
-        }
-        if updated {
-            info!("Updated state; global hash is now {}", self.hash(&..));
+            .map(|v| self.insert(k, v));
         }
     }
 

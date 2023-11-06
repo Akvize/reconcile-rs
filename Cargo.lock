@@ -449,7 +449,6 @@ dependencies = [
  "chrono",
  "diff",
  "htree",
- "tracing",
 ]
 
 [[package]]
