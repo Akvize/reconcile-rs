@@ -114,14 +114,14 @@ pub async fn run<
             if !updates.is_empty() {
                 debug!("received {} updates", updates.len());
                 let mut changed = false;
-                for (k, tv) in updates {
-                    let local_tv = reconcilable.get(&k);
-                    let do_change = local_tv
-                        .map(|local_tv| local_tv.reconcile(&tv) == ReconciliationResult::KeepOther)
+                for (k, v) in updates {
+                    let local_v = reconcilable.get(&k);
+                    let do_change = local_v
+                        .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                         .unwrap_or(true);
                     if do_change {
-                        pre_insert(&k, &tv, local_tv);
-                        reconcilable.insert(k, tv);
+                        pre_insert(&k, &v, local_v);
+                        reconcilable.insert(k, v);
                         changed = true;
                     }
                 }
