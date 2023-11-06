@@ -23,10 +23,14 @@ pub async fn run<
     K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
     V: Clone + DeserializeOwned + Hash + Reconcilable + Serialize,
     R: Map<Key = K, Value = V> + Diffable<Key = K>,
+    FI: Fn(&K, &V, Option<&V>),
+    FU: Fn(&R),
 >(
     socket: UdpSocket,
     other_addr: SocketAddr,
     mut reconcilable: R,
+    pre_insert: FI,
+    post_change: FU,
 ) -> Result<(), std::io::Error> {
     // extra byte that easily detect when the buffer is too small
     let mut recv_buf = [0; BUFFER_SIZE + 1];
@@ -109,14 +113,22 @@ pub async fn run<
             }
             if !updates.is_empty() {
                 debug!("received {} updates", updates.len());
+                let mut changed = false;
                 for (k, tv) in updates {
                     if let Some(local_tv) = reconcilable.get(&k) {
                         if local_tv.reconcile(&tv) == ReconciliationResult::KeepOther {
+                            pre_insert(&k, &tv, Some(local_tv));
                             reconcilable.insert(k, tv);
+                            changed = true;
                         }
                     } else {
+                        pre_insert(&k, &tv, None);
                         reconcilable.insert(k, tv);
+                        changed = true;
                     }
+                }
+                if changed {
+                    post_change(&reconcilable);
                 }
             }
         }
