@@ -27,21 +27,14 @@ where
     type Value = TV<V>;
 
     fn reconcile(&mut self, updates: Vec<(Self::Key, Self::Value)>) {
-        // here, using `Option::map` is clearer than using `if let Some(…) =` because of the
-        // long match expression
-        #[allow(clippy::option_map_unit_fn)]
         for (k, tv) in updates {
-            match self.get(&k) {
-                Some(local_tv) => {
-                    if tv.0 > local_tv.0 {
-                        Some(tv)
-                    } else {
-                        None
-                    }
+            if let Some(local_tv) = self.get(&k) {
+                if tv.0 > local_tv.0 {
+                    self.insert(k, tv);
                 }
-                None => Some(tv),
+            } else {
+                self.insert(k, tv);
             }
-            .map(|v| self.insert(k, v));
         }
     }
 
