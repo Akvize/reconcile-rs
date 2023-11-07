@@ -16,27 +16,27 @@ use reconcilable::{Map, Reconcilable, ReconciliationResult};
 const BUFFER_SIZE: usize = 65507;
 
 #[derive(Debug)]
-pub struct ReconcileService<M> {
+pub struct Service<M> {
     map: Arc<RwLock<M>>,
 }
 
-impl<M> ReconcileService<M> {
+impl<M> Service<M> {
     pub fn new(map: M) -> Self {
-        ReconcileService {
+        Service {
             map: Arc::new(RwLock::new(map)),
         }
     }
 }
 
-impl<M> Clone for ReconcileService<M> {
+impl<M> Clone for Service<M> {
     fn clone(&self) -> Self {
-        ReconcileService {
+        Service {
             map: self.map.clone(),
         }
     }
 }
 
-impl<K, V, M: Map<Key = K, Value = V>> ReconcileService<M> {
+impl<K, V, M: Map<Key = K, Value = V>> Service<M> {
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
         guard.insert(key, value)
@@ -57,7 +57,7 @@ impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
         V: Clone + DeserializeOwned + Hash + Reconcilable + Serialize,
         R: Map<Key = K, Value = V> + Diffable<Key = K>,
-    > ReconcileService<R>
+    > Service<R>
 {
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
         self,

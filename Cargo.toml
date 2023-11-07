@@ -4,5 +4,5 @@ members = [
     "diff",
     "htree",
     "reconcilable",
-    "reconcile-service",
+    "reconcile",
 ]

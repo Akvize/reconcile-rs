@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 
 use diff::HashRangeQueryable;
 use htree::HTree;
-use reconcile_service::ReconcileService;
+use reconcile::Service;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
@@ -35,8 +35,8 @@ async fn test() {
     let tree2: HTree<String, (DateTime<Utc>, String)> = HTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = ReconcileService::new(tree1);
-    let service2 = ReconcileService::new(tree2);
+    let service1 = Service::new(tree1);
+    let service2 = Service::new(tree2);
     let task1 = tokio::spawn(service1.clone().run(socket1, addr2, |_, _, _| {}, |_| {}));
     let task2 = tokio::spawn(service2.clone().run(socket2, addr1, |_, _, _| {}, |_| {}));
 
@@ -54,7 +54,7 @@ async fn test() {
     let new_hash = service2.read().hash(&..);
     assert_ne!(new_hash, start_hash);
     assert_eq!(service1.read().hash(&..), start_hash);
-    tokio::time::sleep(Duration::from_millis(110)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(service1.read().hash(&..), new_hash);
     assert_eq!(service2.read().hash(&..), new_hash);
     assert_eq!(service2.read().get(&key), Some(&value));
@@ -72,7 +72,7 @@ async fn test() {
             service1.insert(key.clone(), value2.clone());
             service2.insert(key.clone(), value1.clone());
         }
-        tokio::time::sleep(Duration::from_millis(110)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(service2.read().get(&key), Some(&value2));
     }
 
