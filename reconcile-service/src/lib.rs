@@ -69,7 +69,6 @@ impl<
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        let my_options = DefaultOptions::new();
         let recv_timeout = Duration::from_millis(100);
         // infinite loop
         loop {
@@ -77,18 +76,8 @@ impl<
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
-                    let segments = {
-                        let guard = self.map.read().unwrap();
-                        guard.start_diff()
-                    };
-                    send_buf.clear();
-                    for segment in segments {
-                        Message::HashSegment::<K, V>(segment)
-                            .serialize(&mut Serializer::new(&mut send_buf, my_options))
-                            .unwrap();
-                    }
-                    trace!("start_diff {} bytes to {other_addr}", send_buf.len());
-                    socket.send_to(&send_buf, &other_addr).await.unwrap();
+                    self.start_diff_protocol(&socket, other_addr, &mut send_buf)
+                        .await;
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -108,6 +97,26 @@ impl<
                 }
             }
         }
+    }
+
+    async fn start_diff_protocol(
+        &self,
+        socket: &UdpSocket,
+        other_addr: SocketAddr,
+        send_buf: &mut Vec<u8>,
+    ) {
+        let segments = {
+            let guard = self.map.read().unwrap();
+            guard.start_diff()
+        };
+        send_buf.clear();
+        for segment in segments {
+            Message::HashSegment::<K, V>(segment)
+                .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+                .unwrap();
+        }
+        trace!("start_diff {} bytes to {other_addr}", send_buf.len());
+        socket.send_to(send_buf, &other_addr).await.unwrap();
     }
 
     async fn handle_messages<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
