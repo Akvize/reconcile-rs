@@ -951,8 +951,16 @@ mod tests {
         let mut segments1 = tree1.start_diff();
         let mut segments2 = Vec::new();
         while !segments1.is_empty() {
-            tree2.diff_round(segments1.drain(..), &mut segments2, &mut diff_ranges2);
-            tree1.diff_round(segments2.drain(..), &mut segments1, &mut diff_ranges1);
+            tree2.diff_round(
+                segments1.drain(..).collect(),
+                &mut segments2,
+                &mut diff_ranges2,
+            );
+            tree1.diff_round(
+                segments2.drain(..).collect(),
+                &mut segments1,
+                &mut diff_ranges1,
+            );
         }
         assert_eq!(diff_ranges1.len(), 0);
         assert_eq!(diff_ranges2.len(), 1);
