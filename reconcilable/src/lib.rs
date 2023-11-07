@@ -15,9 +15,7 @@ pub trait Reconcilable {
     fn reconcile(&self, other: &Self) -> ReconciliationResult;
 }
 
-type TV<V> = (DateTime<Utc>, V);
-
-impl<V> Reconcilable for TV<V> {
+impl<V> Reconcilable for (DateTime<Utc>, V) {
     fn reconcile(&self, other: &Self) -> ReconciliationResult {
         if other.0 > self.0 {
             ReconciliationResult::KeepOther
