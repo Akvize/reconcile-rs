@@ -93,19 +93,27 @@ impl<
                 socket.send_to(&send_buf, &other_addr).await.unwrap();
                 last_activity = Some(Instant::now());
             }
-            if let Ok(Ok((size, peer))) =
-                timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await
-            {
-                self.handle_messages(
-                    &socket,
-                    &recv_buf,
-                    (size, peer),
-                    &mut send_buf,
-                    &before_insert,
-                    &after_sync,
-                )
-                .await;
-                last_activity = Some(Instant::now());
+            match timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await {
+                Err(_) => {
+                    // timeout
+                }
+                Ok(Err(err)) => {
+                    // network error
+                    warn!("network error in recv_from: {err}");
+                }
+                Ok(Ok((size, peer))) => {
+                    // received datagram
+                    self.handle_messages(
+                        &socket,
+                        &recv_buf,
+                        (size, peer),
+                        &mut send_buf,
+                        &before_insert,
+                        &after_sync,
+                    )
+                    .await;
+                    last_activity = Some(Instant::now());
+                }
             }
         }
     }
