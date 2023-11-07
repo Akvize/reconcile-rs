@@ -62,7 +62,7 @@ impl<
         &self,
         socket: UdpSocket,
         other_addr: SocketAddr,
-        pre_insert: FI,
+        before_insert: FI,
         post_change: FU,
     ) {
         // extra byte that easily detect when the buffer is too small
@@ -161,7 +161,7 @@ impl<
                                 })
                                 .unwrap_or(true);
                             if do_change {
-                                pre_insert(&k, &v, local_v);
+                                before_insert(&k, &v, local_v);
                                 guard.insert(k, v);
                                 changed = true;
                             }
