@@ -63,7 +63,7 @@ impl<
         socket: UdpSocket,
         other_addr: SocketAddr,
         before_insert: FI,
-        post_change: FU,
+        after_sync: FU,
     ) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
@@ -168,7 +168,7 @@ impl<
                         }
                     }
                     if changed {
-                        post_change(self);
+                        after_sync(self);
                     }
                 }
             }
