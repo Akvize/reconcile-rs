@@ -3,6 +3,5 @@ resolver = "2"
 members = [
     "diff",
     "htree",
-    "reconcilable",
     "reconcile",
 ]
