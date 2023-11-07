@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rand::{
     distributions::{Alphanumeric, DistString},
-    SeedableRng,
+    Rng, SeedableRng,
 };
 use tokio::net::UdpSocket;
 
@@ -58,6 +58,23 @@ async fn test() {
     assert_eq!(service1.read().hash(&..), new_hash);
     assert_eq!(service2.read().hash(&..), new_hash);
     assert_eq!(service2.read().get(&key), Some(&value));
+
+    // check that the more recent value always win
+    for _ in 0..10 {
+        // add value to tree2, and check that it is transferred to tree1
+        let key = "42".to_string();
+        let value1 = (Utc::now(), "Hello, World!".to_string());
+        let value2 = (Utc::now(), "Hello, World!".to_string());
+        if rng.gen() {
+            service1.insert(key.clone(), value1.clone());
+            service2.insert(key.clone(), value2.clone());
+        } else {
+            service1.insert(key.clone(), value2.clone());
+            service2.insert(key.clone(), value1.clone());
+        }
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        assert_eq!(service2.read().get(&key), Some(&value2));
+    }
 
     task2.abort();
     task1.abort();
