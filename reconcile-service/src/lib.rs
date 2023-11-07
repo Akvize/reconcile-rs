@@ -70,6 +70,9 @@ impl<
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
         let recv_timeout = Duration::from_millis(100);
+        // start the protocol at the beginning
+        self.start_diff_protocol(&socket, other_addr, &mut send_buf)
+            .await;
         // infinite loop
         loop {
             match timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await {
