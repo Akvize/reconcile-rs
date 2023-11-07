@@ -59,7 +59,7 @@ impl<
     > ReconcileService<R>
 {
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
-        &self,
+        self,
         socket: UdpSocket,
         other_addr: SocketAddr,
         before_insert: FI,
@@ -168,7 +168,7 @@ impl<
                         }
                     }
                     if changed {
-                        after_sync(self);
+                        after_sync(&self);
                     }
                 }
             }
