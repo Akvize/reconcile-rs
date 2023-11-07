@@ -19,6 +19,7 @@ async fn test() {
     let socket1 = UdpSocket::bind(addr1).await.unwrap();
     let socket2 = UdpSocket::bind(addr2).await.unwrap();
 
+    // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values = Vec::new();
     for _ in 0..1000 {
@@ -28,17 +29,35 @@ async fn test() {
         key_values.push((key, (time, value)));
     }
     let tree1 = HTree::from_iter(key_values.into_iter());
+    let start_hash = tree1.hash(&..);
+
+    // empty tree2
     let tree2: HTree<String, (DateTime<Utc>, String)> = HTree::new();
 
+    // start reconciliation services for tree1 and tree2
     let service1 = ReconcileService::new(tree1);
     let service2 = ReconcileService::new(tree2);
-
     let task1 = tokio::spawn(service1.clone().run(socket1, addr2, |_, _, _| {}, |_| {}));
     let task2 = tokio::spawn(service2.clone().run(socket2, addr1, |_, _, _| {}, |_| {}));
 
-    assert_ne!(service1.read().hash(&..), service2.read().hash(&..));
+    // check that tree2 is filled with the values from tree1
+    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service2.read().hash(&..), 0);
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(service1.read().hash(&..), service2.read().hash(&..));
+    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service1.read().hash(&..), start_hash);
+
+    // add value to tree2, and check that it is transferred to tree1
+    let key = "42".to_string();
+    let value = (Utc::now(), "Hello, World!".to_string());
+    service2.insert(key.clone(), value.clone());
+    let new_hash = service2.read().hash(&..);
+    assert_ne!(new_hash, start_hash);
+    assert_eq!(service1.read().hash(&..), start_hash);
+    tokio::time::sleep(Duration::from_millis(110)).await;
+    assert_eq!(service1.read().hash(&..), new_hash);
+    assert_eq!(service2.read().hash(&..), new_hash);
+    assert_eq!(service2.read().get(&key), Some(&value));
 
     task2.abort();
     task1.abort();

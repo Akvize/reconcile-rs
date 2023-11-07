@@ -75,7 +75,7 @@ impl<
         // infinite loop
         loop {
             let is_active = last_activity
-                .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(10000))
+                .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(100))
                 .unwrap_or(false);
             if !is_active {
                 debug!("no recent activity; initiating diff protocol");
