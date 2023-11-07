@@ -96,7 +96,6 @@ impl<
             if let Ok(Ok((size, peer))) =
                 timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await
             {
-                last_activity = Some(Instant::now());
                 if size == recv_buf.len() {
                     warn!("Buffer too small for message, discarded");
                     continue;
@@ -168,7 +167,6 @@ impl<
                         trace!("sending last {} bytes to {peer}", send_buf.len());
                         socket.send_to(&send_buf, &peer).await.unwrap();
                         trace!("sent last {} bytes to {peer}", send_buf.len());
-                        last_activity = Some(Instant::now());
                     }
                 }
                 if !updates.is_empty() {
@@ -194,6 +192,7 @@ impl<
                         after_sync(&self);
                     }
                 }
+                last_activity = Some(Instant::now());
             }
         }
     }
