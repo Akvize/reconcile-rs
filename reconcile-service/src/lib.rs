@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -70,32 +70,25 @@ impl<
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
         let my_options = DefaultOptions::new();
-        let mut last_activity = None;
         let recv_timeout = Duration::from_millis(100);
         // infinite loop
         loop {
-            let is_active = last_activity
-                .map(|last_activity| Instant::now() - last_activity < Duration::from_millis(100))
-                .unwrap_or(false);
-            if !is_active {
-                debug!("no recent activity; initiating diff protocol");
-                let segments = {
-                    let guard = self.map.read().unwrap();
-                    guard.start_diff()
-                };
-                send_buf.clear();
-                for segment in segments {
-                    Message::HashSegment::<K, V>(segment)
-                        .serialize(&mut Serializer::new(&mut send_buf, my_options))
-                        .unwrap();
-                }
-                trace!("start_diff {} bytes to {other_addr}", send_buf.len());
-                socket.send_to(&send_buf, &other_addr).await.unwrap();
-                last_activity = Some(Instant::now());
-            }
             match timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
+                    debug!("no recent activity; initiating diff protocol");
+                    let segments = {
+                        let guard = self.map.read().unwrap();
+                        guard.start_diff()
+                    };
+                    send_buf.clear();
+                    for segment in segments {
+                        Message::HashSegment::<K, V>(segment)
+                            .serialize(&mut Serializer::new(&mut send_buf, my_options))
+                            .unwrap();
+                    }
+                    trace!("start_diff {} bytes to {other_addr}", send_buf.len());
+                    socket.send_to(&send_buf, &other_addr).await.unwrap();
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -112,7 +105,6 @@ impl<
                         &after_sync,
                     )
                     .await;
-                    last_activity = Some(Instant::now());
                 }
             }
         }
