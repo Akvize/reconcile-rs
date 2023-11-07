@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
@@ -13,14 +14,35 @@ use reconcilable::{Map, Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ReconcileService<M> {
-    map: M,
+    map: Arc<RwLock<M>>,
 }
 
 impl<M> ReconcileService<M> {
     pub fn new(map: M) -> Self {
-        ReconcileService { map }
+        ReconcileService {
+            map: Arc::new(RwLock::new(map)),
+        }
+    }
+}
+
+impl<M> Clone for ReconcileService<M> {
+    fn clone(&self) -> Self {
+        ReconcileService {
+            map: self.map.clone(),
+        }
+    }
+}
+
+impl<K, V, M: Map<Key = K, Value = V>> ReconcileService<M> {
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let mut guard = self.map.write().unwrap();
+        guard.insert(key, value)
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.map.read().unwrap()
     }
 }
 
@@ -37,12 +59,12 @@ impl<
     > ReconcileService<R>
 {
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&R)>(
-        &mut self,
+        &self,
         socket: UdpSocket,
         other_addr: SocketAddr,
         pre_insert: FI,
         post_change: FU,
-    ) -> Result<(), std::io::Error> {
+    ) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
@@ -85,8 +107,10 @@ impl<
                     debug!("received {} segments", segments.len());
                     let mut diff_ranges = Vec::new();
                     let mut out_segments = Vec::new();
-                    self.map
-                        .diff_round(segments, &mut out_segments, &mut diff_ranges);
+                    {
+                        let guard = self.map.read().unwrap();
+                        guard.diff_round(segments, &mut out_segments, &mut diff_ranges);
+                    }
                     let mut messages = Vec::new();
                     if !out_segments.is_empty() {
                         debug!("returning {} segments", out_segments.len());
@@ -98,7 +122,8 @@ impl<
                     if !diff_ranges.is_empty() {
                         debug!("returning {} diff_ranges", diff_ranges.len());
                         trace!("diff_ranges: {diff_ranges:?}");
-                        for update in self.map.enumerate_diff_ranges(diff_ranges) {
+                        let guard = self.map.read().unwrap();
+                        for update in guard.enumerate_diff_ranges(diff_ranges) {
                             messages.push(Message::Update(update));
                         }
                     }
@@ -112,33 +137,34 @@ impl<
                                 .unwrap();
                             if send_buf.len() > BUFFER_SIZE {
                                 trace!("sending {} bytes to {peer}", last_size);
-                                socket.send_to(&send_buf[..last_size], &peer).await?;
+                                socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
                                 trace!("sent {} bytes to {peer}", last_size);
                                 send_buf.drain(..last_size);
                             }
                         }
                         trace!("sending last {} bytes to {peer}", send_buf.len());
-                        socket.send_to(&send_buf, &peer).await?;
+                        socket.send_to(&send_buf, &peer).await.unwrap();
                         trace!("sent last {} bytes to {peer}", send_buf.len());
                         last_activity = Some(Instant::now());
                     }
                 }
                 if !updates.is_empty() {
                     debug!("received {} updates", updates.len());
+                    let mut guard = self.map.write().unwrap();
                     let mut changed = false;
                     for (k, v) in updates {
-                        let local_v = self.map.get(&k);
+                        let local_v = guard.get(&k);
                         let do_change = local_v
                             .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                             .unwrap_or(true);
                         if do_change {
                             pre_insert(&k, &v, local_v);
-                            self.map.insert(k, v);
+                            guard.insert(k, v);
                             changed = true;
                         }
                     }
                     if changed {
-                        post_change(&self.map);
+                        post_change(&guard);
                     }
                 }
             }
@@ -147,7 +173,10 @@ impl<
                 .unwrap_or(false);
             if !is_active {
                 debug!("no recent activity; initiating diff protocol");
-                let segments = self.map.start_diff();
+                let segments = {
+                    let guard = self.map.read().unwrap();
+                    guard.start_diff()
+                };
                 send_buf.clear();
                 for segment in segments {
                     Message::HashSegment::<K, V>(segment)
@@ -155,7 +184,7 @@ impl<
                         .unwrap();
                 }
                 trace!("start_diff {} bytes to {other_addr}", send_buf.len());
-                socket.send_to(&send_buf, &other_addr).await?;
+                socket.send_to(&send_buf, &other_addr).await.unwrap();
                 last_activity = Some(Instant::now());
             }
         }

@@ -55,6 +55,5 @@ async fn main() {
             |_k, _v, _old_v| (),
             |tree| info!("Updated state; global hash is now {}", tree.hash(&..)),
         )
-        .await
-        .unwrap();
+        .await;
 }
