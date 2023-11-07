@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
+use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use diff::{Diffable, HashSegment};
@@ -70,9 +71,12 @@ impl<
         let mut send_buf = Vec::new();
         let my_options = DefaultOptions::new();
         let mut last_activity = None;
+        let recv_timeout = Duration::from_millis(100);
         // infinite loop
         loop {
-            if let Ok((size, peer)) = socket.try_recv_from(&mut recv_buf) {
+            if let Ok(Ok((size, peer))) =
+                timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await
+            {
                 last_activity = Some(Instant::now());
                 if size == recv_buf.len() {
                     warn!("Buffer too small for message, discarded");
