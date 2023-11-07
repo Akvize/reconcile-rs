@@ -58,7 +58,7 @@ impl<
         R: Map<Key = K, Value = V> + Diffable<Key = K>,
     > ReconcileService<R>
 {
-    pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&R)>(
+    pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
         &self,
         socket: UdpSocket,
         other_addr: SocketAddr,
@@ -150,21 +150,25 @@ impl<
                 }
                 if !updates.is_empty() {
                     debug!("received {} updates", updates.len());
-                    let mut guard = self.map.write().unwrap();
                     let mut changed = false;
-                    for (k, v) in updates {
-                        let local_v = guard.get(&k);
-                        let do_change = local_v
-                            .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
-                            .unwrap_or(true);
-                        if do_change {
-                            pre_insert(&k, &v, local_v);
-                            guard.insert(k, v);
-                            changed = true;
+                    {
+                        let mut guard = self.map.write().unwrap();
+                        for (k, v) in updates {
+                            let local_v = guard.get(&k);
+                            let do_change = local_v
+                                .map(|local_v| {
+                                    local_v.reconcile(&v) == ReconciliationResult::KeepOther
+                                })
+                                .unwrap_or(true);
+                            if do_change {
+                                pre_insert(&k, &v, local_v);
+                                guard.insert(k, v);
+                                changed = true;
+                            }
                         }
                     }
                     if changed {
-                        post_change(&guard);
+                        post_change(self);
                     }
                 }
             }

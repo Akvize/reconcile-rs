@@ -47,13 +47,18 @@ async fn main() {
     let tree = HTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let mut service = ReconcileService::new(tree);
+    let service = ReconcileService::new(tree);
     service
         .run(
             socket,
             other_addr,
             |_k, _v, _old_v| (),
-            |tree| info!("Updated state; global hash is now {}", tree.hash(&..)),
+            |service| {
+                info!(
+                    "Updated state; global hash is now {}",
+                    service.read().hash(&..)
+                )
+            },
         )
         .await;
 }
