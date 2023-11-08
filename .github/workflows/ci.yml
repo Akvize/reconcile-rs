@@ -1,4 +1,4 @@
-name: Rust API Template - CI
+name: CI
 
 on:
   push:
