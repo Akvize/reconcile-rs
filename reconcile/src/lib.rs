@@ -13,7 +13,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use diff::Diffable;
+use htree::Diffable;
 
 use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};

@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 arrayvec = "0.7.4"
-diff = { version = "0.1.0", path = "../diff" }
 range-cmp = "0.1.1"
+serde = { version = "1.0.192", features = ["derive"] }
 
 [dev-dependencies]
 rand = "0.8.5"

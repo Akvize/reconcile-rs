@@ -8,8 +8,7 @@ use rand::{
 use tokio::net::UdpSocket;
 use tracing::info;
 
-use diff::HashRangeQueryable;
-use htree::HTree;
+use htree::{HTree, HashRangeQueryable};
 use reconcile::Service;
 
 #[derive(Parser)]

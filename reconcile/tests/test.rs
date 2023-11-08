@@ -8,8 +8,7 @@ use rand::{
 };
 use tokio::net::UdpSocket;
 
-use diff::HashRangeQueryable;
-use htree::HTree;
+use htree::{HTree, HashRangeQueryable};
 use reconcile::Service;
 
 #[tokio::test(flavor = "multi_thread")]
