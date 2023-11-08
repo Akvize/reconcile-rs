@@ -14,7 +14,7 @@
 [actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml/badge.svg
 [actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml
 
-[Docs](https://docs.rs/reconcile/0.1.0/reconcile/)
+[Docs](https://docs.rs/reconcile/latest/reconcile/)
 
 This crate provides a key-data map structure `HTree` that can be used together
 with the reconciliation `Service`. Different instances can talk together over
