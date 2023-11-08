@@ -194,23 +194,7 @@ impl<
                 }
             }
             if !messages.is_empty() {
-                debug!("sending {} messages to {peer}", messages.len());
-                send_buf.clear();
-                for message in messages {
-                    let last_size = send_buf.len();
-                    message
-                        .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                        .unwrap();
-                    if send_buf.len() > BUFFER_SIZE {
-                        trace!("sending {} bytes to {peer}", last_size);
-                        socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
-                        trace!("sent {} bytes to {peer}", last_size);
-                        send_buf.drain(..last_size);
-                    }
-                }
-                trace!("sending last {} bytes to {peer}", send_buf.len());
-                socket.send_to(send_buf, &peer).await.unwrap();
-                trace!("sent last {} bytes to {peer}", send_buf.len());
+                send_messages_to(&messages, socket, &peer, send_buf).await;
             }
         }
         if !updates.is_empty() {
@@ -235,4 +219,29 @@ impl<
             }
         }
     }
+}
+
+async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
+    messages: &[Message<K, V, C>],
+    socket: &UdpSocket,
+    peer: &SocketAddr,
+    send_buf: &mut Vec<u8>,
+) {
+    debug!("sending {} messages to {peer}", messages.len());
+    send_buf.clear();
+    for message in messages {
+        let last_size = send_buf.len();
+        message
+            .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+            .unwrap();
+        if send_buf.len() > BUFFER_SIZE {
+            trace!("sending {} bytes to {peer}", last_size);
+            socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
+            trace!("sent {} bytes to {peer}", last_size);
+            send_buf.drain(..last_size);
+        }
+    }
+    trace!("sending last {} bytes to {peer}", send_buf.len());
+    socket.send_to(send_buf, &peer).await.unwrap();
+    trace!("sent last {} bytes to {peer}", send_buf.len());
 }
