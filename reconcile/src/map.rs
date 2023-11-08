@@ -1,31 +1,7 @@
 use core::hash::Hash;
 
-use chrono::{DateTime, Utc};
-
 use diff::DiffRange;
 use htree::HTree;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ReconciliationResult {
-    KeepSelf,
-    KeepOther,
-}
-
-pub trait Reconcilable {
-    fn reconcile(&self, other: &Self) -> ReconciliationResult;
-}
-
-type TV<V> = (DateTime<Utc>, V);
-
-impl<V> Reconcilable for TV<V> {
-    fn reconcile(&self, other: &Self) -> ReconciliationResult {
-        if other.0 > self.0 {
-            ReconciliationResult::KeepOther
-        } else {
-            ReconciliationResult::KeepSelf
-        }
-    }
-}
 
 pub trait Map {
     type Key;

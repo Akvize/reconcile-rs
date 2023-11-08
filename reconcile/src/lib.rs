@@ -1,3 +1,6 @@
+pub mod map;
+pub mod reconcilable;
+
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
@@ -11,7 +14,9 @@ use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use diff::Diffable;
-use reconcilable::{Map, Reconcilable, ReconciliationResult};
+
+use crate::map::Map;
+use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
