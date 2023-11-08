@@ -60,7 +60,7 @@ enum Message<K: Serialize, V: Serialize, C: Serialize> {
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
         V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
         R: Map<Key = K, Value = V, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>
@@ -82,6 +82,25 @@ impl<
             }
         });
         ret
+    }
+
+    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+        let mut guard = self.map.write().unwrap();
+        for (key, value) in key_values {
+            guard.insert(key.clone(), value.clone());
+        }
+        let peers = self.peers.read().unwrap().clone();
+        let messages: Vec<_> = key_values
+            .iter()
+            .map(|kv| Message::Update::<K, V, C>(kv.clone()))
+            .collect();
+        tokio::spawn(async move {
+            let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+            let mut send_buf = Vec::new();
+            for peer in peers {
+                send_messages_to(&messages, &socket, &peer, &mut send_buf).await;
+            }
+        });
     }
 
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
