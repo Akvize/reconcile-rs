@@ -24,12 +24,14 @@ const BUFFER_SIZE: usize = 65507;
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
+    peers: Arc<RwLock<Vec<SocketAddr>>>,
 }
 
 impl<M> Service<M> {
     pub fn new(map: M) -> Self {
         Service {
             map: Arc::new(RwLock::new(map)),
+            peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -38,16 +40,12 @@ impl<M> Clone for Service<M> {
     fn clone(&self) -> Self {
         Service {
             map: self.map.clone(),
+            peers: self.peers.clone(),
         }
     }
 }
 
-impl<K, V, M: Map<Key = K, Value = V>> Service<M> {
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
-        let mut guard = self.map.write().unwrap();
-        guard.insert(key, value)
-    }
-
+impl<M: Map> Service<M> {
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
     }
@@ -60,14 +58,32 @@ enum Message<K: Serialize, V: Serialize, C: Serialize> {
 }
 
 impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Serialize,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Serialize,
-        C: Debug + DeserializeOwned + Serialize,
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync,
         D: Debug,
         R: Map<Key = K, Value = V, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+            + Diffable<ComparisonItem = C, DifferenceItem = D>
+            + Send
+            + Sync,
     > Service<R>
 {
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let mut guard = self.map.write().unwrap();
+        let ret = guard.insert(key.clone(), value.clone());
+        let peers = self.peers.read().unwrap().clone();
+        tokio::spawn(async {
+            let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+            let message = Message::Update::<K, V, C>((key, value));
+            let messages = vec![message];
+            let mut send_buf = Vec::new();
+            for peer in peers {
+                send_messages_to(&messages, &socket, &peer, &mut send_buf).await;
+            }
+        });
+        ret
+    }
+
     pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
         self,
         socket: UdpSocket,
@@ -75,6 +91,8 @@ impl<
         before_insert: FI,
         after_sync: FU,
     ) {
+        self.peers.write().unwrap().push(other_addr);
+
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
@@ -194,23 +212,7 @@ impl<
                 }
             }
             if !messages.is_empty() {
-                debug!("sending {} messages to {peer}", messages.len());
-                send_buf.clear();
-                for message in messages {
-                    let last_size = send_buf.len();
-                    message
-                        .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                        .unwrap();
-                    if send_buf.len() > BUFFER_SIZE {
-                        trace!("sending {} bytes to {peer}", last_size);
-                        socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
-                        trace!("sent {} bytes to {peer}", last_size);
-                        send_buf.drain(..last_size);
-                    }
-                }
-                trace!("sending last {} bytes to {peer}", send_buf.len());
-                socket.send_to(send_buf, &peer).await.unwrap();
-                trace!("sent last {} bytes to {peer}", send_buf.len());
+                send_messages_to(&messages, socket, &peer, send_buf).await;
             }
         }
         if !updates.is_empty() {
@@ -235,4 +237,29 @@ impl<
             }
         }
     }
+}
+
+async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
+    messages: &[Message<K, V, C>],
+    socket: &UdpSocket,
+    peer: &SocketAddr,
+    send_buf: &mut Vec<u8>,
+) {
+    debug!("sending {} messages to {peer}", messages.len());
+    send_buf.clear();
+    for message in messages {
+        let last_size = send_buf.len();
+        message
+            .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+            .unwrap();
+        if send_buf.len() > BUFFER_SIZE {
+            trace!("sending {} bytes to {peer}", last_size);
+            socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
+            trace!("sent {} bytes to {peer}", last_size);
+            send_buf.drain(..last_size);
+        }
+    }
+    trace!("sending last {} bytes to {peer}", send_buf.len());
+    socket.send_to(send_buf, &peer).await.unwrap();
+    trace!("sent last {} bytes to {peer}", send_buf.len());
 }
