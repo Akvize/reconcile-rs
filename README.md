@@ -4,7 +4,6 @@
 [![MIT licensed][mit-badge]][mit-url]
 [![Apache licensed][apache-badge]][apache-url]
 [![Build Status][actions-badge]][actions-url]
-[![Docs][docs-badge]][docs-url]
 
 [crates-badge]: https://img.shields.io/crates/v/reconcile.svg
 [crates-url]: https://crates.io/crates/reconcile
