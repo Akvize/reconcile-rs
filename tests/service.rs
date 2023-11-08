@@ -45,7 +45,7 @@ async fn test() {
     assert_eq!(service2.read().hash(&..), 0);
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(service1.read().hash(&..), start_hash);
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service2.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
