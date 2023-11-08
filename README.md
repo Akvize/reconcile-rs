@@ -1,5 +1,22 @@
 # reconcile-rs
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+[![Apache licensed][apache-badge]][apache-url]
+[![Build Status][actions-badge]][actions-url]
+[![Docs][docs-badge]][docs-url]
+
+[crates-badge]: https://img.shields.io/crates/v/reconcile.svg
+[crates-url]: https://crates.io/crates/reconcile
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-MIT
+[apache-badge]: https://img.shields.io/badge/license-APACHE-blue.svg
+[apache-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-APACHE
+[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml/badge.svg
+[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml
+
+[Docs](https://docs.rs/reconcile/0.1.0/reconcile/)
+
 This crate provides a key-data map structure `HTree` that can be used together
 with the reconciliation `Service`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
