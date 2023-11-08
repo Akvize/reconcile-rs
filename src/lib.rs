@@ -273,8 +273,8 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
     trace!("sent last {} bytes to {peer}", send_buf.len());
 }
 
-type MaybeTombstone<V> = Option<V>;
-type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
+pub type MaybeTombstone<V> = Option<V>;
+pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
 pub struct RemoveService<M: Map> {
     service: Service<M>,
@@ -305,7 +305,7 @@ impl<M: Map> Clone for RemoveService<M> {
 
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
         R: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
