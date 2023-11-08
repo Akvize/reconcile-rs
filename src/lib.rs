@@ -218,22 +218,17 @@ impl<
         let mut deserializer = Deserializer::from_slice(&recv_buf[..size], DefaultOptions::new());
         // read messages in buffer
         loop {
-            let res = Message::deserialize(&mut deserializer);
-            if let Err(kind) = res.as_ref() {
-                if let bincode::ErrorKind::Io(err) = kind.as_ref() {
-                    if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                        break;
+            match Message::deserialize(&mut deserializer) {
+                Err(ref kind) => {
+                    if let bincode::ErrorKind::Io(err) = kind.as_ref() {
+                        if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                            break;
+                        }
                     }
+                    panic!("failed to deserialize message: {:?}", kind);
                 }
-            }
-            let message: Message<K, V, C> = res.unwrap();
-            match message {
-                Message::ComparisonItem(segment) => {
-                    in_comparison.push(segment);
-                }
-                Message::Update(update) => {
-                    updates.push(update);
-                }
+                Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
+                Ok(Message::Update(update)) => updates.push(update),
             }
         }
         // handle messages
