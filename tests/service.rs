@@ -43,7 +43,12 @@ async fn test() {
     // check that tree2 is filled with the values from tree1
     assert_eq!(service1.read().hash(&..), start_hash);
     assert_eq!(service2.read().hash(&..), 0);
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if service2.read().hash(&..) == start_hash {
+            break;
+        }
+    }
     assert_eq!(service1.read().hash(&..), start_hash);
     assert_eq!(service2.read().hash(&..), start_hash);
 
@@ -54,7 +59,12 @@ async fn test() {
     let new_hash = service2.read().hash(&..);
     assert_ne!(new_hash, start_hash);
     assert_eq!(service1.read().hash(&..), start_hash);
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if service1.read().hash(&..) == new_hash {
+            break;
+        }
+    }
     assert_eq!(service1.read().hash(&..), new_hash);
     assert_eq!(service2.read().hash(&..), new_hash);
     assert_eq!(service2.read().get(&key), Some(&value));
@@ -72,7 +82,12 @@ async fn test() {
             service1.insert(key.clone(), value2.clone());
             service2.insert(key.clone(), value1.clone());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        for _ in 0..1000 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if service2.read().get(&key) == Some(&value2) {
+                break;
+            }
+        }
         assert_eq!(service2.read().get(&key), Some(&value2));
     }
 
