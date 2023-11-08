@@ -63,9 +63,7 @@ impl<
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
         R: Map<Key = K, Value = V, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>
-            + Send
-            + Sync,
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > Service<R>
 {
     pub fn insert(&self, key: K, value: V) -> Option<V> {
