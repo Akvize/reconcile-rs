@@ -1,3 +1,27 @@
+// Copyright 2023 Developers of the reconcile project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This [`module`](crate::hrtree) provides
+//! a [`Hash Range Tree`](HRTree), a key-value store
+//! based on a BTree structure.
+//!
+//! It is the core of the protocol, as it allows `O(log(n))` access,
+//! insertion and removal, as well as `O(log(n))` cumulated hash range-query.
+//! The latter property enables querying
+//! the cumulated (XORed) hash of all key-value pairs between two keys.
+
+//! Although we did come we the idea independently, it exactly matches a paper
+//! published on Arxiv in February 2023:
+//! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
+//!
+//! [`HRTree`] implements the [`Diffable`](crate::diff::Diffable)
+//! and [`HashRangeQueryable`](crate::diff::HashRangeQueryable) traits.
+
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

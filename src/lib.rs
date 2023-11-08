@@ -1,3 +1,22 @@
+// Copyright 2023 Developers of the reconcile project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This crate provides a key-data map structure [`HRTree`](hrtree::HRTree) that can be used together
+//! with the reconciliation [`Service`]. Different instances can talk together over
+//! UDP to efficiently reconcile their differences.
+
+//! All the data is available locally in all instances, and the user can be
+//! notified of changes to the collection with an insertion hook.
+
+//! The protocol allows finding a difference over millions of elements with a limited
+//! number of round-trips. It should also work well to populate an instance from
+//! scratch from other instances.
+
 pub mod diff;
 pub mod hrtree;
 pub mod map;
@@ -23,6 +42,11 @@ use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
+/// The main service of this crate.
+/// Wraps a key-value map
+/// and a collection of peer addresses.
+/// Exposes a run method to run on each instance
+/// to sync.
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
@@ -47,12 +71,17 @@ impl<M> Clone for Service<M> {
     }
 }
 
+/// Direct read access to the underlying [`Map`](map::Map).
 impl<M: Map> Service<M> {
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
     }
 }
 
+/// Provides wrappers for its underlying [`Map`](map::Map)'s
+/// classic insertion and deletion methods,
+/// as well as its main service method: [`run`].
+/// This struct does not handle removals. See [`RemoveService`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K: Serialize, V: Serialize, C: Serialize> {
     ComparisonItem(C),
@@ -276,6 +305,8 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
+/// A wrapper to the [`Service`] to provide a
+/// deletion-compatible API.
 pub struct RemoveService<M: Map> {
     service: Service<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,

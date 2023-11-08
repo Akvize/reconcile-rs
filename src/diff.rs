@@ -1,18 +1,45 @@
+// Copyright 2023 Developers of the reconcile project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This [`module`](crate::diff) provides two traits:
+//! [`HashRangeQueryable`] and [`Diffable`].
+
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 
+/// Provides the necessary methods to be able
+/// to efficiently determine and compare
+/// differences between two key stores:
+/// * [`hash`](HashRangeQueryable::hash),
+/// * [`insertion_position`](HashRangeQueryable::insertion_position),
+/// * [`key_at`](HashRangeQueryable::key_at),
+/// * [`len`](HashRangeQueryable::len)
+/// (with [`is_empty`](HashRangeQueryable::is_empty) as a default implementation).
+/// This is a low-level trait.
 pub trait HashRangeQueryable {
     type Key;
+    /// Hash of a given [`Key`](HashRangeQueryable::Key) range of type [`RangeBounds`].
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
+    /// Insertion position of a given [`Key`](HashRangeQueryable::Key).
     fn insertion_position(&self, key: &Self::Key) -> usize;
+    /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position.
     fn key_at(&self, index: usize) -> &Self::Key;
+    /// Number of [`Keys`](HashRangeQueryable::Key) in the collection.
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+/// A key [`range`](RangeBounds),
+/// along with its cumulated hash and size,
+/// representing the number of keys it contains.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HashSegment<K> {
     range: (Bound<K>, Bound<K>),
@@ -22,6 +49,23 @@ pub struct HashSegment<K> {
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
+/// Provides a middle-level API to enable two stores
+/// to communicate their differences,
+/// through rounds of communication.
+///
+/// Exposes two methods:
+///
+/// * [`start_diff`](Diffable::start_diff) to start a comparison
+/// by sending a collection of [`ComparisonItems`](Diffable::ComparisonItem),
+/// * [`diff_round`](Diffable::diff_round)
+/// in response to a received collection
+/// of [`ComparisonItems`](Diffable::ComparisonItem), to send
+///    * a collection of [`ComparisonItems`](Diffable::ComparisonItem)
+///    * a collection of [`DifferenceItems`](Diffable::DifferenceItem)
+///
+/// Provides a default implementation
+/// for any [`HashRangeQueryable`] type
+/// with [`cloneable`](Clone) keys.
 pub trait Diffable {
     type ComparisonItem;
     type DifferenceItem;
