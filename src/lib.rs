@@ -1,5 +1,5 @@
 pub mod diff;
-pub mod htree;
+pub mod hrtree;
 pub mod map;
 pub mod reconcilable;
 

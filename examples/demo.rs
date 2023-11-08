@@ -9,7 +9,7 @@ use tokio::net::UdpSocket;
 use tracing::info;
 
 use reconcile::diff::HashRangeQueryable;
-use reconcile::htree::HTree;
+use reconcile::hrtree::HRTree;
 use reconcile::Service;
 
 #[derive(Parser)]
@@ -44,7 +44,7 @@ async fn main() {
         let value = Alphanumeric.sample_string(&mut rng, 1000);
         key_values.push((key, (time, value)));
     }
-    let tree = HTree::from_iter(key_values);
+    let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
     let service = Service::new(tree);

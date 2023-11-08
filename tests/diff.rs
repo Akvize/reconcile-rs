@@ -2,7 +2,7 @@ use std::hash::Hash;
 use std::ops::Bound;
 
 use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
-use reconcile::htree::HTree;
+use reconcile::hrtree::HRTree;
 
 pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
     local: &D,
@@ -27,7 +27,7 @@ pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = Dif
     (local_diff_ranges, remote_diff_ranges)
 }
 
-pub fn reconcile<K, V>(local: &mut HTree<K, V>, remote: &mut HTree<K, V>)
+pub fn reconcile<K, V>(local: &mut HRTree<K, V>, remote: &mut HRTree<K, V>)
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
@@ -47,11 +47,11 @@ where
 
 #[test]
 fn test_compare() {
-    let tree1 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
-    let tree2 = HTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
-    let tree3 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
-    let tree4 = HTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
-    let tree5 = HTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+    let tree1 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+    let tree2 = HRTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+    let tree3 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+    let tree4 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+    let tree5 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
     assert_eq!(tree1.hash(&..), tree1.hash(&..));
     assert_eq!(tree1.hash(&..), tree2.hash(&..));
