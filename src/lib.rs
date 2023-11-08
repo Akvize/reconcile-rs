@@ -3,6 +3,7 @@ pub mod hrtree;
 pub mod map;
 pub mod reconcilable;
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::SocketAddr;
@@ -10,6 +11,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
+use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
@@ -101,12 +103,11 @@ impl<
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
+    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(
         self,
         socket: UdpSocket,
         other_addr: SocketAddr,
         before_insert: FI,
-        after_sync: FU,
     ) {
         self.peers.write().unwrap().push(other_addr);
 
@@ -138,7 +139,6 @@ impl<
                         (size, peer),
                         &mut send_buf,
                         &before_insert,
-                        &after_sync,
                     )
                     .await;
                 }
@@ -166,14 +166,13 @@ impl<
         socket.send_to(send_buf, &other_addr).await.unwrap();
     }
 
-    async fn handle_messages<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
+    async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(
         &self,
         socket: &UdpSocket,
         recv_buf: &[u8],
         (size, peer): (usize, SocketAddr),
         send_buf: &mut Vec<u8>,
         before_insert: &FI,
-        after_sync: &FU,
     ) {
         if size == recv_buf.len() {
             warn!("Buffer too small for message, discarded");
@@ -234,23 +233,16 @@ impl<
         }
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
-            let mut changed = false;
-            {
-                let mut guard = self.map.write().unwrap();
-                for (k, v) in updates {
-                    let local_v = guard.get(&k);
-                    let do_change = local_v
-                        .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
-                        .unwrap_or(true);
-                    if do_change {
-                        before_insert(&k, &v, local_v);
-                        guard.insert(k, v);
-                        changed = true;
-                    }
+            let mut guard = self.map.write().unwrap();
+            for (k, v) in updates {
+                let local_v = guard.get(&k);
+                let do_change = local_v
+                    .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
+                    .unwrap_or(true);
+                if do_change {
+                    before_insert(&k, &v, local_v);
+                    guard.insert(k, v);
                 }
-            }
-            if changed {
-                after_sync(self);
             }
         }
     }
@@ -279,4 +271,99 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
     trace!("sending last {} bytes to {peer}", send_buf.len());
     socket.send_to(send_buf, &peer).await.unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
+}
+
+pub type MaybeTombstone<V> = Option<V>;
+pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
+
+pub struct RemoveService<M: Map> {
+    service: Service<M>,
+    tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
+}
+
+impl<M: Map> RemoveService<M> {
+    pub fn new(map: M) -> Self {
+        RemoveService {
+            service: Service::new(map),
+            tombstones: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.service.map.read().unwrap()
+    }
+}
+
+impl<M: Map> Clone for RemoveService<M> {
+    fn clone(&self) -> Self {
+        RemoveService {
+            service: self.service.clone(),
+            tombstones: self.tombstones.clone(),
+        }
+    }
+}
+
+impl<
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
+        D: Debug,
+        R: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+    > RemoveService<R>
+{
+    pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
+        let mut guard = self.tombstones.write().unwrap();
+        guard.remove(&key);
+
+        let ret = self.service.insert(key, (timestamp, Some(value)));
+        ret.and_then(|t| t.1)
+    }
+
+    pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
+        let mut guard = self.tombstones.write().unwrap();
+        for (k, _, _) in key_values {
+            guard.remove(k);
+        }
+
+        self.service.insert_bulk(
+            &key_values
+                .iter()
+                .map(|(k, v, t)| (k.clone(), (*t, Some(v.clone()))))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
+        let mut guard = self.tombstones.write().unwrap();
+        guard.insert(key.clone(), timestamp);
+
+        let ret = self.service.insert(key.clone(), (timestamp, None));
+        ret.and_then(|t| t.1)
+    }
+
+    pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
+        let mut guard = self.tombstones.write().unwrap();
+        for (k, t) in keys {
+            guard.insert(k.clone(), *t);
+        }
+
+        self.service.insert_bulk(
+            &keys
+                .iter()
+                .map(|(k, t)| (k.clone(), (*t, None)))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    pub async fn run<
+        FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
+    >(
+        self,
+        socket: UdpSocket,
+        other_addr: SocketAddr,
+        before_insert: FI,
+    ) {
+        self.service.run(socket, other_addr, before_insert).await
+    }
 }

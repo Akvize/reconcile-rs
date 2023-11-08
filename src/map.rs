@@ -14,6 +14,7 @@ pub trait Map {
     ) -> Vec<(Self::Key, Self::Value)>;
     fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value>;
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
+    fn remove(&mut self, key: &Self::Key) -> Option<Self::Value>;
 }
 
 impl<K, V> Map for HRTree<K, V>
@@ -44,5 +45,9 @@ where
 
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value> {
         self.insert(key, value)
+    }
+
+    fn remove(&mut self, key: &Self::Key) -> Option<Self::Value> {
+        self.remove(key)
     }
 }

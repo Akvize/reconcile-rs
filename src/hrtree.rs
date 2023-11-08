@@ -5,6 +5,7 @@ use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
 use range_cmp::{RangeComparable, RangeOrdering};
+use tracing::trace;
 
 use crate::diff::HashRangeQueryable;
 
@@ -355,6 +356,10 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
             self.root.children = Some(children);
             self.root.refresh_hash_size();
         }
+        trace!(
+            "Updated state after insertion; global hash is now {}",
+            self.root.tree_hash
+        );
         ret
     }
 
@@ -420,7 +425,12 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
                 }
             }
         }
-        aux(&mut self.root, key).1
+        let ret = aux(&mut self.root, key).1;
+        trace!(
+            "Updated state after removal; global hash is now {}",
+            self.root.tree_hash
+        );
+        ret
     }
 
     pub fn check_invariants(&self) {
