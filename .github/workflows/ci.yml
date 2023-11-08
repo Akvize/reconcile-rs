@@ -14,7 +14,6 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
   RUSTDOCFLAGS: -Dwarnings
-  IMAGE_NAME: rust-api-template
 
 jobs:
   lint-and-test:
