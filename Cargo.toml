@@ -2,6 +2,13 @@
 name = "reconcile"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A reconciliation service to sync a key-value map over multiple instances"
+repository = "https://github.com/Akvize/reconcile-rs"
+exclude = [
+    "pre-commit",
+    "CONTRIBUTING.md",
+]
 
 [dependencies]
 arrayvec = "0.7.4"
