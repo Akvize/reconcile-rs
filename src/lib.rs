@@ -1,3 +1,5 @@
+pub mod diff;
+pub mod htree;
 pub mod map;
 pub mod reconcilable;
 
@@ -13,8 +15,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use diff::Diffable;
-
+use crate::diff::Diffable;
 use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 

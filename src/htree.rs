@@ -4,8 +4,9 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
-use diff::HashRangeQueryable;
 use range_cmp::{RangeComparable, RangeOrdering};
+
+use crate::diff::HashRangeQueryable;
 
 pub fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -811,8 +812,9 @@ impl<K: Ord, V> HTree<K, V> {
 mod tests {
     use std::ops::RangeBounds;
 
-    use diff::{Diffable, HashRangeQueryable};
     use rand::{seq::SliceRandom, Rng, SeedableRng};
+
+    use crate::diff::{Diffable, HashRangeQueryable};
 
     use super::HTree;
 

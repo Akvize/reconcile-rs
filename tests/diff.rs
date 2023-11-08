@@ -1,8 +1,8 @@
 use std::hash::Hash;
 use std::ops::Bound;
 
-use diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
-use htree::HTree;
+use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
+use reconcile::htree::HTree;
 
 pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
     local: &D,

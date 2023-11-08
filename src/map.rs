@@ -1,7 +1,7 @@
 use core::hash::Hash;
 
-use diff::DiffRange;
-use htree::HTree;
+use crate::diff::DiffRange;
+use crate::htree::HTree;
 
 pub trait Map {
     type Key;
