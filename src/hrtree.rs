@@ -238,19 +238,19 @@ impl<K, V> Node<K, V> {
     }
 }
 
-pub struct HTree<K, V> {
+pub struct HRTree<K, V> {
     root: Box<Node<K, V>>,
 }
 
-impl<K, V> Default for HTree<K, V> {
+impl<K, V> Default for HRTree<K, V> {
     fn default() -> Self {
-        HTree {
+        HRTree {
             root: Box::new(Node::new()),
         }
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HTree<K, V> {
+impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
     pub fn new() -> Self {
         Default::default()
     }
@@ -491,20 +491,20 @@ impl<K: Hash + Ord, V: Hash> HTree<K, V> {
     }
 }
 
-impl<K, V> PartialEq for HTree<K, V> {
+impl<K, V> PartialEq for HRTree<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root.tree_hash == other.root.tree_hash
     }
 }
 
-impl<K, V> Eq for HTree<K, V> {}
+impl<K, V> Eq for HRTree<K, V> {}
 
-impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HTree<K, V> {
+impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HRTree<K, V> {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = (K, V)>,
     {
-        let mut tree = HTree::new();
+        let mut tree = HRTree::new();
         let mut items: Vec<_> = iter.into_iter().collect();
         items.sort_by(|a, b| a.0.cmp(&b.0));
         for (k, v) in items {
@@ -552,7 +552,7 @@ impl<K, V> Iterator for IntoIter<K, V> {
     }
 }
 
-impl<K, V> IntoIterator for HTree<K, V> {
+impl<K, V> IntoIterator for HRTree<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
@@ -592,7 +592,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
+impl<'a, K, V> IntoIterator for &'a HRTree<K, V> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
@@ -602,19 +602,19 @@ impl<'a, K, V> IntoIterator for &'a HTree<K, V> {
     }
 }
 
-impl<K, V> HTree<K, V> {
+impl<K, V> HRTree<K, V> {
     pub fn iter(&self) -> Iter<K, V> {
         self.into_iter()
     }
 }
 
-impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HTree<K, V> {
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HRTree<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HTree<K, V> {
+impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
     type Key = K;
     fn hash<R: RangeBounds<K>>(&self, range: &R) -> u64 {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
@@ -769,7 +769,7 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
     }
 }
 
-impl<K: Ord, V> HTree<K, V> {
+impl<K: Ord, V> HRTree<K, V> {
     pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();
@@ -816,12 +816,12 @@ mod tests {
 
     use crate::diff::{Diffable, HashRangeQueryable};
 
-    use super::HTree;
+    use super::HRTree;
 
     #[test]
     fn test_simple() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut tree: HTree<u64, u64> = HTree::new();
+        let mut tree: HRTree<u64, u64> = HRTree::new();
         for _ in 1..=100 {
             tree.insert(rng.gen(), rng.gen());
             tree.check_invariants();
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn test_hash() {
         // empty
-        let mut tree = HTree::new();
+        let mut tree = HRTree::new();
         assert_eq!(tree.hash(&..), 0);
         tree.check_invariants();
 
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut tree1 = HTree::new();
+        let mut tree1 = HRTree::new();
         let mut key_values = Vec::new();
 
         let mut expected_hash = 0;
@@ -886,7 +886,7 @@ mod tests {
         // in the tree, the items should now be sorted
         key_values.sort();
 
-        let mut tree2 = HTree::from_iter(key_values.iter().copied());
+        let mut tree2 = HRTree::from_iter(key_values.iter().copied());
         assert_eq!(tree1, tree2);
 
         // check for partial ranges
@@ -920,7 +920,7 @@ mod tests {
             SI: std::slice::SliceIndex<[(u64, u64)], Output = [(u64, u64)]>,
         >(
             key_values: &Vec<(u64, u64)>,
-            tree: &HTree<u64, u64>,
+            tree: &HRTree<u64, u64>,
             range: R,
             slice_index: SI,
         ) {
@@ -991,7 +991,7 @@ mod tests {
             let value: u64 = rng.gen();
             key_values.push((key, value));
         }
-        let tree = HTree::from_iter(key_values.clone());
+        let tree = HRTree::from_iter(key_values.clone());
         key_values.sort();
         assert_eq!(
             tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),

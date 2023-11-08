@@ -9,7 +9,7 @@ use rand::{
 use tokio::net::UdpSocket;
 
 use reconcile::diff::HashRangeQueryable;
-use reconcile::htree::HTree;
+use reconcile::hrtree::HRTree;
 use reconcile::Service;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -28,11 +28,11 @@ async fn test() {
         let value: String = Alphanumeric.sample_string(&mut rng, 100);
         key_values.push((key, (time, value)));
     }
-    let tree1 = HTree::from_iter(key_values.into_iter());
+    let tree1 = HRTree::from_iter(key_values.into_iter());
     let start_hash = tree1.hash(&..);
 
     // empty tree2
-    let tree2: HTree<String, (DateTime<Utc>, String)> = HTree::new();
+    let tree2: HRTree<String, (DateTime<Utc>, String)> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
     let service1 = Service::new(tree1);

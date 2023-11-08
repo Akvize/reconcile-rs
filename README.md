@@ -16,7 +16,7 @@
 
 [Docs](https://docs.rs/reconcile/latest/reconcile/)
 
-This crate provides a key-data map structure `HTree` that can be used together
+This crate provides a key-data map structure `HRTree` that can be used together
 with the reconciliation `Service`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
 
@@ -27,9 +27,9 @@ The protocol allows finding a difference over millions of elements with a limite
 number of round-trips. It should also work well to populate an instance from
 scratch from other instances.
 
-## HTree
+## HRTree
 
-The core of the protocol is made possible by the `HTree` data structure, which
+The core of the protocol is made possible by the `HRTree` data structure, which
 allows `O(log(n))` access, insertion and removal, as well as `O(log(n))`
 cumulated hash range-query. The latter property enables querying
 the cumulated (XORed) hash of all key-value pairs between two keys.
@@ -40,6 +40,6 @@ Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 
 ## Service
 
-The service exploits the properties of `HTree` to conduct a binary-search-like
+The service exploits the properties of `HRTree` to conduct a binary-search-like
 search in the collections of the two instances. Once difference are found, the
 corresponding key-value pairs are exchanged and conflicts are resolved.

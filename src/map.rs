@@ -1,7 +1,7 @@
 use core::hash::Hash;
 
 use crate::diff::DiffRange;
-use crate::htree::HTree;
+use crate::hrtree::HRTree;
 
 pub trait Map {
     type Key;
@@ -16,7 +16,7 @@ pub trait Map {
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
 }
 
-impl<K, V> Map for HTree<K, V>
+impl<K, V> Map for HRTree<K, V>
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
