@@ -37,15 +37,20 @@ async fn test() {
     // start reconciliation services for tree1 and tree2
     let service1 = Service::new(tree1);
     let service2 = Service::new(tree2);
-    let task1 = tokio::spawn(service1.clone().run(socket1, addr2, |_, _, _| {}, |_| {}));
     let task2 = tokio::spawn(service2.clone().run(socket2, addr1, |_, _, _| {}, |_| {}));
+    assert_eq!(service2.read().hash(&..), 0);
+    let task1 = tokio::spawn(service1.clone().run(socket1, addr2, |_, _, _| {}, |_| {}));
+    assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if service2.read().hash(&..) == start_hash {
+            break;
+        }
+    }
     assert_eq!(service1.read().hash(&..), start_hash);
-    assert_eq!(service2.read().hash(&..), 0);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(service1.read().hash(&..), start_hash);
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service2.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
@@ -54,7 +59,12 @@ async fn test() {
     let new_hash = service2.read().hash(&..);
     assert_ne!(new_hash, start_hash);
     assert_eq!(service1.read().hash(&..), start_hash);
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if service1.read().hash(&..) == new_hash {
+            break;
+        }
+    }
     assert_eq!(service1.read().hash(&..), new_hash);
     assert_eq!(service2.read().hash(&..), new_hash);
     assert_eq!(service2.read().get(&key), Some(&value));
@@ -72,7 +82,12 @@ async fn test() {
             service1.insert(key.clone(), value2.clone());
             service2.insert(key.clone(), value1.clone());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        for _ in 0..1000 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if service2.read().get(&key) == Some(&value2) {
+                break;
+            }
+        }
         assert_eq!(service2.read().get(&key), Some(&value2));
     }
 
