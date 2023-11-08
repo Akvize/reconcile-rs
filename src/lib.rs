@@ -101,12 +101,11 @@ impl<
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
+    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(
         self,
         socket: UdpSocket,
         other_addr: SocketAddr,
         before_insert: FI,
-        after_sync: FU,
     ) {
         self.peers.write().unwrap().push(other_addr);
 
@@ -138,7 +137,6 @@ impl<
                         (size, peer),
                         &mut send_buf,
                         &before_insert,
-                        &after_sync,
                     )
                     .await;
                 }
@@ -166,14 +164,13 @@ impl<
         socket.send_to(send_buf, &other_addr).await.unwrap();
     }
 
-    async fn handle_messages<FI: Fn(&K, &V, Option<&V>), FU: Fn(&Self)>(
+    async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(
         &self,
         socket: &UdpSocket,
         recv_buf: &[u8],
         (size, peer): (usize, SocketAddr),
         send_buf: &mut Vec<u8>,
         before_insert: &FI,
-        after_sync: &FU,
     ) {
         if size == recv_buf.len() {
             warn!("Buffer too small for message, discarded");
@@ -234,23 +231,16 @@ impl<
         }
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
-            let mut changed = false;
-            {
-                let mut guard = self.map.write().unwrap();
-                for (k, v) in updates {
-                    let local_v = guard.get(&k);
-                    let do_change = local_v
-                        .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
-                        .unwrap_or(true);
-                    if do_change {
-                        before_insert(&k, &v, local_v);
-                        guard.insert(k, v);
-                        changed = true;
-                    }
+            let mut guard = self.map.write().unwrap();
+            for (k, v) in updates {
+                let local_v = guard.get(&k);
+                let do_change = local_v
+                    .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
+                    .unwrap_or(true);
+                if do_change {
+                    before_insert(&k, &v, local_v);
+                    guard.insert(k, v);
                 }
-            }
-            if changed {
-                after_sync(self);
             }
         }
     }

@@ -48,17 +48,5 @@ async fn main() {
     info!("Global hash is {}", tree.hash(&..));
 
     let service = Service::new(tree);
-    service
-        .run(
-            socket,
-            other_addr,
-            |_k, _v, _old_v| (),
-            |service| {
-                info!(
-                    "Updated state; global hash is now {}",
-                    service.read().hash(&..)
-                )
-            },
-        )
-        .await;
+    service.run(socket, other_addr, |_k, _v, _old_v| ()).await;
 }
