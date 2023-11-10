@@ -20,7 +20,7 @@ This crate provides a key-data map structure `HRTree` that can be used together
 with the reconciliation `Service`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
 
-All the data is available locally in all instances, and the user can be
+All the data is available locally on all instances, and the user can be
 notified of changes to the collection with an insertion hook.
 
 The protocol allows finding a difference over millions of elements with a limited
@@ -29,7 +29,7 @@ scratch from other instances.
 
 ## HRTree
 
-The core of the protocol is made possible by the `HRTree` data structure, which
+The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
 allows `O(log(n))` access, insertion and removal, as well as `O(log(n))`
 cumulated hash range-query. The latter property enables querying
 the cumulated (XORed) hash of all key-value pairs between two keys.
