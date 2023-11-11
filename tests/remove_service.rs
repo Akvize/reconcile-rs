@@ -13,8 +13,8 @@ use reconcile::{diff::HashRangeQueryable, DatedMaybeTombstone, RemoveService};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
-    let addr1: SocketAddr = "127.0.0.42:8080".parse().unwrap();
-    let addr2: SocketAddr = "127.0.0.43:8080".parse().unwrap();
+    let addr1: SocketAddr = "127.0.0.44:8080".parse().unwrap();
+    let addr2: SocketAddr = "127.0.0.45:8080".parse().unwrap();
     let socket1 = UdpSocket::bind(addr1).await.unwrap();
     let socket2 = UdpSocket::bind(addr2).await.unwrap();
 
