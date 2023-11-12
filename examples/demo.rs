@@ -8,9 +8,7 @@ use rand::{
 use tokio::net::UdpSocket;
 use tracing::info;
 
-use reconcile::diff::HashRangeQueryable;
-use reconcile::hrtree::HRTree;
-use reconcile::Service;
+use reconcile::{HRTree, HashRangeQueryable, Service};
 
 #[derive(Parser)]
 struct Args {

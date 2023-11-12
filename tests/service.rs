@@ -8,9 +8,7 @@ use rand::{
 };
 use tokio::net::UdpSocket;
 
-use reconcile::diff::HashRangeQueryable;
-use reconcile::hrtree::HRTree;
-use reconcile::Service;
+use reconcile::{HRTree, HashRangeQueryable, Service};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {

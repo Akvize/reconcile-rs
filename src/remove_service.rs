@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 
 use crate::diff::Diffable;
 use crate::map::Map;
-use crate::Service;
+use crate::service::Service;
 
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
@@ -30,7 +30,7 @@ impl<M: Map> RemoveService<M> {
     }
 
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.map.read().unwrap()
+        self.service.read()
     }
 }
 
