@@ -18,6 +18,7 @@
 //! scratch from other instances.
 
 pub mod diff;
+pub mod gen_ip;
 pub mod hrtree;
 pub mod map;
 pub mod reconcilable;
