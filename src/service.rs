@@ -6,6 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Provides the [`Service`], a wrapper to a key-value map
+//! to enable reconciliation between different instances over a network.
+
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;

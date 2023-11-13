@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Provides the [`RemoveService`], a wrapper to the [`Service`] that handles removals.
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
