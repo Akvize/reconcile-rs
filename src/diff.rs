@@ -28,7 +28,7 @@ pub trait HashRangeQueryable {
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
     /// Position of the given key in the collection, if it exists, or position where it would be after insertion otherwise
     fn insertion_position(&self, key: &Self::Key) -> usize;
-    /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position.
+    /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position. Panics if the key is not in the collection.
     fn key_at(&self, index: usize) -> &Self::Key;
     /// Number of elements in the collection.
     fn len(&self) -> usize;
