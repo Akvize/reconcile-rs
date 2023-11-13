@@ -22,9 +22,9 @@ pub struct RemoveService<M: Map> {
 }
 
 impl<M: Map> RemoveService<M> {
-    pub fn new(map: M) -> Self {
+    pub fn new(map: M, socket: UdpSocket) -> Self {
         RemoveService {
-            service: Service::new(map),
+            service: Service::new(map, socket),
             tombstones: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -100,10 +100,9 @@ impl<
         FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
     >(
         self,
-        socket: UdpSocket,
         other_addr: SocketAddr,
         before_insert: FI,
     ) {
-        self.service.run(socket, other_addr, before_insert).await
+        self.service.run(other_addr, before_insert).await
     }
 }

@@ -28,13 +28,15 @@ const BUFFER_SIZE: usize = 65507;
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
+    socket: Arc<UdpSocket>,
     peers: Arc<RwLock<Vec<SocketAddr>>>,
 }
 
 impl<M> Service<M> {
-    pub fn new(map: M) -> Self {
+    pub fn new(map: M, socket: UdpSocket) -> Self {
         Service {
             map: Arc::new(RwLock::new(map)),
+            socket: Arc::new(socket),
             peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -44,6 +46,7 @@ impl<M> Clone for Service<M> {
     fn clone(&self) -> Self {
         Service {
             map: self.map.clone(),
+            socket: self.socket.clone(),
             peers: self.peers.clone(),
         }
     }
@@ -80,13 +83,13 @@ impl<
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
         let peers = self.peers.read().unwrap().clone();
-        tokio::spawn(async {
-            let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let socket = Arc::clone(&self.socket);
+        tokio::spawn(async move {
             let message = Message::Update::<K, V, C>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for peer in peers {
-                send_messages_to(&messages, &socket, &peer, &mut send_buf).await;
+                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
         ret
@@ -102,21 +105,16 @@ impl<
             .iter()
             .map(|kv| Message::Update::<K, V, C>(kv.clone()))
             .collect();
+        let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
-            let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
             let mut send_buf = Vec::new();
             for peer in peers {
-                send_messages_to(&messages, &socket, &peer, &mut send_buf).await;
+                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(
-        self,
-        socket: UdpSocket,
-        other_addr: SocketAddr,
-        before_insert: FI,
-    ) {
+    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(self, other_addr: SocketAddr, before_insert: FI) {
         self.peers.write().unwrap().push(other_addr);
 
         // extra byte that easily detect when the buffer is too small
@@ -124,16 +122,14 @@ impl<
         let mut send_buf = Vec::new();
         let recv_timeout = Duration::from_millis(100);
         // start the protocol at the beginning
-        self.start_diff_protocol(&socket, other_addr, &mut send_buf)
-            .await;
+        self.start_diff_protocol(other_addr, &mut send_buf).await;
         // infinite loop
         loop {
-            match timeout(recv_timeout, socket.recv_from(&mut recv_buf)).await {
+            match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
-                    self.start_diff_protocol(&socket, other_addr, &mut send_buf)
-                        .await;
+                    self.start_diff_protocol(other_addr, &mut send_buf).await;
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -141,25 +137,14 @@ impl<
                 }
                 Ok(Ok((size, peer))) => {
                     // received datagram
-                    self.handle_messages(
-                        &socket,
-                        &recv_buf,
-                        (size, peer),
-                        &mut send_buf,
-                        &before_insert,
-                    )
-                    .await;
+                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
+                        .await;
                 }
             }
         }
     }
 
-    async fn start_diff_protocol(
-        &self,
-        socket: &UdpSocket,
-        other_addr: SocketAddr,
-        send_buf: &mut Vec<u8>,
-    ) {
+    async fn start_diff_protocol(&self, other_addr: SocketAddr, send_buf: &mut Vec<u8>) {
         let segments = {
             let guard = self.map.read().unwrap();
             guard.start_diff()
@@ -171,12 +156,11 @@ impl<
                 .unwrap();
         }
         trace!("start_diff {} bytes to {other_addr}", send_buf.len());
-        socket.send_to(send_buf, &other_addr).await.unwrap();
+        self.socket.send_to(send_buf, &other_addr).await.unwrap();
     }
 
     async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(
         &self,
-        socket: &UdpSocket,
         recv_buf: &[u8],
         (size, peer): (usize, SocketAddr),
         send_buf: &mut Vec<u8>,
@@ -231,7 +215,7 @@ impl<
                 }
             }
             if !messages.is_empty() {
-                send_messages_to(&messages, socket, &peer, send_buf).await;
+                send_messages_to(&messages, Arc::clone(&self.socket), &peer, send_buf).await;
             }
         }
         if !updates.is_empty() {
@@ -253,7 +237,7 @@ impl<
 
 async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
     messages: &[Message<K, V, C>],
-    socket: &UdpSocket,
+    socket: Arc<UdpSocket>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
