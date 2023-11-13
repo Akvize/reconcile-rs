@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use clap::Parser;
+use ipnet::IpNet;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
@@ -13,6 +14,7 @@ use reconcile::{HRTree, HashRangeQueryable, Service};
 #[derive(Parser)]
 struct Args {
     listen_addr: SocketAddr,
+    peer_net: IpNet,
     other_addr: SocketAddr,
     elements: usize,
     #[arg(short, long, default_value_t = tracing::Level::INFO)]
@@ -23,6 +25,7 @@ struct Args {
 async fn main() {
     let Args {
         listen_addr,
+        peer_net,
         other_addr,
         elements,
         log_level,
@@ -45,6 +48,6 @@ async fn main() {
     let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let service = Service::new(tree, socket).with_seed(other_addr);
+    let service = Service::new(tree, socket, peer_net).with_seed(other_addr);
     service.run(|_k, _v, _old_v| ()).await;
 }

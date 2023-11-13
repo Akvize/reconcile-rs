@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
+use ipnet::IpNet;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
@@ -29,15 +30,17 @@ const BUFFER_SIZE: usize = 65507;
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
     socket: Arc<UdpSocket>,
+    peer_net: IpNet,
     peers: Arc<RwLock<Vec<SocketAddr>>>,
 }
 
 impl<M> Service<M> {
-    pub fn new(map: M, socket: UdpSocket) -> Self {
+    pub fn new(map: M, socket: UdpSocket, peer_net: IpNet) -> Self {
         Service {
             map: Arc::new(RwLock::new(map)),
             socket: Arc::new(socket),
             peers: Arc::new(RwLock::new(Vec::new())),
+            peer_net,
         }
     }
 
@@ -53,6 +56,7 @@ impl<M> Clone for Service<M> {
             map: self.map.clone(),
             socket: self.socket.clone(),
             peers: self.peers.clone(),
+            peer_net: self.peer_net,
         }
     }
 }

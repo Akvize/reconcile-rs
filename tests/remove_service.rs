@@ -12,6 +12,8 @@ use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, RemoveService};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+
     let addr1: SocketAddr = "127.0.0.44:8080".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.45:8080".parse().unwrap();
     let socket1 = UdpSocket::bind(addr1).await.unwrap();
@@ -33,8 +35,8 @@ async fn test() {
     let tree2: HRTree<String, DatedMaybeTombstone<String>> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = RemoveService::new(tree1, socket1).with_seed(addr2);
-    let service2 = RemoveService::new(tree2, socket2).with_seed(addr1);
+    let service1 = RemoveService::new(tree1, socket1, peer_net).with_seed(addr2);
+    let service2 = RemoveService::new(tree2, socket2, peer_net).with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run(|_, _, _| {}));
     assert_eq!(service2.read().hash(&..), 0);
     let task1 = tokio::spawn(service1.clone().run(|_, _, _| {}));

@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::net::UdpSocket;
 
@@ -22,9 +23,9 @@ pub struct RemoveService<M: Map> {
 }
 
 impl<M: Map> RemoveService<M> {
-    pub fn new(map: M, socket: UdpSocket) -> Self {
+    pub fn new(map: M, socket: UdpSocket, peer_net: IpNet) -> Self {
         RemoveService {
-            service: Service::new(map, socket),
+            service: Service::new(map, socket, peer_net),
             tombstones: Arc::new(RwLock::new(HashMap::new())),
         }
     }
