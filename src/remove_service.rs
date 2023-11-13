@@ -53,9 +53,9 @@ impl<
         V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
-        R: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
+        M: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > RemoveService<R>
+    > RemoveService<M>
 {
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let mut guard = self.tombstones.write().unwrap();

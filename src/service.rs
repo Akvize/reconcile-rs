@@ -91,9 +91,9 @@ impl<
         V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
-        R: Map<Key = K, Value = V, DifferenceItem = D>
+        M: Map<Key = K, Value = V, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > Service<R>
+    > Service<M>
 {
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
