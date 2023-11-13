@@ -20,7 +20,7 @@
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
 //! [`HRTree`] implements the [`Diffable`](crate::diff::Diffable)
-//! and [`HashRangeQueryable`](crate::diff::HashRangeQueryable) traits.
+//! and [`HashRangeQueryable`] traits.
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
