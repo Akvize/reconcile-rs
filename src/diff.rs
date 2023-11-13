@@ -47,27 +47,19 @@ pub struct HashSegment<K> {
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
-/// Provides a middle-level API to enable two stores
-/// to communicate their differences,
-/// through rounds of communication.
-///
-/// Exposes two methods:
-///
-/// * [`start_diff`](Diffable::start_diff) to start a comparison
-/// by sending a collection of [`ComparisonItems`](Diffable::ComparisonItem),
-/// * [`diff_round`](Diffable::diff_round)
-/// in response to a received collection
-/// of [`ComparisonItems`](Diffable::ComparisonItem), to send
-///    * a collection of [`ComparisonItems`](Diffable::ComparisonItem)
-///    * a collection of [`DifferenceItems`](Diffable::DifferenceItem)
-///
-/// Provides a default implementation
-/// for any [`HashRangeQueryable`] type
-/// with [`cloneable`](Clone) keys.
+/// Exposes two methods that can be used to implement a reconciliation protocol over a network.
 pub trait Diffable {
     type ComparisonItem;
     type DifferenceItem;
+    /// Returns a representation of all the elements in the collection
+    /// that can be sent to `diff_round`; for instance, an accumulated hash of the elements
     fn start_diff(&self) -> Vec<Self::ComparisonItem>;
+    /// Refines set differences (typically, a range of keys along with the accumulated hash) into smaller sets.
+    ///
+    /// When sets are determined to contains the same elements, they can be remove from the output.
+    /// When sets are determinied to only contains differing elements,
+    /// the corresponding elements are listed as `differences`.
+    /// In other cases, the set must be refined and sent back to the peer for further analysis.
     fn diff_round(
         &self,
         in_comparison: Vec<Self::ComparisonItem>,
