@@ -37,9 +37,7 @@ pub trait HashRangeQueryable {
     }
 }
 
-/// A key [`range`](RangeBounds),
-/// along with its cumulated hash and size,
-/// representing the number of keys it contains.
+/// Represents the elements of the collections in the given key range. The `hash` and `size` fields allow testing whether the two segments represent the same elements.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HashSegment<K> {
     range: (Bound<K>, Bound<K>),
