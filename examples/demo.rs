@@ -1,22 +1,23 @@
-use std::net::SocketAddr;
+use std::net::IpAddr;
 
 use clap::Parser;
+use ipnet::IpNet;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
-use tokio::net::UdpSocket;
 use tracing::info;
 
-use reconcile::diff::HashRangeQueryable;
-use reconcile::hrtree::HRTree;
-use reconcile::Service;
+use reconcile::{HRTree, HashRangeQueryable, Service};
 
 #[derive(Parser)]
 struct Args {
-    listen_addr: SocketAddr,
-    other_addr: SocketAddr,
+    port: u16,
+    listen_addr: IpAddr,
+    peer_net: IpNet,
     elements: usize,
+    #[arg(short, long)]
+    seed: Vec<IpAddr>,
     #[arg(short, long, default_value_t = tracing::Level::INFO)]
     log_level: tracing::Level,
 }
@@ -24,16 +25,15 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let Args {
+        port,
         listen_addr,
-        other_addr,
+        peer_net,
+        seed,
         elements,
         log_level,
     } = Args::parse();
 
     tracing_subscriber::fmt().with_max_level(log_level).init();
-
-    let socket = UdpSocket::bind(listen_addr).await.unwrap();
-    info!("Listening on: {}", socket.local_addr().unwrap());
 
     // build collection
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -47,6 +47,9 @@ async fn main() {
     let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let service = Service::new(tree);
-    service.run(socket, other_addr, |_k, _v, _old_v| ()).await;
+    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+    for seed in seed {
+        service = service.with_seed(seed);
+    }
+    service.run(|_k, _v, _old_v| ()).await;
 }
