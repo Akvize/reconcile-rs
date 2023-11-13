@@ -42,11 +42,10 @@ use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
-/// The main service of this crate.
-/// Wraps a key-value map
-/// and a collection of peer addresses.
-/// Exposes a run method to run on each instance
-/// to sync.
+/// Wraps a key-value map to reconciliate
+/// between different instances over a network.
+/// To do so, the service also wraps a collection of addresses,
+/// representing the other instances.
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
