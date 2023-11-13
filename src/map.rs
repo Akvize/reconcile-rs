@@ -24,7 +24,7 @@ pub trait Map {
         &self,
         diff_ranges: Vec<Self::DifferenceItem>,
     ) -> Vec<(Self::Key, Self::Value)>;
-    /// Maybe get the value associated with the given key.
+    /// Get the value associated with the given key, if it exists.
     fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value>;
     /// Insert a value at the given key, return the pre-existing value if applicable.
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
