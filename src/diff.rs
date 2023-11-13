@@ -1,18 +1,43 @@
+// Copyright 2023 Developers of the reconcile project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This [`module`](crate::diff) provides two traits:
+//! [`HashRangeQueryable`] and [`Diffable`].
+
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 
+/// Provides the necessary methods to be able
+/// to efficiently determine and compare
+/// differences between two key stores:
+/// * [`hash`](HashRangeQueryable::hash),
+/// * [`insertion_position`](HashRangeQueryable::insertion_position),
+/// * [`key_at`](HashRangeQueryable::key_at),
+/// * [`len`](HashRangeQueryable::len)
+/// (with [`is_empty`](HashRangeQueryable::is_empty) as a default implementation).
+/// This is a low-level trait.
 pub trait HashRangeQueryable {
     type Key;
+    /// Cumulated hash over a given range of keys. For instance, it could be the XOR of all the hashes of the elements in the range.
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
+    /// Position of the given key in the collection, if it exists, or position where it would be after insertion otherwise
     fn insertion_position(&self, key: &Self::Key) -> usize;
+    /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position. Panics if the key is not in the collection.
     fn key_at(&self, index: usize) -> &Self::Key;
+    /// Number of elements in the collection.
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+/// Represents the elements of the collections in the given key range. The `hash` and `size` fields allow testing whether the two segments represent the same elements.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HashSegment<K> {
     range: (Bound<K>, Bound<K>),
@@ -22,10 +47,19 @@ pub struct HashSegment<K> {
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
+/// Exposes two methods that can be used to implement a reconciliation protocol over a network.
 pub trait Diffable {
     type ComparisonItem;
     type DifferenceItem;
+    /// Returns a representation of all the elements in the collection
+    /// that can be sent to `diff_round`; for instance, an accumulated hash of the elements
     fn start_diff(&self) -> Vec<Self::ComparisonItem>;
+    /// Refines set differences (typically, a range of keys along with the accumulated hash) into smaller sets.
+    ///
+    /// When sets are determined to contains the same elements, they can be remove from the output.
+    /// When sets are determinied to only contains differing elements,
+    /// the corresponding elements are listed as `differences`.
+    /// In other cases, the set must be refined and sent back to the peer for further analysis.
     fn diff_round(
         &self,
         in_comparison: Vec<Self::ComparisonItem>,

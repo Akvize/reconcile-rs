@@ -1,3 +1,22 @@
+// Copyright 2023 Developers of the reconcile project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This crate provides a key-data map structure [`HRTree`](hrtree::HRTree) that can be used together
+//! with the reconciliation [`Service`]. Different instances can talk together over
+//! UDP to efficiently reconcile their differences.
+
+//! All the data is available locally in all instances, and the user can be
+//! notified of changes to the collection with an insertion hook.
+
+//! The protocol allows finding a difference over millions of elements with a limited
+//! number of round-trips. It should also work well to populate an instance from
+//! scratch from other instances.
+
 pub mod diff;
 pub mod hrtree;
 pub mod map;
@@ -23,6 +42,15 @@ use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
+/// Wraps a key-value map to enable reconciliation between different instances over a network.
+///
+/// The service also keeps track of the addresses of other instances.
+///
+/// Provides wrappers for its underlying [`Map`]s insertion and deletion methods,
+/// as well as its main service method: `run()`,
+/// which must be called to actually synchronize with peers.
+///
+/// This struct does not handle removals. See [`RemoveService`].
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
@@ -47,15 +75,21 @@ impl<M> Clone for Service<M> {
     }
 }
 
+/// Direct read access to the underlying map.
 impl<M: Map> Service<M> {
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
     }
 }
 
+/// Represent an atomic message for the reconciliation protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K: Serialize, V: Serialize, C: Serialize> {
+    /// Provides information about a set of keys that allows checking
+    /// whether there are differences between the two instances over this set
     ComparisonItem(C),
+    /// Provides an individual key-value pair when the protocol
+    /// has identified that it differs on the two instances
     Update((K, V)),
 }
 
@@ -276,6 +310,7 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
+/// A wrapper to the [`Service`] to provide a remove method.
 pub struct RemoveService<M: Map> {
     service: Service<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
