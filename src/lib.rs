@@ -42,8 +42,9 @@ use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
 
-/// Wraps a key-value map to reconcile
-/// between different instances over a network.
+/// Wraps a key-value map to enable reconciliation between different instances over a network.
+///
+/// The service also keeps track of the addresses of other instances.
 ///
 /// Provides wrappers for its underlying [`Map`]s insertion and deletion methods,
 /// as well as its main service method: `run()`,
