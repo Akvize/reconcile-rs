@@ -6,7 +6,7 @@ the `reconcile` crate.
 The [`demo`](demo.rs) example can be executed with:
 
 ```
-cargo run --release --example demo 127.0.0.1:8080 127.0.0.1:8081 100000
+cargo run --release --example demo 8080 127.0.0.1 127.0.0.0/30 100000
 ```
 
 If you've got an example you'd like to see here, please feel free to open an
