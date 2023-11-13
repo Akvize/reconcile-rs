@@ -433,7 +433,7 @@ checksum = "638a43da05ea92dd280bce4654221cc350fd8e78e77f205c55fbb7ce9040d20f"
 
 [[package]]
 name = "reconcile"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arrayvec",
  "bincode",
