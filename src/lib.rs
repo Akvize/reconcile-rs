@@ -46,6 +46,11 @@ const BUFFER_SIZE: usize = 65507;
 /// between different instances over a network.
 /// To do so, the service also wraps a collection of addresses,
 /// representing the other instances.
+///
+/// Provides wrappers for its underlying [`Map`](map::Map)'s insertion and deletion methods,
+/// as well as its main service method: run.
+///
+/// This struct does not handle removals. See [`RemoveService`].
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
@@ -77,13 +82,14 @@ impl<M: Map> Service<M> {
     }
 }
 
-/// Provides wrappers for its underlying [`Map`](map::Map)'s
-/// classic insertion and deletion methods,
-/// as well as its main service method: [`run`].
-/// This struct does not handle removals. See [`RemoveService`].
+/// Represent an atomic message for the reconciliation protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 enum Message<K: Serialize, V: Serialize, C: Serialize> {
+    /// Provides information about a set of keys that allows checking
+    /// whether there are differences between the two instances over this set
     ComparisonItem(C),
+    /// Provides an individual key-value pair when the protocol
+    /// has identified that it differs on the two instances
     Update((K, V)),
 }
 
