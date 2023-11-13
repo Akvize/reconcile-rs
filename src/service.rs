@@ -9,12 +9,12 @@
 //! Provides the [`Service`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
@@ -49,7 +49,7 @@ pub struct Service<M> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<HashSet<IpAddr>>>,
+    peers: Arc<RwLock<HashMap<Instant, IpAddr>>>,
 }
 
 impl<M> Service<M> {
@@ -64,12 +64,13 @@ impl<M> Service<M> {
             socket: Arc::new(socket),
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
-            peers: Arc::new(RwLock::new(HashSet::new())),
+            peers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn with_seed(self, peer: IpAddr) -> Self {
-        self.peers.write().unwrap().insert(peer);
+    pub fn with_seed(self, addr: IpAddr) -> Self {
+        let now = Instant::now();
+        self.peers.write().unwrap().insert(now, addr);
         self
     }
 }
@@ -124,8 +125,8 @@ impl<
             let message = Message::Update::<K, V, C>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
-            for peer in peers {
-                let peer = SocketAddr::new(peer, port);
+            for addr in peers.into_values() {
+                let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -146,8 +147,8 @@ impl<
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
-            for peer in peers {
-                let peer = SocketAddr::new(peer, port);
+            for addr in peers.into_values() {
+                let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -182,7 +183,9 @@ impl<
                     }
                     self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
                         .await;
-                    self.peers.write().unwrap().insert(peer.ip());
+                    let now = Instant::now();
+                    let addr = peer.ip();
+                    self.peers.write().unwrap().insert(now, addr);
                 }
             }
         }
@@ -201,8 +204,10 @@ impl<
         }
         let mut peers = self.peers.read().unwrap().clone();
         // also try sending to another random IP from the peer network
-        peers.insert(gen_ip(&mut *self.rng.write().unwrap(), self.peer_net));
-        for peer in peers {
+        let now = Instant::now();
+        let addr = gen_ip(&mut *self.rng.write().unwrap(), self.peer_net);
+        peers.insert(now, addr);
+        for peer in peers.into_values() {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
                 .send_to(send_buf, (peer, self.port))
