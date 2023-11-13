@@ -305,8 +305,7 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
-/// A wrapper to the [`Service`] to provide a
-/// deletion-compatible API.
+/// A wrapper to the [`Service`] to provide a remove method.
 pub struct RemoveService<M: Map> {
     service: Service<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,

@@ -11,10 +11,10 @@ use core::hash::Hash;
 use crate::diff::DiffRange;
 use crate::hrtree::HRTree;
 
-/// A classical Map trait,
-/// enriched with [`enumerate_diff_ranges`](Map::enumerate_diff_ranges),
-/// a method that yields the collection of key-value pairs
-/// corresponding with the given differences (typically index bounds).
+/// Basic methods of a key-value map.
+/// In addition to [`get`](Map::get), [`insert`](Map::insert) and [`remove`](Map::remove),
+/// the method [`enumerate_diff_ranges`](Map::enumerate_diff_ranges) allows listing key-value pairs
+/// within the given [`DifferenceItem`](Map::DifferenceItem)s (typically, ranges).
 pub trait Map {
     type Key;
     type Value;
@@ -28,7 +28,7 @@ pub trait Map {
     fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value>;
     /// Insert a value at the given key, return the pre-existing value if applicable.
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
-    /// Remove and return the value at the given key if exists.
+    /// Remove and return the value at the given key if it exists.
     fn remove(&mut self, key: &Self::Key) -> Option<Self::Value>;
 }
 

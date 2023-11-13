@@ -15,7 +15,6 @@ pub enum ReconciliationResult {
     KeepOther,
 }
 
-/// One of the main traits of this crate.
 /// Values stored in a map to be synced by the [`Service`](crate::Service)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
 pub trait Reconcilable {
