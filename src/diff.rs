@@ -26,7 +26,7 @@ pub trait HashRangeQueryable {
     type Key;
     /// Cumulated hash over a given range of keys. For instance, it could be the XOR of all the hashes of the elements in the range.
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
-    /// Insertion position of a given [`Key`](HashRangeQueryable::Key).
+    /// Position of the given key in the collection, if it exists, or position where it would be after insertion otherwise
     fn insertion_position(&self, key: &Self::Key) -> usize;
     /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position.
     fn key_at(&self, index: usize) -> &Self::Key;
