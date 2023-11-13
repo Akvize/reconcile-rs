@@ -6,8 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This [`module`](crate::hrtree) provides
-//! a [`Hash Range Tree`](HRTree), a key-value store
+//! Provides a [`Hash Range Tree`](HRTree), a key-value store
 //! based on a BTree structure.
 //!
 //! It is the core of the protocol, as it allows `O(log(n))` access,

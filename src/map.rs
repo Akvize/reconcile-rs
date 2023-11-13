@@ -6,12 +6,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Provides the [`Map`] trait and the related implementation for [`HRTree`].
+
 use core::hash::Hash;
 
 use crate::diff::DiffRange;
 use crate::hrtree::HRTree;
 
-/// Basic methods of a key-value map.
+/// Provides the basic methods of a key-value map.
 /// In addition to [`get`](Map::get), [`insert`](Map::insert) and [`remove`](Map::remove),
 /// the method [`enumerate_diff_ranges`](Map::enumerate_diff_ranges) allows listing key-value pairs
 /// within the given [`DifferenceItem`](Map::DifferenceItem)s (typically, ranges).

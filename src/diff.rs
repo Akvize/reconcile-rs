@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This [`module`](crate::diff) provides two traits:
+//! Provides two traits:
 //! [`HashRangeQueryable`] and [`Diffable`].
 
 use std::ops::{Bound, RangeBounds};
