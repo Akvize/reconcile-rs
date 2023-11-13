@@ -15,8 +15,9 @@ struct Args {
     port: u16,
     listen_addr: IpAddr,
     peer_net: IpNet,
-    other_addr: IpAddr,
     elements: usize,
+    #[arg(short, long)]
+    seed: Vec<IpAddr>,
     #[arg(short, long, default_value_t = tracing::Level::INFO)]
     log_level: tracing::Level,
 }
@@ -27,7 +28,7 @@ async fn main() {
         port,
         listen_addr,
         peer_net,
-        other_addr,
+        seed,
         elements,
         log_level,
     } = Args::parse();
@@ -46,8 +47,9 @@ async fn main() {
     let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let service = Service::new(tree, port, listen_addr, peer_net)
-        .await
-        .with_seed(other_addr);
+    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+    for seed in seed {
+        service = service.with_seed(seed);
+    }
     service.run(|_k, _v, _old_v| ()).await;
 }
