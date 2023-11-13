@@ -29,7 +29,8 @@ const BUFFER_SIZE: usize = 65507;
 /// as well as its main service method: `run()`,
 /// which must be called to actually synchronize with peers.
 ///
-/// This struct does not handle removals. See [`RemoveService`].
+/// This struct does not handle removals. See
+/// [`RemoveService`](crate::remove_service::RemoveService).
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,

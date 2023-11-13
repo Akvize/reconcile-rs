@@ -6,9 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This crate provides a key-data map structure [`HRTree`](hrtree::HRTree) that can be used together
-//! with the reconciliation [`Service`]. Different instances can talk together over
-//! UDP to efficiently reconcile their differences.
+//! This crate provides a key-data map structure [`HRTree`] that can be used together with the
+//! reconciliation [`Service`]. Different instances can talk together over UDP to efficiently
+//! reconcile their differences.
 
 //! All the data is available locally in all instances, and the user can be
 //! notified of changes to the collection with an insertion hook.
