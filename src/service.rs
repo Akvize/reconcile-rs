@@ -40,6 +40,11 @@ impl<M> Service<M> {
             peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
+
+    pub fn with_seed(self, peer: SocketAddr) -> Self {
+        self.peers.write().unwrap().push(peer);
+        self
+    }
 }
 
 impl<M> Clone for Service<M> {
@@ -114,22 +119,20 @@ impl<
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(self, other_addr: SocketAddr, before_insert: FI) {
-        self.peers.write().unwrap().push(other_addr);
-
+    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(self, before_insert: FI) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
         let recv_timeout = Duration::from_millis(100);
         // start the protocol at the beginning
-        self.start_diff_protocol(other_addr, &mut send_buf).await;
+        self.start_diff_protocol(&mut send_buf).await;
         // infinite loop
         loop {
             match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
-                    self.start_diff_protocol(other_addr, &mut send_buf).await;
+                    self.start_diff_protocol(&mut send_buf).await;
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -144,7 +147,7 @@ impl<
         }
     }
 
-    async fn start_diff_protocol(&self, other_addr: SocketAddr, send_buf: &mut Vec<u8>) {
+    async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
         let segments = {
             let guard = self.map.read().unwrap();
             guard.start_diff()
@@ -155,8 +158,11 @@ impl<
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
-        trace!("start_diff {} bytes to {other_addr}", send_buf.len());
-        self.socket.send_to(send_buf, &other_addr).await.unwrap();
+        let peers = self.peers.read().unwrap().clone();
+        for peer in peers {
+            trace!("start_diff {} bytes to {peer}", send_buf.len());
+            self.socket.send_to(send_buf, peer).await.unwrap();
+        }
     }
 
     async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(

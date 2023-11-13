@@ -29,6 +29,11 @@ impl<M: Map> RemoveService<M> {
         }
     }
 
+    pub fn with_seed(mut self, peer: SocketAddr) -> Self {
+        self.service = self.service.with_seed(peer);
+        self
+    }
+
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.service.read()
     }
@@ -100,9 +105,8 @@ impl<
         FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
     >(
         self,
-        other_addr: SocketAddr,
         before_insert: FI,
     ) {
-        self.service.run(other_addr, before_insert).await
+        self.service.run(before_insert).await
     }
 }

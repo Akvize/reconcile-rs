@@ -45,6 +45,6 @@ async fn main() {
     let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let service = Service::new(tree, socket);
-    service.run(other_addr, |_k, _v, _old_v| ()).await;
+    let service = Service::new(tree, socket).with_seed(other_addr);
+    service.run(|_k, _v, _old_v| ()).await;
 }

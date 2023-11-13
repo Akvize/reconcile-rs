@@ -33,11 +33,11 @@ async fn test() {
     let tree2: HRTree<String, DatedMaybeTombstone<String>> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = RemoveService::new(tree1, socket1);
-    let service2 = RemoveService::new(tree2, socket2);
-    let task2 = tokio::spawn(service2.clone().run(addr1, |_, _, _| {}));
+    let service1 = RemoveService::new(tree1, socket1).with_seed(addr2);
+    let service2 = RemoveService::new(tree2, socket2).with_seed(addr1);
+    let task2 = tokio::spawn(service2.clone().run(|_, _, _| {}));
     assert_eq!(service2.read().hash(&..), 0);
-    let task1 = tokio::spawn(service1.clone().run(addr2, |_, _, _| {}));
+    let task1 = tokio::spawn(service1.clone().run(|_, _, _| {}));
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1
