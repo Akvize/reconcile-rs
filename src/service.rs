@@ -6,12 +6,15 @@ use std::time::Duration;
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use crate::diff::Diffable;
+use crate::gen_ip::gen_ip;
 use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
@@ -32,6 +35,7 @@ pub struct Service<M> {
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
+    rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<Vec<IpAddr>>>,
 }
 
@@ -45,8 +49,9 @@ impl<M> Service<M> {
             map: Arc::new(RwLock::new(map)),
             port,
             socket: Arc::new(socket),
-            peers: Arc::new(RwLock::new(Vec::new())),
             peer_net,
+            rng: Arc::new(RwLock::new(StdRng::from_entropy())),
+            peers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -62,8 +67,9 @@ impl<M> Clone for Service<M> {
             map: self.map.clone(),
             port: self.port,
             socket: self.socket.clone(),
-            peers: self.peers.clone(),
             peer_net: self.peer_net,
+            rng: self.rng.clone(),
+            peers: self.peers.clone(),
         }
     }
 }
@@ -173,7 +179,9 @@ impl<
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
-        let peers = self.peers.read().unwrap().clone();
+        let mut peers = self.peers.read().unwrap().clone();
+        // also try sending to another random IP from the peer network
+        peers.push(gen_ip(&mut *self.rng.write().unwrap(), self.peer_net));
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
