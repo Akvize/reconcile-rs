@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
@@ -36,7 +37,7 @@ pub struct Service<M> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<Vec<IpAddr>>>,
+    peers: Arc<RwLock<HashSet<IpAddr>>>,
 }
 
 impl<M> Service<M> {
@@ -51,12 +52,12 @@ impl<M> Service<M> {
             socket: Arc::new(socket),
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
-            peers: Arc::new(RwLock::new(Vec::new())),
+            peers: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
     pub fn with_seed(self, peer: IpAddr) -> Self {
-        self.peers.write().unwrap().push(peer);
+        self.peers.write().unwrap().insert(peer);
         self
     }
 }
@@ -161,8 +162,15 @@ impl<
                 }
                 Ok(Ok((size, peer))) => {
                     // received datagram
+                    if peer.port() != self.port {
+                        warn!(
+                            "received message from {peer}, but protocol port is {}",
+                            self.port
+                        );
+                    }
                     self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
                         .await;
+                    self.peers.write().unwrap().insert(peer.ip());
                 }
             }
         }
@@ -181,7 +189,7 @@ impl<
         }
         let mut peers = self.peers.read().unwrap().clone();
         // also try sending to another random IP from the peer network
-        peers.push(gen_ip(&mut *self.rng.write().unwrap(), self.peer_net));
+        peers.insert(gen_ip(&mut *self.rng.write().unwrap(), self.peer_net));
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
