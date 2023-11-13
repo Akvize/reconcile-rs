@@ -47,7 +47,7 @@ const BUFFER_SIZE: usize = 65507;
 /// To do so, the service also wraps a collection of addresses,
 /// representing the other instances.
 ///
-/// Provides wrappers for its underlying [`Map`](map::Map)'s insertion and deletion methods,
+/// Provides wrappers for its underlying [`Map`]'s insertion and deletion methods,
 /// as well as its main service method: run.
 ///
 /// This struct does not handle removals. See [`RemoveService`].
