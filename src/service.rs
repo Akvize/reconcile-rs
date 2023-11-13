@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
@@ -29,22 +29,28 @@ const BUFFER_SIZE: usize = 65507;
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
+    port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
-    peers: Arc<RwLock<Vec<SocketAddr>>>,
+    peers: Arc<RwLock<Vec<IpAddr>>>,
 }
 
 impl<M> Service<M> {
-    pub fn new(map: M, socket: UdpSocket, peer_net: IpNet) -> Self {
+    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
+        let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
+            .await
+            .unwrap();
+        debug!("Listening on: {}", socket.local_addr().unwrap());
         Service {
             map: Arc::new(RwLock::new(map)),
+            port,
             socket: Arc::new(socket),
             peers: Arc::new(RwLock::new(Vec::new())),
             peer_net,
         }
     }
 
-    pub fn with_seed(self, peer: SocketAddr) -> Self {
+    pub fn with_seed(self, peer: IpAddr) -> Self {
         self.peers.write().unwrap().push(peer);
         self
     }
@@ -54,6 +60,7 @@ impl<M> Clone for Service<M> {
     fn clone(&self) -> Self {
         Service {
             map: self.map.clone(),
+            port: self.port,
             socket: self.socket.clone(),
             peers: self.peers.clone(),
             peer_net: self.peer_net,
@@ -92,12 +99,14 @@ impl<
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
         let peers = self.peers.read().unwrap().clone();
+        let port = self.port;
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let message = Message::Update::<K, V, C>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for peer in peers {
+                let peer = SocketAddr::new(peer, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -114,10 +123,12 @@ impl<
             .iter()
             .map(|kv| Message::Update::<K, V, C>(kv.clone()))
             .collect();
+        let port = self.port;
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for peer in peers {
+                let peer = SocketAddr::new(peer, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -165,7 +176,10 @@ impl<
         let peers = self.peers.read().unwrap().clone();
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            self.socket.send_to(send_buf, peer).await.unwrap();
+            self.socket
+                .send_to(send_buf, (peer, self.port))
+                .await
+                .unwrap();
         }
     }
 

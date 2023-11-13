@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::net::SocketAddr;
+use std::net::IpAddr;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::net::UdpSocket;
 
 use crate::diff::Diffable;
 use crate::map::Map;
@@ -23,14 +22,14 @@ pub struct RemoveService<M: Map> {
 }
 
 impl<M: Map> RemoveService<M> {
-    pub fn new(map: M, socket: UdpSocket, peer_net: IpNet) -> Self {
+    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         RemoveService {
-            service: Service::new(map, socket, peer_net),
+            service: Service::new(map, port, listen_addr, peer_net).await,
             tombstones: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn with_seed(mut self, peer: SocketAddr) -> Self {
+    pub fn with_seed(mut self, peer: IpAddr) -> Self {
         self.service = self.service.with_seed(peer);
         self
     }

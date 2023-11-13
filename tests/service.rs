@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -6,18 +6,15 @@ use rand::{
     distributions::{Alphanumeric, DistString},
     Rng, SeedableRng,
 };
-use tokio::net::UdpSocket;
 
 use reconcile::{HRTree, HashRangeQueryable, Service};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
+    let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
-
-    let addr1: SocketAddr = "127.0.0.42:8080".parse().unwrap();
-    let addr2: SocketAddr = "127.0.0.43:8080".parse().unwrap();
-    let socket1 = UdpSocket::bind(addr1).await.unwrap();
-    let socket2 = UdpSocket::bind(addr2).await.unwrap();
+    let addr1: IpAddr = "127.0.0.42".parse().unwrap();
+    let addr2: IpAddr = "127.0.0.43".parse().unwrap();
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -35,8 +32,12 @@ async fn test() {
     let tree2: HRTree<String, (DateTime<Utc>, String)> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = Service::new(tree1, socket1, peer_net).with_seed(addr2);
-    let service2 = Service::new(tree2, socket2, peer_net).with_seed(addr1);
+    let service1 = Service::new(tree1, port, addr1, peer_net)
+        .await
+        .with_seed(addr2);
+    let service2 = Service::new(tree2, port, addr2, peer_net)
+        .await
+        .with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run(|_, _, _| {}));
     assert_eq!(service2.read().hash(&..), 0);
     let task1 = tokio::spawn(service1.clone().run(|_, _, _| {}));
