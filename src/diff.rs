@@ -30,7 +30,7 @@ pub trait HashRangeQueryable {
     fn insertion_position(&self, key: &Self::Key) -> usize;
     /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position.
     fn key_at(&self, index: usize) -> &Self::Key;
-    /// Number of [`Keys`](HashRangeQueryable::Key) in the collection.
+    /// Number of elements in the collection.
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
