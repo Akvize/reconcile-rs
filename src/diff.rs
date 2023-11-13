@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// This is a low-level trait.
 pub trait HashRangeQueryable {
     type Key;
-    /// Hash of a given [`Key`](HashRangeQueryable::Key) range of type [`RangeBounds`].
+    /// Cumulated hash over a given range of keys. For instance, it could be the XOR of all the hashes of the elements in the range.
     fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
     /// Insertion position of a given [`Key`](HashRangeQueryable::Key).
     fn insertion_position(&self, key: &Self::Key) -> usize;
