@@ -26,7 +26,7 @@ pub trait Map {
     ) -> Vec<(Self::Key, Self::Value)>;
     /// Get the value associated with the given key, if it exists.
     fn get<'a>(&'a self, key: &Self::Key) -> Option<&'a Self::Value>;
-    /// Insert a value at the given key, return the pre-existing value if applicable.
+    /// Insert a value at the given key, return the current value if it exists.
     fn insert(&mut self, key: Self::Key, value: Self::Value) -> Option<Self::Value>;
     /// Remove and return the value at the given key if it exists.
     fn remove(&mut self, key: &Self::Key) -> Option<Self::Value>;
