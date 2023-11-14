@@ -31,7 +31,7 @@ use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
-const ACTIVITY_TIMEOUT: Duration = Duration::from_millis(100);
+const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 /// Wraps a key-value map to enable reconciliation between different instances over a network.
