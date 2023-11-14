@@ -31,6 +31,7 @@ use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
+const ACTIVITY_TIMEOUT: Duration = Duration::from_millis(100);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 /// Wraps a key-value map to enable reconciliation between different instances over a network.
@@ -165,7 +166,7 @@ impl<
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        let recv_timeout = Duration::from_millis(100);
+        let recv_timeout = ACTIVITY_TIMEOUT;
         // start the protocol at the beginning
         self.start_diff_protocol(&mut send_buf).await;
         // infinite loop
