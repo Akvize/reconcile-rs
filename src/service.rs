@@ -31,6 +31,7 @@ use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
+const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 /// Wraps a key-value map to enable reconciliation between different instances over a network.
 ///
@@ -115,17 +116,23 @@ impl<
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > Service<M>
 {
+    fn get_peers(&self) -> Vec<IpAddr> {
+        let mut guard = self.peers.write().unwrap();
+        guard.retain(|instant, _| instant.elapsed() < PEER_EXPIRATION);
+        guard.values().cloned().collect()
+    }
+
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let message = Message::Update::<K, V, C>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
-            for addr in peers.into_values() {
+            for addr in peers {
                 let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
@@ -138,7 +145,7 @@ impl<
         for (key, value) in key_values {
             guard.insert(key.clone(), value.clone());
         }
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
             .map(|kv| Message::Update::<K, V, C>(kv.clone()))
@@ -147,7 +154,7 @@ impl<
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
-            for addr in peers.into_values() {
+            for addr in peers {
                 let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
@@ -202,12 +209,11 @@ impl<
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
-        let mut peers = self.peers.read().unwrap().clone();
+        let mut peers = self.get_peers();
         // also try sending to another random IP from the peer network
-        let now = Instant::now();
         let addr = gen_ip(&mut *self.rng.write().unwrap(), self.peer_net);
-        peers.insert(now, addr);
-        for peer in peers.into_values() {
+        peers.push(addr);
+        for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
                 .send_to(send_buf, (peer, self.port))
