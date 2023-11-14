@@ -27,6 +27,21 @@ The protocol allows finding a difference over millions of elements with a limite
 number of round-trips. It should also work well to populate an instance from
 scratch from other instances.
 
+The intended use case is a scalable Web service with a non-persistent and
+eventually consistent key-value store. The design enable high performance by
+avoiding any latency related to using an external service such as Redis.
+
+![Architecture diagram of a scalable Web service using reconcile-rs](illustration.png)
+
+In code, this would look like this:
+
+```rust
+let tree = HRTree::new();
+let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+tokio::spawn(service.run(|_, _, _| {}));
+// use the reconciliation service as a key-value store in the API
+```
+
 ## HRTree
 
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
