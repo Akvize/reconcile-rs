@@ -138,7 +138,7 @@ impl<
         );
     }
 
-    fn handle_tombstones(&self) {
+    fn clear_expired_tombstones(&self) {
         loop {
             while let Some(value) = self.tombstones.write().unwrap().pop_expired() {
                 self.service.map.write().unwrap().remove(&value);
