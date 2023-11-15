@@ -48,31 +48,6 @@ where
     tombstones: Arc<RwLock<TimeoutWheel<M::Key>>>,
 }
 
-impl<M: Map> Service<M>
-where
-    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
-{
-    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        Service {
-            service: InternalService::new(map, port, listen_addr, peer_net).await,
-            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
-        }
-    }
-
-    /// Provides the address of a known peer to the service
-    ///
-    /// This is optional, but reduces the time to connect to existing peers
-    pub fn with_seed(mut self, peer: IpAddr) -> Self {
-        self.service = self.service.with_seed(peer);
-        self
-    }
-
-    /// Direct read access to the underlying map.
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.read()
-    }
-}
-
 impl<M: Map> Clone for Service<M>
 where
     M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
@@ -97,6 +72,26 @@ impl<
             + 'static,
     > Service<M>
 {
+    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
+        Service {
+            service: InternalService::new(map, port, listen_addr, peer_net).await,
+            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
+        }
+    }
+
+    /// Provides the address of a known peer to the service
+    ///
+    /// This is optional, but reduces the time to connect to existing peers
+    pub fn with_seed(mut self, peer: IpAddr) -> Self {
+        self.service = self.service.with_seed(peer);
+        self
+    }
+
+    /// Direct read access to the underlying map.
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.service.read()
+    }
+
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let mut guard = self.tombstones.write().unwrap();
         guard.remove(&key);

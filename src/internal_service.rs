@@ -49,7 +49,39 @@ pub(crate) struct InternalService<M> {
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
 }
 
-impl<M> InternalService<M> {
+impl<M> Clone for InternalService<M> {
+    fn clone(&self) -> Self {
+        InternalService {
+            map: self.map.clone(),
+            port: self.port,
+            socket: self.socket.clone(),
+            peer_net: self.peer_net,
+            rng: self.rng.clone(),
+            peers: self.peers.clone(),
+        }
+    }
+}
+
+/// Represent an atomic message for the reconciliation protocol.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum Message<K: Serialize, V: Serialize, C: Serialize> {
+    /// Provides information about a set of keys that allows checking
+    /// whether there are differences between the two instances over this set
+    ComparisonItem(C),
+    /// Provides an individual key-value pair when the protocol
+    /// has identified that it differs on the two instances
+    Update((K, V)),
+}
+
+impl<
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
+        D: Debug,
+        M: Map<Key = K, Value = V, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+    > InternalService<M>
+{
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
             .await
@@ -74,57 +106,7 @@ impl<M> InternalService<M> {
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
     }
-}
 
-impl<M> Clone for InternalService<M> {
-    fn clone(&self) -> Self {
-        InternalService {
-            map: self.map.clone(),
-            port: self.port,
-            socket: self.socket.clone(),
-            peer_net: self.peer_net,
-            rng: self.rng.clone(),
-            peers: self.peers.clone(),
-        }
-    }
-}
-
-async fn send_to_retry<A: ToSocketAddrs>(
-    socket: &UdpSocket,
-    buf: &[u8],
-    target: A,
-) -> std::io::Result<usize> {
-    let mut res = Ok(0);
-    for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(buf, &target).await;
-        if res.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    res
-}
-
-/// Represent an atomic message for the reconciliation protocol.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-enum Message<K: Serialize, V: Serialize, C: Serialize> {
-    /// Provides information about a set of keys that allows checking
-    /// whether there are differences between the two instances over this set
-    ComparisonItem(C),
-    /// Provides an individual key-value pair when the protocol
-    /// has identified that it differs on the two instances
-    Update((K, V)),
-}
-
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug,
-        M: Map<Key = K, Value = V, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > InternalService<M>
-{
     fn get_peers(&self) -> Vec<IpAddr> {
         let mut guard = self.peers.write().unwrap();
         guard.retain(|_, instant| instant.elapsed() < PEER_EXPIRATION);
@@ -309,6 +291,22 @@ impl<
             }
         }
     }
+}
+
+async fn send_to_retry<A: ToSocketAddrs>(
+    socket: &UdpSocket,
+    buf: &[u8],
+    target: A,
+) -> std::io::Result<usize> {
+    let mut res = Ok(0);
+    for _ in 0..MAX_SENDTO_RETRIES {
+        res = socket.send_to(buf, &target).await;
+        if res.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    res
 }
 
 async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
