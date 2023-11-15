@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`InternalService`], a wrapper to a key-value map
-//! to enable reconciliation between different instances over a network.
+//! Provides the [`InternalService`], the inner layer of the [`Service`](crate::service::Service)
+//! that handles communication between instances at the network level.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -34,20 +34,9 @@ const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
-/// Wraps a key-value map to enable reconciliation between different instances over a network.
-///
-/// The service also keeps track of the addresses of other instances.
-///
-/// Provides wrappers for its underlying [`Map`]s insertion and deletion methods,
-/// as well as its main service method: `run()`,
-/// which must be called to actually synchronize with peers.
-///
-/// This struct does not handle removals. See
-/// [`Service`](crate::service::Service).
-///
-/// Known peers can optionally be provided using the [`with_seed`](InternalService::with_seed) method. In
-/// any case, the service will periodically look for new peers by sampling a random address from
-/// the given peer network.
+/// The internal service at the network level.
+/// This struct does not handle removals, which are managed by the external layer.
+/// For more information, see [`Service`](crate::service::Service).
 #[derive(Debug)]
 pub struct InternalService<M> {
     map: Arc<RwLock<M>>,
@@ -74,16 +63,12 @@ impl<M> InternalService<M> {
         }
     }
 
-    /// Provide the address of a known peer to the service
-    ///
-    /// This is optional, but reduces the time to connect to existing peers
     pub fn with_seed(self, addr: IpAddr) -> Self {
         let now = Instant::now();
         self.peers.write().unwrap().insert(now, addr);
         self
     }
 
-    /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
     }

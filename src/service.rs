@@ -6,7 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`Service`], a wrapper to the [`InternalService`] that handles removals.
+//! Provides the [`Service`], a wrapper to a key-value map
+//! to enable reconciliation between different instances over a network.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -25,7 +26,17 @@ use crate::map::Map;
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
-/// A wrapper to the [`InternalService`] to provide a remove method.
+/// Wraps a key-value map to enable reconciliation between different instances over a network.
+///
+/// The service also keeps track of the addresses of other instances.
+///
+/// Provides wrappers for its underlying [`Map`]s insertion and deletion methods,
+/// as well as its main service method: `run()`,
+/// which must be called to actually synchronize with peers.
+///
+/// Known peers can optionally be provided using the [`with_seed`](Service::with_seed) method. In
+/// any case, the service will periodically look for new peers by sampling a random address from
+/// the given peer network.
 pub struct Service<M: Map> {
     service: InternalService<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
@@ -39,11 +50,15 @@ impl<M: Map> Service<M> {
         }
     }
 
+    /// Provide the address of a known peer to the service
+    ///
+    /// This is optional, but reduces the time to connect to existing peers
     pub fn with_seed(mut self, peer: IpAddr) -> Self {
         self.service = self.service.with_seed(peer);
         self
     }
 
+    /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.service.read()
     }

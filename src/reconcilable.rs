@@ -17,7 +17,7 @@ pub enum ReconciliationResult {
     KeepOther,
 }
 
-/// Values stored in a map to be synced by the [`InternalService`](crate::InternalService)
+/// Values stored in a map to be synced by the [`Service`](crate::Service)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
 pub trait Reconcilable {
     fn reconcile(&self, other: &Self) -> ReconciliationResult;

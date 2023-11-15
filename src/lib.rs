@@ -7,7 +7,7 @@
 // except according to those terms.
 
 //! This crate provides a key-data map structure [`HRTree`] that can be used together with the
-//! reconciliation [`InternalService`]. Different instances can talk together over UDP to efficiently
+//! reconciliation [`Service`]. Different instances can talk together over UDP to efficiently
 //! reconcile their differences.
 
 //! All the data is available locally in all instances, and the user can be
