@@ -21,7 +21,7 @@ use ipnet::IpNet;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::net::UdpSocket;
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
@@ -33,6 +33,8 @@ use crate::reconcilable::{Reconcilable, ReconciliationResult};
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
+
+const MAX_SENDTO_RETRIES: u32 = 4;
 
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
@@ -85,6 +87,22 @@ impl<M> Clone for InternalService<M> {
             peers: self.peers.clone(),
         }
     }
+}
+
+async fn send_to_retry<A: ToSocketAddrs>(
+    socket: &UdpSocket,
+    buf: &[u8],
+    target: A,
+) -> std::io::Result<usize> {
+    let mut res = Ok(0);
+    for _ in 0..MAX_SENDTO_RETRIES {
+        res = socket.send_to(buf, &target).await;
+        if res.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    res
 }
 
 /// Represent an atomic message for the reconciliation protocol.
@@ -211,8 +229,7 @@ impl<
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            self.socket
-                .send_to(send_buf, (peer, self.port))
+            send_to_retry(&self.socket, send_buf, (peer, self.port))
                 .await
                 .unwrap();
         }
@@ -309,12 +326,14 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
             .unwrap();
         if send_buf.len() > BUFFER_SIZE {
             trace!("sending {} bytes to {peer}", last_size);
-            socket.send_to(&send_buf[..last_size], &peer).await.unwrap();
+            send_to_retry(&socket, &send_buf[..last_size], &peer)
+                .await
+                .unwrap();
             trace!("sent {} bytes to {peer}", last_size);
             send_buf.drain(..last_size);
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    socket.send_to(send_buf, &peer).await.unwrap();
+    send_to_retry(&socket, send_buf, &peer).await.unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
 }
