@@ -44,7 +44,7 @@ pub(crate) struct InternalService<M> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<HashMap<Instant, IpAddr>>>,
+    peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
 }
 
 impl<M> InternalService<M> {
@@ -65,7 +65,7 @@ impl<M> InternalService<M> {
 
     pub fn with_seed(self, addr: IpAddr) -> Self {
         let now = Instant::now();
-        self.peers.write().unwrap().insert(now, addr);
+        self.peers.write().unwrap().insert(addr, now);
         self
     }
 
@@ -109,8 +109,8 @@ impl<
 {
     fn get_peers(&self) -> Vec<IpAddr> {
         let mut guard = self.peers.write().unwrap();
-        guard.retain(|instant, _| instant.elapsed() < PEER_EXPIRATION);
-        guard.values().cloned().collect()
+        guard.retain(|_, instant| instant.elapsed() < PEER_EXPIRATION);
+        guard.keys().cloned().collect()
     }
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
@@ -183,7 +183,7 @@ impl<
                         .await;
                     let now = Instant::now();
                     let addr = peer.ip();
-                    self.peers.write().unwrap().insert(now, addr);
+                    self.peers.write().unwrap().insert(addr, now);
                 }
             }
         }
