@@ -9,12 +9,12 @@
 //! Provides the [`Service`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
@@ -31,6 +31,8 @@ use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
+const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
+const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 /// Wraps a key-value map to enable reconciliation between different instances over a network.
 ///
@@ -42,6 +44,10 @@ const BUFFER_SIZE: usize = 65507;
 ///
 /// This struct does not handle removals. See
 /// [`RemoveService`](crate::remove_service::RemoveService).
+///
+/// Known peers can optionally be provided using the [`with_seed`](Service::with_seed) method. In
+/// any case, the service will periodically look for new peers by sampling a random address from
+/// the given peer network.
 #[derive(Debug)]
 pub struct Service<M> {
     map: Arc<RwLock<M>>,
@@ -49,7 +55,7 @@ pub struct Service<M> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<HashSet<IpAddr>>>,
+    peers: Arc<RwLock<HashMap<Instant, IpAddr>>>,
 }
 
 impl<M> Service<M> {
@@ -64,13 +70,22 @@ impl<M> Service<M> {
             socket: Arc::new(socket),
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
-            peers: Arc::new(RwLock::new(HashSet::new())),
+            peers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn with_seed(self, peer: IpAddr) -> Self {
-        self.peers.write().unwrap().insert(peer);
+    /// Provide the address of a known peer to the service
+    ///
+    /// This is optional, but reduces the time to connect to existing peers
+    pub fn with_seed(self, addr: IpAddr) -> Self {
+        let now = Instant::now();
+        self.peers.write().unwrap().insert(now, addr);
         self
+    }
+
+    /// Direct read access to the underlying map.
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.map.read().unwrap()
     }
 }
 
@@ -84,13 +99,6 @@ impl<M> Clone for Service<M> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
         }
-    }
-}
-
-/// Direct read access to the underlying map.
-impl<M: Map> Service<M> {
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read().unwrap()
     }
 }
 
@@ -114,18 +122,24 @@ impl<
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > Service<M>
 {
+    fn get_peers(&self) -> Vec<IpAddr> {
+        let mut guard = self.peers.write().unwrap();
+        guard.retain(|instant, _| instant.elapsed() < PEER_EXPIRATION);
+        guard.values().cloned().collect()
+    }
+
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let message = Message::Update::<K, V, C>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
-            for peer in peers {
-                let peer = SocketAddr::new(peer, port);
+            for addr in peers {
+                let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -137,7 +151,7 @@ impl<
         for (key, value) in key_values {
             guard.insert(key.clone(), value.clone());
         }
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
             .map(|kv| Message::Update::<K, V, C>(kv.clone()))
@@ -146,8 +160,8 @@ impl<
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
-            for peer in peers {
-                let peer = SocketAddr::new(peer, port);
+            for addr in peers {
+                let peer = SocketAddr::new(addr, port);
                 send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
             }
         });
@@ -157,7 +171,7 @@ impl<
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        let recv_timeout = Duration::from_millis(100);
+        let recv_timeout = ACTIVITY_TIMEOUT;
         // start the protocol at the beginning
         self.start_diff_protocol(&mut send_buf).await;
         // infinite loop
@@ -182,7 +196,9 @@ impl<
                     }
                     self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
                         .await;
-                    self.peers.write().unwrap().insert(peer.ip());
+                    let now = Instant::now();
+                    let addr = peer.ip();
+                    self.peers.write().unwrap().insert(now, addr);
                 }
             }
         }
@@ -199,9 +215,15 @@ impl<
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
-        let mut peers = self.peers.read().unwrap().clone();
-        // also try sending to another random IP from the peer network
-        peers.insert(gen_ip(&mut *self.rng.write().unwrap(), self.peer_net));
+        let mut peers = self.get_peers();
+        // select a random address out of the peer network
+        // NOTE: the random address might not correspond to a real peer, so we do not add it to the
+        // list of known peers, just to our local copies of the addresses; if a peer exists at this
+        // address, they will eventually send us a message in return, and we will add them to the
+        // list of known peer
+        let addr = gen_ip(&mut *self.rng.write().unwrap(), self.peer_net);
+        peers.push(addr);
+        // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
