@@ -23,14 +23,14 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
     }
 
     pub fn pop_expired(&mut self) -> Option<T> {
-        self.wheel.first_entry().and_then(|entry| {
-            if entry.key() < &Utc::now() {
+        self.wheel
+            .first_entry()
+            .filter(|entry| entry.key() < &Utc::now())
+            .map(|entry| {
                 let value = entry.remove();
                 self.map.remove(&value);
-                return Some(value);
-            }
-            None
-        })
+                value
+            })
     }
 
     pub fn remove(&mut self, value: &T) -> Option<T> {
