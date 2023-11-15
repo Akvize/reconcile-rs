@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
@@ -86,7 +87,7 @@ impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
         V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug,
+        D: Debug + 'static,
         M: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>
             + Send
@@ -138,11 +139,12 @@ impl<
         );
     }
 
-    fn clear_expired_tombstones(&self) {
+    async fn clear_expired_tombstones(&self) {
         loop {
             while let Some(value) = self.tombstones.write().unwrap().pop_expired() {
                 self.service.map.write().unwrap().remove(&value);
             }
+            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }
 
@@ -153,7 +155,7 @@ impl<
         before_insert: FI,
     ) {
         let clone = self.clone();
-        tokio::spawn(async move { clone.handle_tombstones() });
+        tokio::spawn(async move { clone.clear_expired_tombstones().await });
         self.service.run(before_insert).await
     }
 }
