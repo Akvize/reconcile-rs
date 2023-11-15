@@ -56,7 +56,7 @@ where
         }
     }
 
-    /// Provide the address of a known peer to the service
+    /// Provides the address of a known peer to the service
     ///
     /// This is optional, but reduces the time to connect to existing peers
     pub fn with_seed(mut self, peer: IpAddr) -> Self {
