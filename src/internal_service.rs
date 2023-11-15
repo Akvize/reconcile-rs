@@ -34,6 +34,8 @@ const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
+const MAX_SENDTO_RETRIES: u32 = 4;
+
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`Service`](crate::service::Service).
@@ -93,7 +95,7 @@ async fn send_to_retry<A: ToSocketAddrs>(
     target: A,
 ) -> std::io::Result<usize> {
     let mut res = Ok(0);
-    for _ in 0..4 {
+    for _ in 0..MAX_SENDTO_RETRIES {
         res = socket.send_to(buf, &target).await;
         if res.is_ok() {
             break;
