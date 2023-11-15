@@ -44,8 +44,9 @@ impl<M: Map> Service<M> {
         self
     }
 
+    /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.read()
+        self.service.map.read().unwrap()
     }
 }
 

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
@@ -84,13 +84,6 @@ impl<M> Clone for InternalService<M> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
         }
-    }
-}
-
-/// Direct read access to the underlying map.
-impl<M: Map> InternalService<M> {
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read().unwrap()
     }
 }
 
