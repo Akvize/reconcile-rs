@@ -91,9 +91,9 @@ impl<
         F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
     >(
         mut self,
-        before_insert: F,
+        on_insert: F,
     ) -> Self {
-        self.service = self.service.with_before_insert(before_insert);
+        self.service = self.service.with_before_insert(on_insert);
         self
     }
 

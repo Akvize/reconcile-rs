@@ -36,7 +36,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
-type BeforeInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V, Option<&V>)>;
+type OnInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V, Option<&V>)>;
 
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
@@ -48,7 +48,7 @@ pub(crate) struct InternalService<M: Map> {
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
-    before_insert: Arc<RwLock<BeforeInsertCallback<M::Key, M::Value>>>,
+    on_insert: Arc<RwLock<OnInsertCallback<M::Key, M::Value>>>,
 }
 
 impl<M: Map> Clone for InternalService<M> {
@@ -60,7 +60,7 @@ impl<M: Map> Clone for InternalService<M> {
             peer_net: self.peer_net,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
-            before_insert: self.before_insert.clone(),
+            on_insert: self.on_insert.clone(),
         }
     }
 }
@@ -97,7 +97,7 @@ impl<
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
-            before_insert: Arc::new(RwLock::new(Box::new(|_, _, _| {}))),
+            on_insert: Arc::new(RwLock::new(Box::new(|_, _, _| {}))),
         }
     }
 
@@ -111,9 +111,9 @@ impl<
         F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
     >(
         self,
-        before_insert: F,
+        on_insert: F,
     ) -> Self {
-        *self.before_insert.write().unwrap() = Box::new(before_insert);
+        *self.on_insert.write().unwrap() = Box::new(on_insert);
         self
     }
 
@@ -298,7 +298,7 @@ impl<
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    (self.before_insert.read().unwrap())(&k, &v, local_v);
+                    (self.on_insert.read().unwrap())(&k, &v, local_v);
                     guard.insert(k, v);
                 }
             }
