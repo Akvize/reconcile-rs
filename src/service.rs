@@ -27,6 +27,8 @@ use crate::timeout_wheel::TimeoutWheel;
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
+const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
+
 /// Wraps a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The service also keeps track of the addresses of other instances.
@@ -144,7 +146,7 @@ impl<
             while let Some(value) = self.tombstones.write().unwrap().pop_expired() {
                 self.service.map.write().unwrap().remove(&value);
             }
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+            tokio::time::sleep(TOMBSTONE_CLEARING).await;
         }
     }
 
