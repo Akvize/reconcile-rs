@@ -1,0 +1,28 @@
+name: tags
+
+on:
+  push:
+    tags: [ "v*" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF##*\/v}" >> $GITHUB_ENV
+      - uses: actions/checkout@v4
+      - name: Set Cargo.toml version
+        run: sed "s/0\\.0\\.0-git/$VERSION/" -i Cargo.toml Cargo.lock
+      - name: Login on crates repository
+        run: echo ${{ secrets.GITHUB_TOKEN }} | cargo login
+      - name: Publish crate
+        run: cargo publish --allow-dirty
