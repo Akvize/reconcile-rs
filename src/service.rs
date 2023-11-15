@@ -211,9 +211,14 @@ impl<
                 .unwrap();
         }
         let mut peers = self.get_peers();
-        // also try sending to another random IP from the peer network
+        // select a random address out of the peer network
+        // NOTE: the random address might not correspond to a real peer, so we do not add it to the
+        // list of known peers, just to our local copies of the addresses; if a peer exists at this
+        // address, they will eventually send us a message in return, and we will add them to the
+        // list of known peer
         let addr = gen_ip(&mut *self.rng.write().unwrap(), self.peer_net);
         peers.push(addr);
+        // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             self.socket
