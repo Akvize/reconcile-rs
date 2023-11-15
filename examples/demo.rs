@@ -35,6 +35,9 @@ async fn main() {
 
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
+    let tree = HRTree::new();
+    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+
     // build collection
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values = Vec::new();
@@ -44,10 +47,12 @@ async fn main() {
         let value = Alphanumeric.sample_string(&mut rng, 1000);
         key_values.push((key, (time, value)));
     }
-    let tree = HRTree::from_iter(key_values);
-    info!("Global hash is {}", tree.hash(&..));
+    key_values.sort();
+    for (key, (time, value)) in key_values {
+        service.insert(key, value, time);
+    }
+    info!("Global hash is {}", service.read().hash(&..));
 
-    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
     for seed in seed {
         service = service.with_seed(seed);
     }
