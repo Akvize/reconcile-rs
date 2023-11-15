@@ -94,7 +94,7 @@ impl<M> Clone for Service<M> {
     }
 }
 
-impl<M: Map> Service<M> {
+impl<M> Service<M> {
     /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.map.read().unwrap()
