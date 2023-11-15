@@ -43,7 +43,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// which must be called to actually synchronize with peers.
 ///
 /// This struct does not handle removals. See
-/// [`RemoveService`](crate::remove_service::RemoveService).
+/// [`Service`](crate::service::Service).
 ///
 /// Known peers can optionally be provided using the [`with_seed`](InternalService::with_seed) method. In
 /// any case, the service will periodically look for new peers by sampling a random address from

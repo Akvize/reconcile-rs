@@ -23,9 +23,9 @@ pub mod hrtree;
 pub mod internal_service;
 pub mod map;
 pub mod reconcilable;
-pub mod remove_service;
+pub mod service;
 
 pub use diff::HashRangeQueryable;
 pub use hrtree::HRTree;
 pub use internal_service::InternalService;
-pub use remove_service::{DatedMaybeTombstone, RemoveService};
+pub use service::{DatedMaybeTombstone, Service};

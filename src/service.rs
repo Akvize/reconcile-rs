@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`RemoveService`], a wrapper to the [`InternalService`] that handles removals.
+//! Provides the [`Service`], a wrapper to the [`InternalService`] that handles removals.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -26,14 +26,14 @@ pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
 /// A wrapper to the [`InternalService`] to provide a remove method.
-pub struct RemoveService<M: Map> {
+pub struct Service<M: Map> {
     service: InternalService<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
 }
 
-impl<M: Map> RemoveService<M> {
+impl<M: Map> Service<M> {
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        RemoveService {
+        Service {
             service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -49,9 +49,9 @@ impl<M: Map> RemoveService<M> {
     }
 }
 
-impl<M: Map> Clone for RemoveService<M> {
+impl<M: Map> Clone for Service<M> {
     fn clone(&self) -> Self {
-        RemoveService {
+        Service {
             service: self.service.clone(),
             tombstones: self.tombstones.clone(),
         }
@@ -65,7 +65,7 @@ impl<
         D: Debug,
         M: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > RemoveService<M>
+    > Service<M>
 {
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let mut guard = self.tombstones.write().unwrap();
