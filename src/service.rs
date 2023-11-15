@@ -9,7 +9,7 @@
 //! Provides the [`Service`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
@@ -37,16 +37,22 @@ pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 /// Known peers can optionally be provided using the [`with_seed`](Service::with_seed) method. In
 /// any case, the service will periodically look for new peers by sampling a random address from
 /// the given peer network.
-pub struct Service<M: Map> {
+pub struct Service<M: Map>
+where
+    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
+{
     service: InternalService<M>,
-    tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
+    tombstones: Arc<RwLock<TimeoutWheel<M::Key>>>,
 }
 
-impl<M: Map> Service<M> {
+impl<M: Map> Service<M>
+where
+    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
+{
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         Service {
             service: InternalService::new(map, port, listen_addr, peer_net).await,
-            tombstones: Arc::new(RwLock::new(HashMap::new())),
+            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
         }
     }
 
@@ -64,7 +70,10 @@ impl<M: Map> Service<M> {
     }
 }
 
-impl<M: Map> Clone for Service<M> {
+impl<M: Map> Clone for Service<M>
+where
+    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
+{
     fn clone(&self) -> Self {
         Service {
             service: self.service.clone(),
@@ -79,7 +88,10 @@ impl<
         C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
         D: Debug,
         M: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+            + Diffable<ComparisonItem = C, DifferenceItem = D>
+            + Send
+            + Sync
+            + 'static,
     > Service<M>
 {
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
@@ -126,12 +138,59 @@ impl<
         );
     }
 
+    fn handle_tombstones(&self) {
+        loop {
+            while let Some(value) = self.tombstones.write().unwrap().pop_expired() {
+                self.service.map.write().unwrap().remove(&value);
+            }
+        }
+    }
+
     pub async fn run<
         FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
     >(
         self,
         before_insert: FI,
     ) {
+        let clone = self.clone();
+        tokio::spawn(async move { clone.handle_tombstones() });
         self.service.run(before_insert).await
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
+    wheel: BTreeMap<DateTime<Utc>, T>,
+    map: HashMap<T, DateTime<Utc>>,
+}
+
+impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
+    pub fn new() -> Self {
+        TimeoutWheel {
+            wheel: BTreeMap::new(),
+            map: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, e: T, timeout: DateTime<Utc>) {
+        self.wheel.insert(timeout, e.clone());
+        self.map.insert(e, timeout);
+    }
+
+    pub fn pop_expired(&mut self) -> Option<T> {
+        self.wheel.first_entry().and_then(|entry| {
+            if entry.key() < &Utc::now() {
+                let value = entry.remove();
+                self.map.remove(&value);
+                return Some(value);
+            }
+            None
+        })
+    }
+
+    pub fn remove(&mut self, value: &T) -> Option<T> {
+        self.map
+            .get(value)
+            .and_then(|instant| self.wheel.remove(instant))
     }
 }
