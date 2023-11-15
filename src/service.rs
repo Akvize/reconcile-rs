@@ -77,6 +77,7 @@ impl<
             service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
         }
+        .with_before_insert(|_, _, _| {})
     }
 
     /// Provides the address of a known peer to the service
@@ -93,7 +94,20 @@ impl<
         mut self,
         on_insert: F,
     ) -> Self {
-        self.service = self.service.with_before_insert(on_insert);
+        let tombstones = Arc::clone(&self.tombstones);
+        let wrapped_on_insert =
+            move |k: &K,
+                  v: &(DateTime<Utc>, Option<V>),
+                  old_v: Option<&(DateTime<Utc>, Option<V>)>| {
+                let mut guard = tombstones.write().unwrap();
+                if v.1.is_some() {
+                    guard.remove(k);
+                } else {
+                    guard.insert(k.clone(), v.0);
+                }
+                on_insert(k, v, old_v)
+            };
+        self.service = self.service.with_before_insert(wrapped_on_insert);
         self
     }
 
@@ -103,19 +117,11 @@ impl<
     }
 
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
-        let mut guard = self.tombstones.write().unwrap();
-        guard.remove(&key);
-
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
     }
 
     pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
-        let mut guard = self.tombstones.write().unwrap();
-        for (k, _, _) in key_values {
-            guard.remove(k);
-        }
-
         self.service.insert_bulk(
             &key_values
                 .iter()
@@ -125,19 +131,11 @@ impl<
     }
 
     pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
-        let mut guard = self.tombstones.write().unwrap();
-        guard.insert(key.clone(), timestamp);
-
         let ret = self.service.insert(key.clone(), (timestamp, None));
         ret.and_then(|t| t.1)
     }
 
     pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
-        let mut guard = self.tombstones.write().unwrap();
-        for (k, t) in keys {
-            guard.insert(k.clone(), *t);
-        }
-
         self.service.insert_bulk(
             &keys
                 .iter()
