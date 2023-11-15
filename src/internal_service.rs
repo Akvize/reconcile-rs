@@ -44,7 +44,7 @@ const BUFFER_SIZE: usize = 65507;
 /// [`RemoveService`](crate::remove_service::RemoveService).
 #[derive(Debug)]
 pub(crate) struct InternalService<M> {
-    map: Arc<RwLock<M>>,
+    pub map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
