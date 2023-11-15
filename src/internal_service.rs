@@ -130,6 +130,7 @@ impl<
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
+        (self.on_insert.read().unwrap())(&key, &value, ret.as_ref());
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -148,7 +149,8 @@ impl<
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write().unwrap();
         for (key, value) in key_values {
-            guard.insert(key.clone(), value.clone());
+            let ret = guard.insert(key.clone(), value.clone());
+            (self.on_insert.read().unwrap())(key, value, ret.as_ref());
         }
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
