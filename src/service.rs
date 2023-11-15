@@ -79,6 +79,11 @@ impl<M> Service<M> {
         self.peers.write().unwrap().insert(now, addr);
         self
     }
+
+    /// Direct read access to the underlying map.
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.map.read().unwrap()
+    }
 }
 
 impl<M> Clone for Service<M> {
@@ -91,13 +96,6 @@ impl<M> Clone for Service<M> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
         }
-    }
-}
-
-impl<M> Service<M> {
-    /// Direct read access to the underlying map.
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read().unwrap()
     }
 }
 
