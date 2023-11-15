@@ -39,7 +39,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// For more information, see [`Service`](crate::service::Service).
 #[derive(Debug)]
 pub struct InternalService<M> {
-    map: Arc<RwLock<M>>,
+    pub(crate) map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
