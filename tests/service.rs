@@ -101,7 +101,7 @@ async fn test() {
                     break;
                 }
             }
-            assert_eq!(service2.read().get(&key).unwrap().1, None);
+            assert_eq!(service1.read().get(&key).unwrap().1, None);
         } else {
             service1.remove(&key, t1);
             service2.insert(key.clone(), value1.clone(), t2);
@@ -111,7 +111,7 @@ async fn test() {
                     break;
                 }
             }
-            assert_eq!(service2.read().get(&key).unwrap().1, Some(value1));
+            assert_eq!(service1.read().get(&key).unwrap().1, Some(value1));
         }
     }
 
