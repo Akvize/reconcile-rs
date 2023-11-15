@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`Service`], a wrapper to a key-value map
+//! Provides the [`InternalService`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
 use std::collections::HashMap;
@@ -45,11 +45,11 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// This struct does not handle removals. See
 /// [`RemoveService`](crate::remove_service::RemoveService).
 ///
-/// Known peers can optionally be provided using the [`with_seed`](Service::with_seed) method. In
+/// Known peers can optionally be provided using the [`with_seed`](InternalService::with_seed) method. In
 /// any case, the service will periodically look for new peers by sampling a random address from
 /// the given peer network.
 #[derive(Debug)]
-pub struct Service<M> {
+pub struct InternalService<M> {
     map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
@@ -58,13 +58,13 @@ pub struct Service<M> {
     peers: Arc<RwLock<HashMap<Instant, IpAddr>>>,
 }
 
-impl<M> Service<M> {
+impl<M> InternalService<M> {
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
-        Service {
+        InternalService {
             map: Arc::new(RwLock::new(map)),
             port,
             socket: Arc::new(socket),
@@ -89,9 +89,9 @@ impl<M> Service<M> {
     }
 }
 
-impl<M> Clone for Service<M> {
+impl<M> Clone for InternalService<M> {
     fn clone(&self) -> Self {
-        Service {
+        InternalService {
             map: self.map.clone(),
             port: self.port,
             socket: self.socket.clone(),
@@ -120,7 +120,7 @@ impl<
         D: Debug,
         M: Map<Key = K, Value = V, DifferenceItem = D>
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > Service<M>
+    > InternalService<M>
 {
     fn get_peers(&self) -> Vec<IpAddr> {
         let mut guard = self.peers.write().unwrap();

@@ -7,7 +7,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{HRTree, HashRangeQueryable, Service};
+use reconcile::{HRTree, HashRangeQueryable, InternalService};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
@@ -32,10 +32,10 @@ async fn test() {
     let tree2: HRTree<String, (DateTime<Utc>, String)> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = Service::new(tree1, port, addr1, peer_net)
+    let service1 = InternalService::new(tree1, port, addr1, peer_net)
         .await
         .with_seed(addr2);
-    let service2 = Service::new(tree2, port, addr2, peer_net)
+    let service2 = InternalService::new(tree2, port, addr2, peer_net)
         .await
         .with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run(|_, _, _| {}));

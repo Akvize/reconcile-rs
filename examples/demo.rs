@@ -8,7 +8,7 @@ use rand::{
 };
 use tracing::info;
 
-use reconcile::{HRTree, HashRangeQueryable, Service};
+use reconcile::{HRTree, HashRangeQueryable, InternalService};
 
 #[derive(Parser)]
 struct Args {
@@ -47,7 +47,7 @@ async fn main() {
     let tree = HRTree::from_iter(key_values);
     info!("Global hash is {}", tree.hash(&..));
 
-    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+    let mut service = InternalService::new(tree, port, listen_addr, peer_net).await;
     for seed in seed {
         service = service.with_seed(seed);
     }

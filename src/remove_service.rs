@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`RemoveService`], a wrapper to the [`Service`] that handles removals.
+//! Provides the [`RemoveService`], a wrapper to the [`InternalService`] that handles removals.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -19,22 +19,22 @@ use ipnet::IpNet;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
+use crate::internal_service::InternalService;
 use crate::map::Map;
-use crate::service::Service;
 
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
-/// A wrapper to the [`Service`] to provide a remove method.
+/// A wrapper to the [`InternalService`] to provide a remove method.
 pub struct RemoveService<M: Map> {
-    service: Service<M>,
+    service: InternalService<M>,
     tombstones: Arc<RwLock<HashMap<M::Key, DateTime<Utc>>>>,
 }
 
 impl<M: Map> RemoveService<M> {
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         RemoveService {
-            service: Service::new(map, port, listen_addr, peer_net).await,
+            service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: Arc::new(RwLock::new(HashMap::new())),
         }
     }
