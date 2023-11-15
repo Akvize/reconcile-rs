@@ -38,7 +38,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`Service`](crate::service::Service).
 #[derive(Debug)]
-pub struct InternalService<M> {
+pub(crate) struct InternalService<M> {
     pub(crate) map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
