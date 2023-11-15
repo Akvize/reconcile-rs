@@ -20,12 +20,12 @@
 pub mod diff;
 pub mod gen_ip;
 pub mod hrtree;
+pub(crate) mod internal_service;
 pub mod map;
 pub mod reconcilable;
-pub mod remove_service;
 pub mod service;
+pub(crate) mod timeout_wheel;
 
 pub use diff::HashRangeQueryable;
 pub use hrtree::HRTree;
-pub use remove_service::{DatedMaybeTombstone, RemoveService};
-pub use service::Service;
+pub use service::{DatedMaybeTombstone, Service};
