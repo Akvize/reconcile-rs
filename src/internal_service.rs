@@ -36,20 +36,22 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
+type BeforeInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V, Option<&V>)>;
+
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`Service`](crate::service::Service).
-#[derive(Debug)]
-pub(crate) struct InternalService<M> {
+pub(crate) struct InternalService<M: Map> {
     pub(crate) map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
+    before_insert: Arc<RwLock<BeforeInsertCallback<M::Key, M::Value>>>,
 }
 
-impl<M> Clone for InternalService<M> {
+impl<M: Map> Clone for InternalService<M> {
     fn clone(&self) -> Self {
         InternalService {
             map: self.map.clone(),
@@ -58,6 +60,7 @@ impl<M> Clone for InternalService<M> {
             peer_net: self.peer_net,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
+            before_insert: self.before_insert.clone(),
         }
     }
 }
@@ -94,12 +97,23 @@ impl<
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
+            before_insert: Arc::new(RwLock::new(Box::new(|_, _, _| {}))),
         }
     }
 
     pub fn with_seed(self, addr: IpAddr) -> Self {
         let now = Instant::now();
         self.peers.write().unwrap().insert(addr, now);
+        self
+    }
+
+    pub fn with_before_insert<
+        F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
+    >(
+        self,
+        before_insert: F,
+    ) -> Self {
+        *self.before_insert.write().unwrap() = Box::new(before_insert);
         self
     }
 
@@ -152,7 +166,7 @@ impl<
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(self, before_insert: FI) {
+    pub async fn run(self) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
@@ -179,7 +193,7 @@ impl<
                             self.port
                         );
                     }
-                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
+                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf)
                         .await;
                     let now = Instant::now();
                     let addr = peer.ip();
@@ -217,12 +231,11 @@ impl<
         }
     }
 
-    async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(
+    async fn handle_messages(
         &self,
         recv_buf: &[u8],
         (size, peer): (usize, SocketAddr),
         send_buf: &mut Vec<u8>,
-        before_insert: &FI,
     ) {
         if size == recv_buf.len() {
             warn!("Buffer too small for message, discarded");
@@ -285,7 +298,7 @@ impl<
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    before_insert(&k, &v, local_v);
+                    (self.before_insert.read().unwrap())(&k, &v, local_v);
                     guard.insert(k, v);
                 }
             }

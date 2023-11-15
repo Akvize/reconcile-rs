@@ -87,6 +87,16 @@ impl<
         self
     }
 
+    pub fn with_before_insert<
+        F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
+    >(
+        mut self,
+        before_insert: F,
+    ) -> Self {
+        self.service = self.service.with_before_insert(before_insert);
+        self
+    }
+
     /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
         self.service.read()
@@ -145,14 +155,9 @@ impl<
         }
     }
 
-    pub async fn run<
-        FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
-    >(
-        self,
-        before_insert: FI,
-    ) {
+    pub async fn run(self) {
         let clone = self.clone();
         tokio::spawn(async move { clone.clear_expired_tombstones().await });
-        self.service.run(before_insert).await
+        self.service.run().await
     }
 }
