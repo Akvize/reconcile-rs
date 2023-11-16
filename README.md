@@ -38,7 +38,7 @@ In code, this would look like this:
 ```rust
 let tree = HRTree::new();
 let mut service = Service::new(tree, port, listen_addr, peer_net).await;
-tokio::spawn(service.run(|_, _, _| {}));
+tokio::spawn(service.clone().run());
 // use the reconciliation service as a key-value store in the API
 ```
 
