@@ -36,7 +36,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
-type OnInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
+type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
@@ -48,7 +48,7 @@ pub(crate) struct InternalService<M: Map> {
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
-    on_insert: Arc<RwLock<OnInsertCallback<M::Key, M::Value>>>,
+    pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
 }
 
 impl<M: Map> Clone for InternalService<M> {
@@ -60,7 +60,7 @@ impl<M: Map> Clone for InternalService<M> {
             peer_net: self.peer_net,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
-            on_insert: self.on_insert.clone(),
+            pre_insert: self.pre_insert.clone(),
         }
     }
 }
@@ -97,7 +97,7 @@ impl<
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
-            on_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+            pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
     }
 
@@ -107,11 +107,11 @@ impl<
         self
     }
 
-    pub fn with_before_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
+    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
         self,
-        on_insert: F,
+        pre_insert: F,
     ) -> Self {
-        *self.on_insert.write().unwrap() = Box::new(on_insert);
+        *self.pre_insert.write().unwrap() = Box::new(pre_insert);
         self
     }
 
@@ -127,8 +127,8 @@ impl<
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
+        (self.pre_insert.read().unwrap())(&key, &value);
         let ret = guard.insert(key.clone(), value.clone());
-        (self.on_insert.read().unwrap())(&key, &value);
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -147,8 +147,8 @@ impl<
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write().unwrap();
         for (key, value) in key_values {
+            (self.pre_insert.read().unwrap())(key, value);
             guard.insert(key.clone(), value.clone());
-            (self.on_insert.read().unwrap())(key, value);
         }
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
@@ -298,7 +298,7 @@ impl<
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    (self.on_insert.read().unwrap())(&k, &v);
+                    (self.pre_insert.read().unwrap())(&k, &v);
                     guard.insert(k, v);
                 }
             }
