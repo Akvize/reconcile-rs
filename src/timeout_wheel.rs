@@ -35,7 +35,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
 
     pub fn remove(&mut self, value: &T) -> Option<T> {
         self.map
-            .get(value)
-            .and_then(|instant| self.wheel.remove(instant))
+            .remove(value)
+            .and_then(|instant| self.wheel.remove(&instant))
     }
 }
