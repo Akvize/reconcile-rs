@@ -24,7 +24,7 @@ async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
 
 macro_rules! assert_until {
     ( $x:expr ) => {
-        assert!(wait_until(|| $x).await)
+        assert!(wait_until(|| $x).await, stringify!($x))
     };
 }
 
