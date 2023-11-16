@@ -90,8 +90,8 @@ impl<
 
     /// Set a specific expiry timeout to handle tombstones.
     /// The default value is 60 seconds.
-    pub fn with_expiry_timeout(mut self, expiry_timeout: Duration) -> Self {
-        self.tombstones = self.tombstones.with_expiry_timeout(expiry_timeout);
+    pub fn with_tombstone_timeout(mut self, tombstone_timeout: Duration) -> Self {
+        self.tombstones = self.tombstones.with_expiry_timeout(tombstone_timeout);
         self
     }
 
@@ -180,7 +180,7 @@ mod service_tests {
             peer_net,
         )
         .await
-        .with_expiry_timeout(Duration::from_millis(1));
+        .with_tombstone_timeout(Duration::from_millis(1));
 
         let task = tokio::spawn(service.clone().run());
 
