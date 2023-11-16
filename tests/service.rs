@@ -72,7 +72,7 @@ async fn test() {
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
-    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value));
+    assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
@@ -88,10 +88,12 @@ async fn test() {
         if rng.gen() {
             service1.insert(key.clone(), value1.clone(), t1);
             service2.remove(&key, t2);
+            assert_until!(service1.read().get(&key).unwrap().1 == None);
             assert_until!(service2.read().get(&key).unwrap().1 == None);
         } else {
             service1.remove(&key, t1);
             service2.insert(key.clone(), value1.clone(), t2);
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
             assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
         }
     }
