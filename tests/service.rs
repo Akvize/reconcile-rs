@@ -79,16 +79,30 @@ async fn test() {
     assert_until!(service2.read().get(&key).unwrap().1.is_none());
 
     // check that the more recent value always wins
-    for _ in 0..10 {
-        // add value to tree2, and check that it is transferred to tree1
+    for _ in 0..20 {
         let key = "42".to_string();
         let value1 = "Hello, World!".to_string();
+        let value2 = "Good bye, World!".to_string();
         if rng.gen() {
+            // value1 vs value2
+            service1.insert(key.clone(), value1.clone(), Utc::now());
+            service2.insert(key.clone(), value2.clone(), Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value2));
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
+        } else if rng.gen() {
+            // value2 vs value1
+            service1.insert(key.clone(), value2.clone(), Utc::now());
+            service2.insert(key.clone(), value1.clone(), Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+        } else if rng.gen() {
+            // value1 vs tombstone
             service1.insert(key.clone(), value1, Utc::now());
             service2.remove(&key, Utc::now());
             assert_until!(service1.read().get(&key).unwrap().1 == None);
             assert_until!(service2.read().get(&key).unwrap().1 == None);
         } else {
+            // tombstone vs value1
             service1.remove(&key, Utc::now());
             service2.insert(key.clone(), value1.clone(), Utc::now());
             assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
