@@ -91,7 +91,7 @@ impl<
     /// Set a specific expiry timeout to handle tombstones.
     /// The default value is 60 seconds.
     pub fn with_tombstone_timeout(mut self, tombstone_timeout: Duration) -> Self {
-        self.tombstones = self.tombstones.with_expiry_timeout(tombstone_timeout);
+        self.tombstones = self.tombstones.with_timeout(tombstone_timeout);
         self
     }
 
