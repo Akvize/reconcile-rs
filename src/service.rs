@@ -101,12 +101,12 @@ impl<
     ) -> Self {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
+            pre_insert(k, v);
             if v.1.is_some() {
                 tombstones.remove(k);
             } else {
                 tombstones.insert(k.clone(), v.0);
             }
-            pre_insert(k, v)
         };
         self.service = self.service.with_pre_insert(wrapped_pre_insert);
         self
