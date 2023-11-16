@@ -77,7 +77,7 @@ impl<
             service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
         }
-        .with_before_insert(|_, _, _| {})
+        .with_before_insert(|_, _| {})
     }
 
     /// Provides the address of a known peer to the service
@@ -88,25 +88,20 @@ impl<
         self
     }
 
-    pub fn with_before_insert<
-        F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
-    >(
+    pub fn with_before_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
         mut self,
         on_insert: F,
     ) -> Self {
         let tombstones = Arc::clone(&self.tombstones);
-        let wrapped_on_insert =
-            move |k: &K,
-                  v: &(DateTime<Utc>, Option<V>),
-                  old_v: Option<&(DateTime<Utc>, Option<V>)>| {
-                let mut guard = tombstones.write().unwrap();
-                if v.1.is_some() {
-                    guard.remove(k);
-                } else {
-                    guard.insert(k.clone(), v.0);
-                }
-                on_insert(k, v, old_v)
-            };
+        let wrapped_on_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
+            let mut guard = tombstones.write().unwrap();
+            if v.1.is_some() {
+                guard.remove(k);
+            } else {
+                guard.insert(k.clone(), v.0);
+            }
+            on_insert(k, v)
+        };
         self.service = self.service.with_before_insert(wrapped_on_insert);
         self
     }

@@ -36,7 +36,7 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
-type OnInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V, Option<&V>)>;
+type OnInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
@@ -97,7 +97,7 @@ impl<
             peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
-            on_insert: Arc::new(RwLock::new(Box::new(|_, _, _| {}))),
+            on_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
     }
 
@@ -107,9 +107,7 @@ impl<
         self
     }
 
-    pub fn with_before_insert<
-        F: Send + Sync + Fn(&M::Key, &M::Value, Option<&M::Value>) + 'static,
-    >(
+    pub fn with_before_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
         self,
         on_insert: F,
     ) -> Self {
@@ -130,7 +128,7 @@ impl<
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
         let ret = guard.insert(key.clone(), value.clone());
-        (self.on_insert.read().unwrap())(&key, &value, ret.as_ref());
+        (self.on_insert.read().unwrap())(&key, &value);
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -149,8 +147,8 @@ impl<
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write().unwrap();
         for (key, value) in key_values {
-            let ret = guard.insert(key.clone(), value.clone());
-            (self.on_insert.read().unwrap())(key, value, ret.as_ref());
+            guard.insert(key.clone(), value.clone());
+            (self.on_insert.read().unwrap())(key, value);
         }
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
@@ -300,7 +298,7 @@ impl<
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    (self.on_insert.read().unwrap())(&k, &v, local_v);
+                    (self.on_insert.read().unwrap())(&k, &v);
                     guard.insert(k, v);
                 }
             }
