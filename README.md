@@ -11,8 +11,8 @@
 [mit-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-MIT
 [apache-badge]: https://img.shields.io/badge/license-APACHE-blue.svg
 [apache-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-APACHE
-[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml/badge.svg
-[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/ci.yml
+[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
+[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
 
 [Docs](https://docs.rs/reconcile/latest/reconcile/)
 
