@@ -164,20 +164,17 @@ impl<
 #[cfg(test)]
 mod service_tests {
     use chrono::Utc;
-    use std::{net::IpAddr, time::Duration};
+    use std::time::Duration;
 
     use crate::{DatedMaybeTombstone, HRTree, Service};
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        let port = 8080;
-        let peer_net = "127.0.0.1/8".parse().unwrap();
-        let addr1: IpAddr = "127.0.0.44".parse().unwrap();
         let service = Service::new(
             HRTree::<u8, DatedMaybeTombstone<String>>::new(),
-            port,
-            addr1,
-            peer_net,
+            8080,
+            "127.0.0.44".parse().unwrap(),
+            "127.0.0.1/8".parse().unwrap(),
         )
         .await
         .with_tombstone_timeout(Duration::from_millis(1));

@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -13,8 +12,8 @@ use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 async fn test() {
     let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
-    let addr1: IpAddr = "127.0.0.44".parse().unwrap();
-    let addr2: IpAddr = "127.0.0.45".parse().unwrap();
+    let addr1 = "127.0.0.44".parse().unwrap();
+    let addr2 = "127.0.0.45".parse().unwrap();
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
