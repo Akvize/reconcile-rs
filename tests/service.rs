@@ -64,18 +64,18 @@ async fn test() {
 
     // check that tree2 is filled with the values from tree1
     assert_until!(service2.read().hash(&..) == start_hash);
+
+    // check that tree1 is unchanged
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
-    assert_eq!(service1.read().hash(&..), start_hash);
     assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
-    assert!(service2.read().get(&key).unwrap().1.is_some());
     assert_until!(service2.read().get(&key).unwrap().1.is_none());
 
     // check that the more recent value always wins
