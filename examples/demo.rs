@@ -53,5 +53,5 @@ async fn main() {
     for seed in seed {
         service = service.with_seed(seed);
     }
-    service.run(|_k, _v, _old_v| ()).await;
+    service.run().await;
 }

@@ -48,31 +48,6 @@ where
     tombstones: Arc<RwLock<TimeoutWheel<M::Key>>>,
 }
 
-impl<M: Map> Service<M>
-where
-    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
-{
-    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        Service {
-            service: InternalService::new(map, port, listen_addr, peer_net).await,
-            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
-        }
-    }
-
-    /// Provides the address of a known peer to the service
-    ///
-    /// This is optional, but reduces the time to connect to existing peers
-    pub fn with_seed(mut self, peer: IpAddr) -> Self {
-        self.service = self.service.with_seed(peer);
-        self
-    }
-
-    /// Direct read access to the underlying map.
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.read()
-    }
-}
-
 impl<M: Map> Clone for Service<M>
 where
     M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
@@ -97,20 +72,51 @@ impl<
             + 'static,
     > Service<M>
 {
-    pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
-        let mut guard = self.tombstones.write().unwrap();
-        guard.remove(&key);
+    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
+        Service {
+            service: InternalService::new(map, port, listen_addr, peer_net).await,
+            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
+        }
+        .with_pre_insert(|_, _| {})
+    }
 
+    /// Provides the address of a known peer to the service
+    ///
+    /// This is optional, but reduces the time to connect to existing peers
+    pub fn with_seed(mut self, peer: IpAddr) -> Self {
+        self.service = self.service.with_seed(peer);
+        self
+    }
+
+    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
+        mut self,
+        pre_insert: F,
+    ) -> Self {
+        let tombstones = Arc::clone(&self.tombstones);
+        let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
+            let mut guard = tombstones.write().unwrap();
+            if v.1.is_some() {
+                guard.remove(k);
+            } else {
+                guard.insert(k.clone(), v.0);
+            }
+            pre_insert(k, v)
+        };
+        self.service = self.service.with_pre_insert(wrapped_pre_insert);
+        self
+    }
+
+    /// Direct read access to the underlying map.
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.service.read()
+    }
+
+    pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
     }
 
     pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
-        let mut guard = self.tombstones.write().unwrap();
-        for (k, _, _) in key_values {
-            guard.remove(k);
-        }
-
         self.service.insert_bulk(
             &key_values
                 .iter()
@@ -120,19 +126,11 @@ impl<
     }
 
     pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
-        let mut guard = self.tombstones.write().unwrap();
-        guard.insert(key.clone(), timestamp);
-
         let ret = self.service.insert(key.clone(), (timestamp, None));
         ret.and_then(|t| t.1)
     }
 
     pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
-        let mut guard = self.tombstones.write().unwrap();
-        for (k, t) in keys {
-            guard.insert(k.clone(), *t);
-        }
-
         self.service.insert_bulk(
             &keys
                 .iter()
@@ -150,14 +148,9 @@ impl<
         }
     }
 
-    pub async fn run<
-        FI: Fn(&K, &(DateTime<Utc>, Option<V>), Option<&(DateTime<Utc>, Option<V>)>),
-    >(
-        self,
-        before_insert: FI,
-    ) {
+    pub async fn run(self) {
         let clone = self.clone();
         tokio::spawn(async move { clone.clear_expired_tombstones().await });
-        self.service.run(before_insert).await
+        self.service.run().await
     }
 }

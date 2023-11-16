@@ -38,9 +38,9 @@ async fn test() {
     let service2 = Service::new(tree2, port, addr2, peer_net)
         .await
         .with_seed(addr1);
-    let task2 = tokio::spawn(service2.clone().run(|_, _, _| {}));
+    let task2 = tokio::spawn(service2.clone().run());
     assert_eq!(service2.read().hash(&..), 0);
-    let task1 = tokio::spawn(service1.clone().run(|_, _, _| {}));
+    let task1 = tokio::spawn(service1.clone().run());
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1

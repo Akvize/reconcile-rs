@@ -36,47 +36,22 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
+type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
+
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`Service`](crate::service::Service).
-#[derive(Debug)]
-pub(crate) struct InternalService<M> {
+pub(crate) struct InternalService<M: Map> {
     pub(crate) map: Arc<RwLock<M>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
+    pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
 }
 
-impl<M> InternalService<M> {
-    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
-            .await
-            .unwrap();
-        debug!("Listening on: {}", socket.local_addr().unwrap());
-        InternalService {
-            map: Arc::new(RwLock::new(map)),
-            port,
-            socket: Arc::new(socket),
-            peer_net,
-            rng: Arc::new(RwLock::new(StdRng::from_entropy())),
-            peers: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    pub fn with_seed(self, addr: IpAddr) -> Self {
-        let now = Instant::now();
-        self.peers.write().unwrap().insert(addr, now);
-        self
-    }
-
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read().unwrap()
-    }
-}
-
-impl<M> Clone for InternalService<M> {
+impl<M: Map> Clone for InternalService<M> {
     fn clone(&self) -> Self {
         InternalService {
             map: self.map.clone(),
@@ -85,24 +60,9 @@ impl<M> Clone for InternalService<M> {
             peer_net: self.peer_net,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
+            pre_insert: self.pre_insert.clone(),
         }
     }
-}
-
-async fn send_to_retry<A: ToSocketAddrs>(
-    socket: &UdpSocket,
-    buf: &[u8],
-    target: A,
-) -> std::io::Result<usize> {
-    let mut res = Ok(0);
-    for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(buf, &target).await;
-        if res.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    res
 }
 
 /// Represent an atomic message for the reconciliation protocol.
@@ -125,6 +85,40 @@ impl<
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > InternalService<M>
 {
+    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
+        let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
+            .await
+            .unwrap();
+        debug!("Listening on: {}", socket.local_addr().unwrap());
+        InternalService {
+            map: Arc::new(RwLock::new(map)),
+            port,
+            socket: Arc::new(socket),
+            peer_net,
+            rng: Arc::new(RwLock::new(StdRng::from_entropy())),
+            peers: Arc::new(RwLock::new(HashMap::new())),
+            pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+        }
+    }
+
+    pub fn with_seed(self, addr: IpAddr) -> Self {
+        let now = Instant::now();
+        self.peers.write().unwrap().insert(addr, now);
+        self
+    }
+
+    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
+        self,
+        pre_insert: F,
+    ) -> Self {
+        *self.pre_insert.write().unwrap() = Box::new(pre_insert);
+        self
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<'_, M> {
+        self.map.read().unwrap()
+    }
+
     fn get_peers(&self) -> Vec<IpAddr> {
         let mut guard = self.peers.write().unwrap();
         guard.retain(|_, instant| instant.elapsed() < PEER_EXPIRATION);
@@ -133,6 +127,7 @@ impl<
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write().unwrap();
+        (self.pre_insert.read().unwrap())(&key, &value);
         let ret = guard.insert(key.clone(), value.clone());
         let peers = self.get_peers();
         let port = self.port;
@@ -152,6 +147,7 @@ impl<
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write().unwrap();
         for (key, value) in key_values {
+            (self.pre_insert.read().unwrap())(key, value);
             guard.insert(key.clone(), value.clone());
         }
         let peers = self.get_peers();
@@ -170,7 +166,7 @@ impl<
         });
     }
 
-    pub async fn run<FI: Fn(&K, &V, Option<&V>)>(self, before_insert: FI) {
+    pub async fn run(self) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
@@ -197,7 +193,7 @@ impl<
                             self.port
                         );
                     }
-                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf, &before_insert)
+                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf)
                         .await;
                     let now = Instant::now();
                     let addr = peer.ip();
@@ -235,12 +231,11 @@ impl<
         }
     }
 
-    async fn handle_messages<FI: Fn(&K, &V, Option<&V>)>(
+    async fn handle_messages(
         &self,
         recv_buf: &[u8],
         (size, peer): (usize, SocketAddr),
         send_buf: &mut Vec<u8>,
-        before_insert: &FI,
     ) {
         if size == recv_buf.len() {
             warn!("Buffer too small for message, discarded");
@@ -303,12 +298,28 @@ impl<
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    before_insert(&k, &v, local_v);
+                    (self.pre_insert.read().unwrap())(&k, &v);
                     guard.insert(k, v);
                 }
             }
         }
     }
+}
+
+async fn send_to_retry<A: ToSocketAddrs>(
+    socket: &UdpSocket,
+    buf: &[u8],
+    target: A,
+) -> std::io::Result<usize> {
+    let mut res = Ok(0);
+    for _ in 0..MAX_SENDTO_RETRIES {
+        res = socket.send_to(buf, &target).await;
+        if res.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    res
 }
 
 async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
