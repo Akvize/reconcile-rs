@@ -108,18 +108,18 @@ async fn test() {
     {
         let key = "43".to_string();
 
-        let t1 = Utc::now();
+        // insert key
         let value1 = "Hello, World!".to_string();
-        service1.insert(key.clone(), value1.clone(), t1);
+        service1.insert(key.clone(), value1.clone(), Utc::now());
         assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
 
-        let t2 = Utc::now();
-        service2.remove(&key, t2);
+        // create tombstone (remove key)
+        service2.remove(&key, Utc::now());
         assert_until!(service1.read().get(&key).unwrap().1 == None);
 
-        let t3 = Utc::now();
+        // overwrite tombstone (reinsert key)
         let value2 = "Goodbye!".to_string();
-        service1.insert(key.clone(), value2.clone(), t3);
+        service1.insert(key.clone(), value2.clone(), Utc::now());
         assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
     }
 
