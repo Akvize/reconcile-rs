@@ -111,19 +111,16 @@ async fn test() {
         let t1 = Utc::now();
         let value1 = "Hello, World!".to_string();
         service1.insert(key.clone(), value1.clone(), t1);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(service2.read().get(&key).unwrap().1, Some(value1));
+        assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
 
         let t2 = Utc::now();
         service2.remove(&key, t2);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(service1.read().get(&key).unwrap().1, None);
+        assert_until!(service1.read().get(&key).unwrap().1 == None);
 
         let t3 = Utc::now();
         let value2 = "Goodbye!".to_string();
         service1.insert(key.clone(), value2.clone(), t3);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(service2.read().get(&key).unwrap().1, Some(value2));
+        assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
     }
 
     task2.abort();
