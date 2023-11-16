@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -9,12 +8,32 @@ use rand::{
 
 use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
+/// Wait for a while until the provided predicate becomes true
+///
+/// If the predicate become true in the delay, retrurn true, otherwise return false. This functions
+/// minimizes the wait time by checking regularly if the predicate is true.
+async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if f() {
+            return true;
+        }
+    }
+    false
+}
+
+macro_rules! assert_until {
+    ( $x:expr ) => {
+        assert!(wait_until(|| $x).await, stringify!($x))
+    };
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
-    let addr1: IpAddr = "127.0.0.44".parse().unwrap();
-    let addr2: IpAddr = "127.0.0.45".parse().unwrap();
+    let addr1 = "127.0.0.44".parse().unwrap();
+    let addr2 = "127.0.0.45".parse().unwrap();
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -44,102 +63,69 @@ async fn test() {
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().hash(&..) == start_hash {
-            break;
-        }
-    }
+    assert_until!(service2.read().hash(&..) == start_hash);
+
+    // check that tree1 is unchanged
     assert_eq!(service1.read().hash(&..), start_hash);
-    assert_eq!(service2.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
-    let new_hash = service2.read().hash(&..);
-    assert_ne!(new_hash, start_hash);
-    assert_eq!(service1.read().hash(&..), start_hash);
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service1.read().hash(&..) == new_hash {
-            break;
-        }
-    }
-    assert_eq!(service1.read().hash(&..), new_hash);
-    assert_eq!(service2.read().hash(&..), new_hash);
-    assert_eq!(service2.read().get(&key).unwrap().1, Some(value));
+    assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
-    let key = "42".to_string();
     service1.remove(&key, Utc::now());
-    let new_hash = service1.read().hash(&..);
-    assert_ne!(new_hash, start_hash);
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().hash(&..) == new_hash {
-            break;
-        }
-    }
-    assert_eq!(service2.read().hash(&..), new_hash);
-    assert_eq!(service1.read().hash(&..), new_hash);
-    assert_eq!(service1.read().get(&key).unwrap().1, None);
+    assert_until!(service2.read().get(&key).unwrap().1.is_none());
 
     // check that the more recent value always wins
-    for _ in 0..10 {
-        // add value to tree2, and check that it is transferred to tree1
+    for _ in 0..20 {
         let key = "42".to_string();
-        let t1 = Utc::now();
         let value1 = "Hello, World!".to_string();
-        let t2 = Utc::now();
+        let value2 = "Good bye, World!".to_string();
         if rng.gen() {
-            service1.insert(key.clone(), value1.clone(), t1);
-            service2.remove(&key, t2);
-            for _ in 0..1000 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if service2.read().get(&key).unwrap().1 == None {
-                    break;
-                }
-            }
-            assert_eq!(service1.read().get(&key).unwrap().1, None);
+            // value1 vs value2
+            service1.insert(key.clone(), value1.clone(), Utc::now());
+            service2.insert(key.clone(), value2.clone(), Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value2));
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
+        } else if rng.gen() {
+            // value2 vs value1
+            service1.insert(key.clone(), value2.clone(), Utc::now());
+            service2.insert(key.clone(), value1.clone(), Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+        } else if rng.gen() {
+            // value1 vs tombstone
+            service1.insert(key.clone(), value1, Utc::now());
+            service2.remove(&key, Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1 == None);
+            assert_until!(service2.read().get(&key).unwrap().1 == None);
         } else {
-            service1.remove(&key, t1);
-            service2.insert(key.clone(), value1.clone(), t2);
-            for _ in 0..1000 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if service2.read().get(&key).unwrap().1 == Some(value1.clone()) {
-                    break;
-                }
-            }
-            assert_eq!(service1.read().get(&key).unwrap().1, Some(value1));
+            // tombstone vs value1
+            service1.remove(&key, Utc::now());
+            service2.insert(key.clone(), value1.clone(), Utc::now());
+            assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
         }
     }
 
-    // check that the following set of changes yields the correct behavior:
-    // 1. Add a key, value1 pair on instance1
-    // 2. Check that instance2 has received the value1
-    // 3. Remove the key on instance2
-    // 4. Check that instance1 has received the tombstone
-    // 5. Add the key, value2 pair on instance1
-    // 6. Check that instance2 has received the value2
+    // check that a newer value can overwrite a tombstone
     let key = "43".to_string();
-
-    let t1 = Utc::now();
     let value1 = "Hello, World!".to_string();
-    service1.insert(key.clone(), value1.clone(), t1);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(service2.read().get(&key).unwrap().1, Some(value1));
-
-    let t2 = Utc::now();
-    service2.remove(&key, t2);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(service1.read().get(&key).unwrap().1, None);
-
-    let t3 = Utc::now();
     let value2 = "Goodbye!".to_string();
-    service1.insert(key.clone(), value2.clone(), t3);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(service2.read().get(&key).unwrap().1, Some(value2));
+    // insert (key, value1) pair
+    service1.insert(key.clone(), value1.clone(), Utc::now());
+    // wait until service2 has received it
+    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+    // remove the key from service2
+    service2.remove(&key, Utc::now());
+    // wait until service1 has received the tombstone
+    assert_until!(service1.read().get(&key).unwrap().1 == None);
+    // overwrite tombstone by inserting (key, value2)
+    service1.insert(key.clone(), value2.clone(), Utc::now());
+    // check that instance2 receives value2
+    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
 
     task2.abort();
     task1.abort();

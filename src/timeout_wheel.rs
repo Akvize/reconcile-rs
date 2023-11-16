@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-const DEFAULT_EXPIRY_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
     wheel: Arc<RwLock<BTreeMap<DateTime<Utc>, T>>>,
     map: Arc<RwLock<HashMap<T, DateTime<Utc>>>>,
-    expiry_timeout: Duration,
+    timeout: Duration,
 }
 
 impl<T: Clone + Hash + std::cmp::Eq> Clone for TimeoutWheel<T> {
@@ -19,7 +19,7 @@ impl<T: Clone + Hash + std::cmp::Eq> Clone for TimeoutWheel<T> {
         TimeoutWheel {
             wheel: self.wheel.clone(),
             map: self.map.clone(),
-            expiry_timeout: self.expiry_timeout,
+            timeout: self.timeout,
         }
     }
 }
@@ -29,12 +29,12 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         TimeoutWheel {
             wheel: Arc::new(RwLock::new(BTreeMap::new())),
             map: Arc::new(RwLock::new(HashMap::new())),
-            expiry_timeout: DEFAULT_EXPIRY_TIMEOUT,
+            timeout: DEFAULT_TIMEOUT,
         }
     }
 
-    pub fn with_expiry_timeout(mut self, expiry_timeout: Duration) -> Self {
-        self.expiry_timeout = expiry_timeout;
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
         self
     }
 
@@ -48,7 +48,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
             .write()
             .unwrap()
             .first_entry()
-            .filter(|entry| *entry.key() + self.expiry_timeout < Utc::now())
+            .filter(|entry| *entry.key() + self.timeout < Utc::now())
             .map(|entry| {
                 let value = entry.remove();
                 self.map.write().unwrap().remove(&value);

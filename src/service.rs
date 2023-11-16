@@ -90,8 +90,8 @@ impl<
 
     /// Set a specific expiry timeout to handle tombstones.
     /// The default value is 60 seconds.
-    pub fn with_expiry_timeout(mut self, expiry_timeout: Duration) -> Self {
-        self.tombstones = self.tombstones.with_expiry_timeout(expiry_timeout);
+    pub fn with_tombstone_timeout(mut self, tombstone_timeout: Duration) -> Self {
+        self.tombstones = self.tombstones.with_timeout(tombstone_timeout);
         self
     }
 
@@ -101,12 +101,12 @@ impl<
     ) -> Self {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
+            pre_insert(k, v);
             if v.1.is_some() {
                 tombstones.remove(k);
             } else {
                 tombstones.insert(k.clone(), v.0);
             }
-            pre_insert(k, v)
         };
         self.service = self.service.with_pre_insert(wrapped_pre_insert);
         self
@@ -164,31 +164,28 @@ impl<
 #[cfg(test)]
 mod service_tests {
     use chrono::Utc;
-    use std::{net::IpAddr, time::Duration};
+    use std::time::Duration;
 
     use crate::{DatedMaybeTombstone, HRTree, Service};
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        let port = 8080;
-        let peer_net = "127.0.0.1/8".parse().unwrap();
-        let addr1: IpAddr = "127.0.0.44".parse().unwrap();
         let service = Service::new(
             HRTree::<u8, DatedMaybeTombstone<String>>::new(),
-            port,
-            addr1,
-            peer_net,
+            8080,
+            "127.0.0.44".parse().unwrap(),
+            "127.0.0.1/8".parse().unwrap(),
         )
         .await
-        .with_expiry_timeout(Duration::from_millis(1));
+        .with_tombstone_timeout(Duration::from_millis(1));
 
         let task = tokio::spawn(service.clone().run());
 
-        service.insert(0, "Hello, World!".to_string(), Utc::now());
+        // insert an already-expired tombstone
         service.remove(&0, Utc::now() - Duration::from_millis(2));
-
+        // check that pop_expired() does yield the tombstone
         assert_eq!(service.tombstones.pop_expired(), Some(0));
-
+        // check that it was indeed removed
         assert_eq!(service.tombstones.remove(&0), None);
 
         task.abort();
