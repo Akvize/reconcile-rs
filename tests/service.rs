@@ -8,6 +8,20 @@ use rand::{
 
 use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
+/// Wait for a while until the provided predicate becomes true
+///
+/// If the predicate become true in the delay, retrurn true, otherwise return false. This functions
+/// minimizes the wait time by checking regularly if the predicate is true.
+async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if f() {
+            return true;
+        }
+    }
+    false
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
@@ -43,13 +57,7 @@ async fn test() {
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().hash(&..) == start_hash {
-            break;
-        }
-    }
-    assert_eq!(service2.read().hash(&..), start_hash);
+    assert!(wait_until(|| service2.read().hash(&..) == start_hash).await);
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
@@ -57,24 +65,12 @@ async fn test() {
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
     assert_eq!(service1.read().hash(&..), start_hash);
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().get(&key).unwrap().1.as_ref() == Some(&value) {
-            break;
-        }
-    }
-    assert_eq!(service2.read().get(&key).unwrap().1, Some(value));
+    assert!(wait_until(|| service2.read().get(&key).unwrap().1.as_ref() == Some(&value)).await);
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
     assert!(service2.read().get(&key).unwrap().1.is_some());
-    for _ in 0..1000 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().get(&key).unwrap().1.is_none() {
-            break;
-        }
-    }
-    assert!(service2.read().get(&key).unwrap().1.is_none());
+    assert!(wait_until(|| service2.read().get(&key).unwrap().1.is_none()).await);
 
     // check that the more recent value always wins
     for _ in 0..10 {
@@ -86,23 +82,13 @@ async fn test() {
         if rng.gen() {
             service1.insert(key.clone(), value1.clone(), t1);
             service2.remove(&key, t2);
-            for _ in 0..1000 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if service2.read().get(&key).unwrap().1 == None {
-                    break;
-                }
-            }
-            assert_eq!(service1.read().get(&key).unwrap().1, None);
+            assert!(wait_until(|| service2.read().get(&key).unwrap().1 == None).await);
         } else {
             service1.remove(&key, t1);
             service2.insert(key.clone(), value1.clone(), t2);
-            for _ in 0..1000 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                if service2.read().get(&key).unwrap().1.as_ref() == Some(&value1) {
-                    break;
-                }
-            }
-            assert_eq!(service1.read().get(&key).unwrap().1, Some(value1));
+            assert!(
+                wait_until(|| service2.read().get(&key).unwrap().1.as_ref() == Some(&value1)).await
+            );
         }
     }
 
