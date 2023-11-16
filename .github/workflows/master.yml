@@ -1,4 +1,4 @@
-name: CI
+name: master
 
 on:
   push:
@@ -37,3 +37,5 @@ jobs:
       run: cargo test --all --verbose
     - name: Generate the documentation
       run: cargo doc --all --verbose
+    - name: Check that the crate is publishable
+      run: cargo publish --allow-dirty --dry-run
