@@ -49,18 +49,17 @@ async fn test() {
             break;
         }
     }
-    assert_eq!(service1.read().hash(&..), start_hash);
     assert_eq!(service2.read().hash(&..), start_hash);
+    assert_eq!(service1.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
-    let new_hash = service2.read().hash(&..);
     assert_eq!(service1.read().hash(&..), start_hash);
     for _ in 0..1000 {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if service1.read().hash(&..) == new_hash {
+        if service2.read().get(&key).unwrap().1.as_ref() == Some(&value) {
             break;
         }
     }
@@ -68,11 +67,10 @@ async fn test() {
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
-    let new_hash = service1.read().hash(&..);
     assert!(service2.read().get(&key).unwrap().1.is_some());
     for _ in 0..1000 {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if service2.read().hash(&..) == new_hash {
+        if service2.read().get(&key).unwrap().1.is_none() {
             break;
         }
     }
@@ -100,7 +98,7 @@ async fn test() {
             service2.insert(key.clone(), value1.clone(), t2);
             for _ in 0..1000 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                if service2.read().get(&key).unwrap().1 == Some(value1.clone()) {
+                if service2.read().get(&key).unwrap().1.as_ref() == Some(&value1) {
                     break;
                 }
             }
