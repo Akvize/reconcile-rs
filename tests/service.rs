@@ -82,17 +82,15 @@ async fn test() {
     for _ in 0..10 {
         // add value to tree2, and check that it is transferred to tree1
         let key = "42".to_string();
-        let t1 = Utc::now();
         let value1 = "Hello, World!".to_string();
-        let t2 = Utc::now();
         if rng.gen() {
-            service1.insert(key.clone(), value1.clone(), t1);
-            service2.remove(&key, t2);
+            service1.insert(key.clone(), value1, Utc::now());
+            service2.remove(&key, Utc::now());
             assert_until!(service1.read().get(&key).unwrap().1 == None);
             assert_until!(service2.read().get(&key).unwrap().1 == None);
         } else {
-            service1.remove(&key, t1);
-            service2.insert(key.clone(), value1.clone(), t2);
+            service1.remove(&key, Utc::now());
+            service2.insert(key.clone(), value1.clone(), Utc::now());
             assert_until!(service1.read().get(&key).unwrap().1.as_ref() == Some(&value1));
             assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
         }
