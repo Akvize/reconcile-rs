@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::RwLockReadGuard;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -45,7 +45,7 @@ where
     M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
     service: InternalService<M>,
-    tombstones: Arc<RwLock<TimeoutWheel<M::Key>>>,
+    tombstones: TimeoutWheel<M::Key>,
 }
 
 impl<M: Map> Clone for Service<M>
@@ -75,7 +75,7 @@ impl<
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
         Service {
             service: InternalService::new(map, port, listen_addr, peer_net).await,
-            tombstones: Arc::new(RwLock::new(TimeoutWheel::new())),
+            tombstones: TimeoutWheel::new(),
         }
         .with_pre_insert(|_, _| {})
     }
@@ -88,17 +88,23 @@ impl<
         self
     }
 
+    /// Set a specific expiry timeout to handle tombstones.
+    /// The default value is 60 seconds.
+    pub fn with_expiry_timeout(mut self, expiry_timeout: Duration) -> Self {
+        self.tombstones = self.tombstones.with_expiry_timeout(expiry_timeout);
+        self
+    }
+
     pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
         mut self,
         pre_insert: F,
     ) -> Self {
-        let tombstones = Arc::clone(&self.tombstones);
+        let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
-            let mut guard = tombstones.write().unwrap();
             if v.1.is_some() {
-                guard.remove(k);
+                tombstones.remove(k);
             } else {
-                guard.insert(k.clone(), v.0);
+                tombstones.insert(k.clone(), v.0);
             }
             pre_insert(k, v)
         };
@@ -141,7 +147,7 @@ impl<
 
     async fn clear_expired_tombstones(&self) {
         loop {
-            while let Some(value) = self.tombstones.write().unwrap().pop_expired() {
+            while let Some(value) = self.tombstones.pop_expired() {
                 self.service.map.write().unwrap().remove(&value);
             }
             tokio::time::sleep(TOMBSTONE_CLEARING).await;
