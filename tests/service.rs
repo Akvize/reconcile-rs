@@ -110,30 +110,22 @@ async fn test() {
         }
     }
 
-    // check that the following set of changes yields the correct behavior:
-    // 1. Add a (key, value1) pair on instance1
-    // 2. Check that instance2 has received the value1
-    // 3. Remove the key on instance2
-    // 4. Check that instance1 has received the tombstone
-    // 5. Add the key, value2 pair on instance1
-    // 6. Check that instance2 has received the value2
-    {
-        let key = "43".to_string();
-
-        // insert key
-        let value1 = "Hello, World!".to_string();
-        service1.insert(key.clone(), value1.clone(), Utc::now());
-        assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
-
-        // create tombstone (remove key)
-        service2.remove(&key, Utc::now());
-        assert_until!(service1.read().get(&key).unwrap().1 == None);
-
-        // overwrite tombstone (reinsert key)
-        let value2 = "Goodbye!".to_string();
-        service1.insert(key.clone(), value2.clone(), Utc::now());
-        assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
-    }
+    // check that a newer value can overwrite a tombstone
+    let key = "43".to_string();
+    let value1 = "Hello, World!".to_string();
+    let value2 = "Goodbye!".to_string();
+    // insert (key, value1) pair
+    service1.insert(key.clone(), value1.clone(), Utc::now());
+    // wait until service2 has received it
+    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
+    // remove the key from service2
+    service2.remove(&key, Utc::now());
+    // wait until service1 has received the tombstone
+    assert_until!(service1.read().get(&key).unwrap().1 == None);
+    // overwrite tombstone by inserting (key, value2)
+    service1.insert(key.clone(), value2.clone(), Utc::now());
+    // check that instance2 receives value2
+    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value2));
 
     task2.abort();
     task1.abort();
