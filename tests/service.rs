@@ -22,6 +22,12 @@ async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     false
 }
 
+macro_rules! assert_until {
+    ( $x:expr ) => {
+        assert!(wait_until(|| $x).await)
+    };
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
@@ -57,7 +63,7 @@ async fn test() {
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // check that tree2 is filled with the values from tree1
-    assert!(wait_until(|| service2.read().hash(&..) == start_hash).await);
+    assert_until!(service2.read().hash(&..) == start_hash);
     assert_eq!(service1.read().hash(&..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
@@ -65,12 +71,12 @@ async fn test() {
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
     assert_eq!(service1.read().hash(&..), start_hash);
-    assert!(wait_until(|| service2.read().get(&key).unwrap().1.as_ref() == Some(&value)).await);
+    assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
     assert!(service2.read().get(&key).unwrap().1.is_some());
-    assert!(wait_until(|| service2.read().get(&key).unwrap().1.is_none()).await);
+    assert_until!(service2.read().get(&key).unwrap().1.is_none());
 
     // check that the more recent value always wins
     for _ in 0..10 {
@@ -82,13 +88,11 @@ async fn test() {
         if rng.gen() {
             service1.insert(key.clone(), value1.clone(), t1);
             service2.remove(&key, t2);
-            assert!(wait_until(|| service2.read().get(&key).unwrap().1 == None).await);
+            assert_until!(service2.read().get(&key).unwrap().1 == None);
         } else {
             service1.remove(&key, t1);
             service2.insert(key.clone(), value1.clone(), t2);
-            assert!(
-                wait_until(|| service2.read().get(&key).unwrap().1.as_ref() == Some(&value1)).await
-            );
+            assert_until!(service2.read().get(&key).unwrap().1.as_ref() == Some(&value1));
         }
     }
 
