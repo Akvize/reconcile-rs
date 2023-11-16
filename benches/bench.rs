@@ -64,5 +64,60 @@ fn hrtree_insert(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, hrtree_new, hrtree_insert);
+fn hrtree_remove(c: &mut Criterion) {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+    let mut key_values = Vec::new();
+    for _ in 0..1_000_000 {
+        let key: u32 = rng.gen();
+        let value: u32 = rng.gen();
+        key_values.push((key, value));
+    }
+    let key_values = &key_values;
+
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("HRTree::remove");
+    group.plot_config(plot_config);
+    let mut size = 10;
+    while size <= key_values.len() {
+        group.throughput(Throughput::Elements(size as u64));
+        group.sample_size(10.max(1_000_000 / size).min(100));
+        group.sampling_mode(SamplingMode::Linear);
+        group.bench_with_input(
+            BenchmarkId::new("BTreeMap::remove", size),
+            &size,
+            |b, &size| {
+                let mut tree = BTreeMap::<u32, u32>::new();
+                for (k, v) in key_values[..size].iter().copied() {
+                    tree.insert(k, v);
+                }
+                let k = rng.gen();
+                let v = rng.gen();
+                b.iter(|| {
+                    tree.insert(k, v);
+                    tree.remove(&k);
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("HRTree::remove", size),
+            &size,
+            |b, &size| {
+                let mut tree = HRTree::<u32, u32>::new();
+                for (k, v) in key_values[..size].iter().copied() {
+                    tree.insert(k, v);
+                }
+                let k = rng.gen();
+                let v = rng.gen();
+                b.iter(|| {
+                    tree.insert(k, v);
+                    tree.remove(&k);
+                })
+            },
+        );
+        size *= 10;
+    }
+}
+
+criterion_group!(benches, hrtree_new, hrtree_insert, hrtree_remove);
 criterion_main!(benches);
