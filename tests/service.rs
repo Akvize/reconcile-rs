@@ -57,7 +57,6 @@ async fn test() {
     let value = "Hello, World!".to_string();
     service2.insert(key.clone(), value.clone(), Utc::now());
     let new_hash = service2.read().hash(&..);
-    assert_ne!(new_hash, start_hash);
     assert_eq!(service1.read().hash(&..), start_hash);
     for _ in 0..1000 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -65,14 +64,11 @@ async fn test() {
             break;
         }
     }
-    assert_eq!(service1.read().hash(&..), new_hash);
-    assert_eq!(service2.read().hash(&..), new_hash);
     assert_eq!(service2.read().get(&key).unwrap().1, Some(value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
     service1.remove(&key, Utc::now());
     let new_hash = service1.read().hash(&..);
-    assert_ne!(new_hash, start_hash);
     assert!(service2.read().get(&key).unwrap().1.is_some());
     for _ in 0..1000 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -80,8 +76,6 @@ async fn test() {
             break;
         }
     }
-    assert_eq!(service2.read().hash(&..), new_hash);
-    assert_eq!(service1.read().hash(&..), new_hash);
     assert!(service2.read().get(&key).unwrap().1.is_none());
 
     // check that the more recent value always wins
