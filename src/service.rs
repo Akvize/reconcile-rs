@@ -160,3 +160,37 @@ impl<
         self.service.run().await
     }
 }
+
+#[cfg(test)]
+mod service_tests {
+    use chrono::Utc;
+    use std::{net::IpAddr, time::Duration};
+
+    use crate::{DatedMaybeTombstone, HRTree, Service};
+
+    #[tokio::test]
+    async fn tombstones_expiration() {
+        let port = 8080;
+        let peer_net = "127.0.0.1/8".parse().unwrap();
+        let addr1: IpAddr = "127.0.0.44".parse().unwrap();
+        let service = Service::new(
+            HRTree::<u8, DatedMaybeTombstone<String>>::new(),
+            port,
+            addr1,
+            peer_net,
+        )
+        .await
+        .with_expiry_timeout(Duration::from_millis(1));
+
+        let task = tokio::spawn(service.clone().run());
+
+        service.insert(0, "Hello, World!".to_string(), Utc::now());
+        service.remove(&0, Utc::now() - Duration::from_millis(2));
+
+        assert_eq!(service.tombstones.pop_expired(), Some(0));
+
+        assert_eq!(service.tombstones.remove(&0), None);
+
+        task.abort();
+    }
+}
