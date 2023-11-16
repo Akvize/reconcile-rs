@@ -101,7 +101,7 @@ async fn test() {
                     break;
                 }
             }
-            assert_eq!(service2.read().get(&key).unwrap().1, None);
+            assert_eq!(service1.read().get(&key).unwrap().1, None);
         } else {
             service1.remove(&key, t1);
             service2.insert(key.clone(), value1.clone(), t2);
@@ -111,9 +111,35 @@ async fn test() {
                     break;
                 }
             }
-            assert_eq!(service2.read().get(&key).unwrap().1, Some(value1));
+            assert_eq!(service1.read().get(&key).unwrap().1, Some(value1));
         }
     }
+
+    // check that the following set of changes yields the correct behavior:
+    // 1. Add a key, value1 pair on instance1
+    // 2. Check that instance2 has received the value1
+    // 3. Remove the key on instance2
+    // 4. Check that instance1 has received the tombstone
+    // 5. Add the key, value2 pair on instance1
+    // 6. Check that instance2 has received the value2
+    let key = "43".to_string();
+
+    let t1 = Utc::now();
+    let value1 = "Hello, World!".to_string();
+    service1.insert(key.clone(), value1.clone(), t1);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(service2.read().get(&key).unwrap().1, Some(value1));
+
+    let t2 = Utc::now();
+    service2.remove(&key, t2);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(service1.read().get(&key).unwrap().1, None);
+
+    let t3 = Utc::now();
+    let value2 = "Goodbye!".to_string();
+    service1.insert(key.clone(), value2.clone(), t3);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(service2.read().get(&key).unwrap().1, Some(value2));
 
     task2.abort();
     task1.abort();
