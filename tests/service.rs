@@ -13,7 +13,7 @@ use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 /// If the predicate become true in the delay, retrurn true, otherwise return false. This functions
 /// minimizes the wait time by checking regularly if the predicate is true.
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
-    for _ in 0..1000 {
+    for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(10)).await;
         if f() {
             return true;
