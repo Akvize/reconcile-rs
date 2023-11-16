@@ -181,11 +181,11 @@ mod service_tests {
 
         let task = tokio::spawn(service.clone().run());
 
-        service.insert(0, "Hello, World!".to_string(), Utc::now());
+        // insert an already-expired tombstone
         service.remove(&0, Utc::now() - Duration::from_millis(2));
-
+        // check that pop_expired() does yield the tombstone
         assert_eq!(service.tombstones.pop_expired(), Some(0));
-
+        // check that it was indeed removed
         assert_eq!(service.tombstones.remove(&0), None);
 
         task.abort();
