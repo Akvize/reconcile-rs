@@ -295,6 +295,22 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
         aux(self.root.as_ref(), key)
     }
 
+    pub fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> {
+        fn aux<'a, K: Ord, V>(node: &'a mut Node<K, V>, key: &K) -> Option<&'a mut V> {
+            match node.keys.binary_search(key) {
+                Ok(index) => Some(&mut node.values[index]),
+                Err(index) => {
+                    if let Some(children) = node.children.as_mut() {
+                        aux(children[index].as_mut(), key)
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+        aux(self.root.as_mut(), key)
+    }
+
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
