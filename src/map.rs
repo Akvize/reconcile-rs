@@ -34,6 +34,11 @@ pub trait Map {
     fn remove(&mut self, key: &Self::Key) -> Option<Self::Value>;
 }
 
+pub trait MutMap: Map {
+    /// Get a mutable reference to the value associated with the given key, if it exists.
+    fn get_mut<'a>(&'a mut self, key: &Self::Key) -> Option<&'a mut Self::Value>;
+}
+
 impl<K, V> Map for HRTree<K, V>
 where
     K: Clone + Hash + Ord,
@@ -66,5 +71,15 @@ where
 
     fn remove(&mut self, key: &Self::Key) -> Option<Self::Value> {
         self.remove(key)
+    }
+}
+
+impl<K, V> MutMap for HRTree<K, V>
+where
+    K: Clone + Hash + Ord,
+    V: Clone + Hash,
+{
+    fn get_mut<'a>(&'a mut self, key: &Self::Key) -> Option<&'a mut Self::Value> {
+        self.get_mut(key)
     }
 }
