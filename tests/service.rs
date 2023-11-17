@@ -10,7 +10,7 @@ use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
 /// Wait for a while until the provided predicate becomes true
 ///
-/// If the predicate become true in the delay, retrurn true, otherwise return false. This functions
+/// If the predicate become true in the delay, return true, otherwise return false. This functions
 /// minimizes the wait time by checking regularly if the predicate is true.
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..100 {
