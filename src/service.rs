@@ -12,11 +12,11 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
-use std::sync::RwLockReadGuard;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
+use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
@@ -117,6 +117,12 @@ impl<
         self.service.read()
     }
 
+    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+        self.service.get(k).and_then(|guard| {
+            MappedRwLockReadGuard::try_map(guard, |(_, v): &DatedMaybeTombstone<V>| v.as_ref()).ok()
+        })
+    }
+
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
@@ -148,7 +154,7 @@ impl<
     async fn clear_expired_tombstones(&self) {
         loop {
             while let Some(value) = self.tombstones.pop_expired() {
-                self.service.map.write().unwrap().remove(&value);
+                self.service.map.write().remove(&value);
             }
             tokio::time::sleep(TOMBSTONE_CLEARING).await;
         }
