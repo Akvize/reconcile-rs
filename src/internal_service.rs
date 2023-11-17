@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -28,7 +30,7 @@ use tracing::{debug, trace, warn};
 
 use crate::diff::Diffable;
 use crate::gen_ip::gen_ip;
-use crate::map::Map;
+use crate::map::{Map, MutMap};
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
@@ -309,6 +311,20 @@ impl<
                 }
             }
         }
+    }
+}
+impl<
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
+        D: Debug,
+        M: MutMap<Key = K, Value = V, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+    > InternalService<M>
+{
+    pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
+        let guard = self.map.write();
+        RwLockWriteGuard::try_map(guard, |map: &mut M| map.get_mut(k)).ok()
     }
 }
 

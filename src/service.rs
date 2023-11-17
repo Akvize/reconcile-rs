@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
+use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
 use crate::internal_service::InternalService;
-use crate::map::Map;
+use crate::map::{Map, MutMap};
 use crate::timeout_wheel::TimeoutWheel;
 
 pub type MaybeTombstone<V> = Option<V>;
@@ -164,6 +164,26 @@ impl<
         let clone = self.clone();
         tokio::spawn(async move { clone.clear_expired_tombstones().await });
         self.service.run().await
+    }
+}
+
+impl<
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
+        D: Debug + 'static,
+        M: MutMap<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>
+            + Send
+            + Sync
+            + 'static,
+    > Service<M>
+{
+    pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
+        self.service.get_mut(k).and_then(|guard| {
+            MappedRwLockWriteGuard::try_map(guard, |(_, v): &mut DatedMaybeTombstone<V>| v.as_mut())
+                .ok()
+        })
     }
 }
 
