@@ -162,8 +162,7 @@ impl<
 
     pub async fn run(self) {
         let clone = self.clone();
-        tokio::spawn(async move { clone.clear_expired_tombstones().await });
-        self.service.run().await
+        tokio::join!(self.service.run(), clone.clear_expired_tombstones());
     }
 }
 

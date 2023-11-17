@@ -23,7 +23,7 @@ parking_lot = "0.12.1"
 rand = "0.8.5"
 range-cmp = "0.1.1"
 serde = { version = "1.0.192", features = ["derive"] }
-tokio = { version = "1.33.0", features = ["net", "time", "rt"] }
+tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros"] }
 tracing = "0.1.40"
 
 [dev-dependencies]
