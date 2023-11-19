@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
+use chrono::Utc;
 use rand::{Rng, SeedableRng};
 
 use criterion::{
@@ -7,7 +9,7 @@ use criterion::{
     SamplingMode, Throughput,
 };
 
-use reconcile::{HRTree, HashRangeQueryable};
+use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
@@ -153,11 +155,75 @@ fn hrtree_hash(c: &mut Criterion) {
     }
 }
 
+fn service_send(c: &mut Criterion) {
+    let port = 8080;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.44".parse().unwrap();
+    let addr2 = "127.0.0.45".parse().unwrap();
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+    let mut key_values = Vec::new();
+    for _ in 0..100_000 {
+        let key: u32 = rng.gen();
+        let value: DatedMaybeTombstone<u32> = (Utc::now(), rng.gen());
+        key_values.push((key, value));
+    }
+    let key_values = &key_values;
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("Service::send");
+    group.plot_config(plot_config);
+    let mut size = 10;
+    while size <= key_values.len() {
+        group.sample_size(10.max(1_000_000 / size).min(100));
+        group.sampling_mode(SamplingMode::Linear);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            rt.block_on(async {
+                // create trees with many values
+                let tree1 = HRTree::from_iter(key_values[..size].iter().copied());
+                let tree2 = HRTree::from_iter(key_values[..size].iter().copied());
+
+                // start reconciliation services
+                let service1 = Service::new(tree1, port, addr1, peer_net)
+                    .await
+                    .with_seed(addr2);
+                let service2 = Service::new(tree2, port, addr2, peer_net)
+                    .await
+                    .with_seed(addr1);
+                let task1 = tokio::spawn(service1.clone().run());
+                let task2 = tokio::spawn(service2.clone().run());
+
+                b.iter(|| {
+                    let k: u32 = rng.gen();
+                    let v: u32 = rng.gen();
+                    service1.insert(k, v, Utc::now());
+                    while service2.get(&k).is_none() {
+                        std::thread::sleep(Duration::from_micros(1));
+                    }
+                    service1.remove(&k, Utc::now());
+                    while service2.get(&k).is_some() {
+                        std::thread::sleep(Duration::from_micros(1));
+                    }
+                });
+
+                task2.abort();
+                task1.abort();
+                let _ = tokio::join!(task1, task2);
+            })
+        });
+        size *= 10;
+    }
+}
+
 criterion_group!(
     benches,
     hrtree_new,
     hrtree_insert,
     hrtree_remove,
-    hrtree_hash
+    hrtree_hash,
+    service_send,
 );
 criterion_main!(benches);

@@ -10,6 +10,9 @@ exclude = [
     "CONTRIBUTING.md",
 ]
 
+[profile.release]
+debug = true
+
 [[bench]]
 name = "bench"
 harness = false
