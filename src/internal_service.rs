@@ -219,7 +219,7 @@ impl<
         }
     }
 
-    async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
+    pub async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
         let segments = {
             let guard = self.map.read();
             guard.start_diff()

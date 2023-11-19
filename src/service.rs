@@ -179,6 +179,11 @@ impl<
         );
     }
 
+    pub async fn initiate_reconciliation(&self) {
+        let mut buf = Vec::new();
+        self.service.start_diff_protocol(&mut buf).await;
+    }
+
     async fn clear_expired_tombstones(&self) {
         loop {
             while let Some(value) = self.tombstones.pop_expired() {
