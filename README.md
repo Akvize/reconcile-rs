@@ -58,7 +58,7 @@ ourselves. Although we put a limited amount of effort in this, did not use
 `unsafe` and have to maintain more invariants, we stay within a factor 2 of the
 standard `BTreeMap` from the standard library:
 
-![Graph of the time needed to insert N elements in an empty tree](img/perf-insert.png)
+![Graph of the time needed to insert N elements in an empty tree](img/perf-fill.png)
 
 The graph above shows the amount of time **in milliseconds** (ordinate, left
 axis) needed to **insert N elements** (abscissa, bottom axis) in a tree
