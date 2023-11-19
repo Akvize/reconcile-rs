@@ -19,6 +19,7 @@ fn hrtree_new(c: &mut Criterion) {
     group.bench_function("HRTree::new()", |b| b.iter(|| HRTree::<u32, u32>::new()));
 }
 
+/// Measure the time to insert N elements in the tree
 fn hrtree_insert(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -66,6 +67,7 @@ fn hrtree_insert(c: &mut Criterion) {
     }
 }
 
+/// Measure the time to insert and remove 1 element in a tree of size N
 fn hrtree_remove(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -121,6 +123,7 @@ fn hrtree_remove(c: &mut Criterion) {
     }
 }
 
+/// Measure the time to compute the hash over a range in a HRTree of size N
 fn hrtree_hash(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -155,6 +158,7 @@ fn hrtree_hash(c: &mut Criterion) {
     }
 }
 
+/// Measure the time to send 1 insertion, and 1 removal between 2 Service instances containing N items
 fn service_send(c: &mut Criterion) {
     let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
