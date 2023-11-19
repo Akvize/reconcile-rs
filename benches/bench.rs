@@ -67,7 +67,7 @@ fn hrtree_insert(c: &mut Criterion) {
     }
 }
 
-/// Measure the time to insert and remove 1 element in a tree of size N
+/// Measure the time to remove (and restore) 1 element in a tree of size N
 fn hrtree_remove(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -95,11 +95,14 @@ fn hrtree_remove(c: &mut Criterion) {
                 for (k, v) in key_values[..size].iter().copied() {
                     tree.insert(k, v);
                 }
-                let k = rng.gen();
-                let v = rng.gen();
                 b.iter(|| {
-                    tree.insert(k, v);
-                    tree.remove(&k);
+                    // NOTE: do the removal first because removing a just-inserted element is
+                    // likely easier; do not reuse the same key, since it was just reinserted
+                    // during the last iteration
+                    let idx = rng.gen_range(0..size);
+                    let (k, v) = &key_values[idx];
+                    tree.remove(k);
+                    tree.insert(*k, *v);
                 })
             },
         );
@@ -111,11 +114,14 @@ fn hrtree_remove(c: &mut Criterion) {
                 for (k, v) in key_values[..size].iter().copied() {
                     tree.insert(k, v);
                 }
-                let k = rng.gen();
-                let v = rng.gen();
                 b.iter(|| {
-                    tree.insert(k, v);
-                    tree.remove(&k);
+                    // NOTE: do the removal first because removing a just-inserted element is
+                    // likely easier; do not reuse the same key, since it was just reinserted
+                    // during the last iteration
+                    let idx = rng.gen_range(0..size);
+                    let (k, v) = &key_values[idx];
+                    tree.remove(k);
+                    tree.insert(*k, *v);
                 })
             },
         );
