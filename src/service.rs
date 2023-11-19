@@ -123,9 +123,23 @@ impl<
         })
     }
 
+    pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
+        let ret = self.service.just_insert(key, (timestamp, Some(value)));
+        ret.and_then(|t| t.1)
+    }
+
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
+    }
+
+    pub fn just_insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
+        self.service.just_insert_bulk(
+            &key_values
+                .iter()
+                .map(|(k, v, t)| (k.clone(), (*t, Some(v.clone()))))
+                .collect::<Vec<_>>(),
+        );
     }
 
     pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
@@ -137,9 +151,23 @@ impl<
         );
     }
 
+    pub fn just_remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
+        let ret = self.service.just_insert(key.clone(), (timestamp, None));
+        ret.and_then(|t| t.1)
+    }
+
     pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key.clone(), (timestamp, None));
         ret.and_then(|t| t.1)
+    }
+
+    pub fn just_remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
+        self.service.just_insert_bulk(
+            &keys
+                .iter()
+                .map(|(k, t)| (k.clone(), (*t, None)))
+                .collect::<Vec<_>>(),
+        );
     }
 
     pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {

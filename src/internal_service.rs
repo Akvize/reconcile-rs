@@ -133,10 +133,14 @@ impl<
         guard.keys().cloned().collect()
     }
 
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
+    pub fn just_insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write();
         (self.pre_insert.read())(&key, &value);
-        let ret = guard.insert(key.clone(), value.clone());
+        guard.insert(key.clone(), value.clone())
+    }
+
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let ret = self.just_insert(key.clone(), value.clone());
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -152,12 +156,16 @@ impl<
         ret
     }
 
-    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+    pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write();
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
             guard.insert(key.clone(), value.clone());
         }
+    }
+
+    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+        self.just_insert_bulk(key_values);
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
