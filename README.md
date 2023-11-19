@@ -68,6 +68,17 @@ The performance of our `HRTree` implementation follows closely that of
 `BTreeMap`. When looking at each value of N, we see that the average throughput
 of the `HRTree` is between one third and one half that of `BTreeMap`.
 
+![Graph of the time needed to insert and remove 1 element in a tree of size N](img/perf-insert.png)
+
+The graph above shows the amount of time **in nanoseconds** (abscissa, bottom
+axis) needed to **insert a single element** (and remove it) in a tree
+containing N elements (ordinate, bottom axis). Note that both axes use a
+logarithmic scale.
+
+The most important thing to notice is that the average insertion/removal time
+only grows from 80 ns to 700 s although the size of the tree changes from 10 to
+1,000,000 elements.
+
 ![Graph of the time needed to remove and restore 1 element in a tree of size N](img/perf-remove.png)
 
 The graph above shows the amount of time **in nanoseconds** (abscissa, bottom
