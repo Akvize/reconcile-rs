@@ -117,10 +117,21 @@ axis) needed to send 1 insertion, then 1 removal** between two instances of
 `Service` that contain the same N elements (ordinate, left axis). Note that
 both axes use a logarithmic scale.
 
-This benchmark is performed locally on the loop-back network interface. On a
-real network, transmission delays will make this value larger.
-
 The times are very consistent, hovering around 122 µs, showing that the
 reconciliation time is entirely bounded by the local network transmission. This
 is made possible by the immediate transmission of the element at
 insertion/removal.
+
+![Graph of the time reconcile 1 difference](img/perf-reconcile.png)
+
+The graph above shows the amount of time **in milliseconds** (abscissa, bottom
+axis) needed to reconcile 1 insertion, then 1 removal** between two instances of
+`Service` that contain the same other N elements (ordinate, left axis). Note that
+both axes use a logarithmic scale.
+
+This time, the full reconciliation protocol must be run to identify the
+difference. The times grow from 240 µs to 640 µs as the size of the collection
+changes from 10 to 1,000,000 elements.
+
+**Note:** These benchmarks are performed locally on the loop-back network
+interface. On a real network, transmission delays will make the values larger.
