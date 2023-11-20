@@ -122,7 +122,7 @@ reconciliation time is entirely bounded by the local network transmission. This
 is made possible by the immediate transmission of the element at
 insertion/removal.
 
-![Graph of the time reconcile 1 difference](img/perf-reconcile.png)
+![Graph of the time to reconcile 1 difference between two instances](img/perf-reconcile.png)
 
 The graph above shows the amount of time **in milliseconds** (abscissa, bottom
 axis) needed to reconcile 1 insertion, then 1 removal** between two instances of

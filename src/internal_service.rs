@@ -188,14 +188,14 @@ impl<
         let mut send_buf = Vec::new();
         let recv_timeout = ACTIVITY_TIMEOUT;
         // start the protocol at the beginning
-        self.start_diff_protocol(&mut send_buf).await;
+        self.start_reconciliation(&mut send_buf).await;
         // infinite loop
         loop {
             match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
-                    self.start_diff_protocol(&mut send_buf).await;
+                    self.start_reconciliation(&mut send_buf).await;
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -219,7 +219,7 @@ impl<
         }
     }
 
-    pub async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
+    pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
         let segments = {
             let guard = self.map.read();
             guard.start_diff()
