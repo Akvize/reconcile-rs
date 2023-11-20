@@ -13,11 +13,14 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -27,7 +30,7 @@ use tracing::{debug, trace, warn};
 
 use crate::diff::Diffable;
 use crate::gen_ip::gen_ip;
-use crate::map::Map;
+use crate::map::{Map, MutMap};
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
@@ -103,7 +106,7 @@ impl<
 
     pub fn with_seed(self, addr: IpAddr) -> Self {
         let now = Instant::now();
-        self.peers.write().unwrap().insert(addr, now);
+        self.peers.write().insert(addr, now);
         self
     }
 
@@ -111,23 +114,28 @@ impl<
         self,
         pre_insert: F,
     ) -> Self {
-        *self.pre_insert.write().unwrap() = Box::new(pre_insert);
+        *self.pre_insert.write() = Box::new(pre_insert);
         self
     }
 
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read().unwrap()
+        self.map.read()
+    }
+
+    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+        let guard = self.map.read();
+        RwLockReadGuard::try_map(guard, |map: &M| map.get(k)).ok()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
-        let mut guard = self.peers.write().unwrap();
+        let mut guard = self.peers.write();
         guard.retain(|_, instant| instant.elapsed() < PEER_EXPIRATION);
         guard.keys().cloned().collect()
     }
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        let mut guard = self.map.write().unwrap();
-        (self.pre_insert.read().unwrap())(&key, &value);
+        let mut guard = self.map.write();
+        (self.pre_insert.read())(&key, &value);
         let ret = guard.insert(key.clone(), value.clone());
         let peers = self.get_peers();
         let port = self.port;
@@ -145,9 +153,9 @@ impl<
     }
 
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
-        let mut guard = self.map.write().unwrap();
+        let mut guard = self.map.write();
         for (key, value) in key_values {
-            (self.pre_insert.read().unwrap())(key, value);
+            (self.pre_insert.read())(key, value);
             guard.insert(key.clone(), value.clone());
         }
         let peers = self.get_peers();
@@ -197,7 +205,7 @@ impl<
                         .await;
                     let now = Instant::now();
                     let addr = peer.ip();
-                    self.peers.write().unwrap().insert(addr, now);
+                    self.peers.write().insert(addr, now);
                 }
             }
         }
@@ -205,7 +213,7 @@ impl<
 
     async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
         let segments = {
-            let guard = self.map.read().unwrap();
+            let guard = self.map.read();
             guard.start_diff()
         };
         send_buf.clear();
@@ -220,7 +228,7 @@ impl<
         // list of known peers, just to our local copies of the addresses; if a peer exists at this
         // address, they will eventually send us a message in return, and we will add them to the
         // list of known peer
-        let addr = gen_ip(&mut *self.rng.write().unwrap(), self.peer_net);
+        let addr = gen_ip(&mut *self.rng.write(), self.peer_net);
         peers.push(addr);
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
@@ -266,7 +274,7 @@ impl<
             let mut differences = Vec::new();
             let mut out_comparison = Vec::new();
             {
-                let guard = self.map.read().unwrap();
+                let guard = self.map.read();
                 guard.diff_round(in_comparison, &mut out_comparison, &mut differences);
             }
             let mut messages = Vec::new();
@@ -280,7 +288,7 @@ impl<
             if !differences.is_empty() {
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
-                let guard = self.map.read().unwrap();
+                let guard = self.map.read();
                 for update in guard.enumerate_diff_ranges(differences) {
                     messages.push(Message::Update(update));
                 }
@@ -291,18 +299,32 @@ impl<
         }
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
-            let mut guard = self.map.write().unwrap();
+            let mut guard = self.map.write();
             for (k, v) in updates {
                 let local_v = guard.get(&k);
                 let do_change = local_v
                     .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
                     .unwrap_or(true);
                 if do_change {
-                    (self.pre_insert.read().unwrap())(&k, &v);
+                    (self.pre_insert.read())(&k, &v);
                     guard.insert(k, v);
                 }
             }
         }
+    }
+}
+impl<
+        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
+        D: Debug,
+        M: MutMap<Key = K, Value = V, DifferenceItem = D>
+            + Diffable<ComparisonItem = C, DifferenceItem = D>,
+    > InternalService<M>
+{
+    pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
+        let guard = self.map.write();
+        RwLockWriteGuard::try_map(guard, |map: &mut M| map.get_mut(k)).ok()
     }
 }
 
