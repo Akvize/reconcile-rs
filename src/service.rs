@@ -16,7 +16,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard, RwLockWriteGuard,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
@@ -118,9 +120,8 @@ impl<
     }
 
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
-        self.service.get(k).and_then(|guard| {
-            MappedRwLockReadGuard::try_map(guard, |(_, v): &DatedMaybeTombstone<V>| v.as_ref()).ok()
-        })
+        let guard = self.service.map.read();
+        RwLockReadGuard::try_map(guard, |map: &M| map.get(k).and_then(|(_, v)| v.as_ref())).ok()
     }
 
     pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
@@ -212,10 +213,11 @@ impl<
     > Service<M>
 {
     pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
-        self.service.get_mut(k).and_then(|guard| {
-            MappedRwLockWriteGuard::try_map(guard, |(_, v): &mut DatedMaybeTombstone<V>| v.as_mut())
-                .ok()
+        let guard = self.service.map.write();
+        RwLockWriteGuard::try_map(guard, |map: &mut M| {
+            map.get_mut(k).and_then(|(_, v)| v.as_mut())
         })
+        .ok()
     }
 }
 
