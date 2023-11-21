@@ -49,7 +49,7 @@ pub(crate) struct InternalService<M: Map> {
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
-    pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
+    pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
 }
 
 impl<M: Map> Clone for InternalService<M> {
@@ -100,14 +100,6 @@ impl<
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
-    }
-
-    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        self,
-        pre_insert: F,
-    ) -> Self {
-        *self.pre_insert.write() = Box::new(pre_insert);
-        self
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {

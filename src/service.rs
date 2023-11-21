@@ -99,7 +99,7 @@ impl<
     }
 
     pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        mut self,
+        self,
         pre_insert: F,
     ) -> Self {
         let tombstones = self.tombstones.clone();
@@ -111,7 +111,7 @@ impl<
                 tombstones.insert(k.clone(), v.0);
             }
         };
-        self.service = self.service.with_pre_insert(wrapped_pre_insert);
+        *self.service.pre_insert.write() = Box::new(wrapped_pre_insert);
         self
     }
 
