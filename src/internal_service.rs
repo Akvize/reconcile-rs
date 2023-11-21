@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -114,10 +114,6 @@ impl<
     ) -> Self {
         *self.pre_insert.write() = Box::new(pre_insert);
         self
-    }
-
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {

@@ -116,7 +116,7 @@ impl<
 
     /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.read()
+        self.service.map.read()
     }
 
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
