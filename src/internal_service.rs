@@ -48,7 +48,7 @@ pub(crate) struct InternalService<M: Map> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
+    pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
 }
 
@@ -100,12 +100,6 @@ impl<
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
-    }
-
-    pub fn with_seed(self, addr: IpAddr) -> Self {
-        let now = Instant::now();
-        self.peers.write().insert(addr, now);
-        self
     }
 
     pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(

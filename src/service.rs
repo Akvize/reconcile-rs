@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
@@ -85,8 +85,9 @@ impl<
     /// Provides the address of a known peer to the service
     ///
     /// This is optional, but reduces the time to connect to existing peers
-    pub fn with_seed(mut self, peer: IpAddr) -> Self {
-        self.service = self.service.with_seed(peer);
+    pub fn with_seed(self, peer: IpAddr) -> Self {
+        let now = Instant::now();
+        self.service.peers.write().insert(peer, now);
         self
     }
 
