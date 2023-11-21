@@ -123,9 +123,23 @@ impl<
         })
     }
 
+    pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
+        let ret = self.service.just_insert(key, (timestamp, Some(value)));
+        ret.and_then(|t| t.1)
+    }
+
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
+    }
+
+    pub fn just_insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
+        self.service.just_insert_bulk(
+            &key_values
+                .iter()
+                .map(|(k, v, t)| (k.clone(), (*t, Some(v.clone()))))
+                .collect::<Vec<_>>(),
+        );
     }
 
     pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
@@ -137,9 +151,23 @@ impl<
         );
     }
 
+    pub fn just_remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
+        let ret = self.service.just_insert(key.clone(), (timestamp, None));
+        ret.and_then(|t| t.1)
+    }
+
     pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key.clone(), (timestamp, None));
         ret.and_then(|t| t.1)
+    }
+
+    pub fn just_remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
+        self.service.just_insert_bulk(
+            &keys
+                .iter()
+                .map(|(k, t)| (k.clone(), (*t, None)))
+                .collect::<Vec<_>>(),
+        );
     }
 
     pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
@@ -149,6 +177,11 @@ impl<
                 .map(|(k, t)| (k.clone(), (*t, None)))
                 .collect::<Vec<_>>(),
         );
+    }
+
+    pub async fn start_reconciliation(&self) {
+        let mut buf = Vec::new();
+        self.service.start_reconciliation(&mut buf).await;
     }
 
     async fn clear_expired_tombstones(&self) {
@@ -162,8 +195,7 @@ impl<
 
     pub async fn run(self) {
         let clone = self.clone();
-        tokio::spawn(async move { clone.clear_expired_tombstones().await });
-        self.service.run().await
+        tokio::join!(self.service.run(), clone.clear_expired_tombstones());
     }
 }
 

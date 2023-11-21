@@ -133,10 +133,14 @@ impl<
         guard.keys().cloned().collect()
     }
 
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
+    pub fn just_insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.map.write();
         (self.pre_insert.read())(&key, &value);
-        let ret = guard.insert(key.clone(), value.clone());
+        guard.insert(key.clone(), value.clone())
+    }
+
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let ret = self.just_insert(key.clone(), value.clone());
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -152,12 +156,16 @@ impl<
         ret
     }
 
-    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+    pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         let mut guard = self.map.write();
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
             guard.insert(key.clone(), value.clone());
         }
+    }
+
+    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+        self.just_insert_bulk(key_values);
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
@@ -180,14 +188,14 @@ impl<
         let mut send_buf = Vec::new();
         let recv_timeout = ACTIVITY_TIMEOUT;
         // start the protocol at the beginning
-        self.start_diff_protocol(&mut send_buf).await;
+        self.start_reconciliation(&mut send_buf).await;
         // infinite loop
         loop {
             match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
-                    self.start_diff_protocol(&mut send_buf).await;
+                    self.start_reconciliation(&mut send_buf).await;
                 }
                 Ok(Err(err)) => {
                     // network error
@@ -211,7 +219,7 @@ impl<
         }
     }
 
-    async fn start_diff_protocol(&self, send_buf: &mut Vec<u8>) {
+    pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
         let segments = {
             let guard = self.map.read();
             guard.start_diff()
