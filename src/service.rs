@@ -12,11 +12,13 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard, RwLockWriteGuard,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
@@ -83,8 +85,9 @@ impl<
     /// Provides the address of a known peer to the service
     ///
     /// This is optional, but reduces the time to connect to existing peers
-    pub fn with_seed(mut self, peer: IpAddr) -> Self {
-        self.service = self.service.with_seed(peer);
+    pub fn with_seed(self, peer: IpAddr) -> Self {
+        let now = Instant::now();
+        self.service.peers.write().insert(peer, now);
         self
     }
 
@@ -96,7 +99,7 @@ impl<
     }
 
     pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        mut self,
+        self,
         pre_insert: F,
     ) -> Self {
         let tombstones = self.tombstones.clone();
@@ -108,19 +111,18 @@ impl<
                 tombstones.insert(k.clone(), v.0);
             }
         };
-        self.service = self.service.with_pre_insert(wrapped_pre_insert);
+        *self.service.pre_insert.write() = Box::new(wrapped_pre_insert);
         self
     }
 
     /// Direct read access to the underlying map.
     pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.read()
+        self.service.map.read()
     }
 
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
-        self.service.get(k).and_then(|guard| {
-            MappedRwLockReadGuard::try_map(guard, |(_, v): &DatedMaybeTombstone<V>| v.as_ref()).ok()
-        })
+        let guard = self.service.map.read();
+        RwLockReadGuard::try_map(guard, |map: &M| map.get(k).and_then(|(_, v)| v.as_ref())).ok()
     }
 
     pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
@@ -212,10 +214,11 @@ impl<
     > Service<M>
 {
     pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
-        self.service.get_mut(k).and_then(|guard| {
-            MappedRwLockWriteGuard::try_map(guard, |(_, v): &mut DatedMaybeTombstone<V>| v.as_mut())
-                .ok()
+        let guard = self.service.map.write();
+        RwLockWriteGuard::try_map(guard, |map: &mut M| {
+            map.get_mut(k).and_then(|(_, v)| v.as_mut())
         })
+        .ok()
     }
 }
 

@@ -18,9 +18,7 @@ use std::time::{Duration, Instant};
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
-use parking_lot::{
-    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -30,7 +28,7 @@ use tracing::{debug, trace, warn};
 
 use crate::diff::Diffable;
 use crate::gen_ip::gen_ip;
-use crate::map::{Map, MutMap};
+use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 
 const BUFFER_SIZE: usize = 65507;
@@ -50,8 +48,8 @@ pub(crate) struct InternalService<M: Map> {
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
-    peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
-    pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
+    pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
+    pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
 }
 
 impl<M: Map> Clone for InternalService<M> {
@@ -102,29 +100,6 @@ impl<
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
-    }
-
-    pub fn with_seed(self, addr: IpAddr) -> Self {
-        let now = Instant::now();
-        self.peers.write().insert(addr, now);
-        self
-    }
-
-    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        self,
-        pre_insert: F,
-    ) -> Self {
-        *self.pre_insert.write() = Box::new(pre_insert);
-        self
-    }
-
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.map.read()
-    }
-
-    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
-        let guard = self.map.read();
-        RwLockReadGuard::try_map(guard, |map: &M| map.get(k)).ok()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -319,20 +294,6 @@ impl<
                 }
             }
         }
-    }
-}
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug,
-        M: MutMap<Key = K, Value = V, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > InternalService<M>
-{
-    pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
-        let guard = self.map.write();
-        RwLockWriteGuard::try_map(guard, |map: &mut M| map.get_mut(k)).ok()
     }
 }
 

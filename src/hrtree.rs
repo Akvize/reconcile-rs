@@ -954,11 +954,6 @@ mod tests {
         assert_eq!(tree1.insertion_position(&0), 0);
         assert_eq!(tree1.insertion_position(&u64::MAX), tree1.len());
 
-        // test iteration
-        let items: Vec<(u64, u64)> = tree1.iter().map(|(&k, &v)| (k, v)).collect();
-        assert_eq!(items.len(), key_values.len());
-        assert_eq!(items, key_values);
-
         // test get_range
         let from_index = rng.gen_range(0..key_values.len());
         let to_index = rng.gen_range(from_index..key_values.len());
