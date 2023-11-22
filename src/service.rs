@@ -16,9 +16,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use parking_lot::{
-    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLockReadGuard, RwLockWriteGuard,
-};
+use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::diff::Diffable;
@@ -213,12 +211,15 @@ impl<
             + 'static,
     > Service<M>
 {
-    pub fn get_mut(&self, k: &K) -> Option<MappedRwLockWriteGuard<'_, V>> {
-        let guard = self.service.map.write();
-        RwLockWriteGuard::try_map(guard, |map: &mut M| {
-            map.get_mut(k).and_then(|(_, v)| v.as_mut())
-        })
-        .ok()
+    pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
+        let mut guard = self.service.map.write();
+        guard.get_mut(k, |maybe_tv| {
+            if let Some((_, v)) = maybe_tv {
+                callback(v.as_mut());
+            } else {
+                callback(None);
+            }
+        });
     }
 }
 

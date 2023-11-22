@@ -36,7 +36,7 @@ pub trait Map {
 
 pub trait MutMap: Map {
     /// Get a mutable reference to the value associated with the given key, if it exists.
-    fn get_mut<'a>(&'a mut self, key: &Self::Key) -> Option<&'a mut Self::Value>;
+    fn get_mut<F: FnOnce(Option<&mut Self::Value>)>(&mut self, key: &Self::Key, callback: F);
 }
 
 impl<K, V> Map for HRTree<K, V>
@@ -79,7 +79,7 @@ where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
-    fn get_mut<'a>(&'a mut self, key: &Self::Key) -> Option<&'a mut Self::Value> {
-        self.get_mut(key)
+    fn get_mut<F: FnOnce(Option<&mut Self::Value>)>(&mut self, key: &Self::Key, callback: F) {
+        self.get_mut(key, callback);
     }
 }
