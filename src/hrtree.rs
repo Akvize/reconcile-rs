@@ -935,6 +935,17 @@ mod tests {
         assert_eq!(tree1.get(&rng.gen()), None);
         assert_eq!(tree1.get(&key_values[0].0), Some(&key_values[0].1));
 
+        // test get_mut
+        assert_eq!(tree1.get_mut(&rng.gen()), None);
+        let key: u64 = rng.gen::<u64>();
+        let value1: u64 = rng.gen();
+        let value2: u64 = rng.gen();
+        tree1.insert(key, value1);
+        *tree1.get_mut(&key).unwrap() = value2;
+        tree1.check_invariants();
+        expected_hash ^= super::hash(&key, &value2);
+        key_values.push((key, value2));
+
         // in the tree, the items should now be sorted
         key_values.sort();
 
