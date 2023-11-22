@@ -922,7 +922,7 @@ mod tests {
 
         // add some
         for _ in 0..1000 {
-            let key: u64 = rng.gen::<u64>();
+            let key: u64 = rng.gen();
             let value: u64 = rng.gen();
             let old = tree1.insert(key, value);
             assert!(old.is_none());
@@ -931,6 +931,9 @@ mod tests {
             assert_eq!(tree1.hash(&..), expected_hash);
             key_values.push((key, value));
         }
+
+        assert_eq!(tree1.get(&rng.gen()), None);
+        assert_eq!(tree1.get(&key_values[0].0), Some(&key_values[0].1));
 
         // in the tree, the items should now be sorted
         key_values.sort();
