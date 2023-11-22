@@ -295,20 +295,39 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
         aux(self.root.as_ref(), key)
     }
 
-    pub fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> {
-        fn aux<'a, K: Ord, V>(node: &'a mut Node<K, V>, key: &K) -> Option<&'a mut V> {
+    pub fn get_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
+        fn aux<K: Hash + Ord, V: Hash, F: FnOnce(Option<&mut V>)>(
+            node: &mut Node<K, V>,
+            key: &K,
+            callback: F,
+        ) -> u64 {
             match node.keys.binary_search(key) {
-                Ok(index) => Some(&mut node.values[index]),
+                Ok(index) => {
+                    let v = Some(&mut node.values[index]);
+                    callback(v);
+                    // callback likely modified v, so we need to restore the hash invariants
+                    let old_hash = node.hashes[index];
+                    let new_hash = hash(key, &node.values[index]);
+                    node.hashes[index] = new_hash;
+                    let diff_hash = old_hash ^ new_hash;
+                    node.tree_hash ^= diff_hash;
+                    println!("{diff_hash}");
+                    diff_hash
+                }
                 Err(index) => {
                     if let Some(children) = node.children.as_mut() {
-                        aux(children[index].as_mut(), key)
+                        let diff_hash = aux(children[index].as_mut(), key, callback);
+                        node.tree_hash ^= diff_hash;
+                        diff_hash
                     } else {
-                        None
+                        callback(None);
+                        // callback cannot change the content of the tree, no invariant to restore
+                        0
                     }
                 }
             }
         }
-        aux(self.root.as_mut(), key)
+        aux(self.root.as_mut(), key, callback);
     }
 
     pub fn position(&self, key: &K) -> Option<usize> {
@@ -936,12 +955,12 @@ mod tests {
         assert_eq!(tree1.get(&key_values[0].0), Some(&key_values[0].1));
 
         // test get_mut
-        assert_eq!(tree1.get_mut(&rng.gen()), None);
+        tree1.get_mut(&rng.gen(), |v| assert_eq!(v, None));
         let key: u64 = rng.gen::<u64>();
         let value1: u64 = rng.gen();
         let value2: u64 = rng.gen();
         tree1.insert(key, value1);
-        *tree1.get_mut(&key).unwrap() = value2;
+        tree1.get_mut(&key, |v| *v.unwrap() = value2);
         tree1.check_invariants();
         expected_hash ^= super::hash(&key, &value2);
         key_values.push((key, value2));
