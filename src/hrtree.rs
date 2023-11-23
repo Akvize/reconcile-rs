@@ -45,7 +45,7 @@ const MAX_CAPACITY: usize = 2 * B - 1;
 
 type InsertionTuple<K, V> = Option<(K, V, u64, Box<Node<K, V>>)>;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Node<K, V> {
     pub(crate) keys: ArrayVec<K, MAX_CAPACITY>,
     pub(crate) values: ArrayVec<V, MAX_CAPACITY>,
@@ -262,6 +262,7 @@ impl<K, V> Node<K, V> {
     }
 }
 
+#[derive(Clone)]
 pub struct HRTree<K, V> {
     pub(crate) root: Box<Node<K, V>>,
 }
