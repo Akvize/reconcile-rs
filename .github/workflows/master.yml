@@ -45,6 +45,9 @@ jobs:
       - name: Run tests
         run: cargo test --all --verbose
 
+      - name: Check that the benchmarks can still compile
+        run: cargo bench --no-run
+
       - name: Generate documentation
         run: cargo doc --all --verbose
 
