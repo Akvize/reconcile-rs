@@ -111,6 +111,51 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+enum IntoValuesItem<K, V> {
+    Node(Box<Node<K, V>>),
+    Element(V),
+}
+
+pub struct IntoValues<K, V> {
+    stack: Vec<IntoValuesItem<K, V>>,
+}
+
+impl<K, V> Iterator for IntoValues<K, V> {
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.pop() {
+            Some(IntoValuesItem::Node(mut node)) => {
+                if let Some(mut children) = node.children {
+                    self.stack
+                        .push(IntoValuesItem::Node(children.pop().unwrap()));
+                    while !node.values.is_empty() {
+                        let v = node.values.pop().unwrap();
+                        self.stack.push(IntoValuesItem::Element(v));
+                        let c = children.pop().unwrap();
+                        self.stack.push(IntoValuesItem::Node(c));
+                    }
+                } else {
+                    while !node.values.is_empty() {
+                        let v = node.values.pop().unwrap();
+                        self.stack.push(IntoValuesItem::Element(v));
+                    }
+                }
+                self.next()
+            }
+            Some(IntoValuesItem::Element(v)) => Some(v),
+            None => None,
+        }
+    }
+}
+
+impl<K, V> HRTree<K, V> {
+    pub fn into_values(self) -> IntoValues<K, V> {
+        IntoValues {
+            stack: vec![IntoValuesItem::Node(self.root)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::{Rng, SeedableRng};
@@ -130,10 +175,18 @@ mod tests {
         }
         let tree = HRTree::from_iter(key_values.clone());
         key_values.sort();
+        let values: Vec<_> = key_values.iter().map(|(_, v)| *v).collect();
+
+        // test into_iter()
+        assert_eq!(tree.clone().into_iter().collect::<Vec<_>>(), key_values);
+
+        // test iter()
         assert_eq!(
             tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
             key_values
         );
-        assert_eq!(tree.into_iter().collect::<Vec<_>>(), key_values);
+
+        // test into_values()
+        assert_eq!(tree.clone().into_values().collect::<Vec<_>>(), values);
     }
 }
