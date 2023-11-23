@@ -76,12 +76,10 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
             if children_passed < node.keys.len() {
                 self.stack.push((node, children_passed + 1));
             }
-            if children_passed <= node.keys.len() {
-                if let Some(children) = node.children.as_ref() {
-                    self.stack.push((&children[children_passed], 0));
-                }
+            if let Some(children) = node.children.as_ref() {
+                self.stack.push((&children[children_passed], 0));
             }
-            if 0 < children_passed && children_passed <= node.keys.len() {
+            if children_passed > 0 {
                 Some((
                     &node.keys[children_passed - 1],
                     &node.values[children_passed - 1],
@@ -167,12 +165,10 @@ impl<'a, K, V> Iterator for Values<'a, K, V> {
             if children_passed < node.keys.len() {
                 self.stack.push((node, children_passed + 1));
             }
-            if children_passed <= node.keys.len() {
-                if let Some(children) = node.children.as_ref() {
-                    self.stack.push((&children[children_passed], 0));
-                }
+            if let Some(children) = node.children.as_ref() {
+                self.stack.push((&children[children_passed], 0));
             }
-            if 0 < children_passed && children_passed <= node.keys.len() {
+            if children_passed > 0 {
                 Some(&node.values[children_passed - 1])
             } else {
                 self.next()
@@ -246,12 +242,10 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
             if children_passed < node.keys.len() {
                 self.stack.push((node, children_passed + 1));
             }
-            if children_passed <= node.keys.len() {
-                if let Some(children) = node.children.as_ref() {
-                    self.stack.push((&children[children_passed], 0));
-                }
+            if let Some(children) = node.children.as_ref() {
+                self.stack.push((&children[children_passed], 0));
             }
-            if 0 < children_passed && children_passed <= node.keys.len() {
+            if children_passed > 0 {
                 Some(&node.keys[children_passed - 1])
             } else {
                 self.next()
