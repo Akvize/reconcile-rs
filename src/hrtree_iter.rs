@@ -156,6 +156,41 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+pub struct Values<'a, K, V> {
+    stack: Vec<(&'a Node<K, V>, usize)>,
+}
+
+impl<'a, K, V> Iterator for Values<'a, K, V> {
+    type Item = &'a V;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((node, children_passed)) = self.stack.pop() {
+            if children_passed < node.keys.len() {
+                self.stack.push((node, children_passed + 1));
+            }
+            if children_passed <= node.keys.len() {
+                if let Some(children) = node.children.as_ref() {
+                    self.stack.push((&children[children_passed], 0));
+                }
+            }
+            if 0 < children_passed && children_passed <= node.keys.len() {
+                Some(&node.values[children_passed - 1])
+            } else {
+                self.next()
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<K, V> HRTree<K, V> {
+    pub fn values(&self) -> Values<'_, K, V> {
+        Values {
+            stack: vec![(&self.root, 0)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::{Rng, SeedableRng};
@@ -188,5 +223,8 @@ mod tests {
 
         // test into_values()
         assert_eq!(tree.clone().into_values().collect::<Vec<_>>(), values);
+
+        // test values()
+        assert_eq!(tree.values().copied().collect::<Vec<_>>(), values);
     }
 }
