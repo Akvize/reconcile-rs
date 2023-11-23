@@ -191,6 +191,50 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+enum IntoKeysItem<K, V> {
+    Node(Box<Node<K, V>>),
+    Element(K),
+}
+
+pub struct IntoKeys<K, V> {
+    stack: Vec<IntoKeysItem<K, V>>,
+}
+
+impl<K, V> Iterator for IntoKeys<K, V> {
+    type Item = K;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.pop() {
+            Some(IntoKeysItem::Node(mut node)) => {
+                if let Some(mut children) = node.children {
+                    self.stack.push(IntoKeysItem::Node(children.pop().unwrap()));
+                    while !node.keys.is_empty() {
+                        let k = node.keys.pop().unwrap();
+                        self.stack.push(IntoKeysItem::Element(k));
+                        let c = children.pop().unwrap();
+                        self.stack.push(IntoKeysItem::Node(c));
+                    }
+                } else {
+                    while !node.keys.is_empty() {
+                        let k = node.keys.pop().unwrap();
+                        self.stack.push(IntoKeysItem::Element(k));
+                    }
+                }
+                self.next()
+            }
+            Some(IntoKeysItem::Element(k)) => Some(k),
+            None => None,
+        }
+    }
+}
+
+impl<K, V> HRTree<K, V> {
+    pub fn into_keys(self) -> IntoKeys<K, V> {
+        IntoKeys {
+            stack: vec![IntoKeysItem::Node(self.root)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::{Rng, SeedableRng};
@@ -210,6 +254,7 @@ mod tests {
         }
         let tree = HRTree::from_iter(key_values.clone());
         key_values.sort();
+        let keys: Vec<_> = key_values.iter().map(|(k, _)| *k).collect();
         let values: Vec<_> = key_values.iter().map(|(_, v)| *v).collect();
 
         // test into_iter()
@@ -226,5 +271,8 @@ mod tests {
 
         // test values()
         assert_eq!(tree.values().copied().collect::<Vec<_>>(), values);
+
+        // test into_keys()
+        assert_eq!(tree.clone().into_keys().collect::<Vec<_>>(), keys);
     }
 }
