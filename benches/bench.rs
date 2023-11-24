@@ -333,14 +333,14 @@ fn service_reconcile(c: &mut Criterion) {
                     let v: u32 = rng.gen();
                     service1.just_insert(k, v, Utc::now());
                     let clone = service1.clone();
-                    let task = tokio::spawn(async move { clone.initiate_reconciliation().await });
+                    let task = tokio::spawn(async move { clone.start_reconciliation().await });
                     while service2.get(&k).is_none() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
                     service1.just_remove(&k, Utc::now());
                     task.abort();
                     let clone = service1.clone();
-                    let task = tokio::spawn(async move { clone.initiate_reconciliation().await });
+                    let task = tokio::spawn(async move { clone.start_reconciliation().await });
                     while service2.get(&k).is_some() {
                         std::thread::sleep(Duration::from_micros(1));
                     }

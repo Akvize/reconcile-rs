@@ -20,6 +20,7 @@
 pub mod diff;
 pub mod gen_ip;
 pub mod hrtree;
+pub mod hrtree_iter;
 pub(crate) mod internal_service;
 pub mod map;
 pub mod reconcilable;
