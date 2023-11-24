@@ -17,39 +17,40 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HRTree<K, V> {
     }
 }
 
-enum IntoIterItem<K, V> {
+enum IntoIterLayer<K, V> {
     Node(Box<Node<K, V>>),
     Element(K, V),
 }
 
 pub struct IntoIter<K, V> {
-    stack: Vec<IntoIterItem<K, V>>,
+    stack: Vec<IntoIterLayer<K, V>>,
 }
 
 impl<K, V> Iterator for IntoIter<K, V> {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         match self.stack.pop() {
-            Some(IntoIterItem::Node(mut node)) => {
+            Some(IntoIterLayer::Node(mut node)) => {
                 if let Some(mut children) = node.children {
-                    self.stack.push(IntoIterItem::Node(children.pop().unwrap()));
+                    self.stack
+                        .push(IntoIterLayer::Node(children.pop().unwrap()));
                     while !node.keys.is_empty() {
                         let k = node.keys.pop().unwrap();
                         let v = node.values.pop().unwrap();
-                        self.stack.push(IntoIterItem::Element(k, v));
+                        self.stack.push(IntoIterLayer::Element(k, v));
                         let c = children.pop().unwrap();
-                        self.stack.push(IntoIterItem::Node(c));
+                        self.stack.push(IntoIterLayer::Node(c));
                     }
                 } else {
                     while !node.keys.is_empty() {
                         let k = node.keys.pop().unwrap();
                         let v = node.values.pop().unwrap();
-                        self.stack.push(IntoIterItem::Element(k, v));
+                        self.stack.push(IntoIterLayer::Element(k, v));
                     }
                 }
                 self.next()
             }
-            Some(IntoIterItem::Element(k, v)) => Some((k, v)),
+            Some(IntoIterLayer::Element(k, v)) => Some((k, v)),
             None => None,
         }
     }
@@ -60,7 +61,7 @@ impl<K, V> IntoIterator for HRTree<K, V> {
     type IntoIter = IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
-            stack: vec![IntoIterItem::Node(self.root)],
+            stack: vec![IntoIterLayer::Node(self.root)],
         }
     }
 }
@@ -109,38 +110,38 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
-enum IntoValuesItem<K, V> {
+enum IntoValuesLayer<K, V> {
     Node(Box<Node<K, V>>),
     Element(V),
 }
 
 pub struct IntoValues<K, V> {
-    stack: Vec<IntoValuesItem<K, V>>,
+    stack: Vec<IntoValuesLayer<K, V>>,
 }
 
 impl<K, V> Iterator for IntoValues<K, V> {
     type Item = V;
     fn next(&mut self) -> Option<Self::Item> {
         match self.stack.pop() {
-            Some(IntoValuesItem::Node(mut node)) => {
+            Some(IntoValuesLayer::Node(mut node)) => {
                 if let Some(mut children) = node.children {
                     self.stack
-                        .push(IntoValuesItem::Node(children.pop().unwrap()));
+                        .push(IntoValuesLayer::Node(children.pop().unwrap()));
                     while !node.values.is_empty() {
                         let v = node.values.pop().unwrap();
-                        self.stack.push(IntoValuesItem::Element(v));
+                        self.stack.push(IntoValuesLayer::Element(v));
                         let c = children.pop().unwrap();
-                        self.stack.push(IntoValuesItem::Node(c));
+                        self.stack.push(IntoValuesLayer::Node(c));
                     }
                 } else {
                     while !node.values.is_empty() {
                         let v = node.values.pop().unwrap();
-                        self.stack.push(IntoValuesItem::Element(v));
+                        self.stack.push(IntoValuesLayer::Element(v));
                     }
                 }
                 self.next()
             }
-            Some(IntoValuesItem::Element(v)) => Some(v),
+            Some(IntoValuesLayer::Element(v)) => Some(v),
             None => None,
         }
     }
@@ -149,7 +150,7 @@ impl<K, V> Iterator for IntoValues<K, V> {
 impl<K, V> HRTree<K, V> {
     pub fn into_values(self) -> IntoValues<K, V> {
         IntoValues {
-            stack: vec![IntoValuesItem::Node(self.root)],
+            stack: vec![IntoValuesLayer::Node(self.root)],
         }
     }
 }
@@ -187,37 +188,38 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
-enum IntoKeysItem<K, V> {
+enum IntoKeysLayer<K, V> {
     Node(Box<Node<K, V>>),
     Element(K),
 }
 
 pub struct IntoKeys<K, V> {
-    stack: Vec<IntoKeysItem<K, V>>,
+    stack: Vec<IntoKeysLayer<K, V>>,
 }
 
 impl<K, V> Iterator for IntoKeys<K, V> {
     type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         match self.stack.pop() {
-            Some(IntoKeysItem::Node(mut node)) => {
+            Some(IntoKeysLayer::Node(mut node)) => {
                 if let Some(mut children) = node.children {
-                    self.stack.push(IntoKeysItem::Node(children.pop().unwrap()));
+                    self.stack
+                        .push(IntoKeysLayer::Node(children.pop().unwrap()));
                     while !node.keys.is_empty() {
                         let k = node.keys.pop().unwrap();
-                        self.stack.push(IntoKeysItem::Element(k));
+                        self.stack.push(IntoKeysLayer::Element(k));
                         let c = children.pop().unwrap();
-                        self.stack.push(IntoKeysItem::Node(c));
+                        self.stack.push(IntoKeysLayer::Node(c));
                     }
                 } else {
                     while !node.keys.is_empty() {
                         let k = node.keys.pop().unwrap();
-                        self.stack.push(IntoKeysItem::Element(k));
+                        self.stack.push(IntoKeysLayer::Element(k));
                     }
                 }
                 self.next()
             }
-            Some(IntoKeysItem::Element(k)) => Some(k),
+            Some(IntoKeysLayer::Element(k)) => Some(k),
             None => None,
         }
     }
@@ -226,7 +228,7 @@ impl<K, V> Iterator for IntoKeys<K, V> {
 impl<K, V> HRTree<K, V> {
     pub fn into_keys(self) -> IntoKeys<K, V> {
         IntoKeys {
-            stack: vec![IntoKeysItem::Node(self.root)],
+            stack: vec![IntoKeysLayer::Node(self.root)],
         }
     }
 }
