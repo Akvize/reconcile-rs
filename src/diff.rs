@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 /// * [`insertion_position`](HashRangeQueryable::insertion_position),
 /// * [`key_at`](HashRangeQueryable::key_at),
 /// * [`len`](HashRangeQueryable::len)
+///
 /// (with [`is_empty`](HashRangeQueryable::is_empty) as a default implementation).
+///
 /// This is a low-level trait.
 pub trait HashRangeQueryable {
     type Key;
