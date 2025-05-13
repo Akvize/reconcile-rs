@@ -325,9 +325,13 @@ mod tests {
     use super::HRTree;
     use once_cell::sync::Lazy;
 
+    const TREE_SIZE: usize = 1000;
+
     static BASE_ITEMS: Lazy<Vec<(u64, u64)>> = Lazy::new(|| {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        (0..1000).map(|i| (i, rng.gen::<u64>())).collect()
+        (0..TREE_SIZE)
+            .map(|i| (i as u64, rng.gen::<u64>()))
+            .collect()
     });
 
     fn make_tree() -> HRTree<u64, u64> {
@@ -364,7 +368,7 @@ mod tests {
     fn test_iter_mut_1_modification() {
         let mut tree = make_tree();
 
-        let num = rand::random::<usize>().rem_euclid(1000);
+        let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
         let (key, value) = BASE_ITEMS[num];
         let mut expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
         expected[num] = value;
