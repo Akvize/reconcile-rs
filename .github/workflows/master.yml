@@ -7,45 +7,44 @@
      branches: [ "master" ]
 
  concurrency:
-@@
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
  jobs:
    lint-and-test:
      runs-on: ubuntu-latest
      steps:
-@@
      - name: Enable caching
        uses: actions/cache@v3
        with:
-@@
          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     # ───────────────────────────────────────────────────────────
     # Devcontainer build cache
-    - name: Cache Buildx layers
-      uses: actions/cache@v3
-      with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ hashFiles('.devcontainer/Dockerfile.dev')}}
+     - name: Cache Buildx layers
+       uses: actions/cache@v3
+       with:
+         path: /tmp/.buildx-cache
+         key: ${{ runner.os }}-buildx-${{ hashFiles('.devcontainer/Dockerfile.dev')}}
 
     # Set up Buildx using the docker-container driver
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-      with:
-        driver: docker-container
+     - name: Set up Docker Buildx
+       uses: docker/setup-buildx-action@v2
+       with:
+         driver: docker-container
 
-    - name: Build Devcontainer image
-      uses: docker/build-push-action@v3
-      with:
-        context: .
-        file: .devcontainer/Dockerfile.dev
-        builder: default
-        load: true
-        cache-from: type=local,src=/tmp/.buildx-cache
-        cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-        tags: devcontainer-ci:latest
+     - name: Build Devcontainer image
+       uses: docker/build-push-action@v3
+       with:
+         context: .
+         file: .devcontainer/Dockerfile.dev
+         builder: default
+         load: true
+         cache-from: type=local,src=/tmp/.buildx-cache
+         cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+         tags: devcontainer-ci:latest
 
      - name: Format
        run: cargo fmt --check
-@@
+       
      - name: Check that the crate is publishable
        run: cargo publish --allow-dirty --dry-run
