@@ -92,7 +92,7 @@ Choose the one that fits your tooling.
 3. **Run the container interactively**
 
    ```bash
-   make run
+   make dev
    ```
 
    This mounts your code at `/workspace` and drops you into `bash` as root.
@@ -125,6 +125,47 @@ Choose the one that fits your tooling.
    ```
 
 > **Tip**: You can also attach your preferred editor (Neovim, Emacs, JetBrains) to the running container for LSP support.
+
+### 🔄 Rebuilding the Image
+
+To rebuild the Docker image without running the init scripts, run:
+
+```bash
+make build
+```
+
+This will rebuild the image using your `Dockerfile.dev`.
+
+Alternatively, to force a no-cache build:
+
+```bash
+docker build --no-cache -f .devcontainer/Dockerfile.dev -t rust-dev-container .
+```
+
+### 🧰 Attaching an Editor
+
+You can attach VS Code to the running container by:
+
+1. Running:
+
+   ```bash
+   make dev
+   ```
+2. In VS Code: **Remote-Containers: Attach to Running Container…** and select the container.
+
+For Neovim, Emacs, or other editors, launch your editor inside the container shell with:
+
+```bash
+nvim .
+```
+
+or
+
+```bash
+emacs .
+```
+
+to pick up the LSP servers installed in `/usr/local/bin`.
 
 ---
 

@@ -45,3 +45,13 @@ RUN chown -R dev:dev /usr/local/cargo /usr/local/rustup
 
 # 9) Prepare workspace
 WORKDIR /workspace
+
+# Ensure that any interactive shell picks up Cargo/Rustup binaries
+RUN echo 'export PATH="/usr/local/cargo/bin:$PATH"' >> /home/dev/.bashrc \
+ && echo 'export PATH="/usr/local/cargo/bin:$PATH"' >> /home/dev/.profile
+
+# 10) Switch to the non-root user
+USER dev
+
+# Optional: default entrypoint to bash login shell
+ENTRYPOINT ["bash"]
