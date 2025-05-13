@@ -490,8 +490,10 @@ mod tests {
         let tree: HRTree<u64, u64> = HRTree::new();
         assert!(tree.clone().into_iter().next().is_none());
         assert!(tree.iter().next().is_none());
+        assert!(tree.clone().iter_mut().next().is_none());
         assert!(tree.clone().into_values().next().is_none());
         assert!(tree.values().next().is_none());
+        assert!(tree.clone().values_mut().next().is_none());
         assert!(tree.clone().into_keys().next().is_none());
         assert!(tree.keys().next().is_none());
     }
