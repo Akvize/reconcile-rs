@@ -335,7 +335,25 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_mut_collect_all_values() {
+    fn test_into_iter() {
+        let tree = make_tree();
+        assert_eq!(
+            tree.clone().into_iter().collect::<Vec<_>>(),
+            BASE_ITEMS.clone()
+        );
+    }
+
+    #[test]
+    fn test_iter() {
+        let tree = make_tree();
+        assert_eq!(
+            tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
+            BASE_ITEMS.clone()
+        );
+    }
+
+    #[test]
+    fn test_iter_mut_0_modification() {
         let mut tree = make_tree();
         let collected: Vec<_> = tree.iter_mut().map(|(_, v)| *v).collect();
         let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
@@ -343,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_mut_modify_targeted_value() {
+    fn test_iter_mut_1_modification() {
         let mut tree = make_tree();
 
         let num = rand::random::<usize>().rem_euclid(1000);
@@ -361,40 +379,41 @@ mod tests {
     }
 
     #[test]
-    fn test_iter() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut key_values = Vec::new();
-
-        // add some
-        for _ in 0..1000 {
-            let key: u64 = rng.gen::<u64>();
-            let value: u64 = rng.gen();
-            key_values.push((key, value));
-        }
-        let tree = HRTree::from_iter(key_values.clone());
-        key_values.sort();
-        let keys: Vec<_> = key_values.iter().map(|(k, _)| *k).collect();
-        let values: Vec<_> = key_values.iter().map(|(_, v)| *v).collect();
-
-        // test into_iter()
-        assert_eq!(tree.clone().into_iter().collect::<Vec<_>>(), key_values);
-
-        // test iter()
-        assert_eq!(
-            tree.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
-            key_values
-        );
-
-        // test into_values()
+    fn test_into_values() {
+        let values: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        let tree = make_tree();
         assert_eq!(tree.clone().into_values().collect::<Vec<_>>(), values);
+    }
 
-        // test values()
+    #[test]
+    fn test_values() {
+        let values: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        let tree = make_tree();
         assert_eq!(tree.values().copied().collect::<Vec<_>>(), values);
+    }
 
-        // test into_keys()
+    #[test]
+    fn test_into_keys() {
+        let keys: Vec<_> = BASE_ITEMS.iter().map(|&(k, _)| k).collect();
+        let tree = make_tree();
         assert_eq!(tree.clone().into_keys().collect::<Vec<_>>(), keys);
+    }
 
-        // test keys()
+    #[test]
+    fn test_keys() {
+        let keys: Vec<_> = BASE_ITEMS.iter().map(|&(k, _)| k).collect();
+        let tree = make_tree();
         assert_eq!(tree.keys().copied().collect::<Vec<_>>(), keys);
+    }
+
+    #[test]
+    fn test_empty_tree_iterators() {
+        let tree: HRTree<u64, u64> = HRTree::new();
+        assert!(tree.clone().into_iter().next().is_none());
+        assert!(tree.iter().next().is_none());
+        assert!(tree.clone().into_values().next().is_none());
+        assert!(tree.values().next().is_none());
+        assert!(tree.clone().into_keys().next().is_none());
+        assert!(tree.keys().next().is_none());
     }
 }
