@@ -240,6 +240,55 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+pub struct ValuesMut<'a, K, V> {
+    stack: Vec<(*mut Node<K, V>, usize)>,
+    _marker: PhantomData<&'a mut V>,
+}
+
+impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
+    /// Returns a mutable iterator over values in-order.
+    pub fn values_mut(&'a mut self) -> ValuesMut<'a, K, V> {
+        let mut stack = Vec::new();
+        let mut cur_ptr: *mut Node<K, V> = &mut *self.root;
+        unsafe {
+            while let Some(children) = (*cur_ptr).children.as_mut() {
+                stack.push((cur_ptr, 0));
+                cur_ptr = &mut *children[0];
+            }
+            stack.push((cur_ptr, 0));
+        }
+        ValuesMut {
+            stack,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K: Hash + Ord, V: Hash> Iterator for ValuesMut<'a, K, V> {
+    type Item = &'a mut V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((node_ptr, idx)) = self.stack.pop() {
+            unsafe {
+                let node = &mut *node_ptr;
+                if idx < node.keys.len() {
+                    self.stack.push((node_ptr, idx + 1));
+                    if let Some(children) = node.children.as_mut() {
+                        let mut child_ptr: *mut Node<K, V> = &mut *children[idx + 1] as *mut _;
+                        while let Some(gc) = (*child_ptr).children.as_mut() {
+                            self.stack.push((child_ptr, 0));
+                            child_ptr = &mut *gc[0];
+                        }
+                        self.stack.push((child_ptr, 0));
+                    }
+                    return Some(&mut node.values[idx]);
+                }
+            }
+        }
+        None
+    }
+}
+
 enum IntoKeysLayer<K, V> {
     Node(Box<Node<K, V>>),
     Element(K),
@@ -394,6 +443,32 @@ mod tests {
         let values: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
         let tree = make_tree();
         assert_eq!(tree.values().copied().collect::<Vec<_>>(), values);
+    }
+
+    #[test]
+    fn test_values_mut_0_modification() {
+        let mut tree = make_tree();
+        let collected: Vec<_> = tree.values_mut().map(|v| *v).collect();
+        let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn test_values_mut_1_modification() {
+        let mut tree = make_tree();
+
+        let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
+        let (_, value) = BASE_ITEMS[num];
+        let mut expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        expected[num] = value;
+
+        for (n, v) in tree.values_mut().enumerate() {
+            if n == num {
+                *v = value;
+            }
+        }
+        let collected: Vec<_> = tree.iter().map(|(_, &v)| v).collect();
+        assert_eq!(collected, expected);
     }
 
     #[test]
