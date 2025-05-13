@@ -96,7 +96,7 @@ Choose the one that fits your tooling.
 
    This mounts your code at `/workspace`, bootstraps the environment and drops you into `bash` as root.
 
-5. **Verify** inside the same shell:
+4. **Verify** inside the same shell:
 
    ```bash
    whoami                       # should be 'dev'
