@@ -88,27 +88,13 @@ Choose the one that fits your tooling.
    ```bash
    make build
    ```
-
 3. **Run the container interactively**
 
    ```bash
    make dev
    ```
 
-   This mounts your code at `/workspace` and drops you into `bash` as root.
-
-4. **Bootstrap the environment** (inside the container)
-
-   ```bash
-   # make sure init.sh is executable
-   chmod +x .devcontainer/init.sh
-
-   # heavy setup (once)
-   .devcontainer/init.sh create
-
-   # lightweight start tasks (each session)
-   .devcontainer/init.sh start
-   ```
+   This mounts your code at `/workspace`, bootstraps the environment and drops you into `bash` as root.
 
 5. **Verify** inside the same shell:
 
@@ -143,15 +129,6 @@ docker build --no-cache -f .devcontainer/Dockerfile.dev -t rust-dev-container .
 ```
 
 ### 🧰 Attaching an Editor
-
-You can attach VS Code to the running container by:
-
-1. Running:
-
-   ```bash
-   make dev
-   ```
-2. In VS Code: **Remote-Containers: Attach to Running Container…** and select the container.
 
 For Neovim, Emacs, or other editors, launch your editor inside the container shell with:
 
