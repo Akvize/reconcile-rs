@@ -88,6 +88,7 @@ Choose the one that fits your tooling.
    ```bash
    make build
    ```
+
 3. **Run the container interactively**
 
    ```bash
@@ -157,13 +158,13 @@ ln -sf ./.devcontainer/../pre-commit .git/hooks/pre-commit
 This will run the [`./pre-commit`](./pre-commit) before letting you create any
 commit. The goal is to detect linting errors as early as possible.
 
-# Code Coverage
+## Code Coverage
 
 To get the code coverage, run:
 
 ```bash
-$ cargo install cargo-llvm-cov
-$ cargo llvm-cov
+cargo install cargo-llvm-cov
+cargo llvm-cov
 ```
 
 For a detailed report of missed lines, use:
