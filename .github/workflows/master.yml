@@ -74,7 +74,7 @@ jobs:
 
       - name: Create builder instance
         run: |
-          docker buildx create --use --driver docker-container \
+          docker buildx create --name builder --use --driver docker-container \
             --driver-opt image=moby/buildkit:latest || true
 
       - name: Cache Buildx layers
