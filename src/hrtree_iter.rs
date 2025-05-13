@@ -1,4 +1,4 @@
-use std::hash::Hash;
+use std::{hash::Hash, marker::PhantomData};
 
 use crate::hrtree::{HRTree, Node};
 
@@ -107,6 +107,58 @@ impl<'a, K, V> IntoIterator for &'a HRTree<K, V> {
 impl<K, V> HRTree<K, V> {
     pub fn iter(&self) -> Iter<K, V> {
         self.into_iter()
+    }
+}
+
+pub struct IterMut<'a, K, V> {
+    stack: Vec<(*mut Node<K, V>, usize)>,
+    _marker: PhantomData<&'a mut V>,
+}
+
+impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((node_ptr, idx)) = self.stack.pop() {
+            unsafe {
+                let node = &mut *node_ptr;
+                if idx < node.keys.len() {
+                    // Prepare next
+                    self.stack.push((node_ptr, idx + 1));
+                    // Traverse right subtree
+                    if let Some(children) = node.children.as_mut() {
+                        let mut child_ptr: *mut Node<K, V> = &mut *children[idx + 1];
+                        while let Some(gc) = (*child_ptr).children.as_mut() {
+                            self.stack.push((child_ptr, 0));
+                            child_ptr = &mut *gc[0];
+                        }
+                        self.stack.push((child_ptr, 0));
+                    }
+                    return Some((&node.keys[idx], &mut node.values[idx]));
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
+    pub fn iter_mut(&'a mut self) -> IterMut<'a, K, V> {
+        let mut stack = Vec::new();
+        // Unsafe pointer to root
+        let mut cur_ptr: *mut Node<K, V> = &mut *self.root;
+        unsafe {
+            // Descend to leftmost leaf
+            while let Some(children) = (*cur_ptr).children.as_mut() {
+                stack.push((cur_ptr, 0));
+                cur_ptr = &mut *children[0];
+            }
+            stack.push((cur_ptr, 0));
+        }
+        IterMut {
+            stack,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -271,6 +323,42 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::HRTree;
+    use once_cell::sync::Lazy;
+
+    static BASE_ITEMS: Lazy<Vec<(u64, u64)>> = Lazy::new(|| {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        (0..1000).map(|i| (i, rng.gen::<u64>())).collect()
+    });
+
+    fn make_tree() -> HRTree<u64, u64> {
+        HRTree::from_iter(BASE_ITEMS.clone())
+    }
+
+    #[test]
+    fn test_iter_mut_collect_all_values() {
+        let mut tree = make_tree();
+        let collected: Vec<_> = tree.iter_mut().map(|(_, v)| *v).collect();
+        let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn test_iter_mut_modify_targeted_value() {
+        let mut tree = make_tree();
+
+        let num = rand::random::<usize>().rem_euclid(1000);
+        let (key, value) = BASE_ITEMS[num];
+        let mut expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        expected[num] = value;
+
+        for (k, v) in tree.iter_mut() {
+            if *k == key {
+                *v = value;
+            }
+        }
+        let collected: Vec<_> = tree.iter().map(|(_, &v)| v).collect();
+        assert_eq!(collected, expected);
+    }
 
     #[test]
     fn test_iter() {
