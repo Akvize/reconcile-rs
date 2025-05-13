@@ -1,0 +1,28 @@
+{
+	"name": "Rust Dev Container",
+	"build": {
+	  "dockerfile": "Dockerfile.dev",
+	  "context": ".."
+	},
+	"workspaceFolder": "/workspace",
+	"remoteUser": "dev",
+	// Pass host Git author info via environment variables
+	"remoteEnv": {
+	  "GIT_AUTHOR_NAME": "${localEnv:GIT_AUTHOR_NAME}",
+	  "GIT_AUTHOR_EMAIL": "${localEnv:GIT_AUTHOR_EMAIL}"
+	},
+	"postCreateCommand": ".devcontainer/init.sh create",
+	"postStartCommand": ".devcontainer/init.sh start",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"ms-azuretools.vscode-docker",
+				"DavidAnson.vscode-markdownlint",
+				"timonwong.shellcheck",
+				"wereturtle.makefile-linter",
+				"tamasfe.even-better-toml"
+			]
+      	}
+   	}
+}

@@ -1,0 +1,47 @@
+FROM debian:stable-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+# 1) System packages (including necessary linters)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev \
+      curl ca-certificates git sudo nodejs npm \
+      shellcheck \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2) Create non-root 'dev' user
+RUN groupadd -g 1000 dev \
+ && useradd -m -u 1000 -g dev -s /usr/bin/bash dev \
+ && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# 3) Install Rust toolchain + components
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path --default-toolchain stable \
+ && rustup component add clippy \
+ && rustup component add rustfmt
+
+# 4) Install Rust Analyzer LSP
+RUN curl -L \
+     https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-linux \
+   -o /usr/local/bin/rust-analyzer \
+  && chmod +x /usr/local/bin/rust-analyzer
+
+# 5) Install Dockerfile language server
+RUN npm install -g dockerfile-language-server-nodejs markdownlint-cli bash-language-server
+
+# 6) Install TOML LSP (Taplo)
+RUN cargo install taplo-cli --locked --features lsp
+
+# 7) Install Markdown LSP (Marksman)
+RUN curl -L \
+     https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux \
+     -o /usr/local/bin/marksman \
+  && chmod +x /usr/local/bin/marksman
+
+# 8) Fix permissions for Cargo & Rustup dirs
+RUN chown -R dev:dev /usr/local/cargo /usr/local/rustup
+
+# 9) Prepare workspace
+WORKDIR /workspace
