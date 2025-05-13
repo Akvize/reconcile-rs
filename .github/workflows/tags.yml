@@ -2,10 +2,11 @@ name: tags
 
 on:
   push:
-    tags: [ "v*" ]
+    tags:
+      - 'v*'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -17,12 +18,19 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set version
-        run: echo "VERSION=${GITHUB_REF##*\/v}" >> $GITHUB_ENV
-      - uses: actions/checkout@v4
-      - name: Set Cargo.toml version
-        run: sed "s/0\\.0\\.0-git/$VERSION/" -i Cargo.toml Cargo.lock
-      - name: Login on crates repository
-        run: echo ${{ secrets.CARGO_REGISTRY_TOKEN }} | cargo login
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
+
+      - name: Update Cargo.toml and Cargo.lock versions
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.lock
+
+      - name: Login to crates.io
+        run: echo "${{ secrets.CARGO_REGISTRY_TOKEN }}" | cargo login
+
       - name: Publish crate
         run: cargo publish --allow-dirty
