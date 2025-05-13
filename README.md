@@ -4,6 +4,7 @@
 [![MIT licensed][mit-badge]][mit-url]
 [![Apache licensed][apache-badge]][apache-url]
 [![Build Status][actions-badge]][actions-url]
+[![Docs Status][docs-badge]][docs-url]
 
 [crates-badge]: https://img.shields.io/crates/v/reconcile.svg
 [crates-url]: https://crates.io/crates/reconcile
@@ -13,8 +14,10 @@
 [apache-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-APACHE
 [actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
 [actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
-
-[Docs](https://docs.rs/reconcile/latest/reconcile/)
+[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
+[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
+[docs-badge]: https://docs.rs/reconcile/badge.svg
+[docs-url]: https://docs.rs/reconcile/latest/reconcile/
 
 This crate provides a key-data map structure `HRTree` that can be used together
 with the reconciliation `Service`. Different instances can talk together over
