@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_mut_0_modification() {
+    fn test_iter_mut() {
         let mut tree = make_tree();
         let collected: Vec<_> = tree.iter_mut().map(|(_, v)| *v).collect();
         let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_mut_1_modification() {
+    fn test_iter_mut_modify() {
         let mut tree = make_tree();
 
         let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_values_mut_0_modification() {
+    fn test_values_mut() {
         let mut tree = make_tree();
         let collected: Vec<_> = tree.values_mut().map(|v| *v).collect();
         let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_values_mut_1_modification() {
+    fn test_values_mut_modify() {
         let mut tree = make_tree();
 
         let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
