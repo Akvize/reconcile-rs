@@ -102,8 +102,7 @@ impl<
     /// The hook is stored internally and called on every key/value
     /// before it’s written into `self.map`.
     ///
-    /// Adds the provided closure as pre_insert to Self, so you can
-    /// chain builder calls at initialization.
+    /// Adds the provided closure as pre_insert to Self
     pub fn add_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(&self, pre_insert: F) {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
