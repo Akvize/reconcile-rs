@@ -109,8 +109,11 @@ impl<
     }
 
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
-        let mut guard = self.map.write();
+        // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
+
+        // 2) Now acquire write lock and insert
+        let mut guard = self.map.write();
         guard.insert(key.clone(), value.clone())
     }
 
@@ -132,9 +135,13 @@ impl<
     }
 
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
-        let mut guard = self.map.write();
+        // 1) First run all pre-insert hooks outside the map lock
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
+        }
+        // 2) Then acquire the write lock once and insert them
+        let mut guard = self.map.write();
+        for (key, value) in key_values {
             guard.insert(key.clone(), value.clone());
         }
     }
@@ -338,4 +345,51 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
     trace!("sending last {} bytes to {peer}", send_buf.len());
     send_to_retry(&socket, send_buf, &peer).await.unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
+}
+
+#[cfg(test)]
+mod deadlock_regressions {
+    use chrono::Utc;
+
+    use crate::{DatedMaybeTombstone, HRTree, Service};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
+        let tree =
+            HRTree::<u8, DatedMaybeTombstone<u8>>::from_iter(vec![(1, (Utc::now(), Some(10_u8)))]);
+        // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
+        let svc = Service::new(
+            tree,
+            8080,
+            "127.0.0.44".parse().unwrap(),
+            "127.0.0.1/8".parse().unwrap(),
+        )
+        .await;
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag2 = flag.clone();
+
+        let hook_svc = svc.clone();
+        // Install a pre-insert hook that itself calls insert on the same Service
+        let once = Arc::new(AtomicBool::new(false));
+        let guard = once.clone();
+        svc.add_pre_insert(move |&k, &v| {
+            // inner insert should no longer deadlock
+            if !guard.swap(true, Ordering::SeqCst) {
+                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100, Utc::now());
+            }
+            flag2.store(true, Ordering::SeqCst);
+        });
+
+        // Trigger our hook via a normal insert
+        let _ = svc.just_insert(42, 99, Utc::now());
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "The pre-insert hook never ran to completion (likely deadlocked)"
+        );
+    }
 }

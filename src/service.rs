@@ -29,7 +29,7 @@ pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
-/// Wraps a key-value map to enable reconciliation between different instances over a network.
+/// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The service also keeps track of the addresses of other instances.
 ///
@@ -44,7 +44,9 @@ pub struct Service<M: Map>
 where
     M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
+    /// Internal map and hooks container.
     service: InternalService<M>,
+    /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<M::Key>,
 }
 
@@ -52,6 +54,7 @@ impl<M: Map> Clone for Service<M>
 where
     M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
+    /// Allows cloning of the `Service` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
         Service {
             service: self.service.clone(),
@@ -72,12 +75,14 @@ impl<
             + 'static,
     > Service<M>
 {
+    /// Create a new `Service`, set up network and tombstones.
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        Service {
+        let svc = Service {
             service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: TimeoutWheel::new(),
-        }
-        .with_pre_insert(|_, _| {})
+        };
+        svc.add_pre_insert(|_, _| {});
+        svc
     }
 
     /// Provides the address of a known peer to the service
@@ -96,10 +101,16 @@ impl<
         self
     }
 
-    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        self,
-        pre_insert: F,
-    ) -> Self {
+    /// Register a pre-insert hook.
+    ///
+    /// The hook is invoked **before** inserting each key/value pair into the internal map.
+    /// Calling this does **not** consume the `Service` instance; you can call it multiple times.
+    ///
+    /// # Deadlock Safety
+    ///
+    /// Hooks are executed outside of the map’s write lock, so calling back into any insert
+    /// method from within a hook will not block or deadlock.
+    pub fn add_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(&self, pre_insert: F) {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
             pre_insert(k, v);
@@ -109,8 +120,8 @@ impl<
                 tombstones.insert(k.clone(), v.0);
             }
         };
+        // Swap in the new hook
         *self.service.pre_insert.write() = Box::new(wrapped_pre_insert);
-        self
     }
 
     /// Direct read access to the underlying map.
@@ -123,16 +134,31 @@ impl<
         RwLockReadGuard::try_map(guard, |map: &M| map.get(k).and_then(|(_, v)| v.as_ref())).ok()
     }
 
+    /// Insert a single key/value pair, running the pre-insert hook first.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Calls the registered `pre_insert` hook outside of any locks.
+    /// 2. Acquires the write lock on the map, performs the insertion, then drops the lock.
+    ///
+    /// Returns the overwritten value if the key already existed.
     pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.just_insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
     }
 
+    /// Fully-qualified insert: just_insert + async broadcast.
     pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
         let ret = self.service.insert(key, (timestamp, Some(value)));
         ret.and_then(|t| t.1)
     }
 
+    /// Bulk-insert multiple key/value pairs with hook invocation.
+    ///
+    /// # Behavior
+    ///
+    /// 1. Runs the pre-insert hook for each entry (outside any lock).
+    /// 2. Acquires the write lock once and inserts all entries.
     pub fn just_insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
         self.service.just_insert_bulk(
             &key_values
@@ -142,6 +168,7 @@ impl<
         );
     }
 
+    /// Bulk-insert + async broadcast.
     pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
         self.service.insert_bulk(
             &key_values
@@ -235,7 +262,7 @@ mod service_tests {
         let service = Service::new(
             HRTree::<u8, DatedMaybeTombstone<String>>::new(),
             8080,
-            "127.0.0.44".parse().unwrap(),
+            "127.0.0.45".parse().unwrap(),
             "127.0.0.1/8".parse().unwrap(),
         )
         .await
