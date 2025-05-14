@@ -694,6 +694,7 @@ dependencies = [
  "clap",
  "criterion",
  "ipnet",
+ "once_cell",
  "parking_lot",
  "rand",
  "range-cmp",
