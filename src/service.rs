@@ -73,11 +73,12 @@ impl<
     > Service<M>
 {
     pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        Service {
+        let svc = Service {
             service: InternalService::new(map, port, listen_addr, peer_net).await,
             tombstones: TimeoutWheel::new(),
-        }
-        .with_pre_insert(|_, _| {})
+        };
+        svc.add_pre_insert(|_, _| {});
+        svc
     }
 
     /// Provides the address of a known peer to the service
@@ -96,10 +97,14 @@ impl<
         self
     }
 
-    pub fn with_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(
-        self,
-        pre_insert: F,
-    ) -> Self {
+    /// Install a “pre-insert” hook that runs before every insert.
+    ///
+    /// The hook is stored internally and called on every key/value
+    /// before it’s written into `self.map`.
+    ///
+    /// Adds the provided closure as pre_insert to Self, so you can
+    /// chain builder calls at initialization.
+    pub fn add_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(&self, pre_insert: F) {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
             pre_insert(k, v);
@@ -109,8 +114,8 @@ impl<
                 tombstones.insert(k.clone(), v.0);
             }
         };
+        // Swap in the new hook
         *self.service.pre_insert.write() = Box::new(wrapped_pre_insert);
-        self
     }
 
     /// Direct read access to the underlying map.
