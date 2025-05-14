@@ -16,12 +16,36 @@
 //! - `ValuesMut`: mutable in-order traversal yielding `&mut V`;
 //! - `IntoKeys`: immutable in-order traversal consuming the tree and yielding `K`;
 //! - `Keys`: immutable in-order traversal yielding `&K`;
+//!
+//! # Complexity
+//!
+//! All iterators perform an initial descent to the leftmost leaf in **O(h)** time, where *h* is the tree height (≈ log n).
+//! Each call to `next()` then executes a constant amount of work plus at most one further descent (amortized **O(1)** per element).
+//! Memory overhead is **O(h)** for the internal stack of node pointers.
+//!
+//! # Safety (for mutable iterators)
+//!
+//! `IterMut` and `ValuesMut` use raw pointers (`*mut Node<K,V>`) internally to allow multiple mutable borrows during traversal.
+//! Safety is guaranteed by:
+//! 1. Never aliasing a pointer twice: stack-driven control ensures each node is borrowed at most once at a time.
+//! 2. Lifetimes tied to `&'a mut self`, so no pointers outlive the tree borrow.
+//! 3. Strict in-order precedence: pointers are only created when descending children, and popped before reuse.
+//!
+//! # Future Work: Lazy Iterators
+//!
+//! Current iterators are "semi-lazy": they do not collect all items up front, but they do pre-compute the full descent path.
+//! To match `BTreeMap` semantics more closely, we can remove even that pre-computation and make both forward and reverse traversal fully lazy,
+//! support `DoubleEndedIterator`, and implement precise lower/upper-bound seeks.
 
 use std::{hash::Hash, marker::PhantomData};
 
 use crate::hrtree::{HRTree, Node};
 
 impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HRTree<K, V> {
+    /// Builds an [`HRTree`] from an iterator of key-value pairs.
+    ///
+    /// The pairs are collected, sorted by key, and then inserted one by one,
+    /// ensuring the resulting tree is balanced according to the input order.
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = (K, V)>,
