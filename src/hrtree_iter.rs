@@ -624,15 +624,47 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_tree_iterators() {
-        let tree: HRTree<u64, u64> = HRTree::new();
-        assert!(tree.clone().into_iter().next().is_none());
-        assert!(tree.iter().next().is_none());
-        assert!(tree.clone().iter_mut().next().is_none());
-        assert!(tree.clone().into_values().next().is_none());
-        assert!(tree.values().next().is_none());
-        assert!(tree.clone().values_mut().next().is_none());
-        assert!(tree.clone().into_keys().next().is_none());
-        assert!(tree.keys().next().is_none());
+    fn test_all_iterators_empty() {
+        let empty: HRTree<i32, i32> = HRTree::new();
+        // immutable
+        assert_eq!(empty.iter().next(), None);
+        // consuming
+        assert!(empty.clone().into_iter().next().is_none());
+        assert!(empty.clone().into_keys().next().is_none());
+        assert!(empty.clone().into_values().next().is_none());
+        // shared
+        assert!(empty.keys().next().is_none());
+        assert!(empty.values().next().is_none());
+        // mutable
+        let mut empty_mut = empty.clone();
+        assert!(empty_mut.iter_mut().next().is_none());
+        assert!(empty_mut.values_mut().next().is_none());
+    }
+
+    #[test]
+    fn test_all_iterators_single_leaf() {
+        let mut single = HRTree::new();
+        single.insert(42, 99);
+        // immutable
+        assert_eq!(single.iter().collect::<Vec<_>>(), vec![(&42, &99)]);
+        // consuming
+        assert_eq!(
+            single.clone().into_iter().collect::<Vec<_>>(),
+            vec![(42, 99)]
+        );
+        assert_eq!(single.clone().into_keys().collect::<Vec<_>>(), vec![42]);
+        assert_eq!(single.clone().into_values().collect::<Vec<_>>(), vec![99]);
+        // shared
+        assert_eq!(single.keys().copied().collect::<Vec<_>>(), vec![42]);
+        assert_eq!(single.values().copied().collect::<Vec<_>>(), vec![99]);
+        // mutable
+        for (_k, v) in single.iter_mut() {
+            *v += 1;
+        }
+        assert_eq!(single.iter().collect::<Vec<_>>(), vec![(&42, &100)]);
+        for val in single.values_mut() {
+            *val *= 2;
+        }
+        assert_eq!(single.values().copied().collect::<Vec<_>>(), vec![200]);
     }
 }
