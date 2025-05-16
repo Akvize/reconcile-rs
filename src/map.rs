@@ -10,8 +10,8 @@
 
 use core::hash::Hash;
 
-use crate::diff::DiffRange;
-use crate::hrtree::HRTree;
+use hrtree::HRTree;
+use reconcile_traits::DiffRange;
 
 /// Provides the basic methods of a key-value map.
 /// In addition to [`get`](Map::get), [`insert`](Map::insert) and [`remove`](Map::remove),

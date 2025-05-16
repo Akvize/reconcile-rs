@@ -39,7 +39,7 @@
 
 use std::{hash::Hash, marker::PhantomData};
 
-use crate::hrtree::{HRTree, Node};
+use crate::{HRTree, Node};
 
 impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for HRTree<K, V> {
     /// Builds an [`HRTree`] from an iterator of key-value pairs.
@@ -110,7 +110,7 @@ impl<K, V> IntoIterator for HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.into_iter().collect();
     /// assert_eq!(pairs, vec![(1, "a"), (2, "b")]);
@@ -169,7 +169,7 @@ impl<K, V> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.iter().collect();
     /// assert_eq!(pairs, vec![(&1, &"a"), (&2, &"b")]);
@@ -225,7 +225,7 @@ impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let mut tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.iter_mut().collect();
     /// assert_eq!(pairs, vec![(&1, &mut "a"), (&2, &mut "b")]);
@@ -295,7 +295,7 @@ impl<K, V> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.into_values().collect();
     /// assert_eq!(pairs, vec![("a"), ("b")]);
@@ -343,7 +343,7 @@ impl<K, V> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.values().collect();
     /// assert_eq!(pairs, vec![(&"a"), (&"b")]);
@@ -376,7 +376,7 @@ impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let mut tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
     /// for val in tree.values_mut() {
     ///     *val += 1;
@@ -471,7 +471,7 @@ impl<K, V> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, 'a'), (2, 'b')]);
     /// let ks: Vec<_> = tree.clone().into_keys().collect();
     /// assert_eq!(ks, vec![1, 2]);
@@ -517,7 +517,7 @@ impl<K, V> HRTree<K, V> {
     /// # Examples
     ///
     /// ```rust
-    /// use reconcile::HRTree;
+    /// # use hrtree::HRTree;
     /// let tree = HRTree::from_iter(vec![(1, 'a'), (2, 'b')]);
     /// let ks: Vec<_> = tree.keys().copied().collect();
     /// assert_eq!(ks, vec![1, 2]);
@@ -540,9 +540,7 @@ mod tests {
 
     static BASE_ITEMS: Lazy<Vec<(u64, u64)>> = Lazy::new(|| {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        (0..TREE_SIZE)
-            .map(|i| (i as u64, rng.gen::<u64>()))
-            .collect()
+        (0..TREE_SIZE).map(|i| (i as u64, rng.random())).collect()
     });
 
     fn make_tree() -> HRTree<u64, u64> {
@@ -579,7 +577,7 @@ mod tests {
     fn test_iter_mut_modify() {
         let mut tree = make_tree();
 
-        let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
+        let num = rand::random::<u64>().rem_euclid(TREE_SIZE as u64) as usize;
         let (key, value) = BASE_ITEMS[num];
         let mut expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
         expected[num] = value;
@@ -619,7 +617,7 @@ mod tests {
     fn test_values_mut_modify() {
         let mut tree = make_tree();
 
-        let num = rand::random::<usize>().rem_euclid(TREE_SIZE);
+        let num = rand::random::<u64>().rem_euclid(TREE_SIZE as u64) as usize;
         let (_, value) = BASE_ITEMS[num];
         let mut expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
         expected[num] = value;

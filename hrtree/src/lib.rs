@@ -13,13 +13,15 @@
 //! insertion and removal, as well as `O(log(n))` cumulated hash range-query.
 //! The latter property enables querying
 //! the cumulated (XORed) hash of all key-value pairs between two keys.
-
+//!
+//! [`HRTree`] implements the [`Diffable`](reconcile_traits::Diffable)
+//! and [`HashRangeQueryable`] traits.
+//!
 //! Although we did come we the idea independently, it exactly matches a paper
 //! published on Arxiv in February 2023:
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
-//!
-//! [`HRTree`] implements the [`Diffable`](crate::diff::Diffable)
-//! and [`HashRangeQueryable`] traits.
+
+pub mod hrtree_iter;
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
@@ -30,7 +32,7 @@ use arrayvec::ArrayVec;
 use range_cmp::{RangeComparable, RangeOrdering};
 use tracing::trace;
 
-use crate::diff::HashRangeQueryable;
+use reconcile_traits::HashRangeQueryable;
 
 pub fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -573,6 +575,80 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HRTree<K, V> {
         f.debug_map().entries(self.iter()).finish()
     }
 }
+pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
+    range: &'a R,
+    stack: Vec<(&'a Node<K, V>, usize)>,
+}
+
+impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((node, children_passed)) = self.stack.pop() {
+            #[allow(clippy::collapsible_if)]
+            if 0 < children_passed && children_passed <= node.keys.len() {
+                if !self.range.contains(&node.keys[children_passed - 1]) {
+                    self.stack.clear();
+                    return None;
+                }
+            }
+            if children_passed <= node.keys.len() {
+                self.stack.push((node, children_passed + 1));
+                if let Some(children) = node.children.as_ref() {
+                    self.stack.push((&children[children_passed], 0));
+                }
+            }
+            if 0 < children_passed && children_passed <= node.keys.len() {
+                Some((
+                    &node.keys[children_passed - 1],
+                    &node.values[children_passed - 1],
+                ))
+            } else {
+                self.next()
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<K: Ord, V> HRTree<K, V> {
+    pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
+        let mut stack = Vec::new();
+        let mut node = self.root.as_ref();
+        // traverse interior nodes
+        'main_loop: while let Some(children) = node.children.as_ref() {
+            for i in 0..node.keys.len() {
+                match node.keys[i].range_cmp(range) {
+                    RangeOrdering::Below => (),
+                    RangeOrdering::Above => {
+                        node = &children[i];
+                        continue 'main_loop;
+                    }
+                    RangeOrdering::Inside => {
+                        stack.push((node, i + 1));
+                        node = &children[i];
+                        continue 'main_loop;
+                    }
+                }
+            }
+            node = children.last().as_ref().unwrap();
+        }
+        // traverse leaf node
+        for i in 0..node.keys.len() {
+            match node.keys[i].range_cmp(range) {
+                RangeOrdering::Below => (),
+                RangeOrdering::Above => {
+                    break;
+                }
+                RangeOrdering::Inside => {
+                    stack.push((node, i + 1));
+                    break;
+                }
+            }
+        }
+        ItemRange { range, stack }
+    }
+}
 
 impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
     type Key = K;
@@ -693,100 +769,25 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
     }
 }
 
-pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
-    range: &'a R,
-    stack: Vec<(&'a Node<K, V>, usize)>,
-}
-
-impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
-    type Item = (&'a K, &'a V);
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some((node, children_passed)) = self.stack.pop() {
-            #[allow(clippy::collapsible_if)]
-            if 0 < children_passed && children_passed <= node.keys.len() {
-                if !self.range.contains(&node.keys[children_passed - 1]) {
-                    self.stack.clear();
-                    return None;
-                }
-            }
-            if children_passed <= node.keys.len() {
-                self.stack.push((node, children_passed + 1));
-                if let Some(children) = node.children.as_ref() {
-                    self.stack.push((&children[children_passed], 0));
-                }
-            }
-            if 0 < children_passed && children_passed <= node.keys.len() {
-                Some((
-                    &node.keys[children_passed - 1],
-                    &node.values[children_passed - 1],
-                ))
-            } else {
-                self.next()
-            }
-        } else {
-            None
-        }
-    }
-}
-
-impl<K: Ord, V> HRTree<K, V> {
-    pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
-        let mut stack = Vec::new();
-        let mut node = self.root.as_ref();
-        // traverse interior nodes
-        'main_loop: while let Some(children) = node.children.as_ref() {
-            for i in 0..node.keys.len() {
-                match node.keys[i].range_cmp(range) {
-                    RangeOrdering::Below => (),
-                    RangeOrdering::Above => {
-                        node = &children[i];
-                        continue 'main_loop;
-                    }
-                    RangeOrdering::Inside => {
-                        stack.push((node, i + 1));
-                        node = &children[i];
-                        continue 'main_loop;
-                    }
-                }
-            }
-            node = children.last().as_ref().unwrap();
-        }
-        // traverse leaf node
-        for i in 0..node.keys.len() {
-            match node.keys[i].range_cmp(range) {
-                RangeOrdering::Below => (),
-                RangeOrdering::Above => {
-                    break;
-                }
-                RangeOrdering::Inside => {
-                    stack.push((node, i + 1));
-                    break;
-                }
-            }
-        }
-        ItemRange { range, stack }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::ops::RangeBounds;
-
-    use rand::{seq::SliceRandom, Rng, SeedableRng};
-
-    use crate::diff::{Diffable, HashRangeQueryable};
-
     use super::HRTree;
+    use rand::{Rng, SeedableRng};
+    use reconcile_traits::{Diffable, HashRangeQueryable};
 
     #[test]
     fn test_simple() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let mut tree: HRTree<u64, u64> = HRTree::new();
         for _ in 1..=100 {
-            tree.insert(rng.gen(), rng.gen());
+            tree.insert(rng.random(), rng.random());
             tree.check_invariants();
         }
     }
+
+    use std::ops::RangeBounds;
+
+    use rand::seq::SliceRandom;
 
     #[test]
     fn test_hash() {
@@ -833,8 +834,8 @@ mod tests {
 
         // add some
         for _ in 0..1000 {
-            let key: u64 = rng.gen();
-            let value: u64 = rng.gen();
+            let key: u64 = rng.random();
+            let value: u64 = rng.random();
             let old = tree1.insert(key, value);
             assert!(old.is_none());
             tree1.check_invariants();
@@ -843,14 +844,14 @@ mod tests {
             key_values.push((key, value));
         }
 
-        assert_eq!(tree1.get(&rng.gen()), None);
+        assert_eq!(tree1.get(&rng.random()), None);
         assert_eq!(tree1.get(&key_values[0].0), Some(&key_values[0].1));
 
         // test get_mut
-        tree1.get_mut(&rng.gen(), |v| assert_eq!(v, None));
-        let key: u64 = rng.gen::<u64>();
-        let value1: u64 = rng.gen();
-        let value2: u64 = rng.gen();
+        tree1.get_mut(&rng.random(), |v| assert_eq!(v, None));
+        let key: u64 = rng.random();
+        let value1: u64 = rng.random();
+        let value2: u64 = rng.random();
         tree1.insert(key, value1);
         tree1.get_mut(&key, |v| *v.unwrap() = value2);
         tree1.check_invariants();
@@ -870,7 +871,7 @@ mod tests {
         assert_eq!(tree1.hash(&..mid) ^ tree1.hash(&(mid..)), tree1.hash(&..));
 
         for _ in 0..100 {
-            let index = rng.gen::<usize>() % key_values.len();
+            let index = rng.random::<u64>() as usize % key_values.len();
             let key = key_values[index].0;
             assert_eq!(*tree1.key_at(index), key);
             assert_eq!(tree1.position(&key), Some(index));
@@ -880,8 +881,8 @@ mod tests {
         assert_eq!(tree1.insertion_position(&u64::MAX), tree1.len());
 
         // test get_range
-        let from_index = rng.gen_range(0..key_values.len());
-        let to_index = rng.gen_range(from_index..key_values.len());
+        let from_index = rng.random_range(0..key_values.len());
+        let to_index = rng.random_range(from_index..key_values.len());
         let from_key = tree1.key_at(from_index);
         let to_key = tree1.key_at(to_index);
         fn test_range<
@@ -913,8 +914,8 @@ mod tests {
         test_range(&key_values, &tree1, .., ..);
 
         // test diff
-        let key: u64 = rng.gen::<u64>();
-        let value: u64 = rng.gen();
+        let key: u64 = rng.random();
+        let value: u64 = rng.random();
         let old = tree2.insert(key, value);
         assert!(old.is_none());
         let mut diff_ranges1 = Vec::new();

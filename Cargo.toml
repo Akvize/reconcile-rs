@@ -10,6 +10,11 @@ exclude = [
     "CONTRIBUTING.md",
 ]
 
+[workspace]
+members = [
+  "hrtree", "reconcile-traits",
+]
+
 [profile.release]
 debug = true
 
@@ -29,6 +34,8 @@ range-cmp = "0.1.1"
 serde = { version = "1.0.192", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros"] }
 tracing = "0.1.40"
+hrtree = { version = "0.1.0", path = "hrtree" }
+reconcile-traits = { version = "0.1.0", path = "reconcile-traits" }
 
 [dev-dependencies]
 clap = { version = "4.4.6", features = ["derive"] }

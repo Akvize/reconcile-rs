@@ -9,7 +9,9 @@ use criterion::{
     SamplingMode, Throughput,
 };
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use hrtree::HRTree;
+use reconcile::{DatedMaybeTombstone, Service};
+use reconcile_traits::HashRangeQueryable;
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");

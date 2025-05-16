@@ -1,4 +1,4 @@
-// Copyright 2023 Developers of the reconcile project.
+// Copyright 2025 Developers of the reconcile project.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -11,7 +11,7 @@
 
 use std::ops::{Bound, RangeBounds};
 
-use serde::{Deserialize, Serialize};
+use serde_derive::{Deserialize, Serialize};
 
 /// Provides the necessary methods to be able
 /// to efficiently determine and compare

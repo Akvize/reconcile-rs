@@ -26,10 +26,10 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use crate::diff::Diffable;
 use crate::gen_ip::gen_ip;
 use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
+use reconcile_traits::Diffable;
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -350,8 +350,9 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 #[cfg(test)]
 mod deadlock_regressions {
     use chrono::Utc;
+    use hrtree::HRTree;
 
-    use crate::{DatedMaybeTombstone, HRTree, Service};
+    use crate::{DatedMaybeTombstone, Service};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,

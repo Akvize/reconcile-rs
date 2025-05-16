@@ -1,10 +1,8 @@
-use std::hash::Hash;
-use std::ops::Bound;
+use hrtree::HRTree;
+use reconcile_traits::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
+use std::{hash::Hash, ops::Bound};
 
-use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
-use reconcile::hrtree::HRTree;
-
-pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
+fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
     local: &D,
     remote: &D,
 ) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>) {
@@ -27,7 +25,7 @@ pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = Dif
     (local_diff_ranges, remote_diff_ranges)
 }
 
-pub fn reconcile<K, V>(local: &mut HRTree<K, V>, remote: &mut HRTree<K, V>)
+fn reconcile<K, V>(local: &mut HRTree<K, V>, remote: &mut HRTree<K, V>)
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,

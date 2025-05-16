@@ -1,0 +1,12 @@
+[package]
+name = "hrtree"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrayvec = "0.7.6"
+rand = "0.9.1"
+range-cmp = "0.1.3"
+tracing = "0.1.41"
+once_cell = "1.21.3"
+reconcile-traits = { version = "0.1.0", path = "../reconcile-traits" }

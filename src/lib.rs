@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This crate provides a key-data map structure [`HRTree`] that can be used together with the
-//! reconciliation [`Service`]. Different instances can talk together over UDP to efficiently
+//! This crate provides a reconciliation [`Service`] wrapping a redundant key-value store.
+//! Different instances can talk together over UDP to efficiently
 //! reconcile their differences.
 
 //! All the data is available locally in all instances, and the user can be
@@ -17,16 +17,11 @@
 //! number of round-trips. It should also work well to populate an instance from
 //! scratch from other instances.
 
-pub mod diff;
 pub mod gen_ip;
-pub mod hrtree;
-pub mod hrtree_iter;
 pub(crate) mod internal_service;
 pub mod map;
 pub mod reconcilable;
 pub mod service;
 pub(crate) mod timeout_wheel;
 
-pub use diff::HashRangeQueryable;
-pub use hrtree::HRTree;
 pub use service::{DatedMaybeTombstone, Service};

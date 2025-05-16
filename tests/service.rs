@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use hrtree::HRTree;
 use rand::{
     distributions::{Alphanumeric, DistString},
     Rng, SeedableRng,
 };
+use reconcile_traits::HashRangeQueryable;
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{DatedMaybeTombstone, Service};
 
 /// Wait for a while until the provided predicate becomes true
 ///

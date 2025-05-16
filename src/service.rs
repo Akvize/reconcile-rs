@@ -19,10 +19,10 @@ use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::diff::Diffable;
 use crate::internal_service::InternalService;
 use crate::map::{Map, MutMap};
 use crate::timeout_wheel::TimeoutWheel;
+use reconcile_traits::Diffable;
 
 pub type MaybeTombstone<V> = Option<V>;
 pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
@@ -255,7 +255,8 @@ mod service_tests {
     use chrono::Utc;
     use std::time::Duration;
 
-    use crate::{DatedMaybeTombstone, HRTree, Service};
+    use crate::{DatedMaybeTombstone, Service};
+    use hrtree::HRTree;
 
     #[tokio::test]
     async fn tombstones_expiration() {

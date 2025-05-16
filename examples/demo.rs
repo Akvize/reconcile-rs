@@ -2,14 +2,16 @@ use std::net::IpAddr;
 
 use chrono::Utc;
 use clap::Parser;
+use hrtree::HRTree;
 use ipnet::IpNet;
 use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
+use reconcile_traits::HashRangeQueryable;
 use tracing::info;
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{DatedMaybeTombstone, Service};
 
 #[derive(Parser)]
 struct Args {
