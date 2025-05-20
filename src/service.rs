@@ -240,7 +240,7 @@ impl<
 {
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         let mut guard = self.service.map.write();
-        guard.get_mut(k, |maybe_tv| {
+        guard.with_mut(k, |maybe_tv| {
             if let Some((_, v)) = maybe_tv {
                 callback(v.as_mut());
             } else {
