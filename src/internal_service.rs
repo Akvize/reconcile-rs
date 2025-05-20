@@ -30,6 +30,7 @@ use crate::diff::Diffable;
 use crate::gen_ip::gen_ip;
 use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
+use crate::service::ServiceConfig;
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -86,16 +87,16 @@ impl<
             + Diffable<ComparisonItem = C, DifferenceItem = D>,
     > InternalService<M>
 {
-    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
-        let socket = UdpSocket::bind(SocketAddr::new(listen_addr, port))
+    pub async fn new(map: M, config: ServiceConfig) -> Self {
+        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
         InternalService {
             map: Arc::new(RwLock::new(map)),
-            port,
+            port: config.port,
             socket: Arc::new(socket),
-            peer_net,
+            peer_net: config.peer_net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
@@ -351,7 +352,7 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 mod deadlock_regressions {
     use chrono::Utc;
 
-    use crate::{DatedMaybeTombstone, HRTree, Service};
+    use crate::{service::ServiceConfig, DatedMaybeTombstone, HRTree, Service};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -361,14 +362,11 @@ mod deadlock_regressions {
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
         let tree =
             HRTree::<u8, DatedMaybeTombstone<u8>>::from_iter(vec![(1, (Utc::now(), Some(10_u8)))]);
+        let config = ServiceConfig::default()
+            .with_port(8080)
+            .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
-        let svc = Service::new(
-            tree,
-            8080,
-            "127.0.0.44".parse().unwrap(),
-            "127.0.0.1/8".parse().unwrap(),
-        )
-        .await;
+        let svc = Service::new(tree, config).await;
 
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = flag.clone();
