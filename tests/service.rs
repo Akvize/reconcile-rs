@@ -6,7 +6,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -34,6 +34,14 @@ async fn test() {
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
+    let cfg1 = ServiceConfig::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net);
+    let cfg2 = ServiceConfig::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net);
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -51,12 +59,8 @@ async fn test() {
     let tree2: HRTree<String, DatedMaybeTombstone<String>> = HRTree::new();
 
     // start reconciliation services for tree1 and tree2
-    let service1 = Service::new(tree1, port, addr1, peer_net)
-        .await
-        .with_seed(addr2);
-    let service2 = Service::new(tree2, port, addr2, peer_net)
-        .await
-        .with_seed(addr1);
+    let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
+    let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run());
     assert_eq!(service2.read().hash(&..), 0);
     let task1 = tokio::spawn(service1.clone().run());
