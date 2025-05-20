@@ -76,9 +76,9 @@ impl<
     > Service<M>
 {
     /// Create a new `Service`, set up network and tombstones.
-    pub async fn new(map: M, port: u16, listen_addr: IpAddr, peer_net: IpNet) -> Self {
+    pub async fn new(map: M, config: ServiceConfig) -> Self {
         let svc = Service {
-            service: InternalService::new(map, port, listen_addr, peer_net).await,
+            service: InternalService::new(map, config).await,
             tombstones: TimeoutWheel::new(),
         };
         svc.add_pre_insert(|_, _| {});
@@ -250,23 +250,54 @@ impl<
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ServiceConfig {
+    pub port: u16,
+    pub listen_addr: IpAddr,
+    pub peer_net: IpNet,
+    // may include other options in the future: use_tls, tombstone_ttl, metrics, etc.
+}
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        ServiceConfig {
+            port: 0,
+            listen_addr: "127.0.0.1".parse().unwrap(),
+            peer_net: "127.0.0.1/8".parse().unwrap(),
+        }
+    }
+}
+impl ServiceConfig {
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+    pub fn with_listen_addr(mut self, listen_addr: IpAddr) -> Self {
+        self.listen_addr = listen_addr;
+        self
+    }
+    pub fn with_peer_net(mut self, peer_net: IpNet) -> Self {
+        self.peer_net = peer_net;
+        self
+    }
+}
+
 #[cfg(test)]
 mod service_tests {
     use chrono::Utc;
     use std::time::Duration;
 
-    use crate::{DatedMaybeTombstone, HRTree, Service};
+    use crate::{service::ServiceConfig, DatedMaybeTombstone, HRTree, Service};
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        let service = Service::new(
-            HRTree::<u8, DatedMaybeTombstone<String>>::new(),
-            8080,
-            "127.0.0.45".parse().unwrap(),
-            "127.0.0.1/8".parse().unwrap(),
-        )
-        .await
-        .with_tombstone_timeout(Duration::from_millis(1));
+        let config = ServiceConfig {
+            port: 8080,
+            listen_addr: "127.0.0.45".parse().unwrap(),
+            peer_net: "127.0.0.1/8".parse().unwrap(),
+        };
+        let service = Service::new(HRTree::<u8, DatedMaybeTombstone<String>>::new(), config)
+            .await
+            .with_tombstone_timeout(Duration::from_millis(1));
 
         let task = tokio::spawn(service.clone().run());
 

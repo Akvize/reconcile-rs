@@ -9,7 +9,7 @@ use rand::{
 };
 use tracing::info;
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
 #[derive(Parser)]
 struct Args {
@@ -33,7 +33,10 @@ async fn main() {
         elements,
         log_level,
     } = Args::parse();
-
+    let config = ServiceConfig::default()
+        .with_port(port)
+        .with_listen_addr(listen_addr)
+        .with_peer_net(peer_net);
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
     // build collection
@@ -48,7 +51,7 @@ async fn main() {
     let tree = HRTree::from_iter(key_values.into_iter());
     info!("Global hash is {}", tree.hash(&..));
 
-    let mut service = Service::new(tree, port, listen_addr, peer_net).await;
+    let mut service = Service::new(tree, config).await;
 
     for seed in seed {
         service = service.with_seed(seed);

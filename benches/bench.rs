@@ -9,7 +9,7 @@ use criterion::{
     SamplingMode, Throughput,
 };
 
-use reconcile::{DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
@@ -228,6 +228,16 @@ fn service_send(c: &mut Criterion) {
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
+    let cfg1 = ServiceConfig {
+        port,
+        listen_addr: addr1,
+        peer_net,
+    };
+    let cfg2 = ServiceConfig {
+        port,
+        listen_addr: addr2,
+        peer_net,
+    };
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -255,12 +265,8 @@ fn service_send(c: &mut Criterion) {
                 let tree2 = HRTree::from_iter(key_values[..size].iter().copied());
 
                 // start reconciliation services
-                let service1 = Service::new(tree1, port, addr1, peer_net)
-                    .await
-                    .with_seed(addr2);
-                let service2 = Service::new(tree2, port, addr2, peer_net)
-                    .await
-                    .with_seed(addr1);
+                let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
+                let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
                 let task1 = tokio::spawn(service1.clone().run());
                 let task2 = tokio::spawn(service2.clone().run());
 
@@ -292,6 +298,14 @@ fn service_reconcile(c: &mut Criterion) {
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
+    let cfg1 = ServiceConfig::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net);
+    let cfg2 = ServiceConfig::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net);
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -319,12 +333,8 @@ fn service_reconcile(c: &mut Criterion) {
                 let tree2 = HRTree::from_iter(key_values[..size].iter().copied());
 
                 // start reconciliation services
-                let service1 = Service::new(tree1, port, addr1, peer_net)
-                    .await
-                    .with_seed(addr2);
-                let service2 = Service::new(tree2, port, addr2, peer_net)
-                    .await
-                    .with_seed(addr1);
+                let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
+                let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
                 let task1 = tokio::spawn(service1.clone().run());
                 let task2 = tokio::spawn(service2.clone().run());
 
