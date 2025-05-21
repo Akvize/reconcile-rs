@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rand::{
     distributions::{Alphanumeric, DistString},
     Rng, SeedableRng,
 };
 
-use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, Service};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -45,32 +45,27 @@ async fn test() {
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
-    for _ in 0..1000 {
+    let key_values: [(String, String, DateTime<Utc>); 1000] = core::array::from_fn(|_| {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
-        let value: DatedMaybeTombstone<String> =
-            (Utc::now(), Some(Alphanumeric.sample_string(&mut rng, 100)));
-        key_values.push((key, value));
-    }
-    let tree1 = HRTree::from_iter(key_values.into_iter());
-    let start_hash = tree1.hash(&..);
-
-    // empty tree2
-    let tree2: HRTree<String, DatedMaybeTombstone<String>> = HRTree::new();
+        let value: String = Alphanumeric.sample_string(&mut rng, 100);
+        (key, value, Utc::now())
+    });
 
     // start reconciliation services for tree1 and tree2
-    let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
-    let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
+    let service1 = Service::new(cfg1).await.with_seed(addr2);
+    service1.insert_bulk(&key_values);
+    let start_hash = service1.fingerprint(..);
+    let service2 = Service::new(cfg2).await.with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run());
-    assert_eq!(service2.read().hash(&..), 0);
+    assert_eq!(service2.fingerprint(..), 0);
     let task1 = tokio::spawn(service1.clone().run());
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service1.fingerprint(..), start_hash);
 
     // check that tree2 is filled with the values from tree1
-    assert_until!(service2.read().hash(&..) == start_hash);
+    assert_until!(service2.fingerprint(..) == start_hash);
 
     // check that tree1 is unchanged
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service1.fingerprint(..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();

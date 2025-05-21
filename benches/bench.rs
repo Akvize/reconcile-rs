@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chrono::Utc;
-use rand::{Rng, SeedableRng};
+use chrono::{DateTime, Utc};
+use rand::{distributions::Standard, Rng, SeedableRng};
 
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
     SamplingMode, Throughput,
 };
 
-use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, HRTree, HashRangeQueryable, Service};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
@@ -239,15 +239,9 @@ fn service_send(c: &mut Criterion) {
         peer_net,
     };
 
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut rng = rand::rngs::ThreadRng::default();
 
-    let mut key_values = Vec::new();
-    for _ in 0..1_000_000 {
-        let key: u32 = rng.gen();
-        let value: DatedMaybeTombstone<u32> = (Utc::now(), rng.gen());
-        key_values.push((key, value));
-    }
-    let key_values = &key_values;
+    let key_values: Vec<(u32, u32, DateTime<Utc>)> = (&mut rng).sample_iter(Standard).map(|(k, v)| (k, v, Utc::now())).take(1_000_000).collect();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -260,13 +254,11 @@ fn service_send(c: &mut Criterion) {
         group.sampling_mode(SamplingMode::Linear);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             rt.block_on(async {
-                // create trees with many values
-                let tree1 = HRTree::from_iter(key_values[..size].iter().copied());
-                let tree2 = HRTree::from_iter(key_values[..size].iter().copied());
-
                 // start reconciliation services
-                let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
-                let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
+                let service1 = Service::new(cfg1).await.with_seed(addr2);
+                service1.insert_bulk(&key_values[..size]);
+                let service2 = Service::new(cfg2).await.with_seed(addr1);
+                service2.insert_bulk(&key_values[..size]);
                 let task1 = tokio::spawn(service1.clone().run());
                 let task2 = tokio::spawn(service2.clone().run());
 
@@ -307,15 +299,10 @@ fn service_reconcile(c: &mut Criterion) {
         .with_listen_addr(addr2)
         .with_peer_net(peer_net);
 
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut rng = rand::rngs::ThreadRng::default();
 
-    let mut key_values = Vec::new();
-    for _ in 0..1_000_000 {
-        let key: u32 = rng.gen();
-        let value: DatedMaybeTombstone<u32> = (Utc::now(), rng.gen());
-        key_values.push((key, value));
-    }
-    let key_values = &key_values;
+    let key_values: Vec<(u32, u32, DateTime<Utc>)> = (&mut rng).sample_iter(Standard).map(|(k, v)| (k, v, Utc::now())).take(1_000_000).collect();
+
 
     let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -328,13 +315,11 @@ fn service_reconcile(c: &mut Criterion) {
         group.sampling_mode(SamplingMode::Linear);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             rt.block_on(async {
-                // create trees with many values
-                let tree1 = HRTree::from_iter(key_values[..size].iter().copied());
-                let tree2 = HRTree::from_iter(key_values[..size].iter().copied());
-
                 // start reconciliation services
-                let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
-                let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
+                let service1 = Service::new(cfg1).await.with_seed(addr2);
+                service1.insert_bulk(&key_values[..size]);
+                let service2 = Service::new(cfg2).await.with_seed(addr1);
+                service2.insert_bulk(&key_values[..size]);
                 let task1 = tokio::spawn(service1.clone().run());
                 let task2 = tokio::spawn(service2.clone().run());
 

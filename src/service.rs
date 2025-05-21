@@ -12,6 +12,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
+use std::ops::RangeBounds;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -19,9 +20,7 @@ use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::diff::Diffable;
 use crate::internal_service::InternalService;
-use crate::map::{Map, MutMap};
 use crate::timeout_wheel::TimeoutWheel;
 
 pub type MaybeTombstone<V> = Option<V>;
@@ -33,26 +32,26 @@ const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 ///
 /// The service also keeps track of the addresses of other instances.
 ///
-/// Provides wrappers for its underlying [`Map`]s insertion and deletion methods,
+/// Provides wrappers for its underlying [`HRTree`](crate::HRTree)'s insertion and deletion methods,
 /// as well as its main service method: `run()`,
 /// which must be called to actually synchronize with peers.
 ///
 /// Known peers can optionally be provided using the [`with_seed`](Service::with_seed) method. In
 /// any case, the service will periodically look for new peers by sampling a random address from
 /// the given peer network.
-pub struct Service<M: Map>
+pub struct Service<K, V>
 where
-    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
+    K: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
     /// Internal map and hooks container.
-    service: InternalService<M>,
+    service: InternalService<K, (DateTime<Utc>, Option<V>)>,
     /// Tombstone timestamps for deleted entries.
-    tombstones: TimeoutWheel<M::Key>,
+    tombstones: TimeoutWheel<K>,
 }
 
-impl<M: Map> Clone for Service<M>
+impl<K, V> Clone for Service<K, V>
 where
-    M::Key: Clone + Hash + std::cmp::Eq + Send + Sync,
+    K: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
     /// Allows cloning of the `Service` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
@@ -66,19 +65,12 @@ where
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
         V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug + 'static,
-        M: Map<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>
-            + Send
-            + Sync
-            + 'static,
-    > Service<M>
+    > Service<K, V>
 {
     /// Create a new `Service`, set up network and tombstones.
-    pub async fn new(map: M, config: ServiceConfig) -> Self {
+    pub async fn new(config: ServiceConfig) -> Self {
         let svc = Service {
-            service: InternalService::new(map, config).await,
+            service: InternalService::<K, (DateTime<Utc>, Option<V>)>::new(config).await,
             tombstones: TimeoutWheel::new(),
         };
         svc.add_pre_insert(|_, _| {});
@@ -110,7 +102,10 @@ impl<
     ///
     /// Hooks are executed outside of the map’s write lock, so calling back into any insert
     /// method from within a hook will not block or deadlock.
-    pub fn add_pre_insert<F: Send + Sync + Fn(&M::Key, &M::Value) + 'static>(&self, pre_insert: F) {
+    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(DateTime<Utc>, Option<V>)) + 'static>(
+        &self,
+        pre_insert: F,
+    ) {
         let tombstones = self.tombstones.clone();
         let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
             pre_insert(k, v);
@@ -124,14 +119,16 @@ impl<
         *self.service.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
-    /// Direct read access to the underlying map.
-    pub fn read(&self) -> RwLockReadGuard<'_, M> {
-        self.service.map.read()
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> u64 {
+        self.service.fingerprint(range)
     }
 
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.service.map.read();
-        RwLockReadGuard::try_map(guard, |map: &M| map.get(k).and_then(|(_, v)| v.as_ref())).ok()
+        RwLockReadGuard::try_map(guard, |map| {
+            map.get(k).and_then(|(_, ref opt)| opt.as_ref())
+        })
+        .ok()
     }
 
     /// Insert a single key/value pair, running the pre-insert hook first.
@@ -229,14 +226,7 @@ impl<
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
         V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug + 'static,
-        M: MutMap<Key = K, Value = DatedMaybeTombstone<V>, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>
-            + Send
-            + Sync
-            + 'static,
-    > Service<M>
+    > Service<K, V>
 {
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         let mut guard = self.service.map.write();
@@ -286,7 +276,7 @@ mod service_tests {
     use chrono::Utc;
     use std::time::Duration;
 
-    use crate::{service::ServiceConfig, DatedMaybeTombstone, HRTree, Service};
+    use crate::{service::ServiceConfig, Service};
 
     #[tokio::test]
     async fn tombstones_expiration() {
@@ -295,7 +285,7 @@ mod service_tests {
             listen_addr: "127.0.0.45".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
         };
-        let service = Service::new(HRTree::<u8, DatedMaybeTombstone<String>>::new(), config)
+        let service = Service::<i32, i32>::new(config)
             .await
             .with_tombstone_timeout(Duration::from_millis(1));
 

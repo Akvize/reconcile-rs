@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use ipnet::IpNet;
 use rand::{
@@ -9,7 +9,7 @@ use rand::{
 };
 use tracing::info;
 
-use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, Service};
 
 #[derive(Parser)]
 struct Args {
@@ -41,17 +41,16 @@ async fn main() {
 
     // build collection
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
+    let mut key_values: Vec<(String, String, DateTime<Utc>)> = vec![];
     for _ in 0..elements {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
-        let value: DatedMaybeTombstone<String> =
-            (Utc::now(), Some(Alphanumeric.sample_string(&mut rng, 100)));
-        key_values.push((key, value));
+        let value: String = Alphanumeric.sample_string(&mut rng, 100);
+        key_values.push((key, value, Utc::now()));
     }
-    let tree = HRTree::from_iter(key_values.into_iter());
-    info!("Global hash is {}", tree.hash(&..));
-
-    let mut service = Service::new(tree, config).await;
+    let key_values = key_values.as_slice();
+    let mut service = Service::new(config).await;
+    service.insert_bulk(key_values);
+    info!("Global fingerprint is {}", service.fingerprint(..));
 
     for seed in seed {
         service = service.with_seed(seed);
