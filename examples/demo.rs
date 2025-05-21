@@ -1,6 +1,5 @@
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
 use clap::Parser;
 use ipnet::IpNet;
 use rand::{
@@ -41,11 +40,11 @@ async fn main() {
 
     // build collection
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values: Vec<(String, String, DateTime<Utc>)> = vec![];
+    let mut key_values: Vec<(String, String)> = vec![];
     for _ in 0..elements {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
         let value: String = Alphanumeric.sample_string(&mut rng, 100);
-        key_values.push((key, value, Utc::now()));
+        key_values.push((key, value));
     }
     let key_values = key_values.as_slice();
     let mut service = Service::new(config).await;

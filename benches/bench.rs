@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use rand::{distributions::Standard, Rng, SeedableRng};
 
 use criterion::{
@@ -241,7 +240,7 @@ fn service_send(c: &mut Criterion) {
 
     let mut rng = rand::rngs::ThreadRng::default();
 
-    let key_values: Vec<(u32, u32, DateTime<Utc>)> = (&mut rng).sample_iter(Standard).map(|(k, v)| (k, v, Utc::now())).take(1_000_000).collect();
+    let key_values: Vec<(u32, u32)> = (&mut rng).sample_iter(Standard).take(1_000_000).collect();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -265,11 +264,11 @@ fn service_send(c: &mut Criterion) {
                 b.iter(|| {
                     let k: u32 = rng.gen();
                     let v: u32 = rng.gen();
-                    service1.insert(k, v, Utc::now());
+                    service1.insert(k, v);
                     while service2.get(&k).is_none() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
-                    service1.remove(&k, Utc::now());
+                    service1.remove(&k);
                     while service2.get(&k).is_some() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
@@ -301,8 +300,7 @@ fn service_reconcile(c: &mut Criterion) {
 
     let mut rng = rand::rngs::ThreadRng::default();
 
-    let key_values: Vec<(u32, u32, DateTime<Utc>)> = (&mut rng).sample_iter(Standard).map(|(k, v)| (k, v, Utc::now())).take(1_000_000).collect();
-
+    let key_values: Vec<(u32, u32)> = (&mut rng).sample_iter(Standard).take(1_000_000).collect();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -326,13 +324,13 @@ fn service_reconcile(c: &mut Criterion) {
                 b.iter(|| {
                     let k: u32 = rng.gen();
                     let v: u32 = rng.gen();
-                    service1.just_insert(k, v, Utc::now());
+                    service1.just_insert(k, v);
                     let clone = service1.clone();
                     let task = tokio::spawn(async move { clone.start_reconciliation().await });
                     while service2.get(&k).is_none() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
-                    service1.just_remove(&k, Utc::now());
+                    service1.just_remove(&k);
                     task.abort();
                     let clone = service1.clone();
                     let task = tokio::spawn(async move { clone.start_reconciliation().await });

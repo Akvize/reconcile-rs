@@ -139,14 +139,14 @@ impl<
     /// 2. Acquires the write lock on the map, performs the insertion, then drops the lock.
     ///
     /// Returns the overwritten value if the key already existed.
-    pub fn just_insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
-        let ret = self.service.just_insert(key, (timestamp, Some(value)));
+    pub fn just_insert(&self, key: K, value: V) -> Option<V> {
+        let ret = self.service.just_insert(key, (Utc::now(), Some(value)));
         ret.and_then(|t| t.1)
     }
 
     /// Fully-qualified insert: just_insert + async broadcast.
-    pub fn insert(&self, key: K, value: V, timestamp: DateTime<Utc>) -> Option<V> {
-        let ret = self.service.insert(key, (timestamp, Some(value)));
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let ret = self.service.insert(key, (Utc::now(), Some(value)));
         ret.and_then(|t| t.1)
     }
 
@@ -156,40 +156,40 @@ impl<
     ///
     /// 1. Runs the pre-insert hook for each entry (outside any lock).
     /// 2. Acquires the write lock once and inserts all entries.
-    pub fn just_insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
+    pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         self.service.just_insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v, t)| (k.clone(), (*t, Some(v.clone()))))
+                .map(|(k, v)| (k.clone(), (Utc::now(), Some(v.clone()))))
                 .collect::<Vec<_>>(),
         );
     }
 
     /// Bulk-insert + async broadcast.
-    pub fn insert_bulk(&self, key_values: &[(K, V, DateTime<Utc>)]) {
+    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         self.service.insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v, t)| (k.clone(), (*t, Some(v.clone()))))
+                .map(|(k, v)| (k.clone(), (Utc::now(), Some(v.clone()))))
                 .collect::<Vec<_>>(),
         );
     }
 
-    pub fn just_remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
-        let ret = self.service.just_insert(key.clone(), (timestamp, None));
+    pub fn just_remove(&self, key: &K) -> Option<V> {
+        let ret = self.service.just_insert(key.clone(), (Utc::now(), None));
         ret.and_then(|t| t.1)
     }
 
-    pub fn remove(&self, key: &K, timestamp: DateTime<Utc>) -> Option<V> {
-        let ret = self.service.insert(key.clone(), (timestamp, None));
+    pub fn remove(&self, key: &K) -> Option<V> {
+        let ret = self.service.insert(key.clone(), (Utc::now(), None));
         ret.and_then(|t| t.1)
     }
 
-    pub fn just_remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
+    pub fn just_remove_bulk(&self, keys: &[K]) {
         self.service.just_insert_bulk(
             &keys
                 .iter()
-                .map(|(k, t)| (k.clone(), (*t, None)))
+                .map(|k| (k.clone(), (Utc::now(), None)))
                 .collect::<Vec<_>>(),
         );
     }
@@ -273,7 +273,6 @@ impl ServiceConfig {
 
 #[cfg(test)]
 mod service_tests {
-    use chrono::Utc;
     use std::time::Duration;
 
     use crate::{service::ServiceConfig, Service};
@@ -291,11 +290,11 @@ mod service_tests {
 
         let task = tokio::spawn(service.clone().run());
 
-        // insert an already-expired tombstone
-        service.remove(&0, Utc::now() - Duration::from_millis(2));
-        // check that pop_expired() does yield the tombstone
+        // insert a tombstone
+        service.remove(&0);
+        tokio::time::sleep(Duration::from_millis(10)).await; // await its expiration
+                                                             // The tombstone should be expired by now
         assert_eq!(service.tombstones.pop_expired(), Some(0));
-        // check that it was indeed removed
         assert_eq!(service.tombstones.remove(&0), None);
 
         task.abort();

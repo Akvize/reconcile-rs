@@ -353,7 +353,6 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
 
 #[cfg(test)]
 mod deadlock_regressions {
-    use chrono::Utc;
 
     use crate::{service::ServiceConfig, Service};
     use std::sync::{
@@ -368,7 +367,7 @@ mod deadlock_regressions {
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
         let svc = Service::new(config).await;
-        svc.insert_bulk(&vec![(1, 10_u8, Utc::now())]);
+        svc.insert_bulk(&vec![(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = flag.clone();
@@ -380,14 +379,14 @@ mod deadlock_regressions {
         svc.add_pre_insert(move |&k, &v| {
             // inner insert should no longer deadlock
             if !guard.swap(true, Ordering::SeqCst) {
-                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100, v.0);
+                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100);
                 // TODO Check vs Utc::now()
             }
             flag2.store(true, Ordering::SeqCst);
         });
 
         // Trigger our hook via a normal insert
-        let _ = svc.just_insert(42, 99, Utc::now());
+        let _ = svc.just_insert(42, 99);
         assert!(
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
