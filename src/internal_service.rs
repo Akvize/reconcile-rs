@@ -29,7 +29,6 @@ use tracing::{debug, trace, warn};
 
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
-use crate::map::Map;
 use crate::reconcilable::{Reconcilable, ReconciliationResult};
 use crate::service::ServiceConfig;
 use crate::{HRTree, HashRangeQueryable};
@@ -283,8 +282,10 @@ impl<
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
                 let guard = self.map.read();
-                for update in guard.enumerate_diff_ranges(differences) {
-                    messages.push(Message::Update(update));
+                for range in differences {
+                    for update in guard.get_range(&range).map(|(k, v)| (k.clone(), v.clone())) {
+                        messages.push(Message::Update(update));
+                    }
                 }
             }
             if !messages.is_empty() {
