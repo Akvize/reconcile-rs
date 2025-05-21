@@ -64,7 +64,7 @@ where
 
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
+        V: Clone + DeserializeOwned + Hash + PartialEq + Send + Serialize + Sync + 'static,
     > Service<K, V>
 {
     /// Create a new `Service`, set up network and tombstones.

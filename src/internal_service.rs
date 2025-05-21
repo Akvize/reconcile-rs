@@ -29,7 +29,7 @@ use tracing::{debug, trace, warn};
 
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
-use crate::reconcilable::{Reconcilable, ReconciliationResult};
+use crate::reconcilable::Reconcilable;
 use crate::service::ServiceConfig;
 use crate::{HRTree, HashRangeQueryable};
 
@@ -81,7 +81,15 @@ enum Message<K: Serialize, V: Serialize> {
 
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
+        V: Clone
+            + DeserializeOwned
+            + Hash
+            + PartialEq
+            + Reconcilable
+            + Send
+            + Serialize
+            + Sync
+            + 'static,
     > InternalService<K, V>
 {
     pub async fn new(config: ServiceConfig) -> Self {
@@ -295,14 +303,19 @@ impl<
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
             let mut guard = self.map.write();
-            for (k, v) in updates {
-                let local_v = guard.get(&k);
-                let do_change = local_v
-                    .map(|local_v| ReconciliationResult::KeepOther == local_v.reconcile(&v))
-                    .unwrap_or(true);
-                if do_change {
-                    (self.pre_insert.read())(&k, &v);
-                    guard.insert(k, v);
+            for (k, remote_v) in updates {
+                match guard.get(&k) {
+                    Some(local_v) => {
+                        let merged_v = local_v.reconcile(&remote_v);
+                        if merged_v != *local_v {
+                            (self.pre_insert.read())(&k, &merged_v);
+                            guard.insert(k, merged_v);
+                        }
+                    }
+                    None => {
+                        (self.pre_insert.read())(&k, &remote_v);
+                        guard.insert(k, remote_v);
+                    }
                 }
             }
         }

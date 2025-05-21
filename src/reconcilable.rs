@@ -10,25 +10,18 @@
 
 use chrono::{DateTime, Utc};
 
-/// Return type for [`reconcile`](Reconcilable::reconcile).
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ReconciliationResult {
-    KeepSelf,
-    KeepOther,
-}
-
 /// Values stored in a map to be synced by the [`Service`](crate::Service)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
 pub trait Reconcilable {
-    fn reconcile(&self, other: &Self) -> ReconciliationResult;
+    fn reconcile(&self, other: &Self) -> Self;
 }
 
-impl<V> Reconcilable for (DateTime<Utc>, V) {
-    fn reconcile(&self, other: &Self) -> ReconciliationResult {
+impl<V: Clone> Reconcilable for (DateTime<Utc>, V) {
+    fn reconcile(&self, other: &Self) -> Self {
         if other.0 > self.0 {
-            ReconciliationResult::KeepOther
+            other.clone()
         } else {
-            ReconciliationResult::KeepSelf
+            self.clone()
         }
     }
 }
