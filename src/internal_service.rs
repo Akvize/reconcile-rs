@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,11 +27,11 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use crate::diff::Diffable;
+use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
-use crate::map::Map;
-use crate::reconcilable::{Reconcilable, ReconciliationResult};
+use crate::reconcilable::Reconcilable;
 use crate::service::ServiceConfig;
+use crate::{HRTree, HashRangeQueryable};
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -43,17 +44,17 @@ type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 /// The internal service at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`Service`](crate::service::Service).
-pub(crate) struct InternalService<M: Map> {
-    pub(crate) map: Arc<RwLock<M>>,
+pub(crate) struct InternalService<K, V> {
+    pub(crate) map: Arc<RwLock<HRTree<K, V>>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
-    pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<M::Key, M::Value>>>,
+    pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
 }
 
-impl<M: Map> Clone for InternalService<M> {
+impl<K, V> Clone for InternalService<K, V> {
     fn clone(&self) -> Self {
         InternalService {
             map: self.map.clone(),
@@ -69,10 +70,10 @@ impl<M: Map> Clone for InternalService<M> {
 
 /// Represent an atomic message for the reconciliation protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-enum Message<K: Serialize, V: Serialize, C: Serialize> {
+enum Message<K: Serialize, V: Serialize> {
     /// Provides information about a set of keys that allows checking
     /// whether there are differences between the two instances over this set
-    ComparisonItem(C),
+    ComparisonItem(HashSegment<K>),
     /// Provides an individual key-value pair when the protocol
     /// has identified that it differs on the two instances
     Update((K, V)),
@@ -80,18 +81,23 @@ enum Message<K: Serialize, V: Serialize, C: Serialize> {
 
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Reconcilable + Send + Serialize + Sync + 'static,
-        C: Debug + DeserializeOwned + Send + Serialize + Sync + 'static,
-        D: Debug,
-        M: Map<Key = K, Value = V, DifferenceItem = D>
-            + Diffable<ComparisonItem = C, DifferenceItem = D>,
-    > InternalService<M>
+        V: Clone
+            + DeserializeOwned
+            + Hash
+            + PartialEq
+            + Reconcilable
+            + Send
+            + Serialize
+            + Sync
+            + 'static,
+    > InternalService<K, V>
 {
-    pub async fn new(map: M, config: ServiceConfig) -> Self {
+    pub async fn new(config: ServiceConfig) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
+        let map = HRTree::<K, V>::new();
         InternalService {
             map: Arc::new(RwLock::new(map)),
             port: config.port,
@@ -101,6 +107,10 @@ impl<
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         }
+    }
+
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> u64 {
+        self.map.read().hash(&range)
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -124,7 +134,7 @@ impl<
         let port = self.port;
         let socket = Arc::clone(&self.socket);
         tokio::spawn(async move {
-            let message = Message::Update::<K, V, C>((key, value));
+            let message = Message::Update::<K, V>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for addr in peers {
@@ -152,7 +162,7 @@ impl<
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
-            .map(|kv| Message::Update::<K, V, C>(kv.clone()))
+            .map(|kv| Message::Update::<K, V>(kv.clone()))
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -209,7 +219,7 @@ impl<
         };
         send_buf.clear();
         for segment in segments {
-            Message::ComparisonItem::<K, V, C>(segment)
+            Message::ComparisonItem::<K, V>(segment)
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
@@ -273,15 +283,17 @@ impl<
                 debug!("returning {} segments", out_comparison.len());
                 trace!("segments: {out_comparison:?}");
                 for segment in out_comparison {
-                    messages.push(Message::ComparisonItem::<K, V, C>(segment))
+                    messages.push(Message::ComparisonItem::<K, V>(segment))
                 }
             }
             if !differences.is_empty() {
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
                 let guard = self.map.read();
-                for update in guard.enumerate_diff_ranges(differences) {
-                    messages.push(Message::Update(update));
+                for range in differences {
+                    for update in guard.get_range(&range).map(|(k, v)| (k.clone(), v.clone())) {
+                        messages.push(Message::Update(update));
+                    }
                 }
             }
             if !messages.is_empty() {
@@ -291,14 +303,19 @@ impl<
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
             let mut guard = self.map.write();
-            for (k, v) in updates {
-                let local_v = guard.get(&k);
-                let do_change = local_v
-                    .map(|local_v| local_v.reconcile(&v) == ReconciliationResult::KeepOther)
-                    .unwrap_or(true);
-                if do_change {
-                    (self.pre_insert.read())(&k, &v);
-                    guard.insert(k, v);
+            for (k, remote_v) in updates {
+                match guard.get(&k) {
+                    Some(local_v) => {
+                        let merged_v = local_v.reconcile(&remote_v);
+                        if merged_v != *local_v {
+                            (self.pre_insert.read())(&k, &merged_v);
+                            guard.insert(k, merged_v);
+                        }
+                    }
+                    None => {
+                        (self.pre_insert.read())(&k, &remote_v);
+                        guard.insert(k, remote_v);
+                    }
                 }
             }
         }
@@ -321,8 +338,8 @@ async fn send_to_retry<A: ToSocketAddrs>(
     res
 }
 
-async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
-    messages: &[Message<K, V, C>],
+async fn send_messages_to<K: Serialize, V: Serialize>(
+    messages: &[Message<K, V>],
     socket: Arc<UdpSocket>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
@@ -350,9 +367,8 @@ async fn send_messages_to<K: Serialize, V: Serialize, C: Serialize>(
 
 #[cfg(test)]
 mod deadlock_regressions {
-    use chrono::Utc;
 
-    use crate::{service::ServiceConfig, DatedMaybeTombstone, HRTree, Service};
+    use crate::{service::ServiceConfig, Service};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -360,13 +376,12 @@ mod deadlock_regressions {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
-        let tree =
-            HRTree::<u8, DatedMaybeTombstone<u8>>::from_iter(vec![(1, (Utc::now(), Some(10_u8)))]);
         let config = ServiceConfig::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
-        let svc = Service::new(tree, config).await;
+        let svc = Service::new(config).await;
+        svc.insert_bulk(&vec![(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = flag.clone();
@@ -378,13 +393,14 @@ mod deadlock_regressions {
         svc.add_pre_insert(move |&k, &v| {
             // inner insert should no longer deadlock
             if !guard.swap(true, Ordering::SeqCst) {
-                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100, Utc::now());
+                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100);
+                // TODO Check vs Utc::now()
             }
             flag2.store(true, Ordering::SeqCst);
         });
 
         // Trigger our hook via a normal insert
-        let _ = svc.just_insert(42, 99, Utc::now());
+        let _ = svc.just_insert(42, 99);
         assert!(
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"

@@ -1,12 +1,11 @@
 use std::time::Duration;
 
-use chrono::Utc;
 use rand::{
     distributions::{Alphanumeric, DistString},
     Rng, SeedableRng,
 };
 
-use reconcile::{service::ServiceConfig, DatedMaybeTombstone, HRTree, HashRangeQueryable, Service};
+use reconcile::{service::ServiceConfig, Service};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -45,41 +44,36 @@ async fn test() {
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let mut key_values = Vec::new();
-    for _ in 0..1000 {
+    let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
-        let value: DatedMaybeTombstone<String> =
-            (Utc::now(), Some(Alphanumeric.sample_string(&mut rng, 100)));
-        key_values.push((key, value));
-    }
-    let tree1 = HRTree::from_iter(key_values.into_iter());
-    let start_hash = tree1.hash(&..);
-
-    // empty tree2
-    let tree2: HRTree<String, DatedMaybeTombstone<String>> = HRTree::new();
+        let value: String = Alphanumeric.sample_string(&mut rng, 100);
+        (key, value)
+    });
 
     // start reconciliation services for tree1 and tree2
-    let service1 = Service::new(tree1, cfg1).await.with_seed(addr2);
-    let service2 = Service::new(tree2, cfg2).await.with_seed(addr1);
+    let service1 = Service::new(cfg1).await.with_seed(addr2);
+    service1.insert_bulk(&key_values);
+    let start_hash = service1.fingerprint(..);
+    let service2 = Service::new(cfg2).await.with_seed(addr1);
     let task2 = tokio::spawn(service2.clone().run());
-    assert_eq!(service2.read().hash(&..), 0);
+    assert_eq!(service2.fingerprint(..), 0);
     let task1 = tokio::spawn(service1.clone().run());
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service1.fingerprint(..), start_hash);
 
     // check that tree2 is filled with the values from tree1
-    assert_until!(service2.read().hash(&..) == start_hash);
+    assert_until!(service2.fingerprint(..) == start_hash);
 
     // check that tree1 is unchanged
-    assert_eq!(service1.read().hash(&..), start_hash);
+    assert_eq!(service1.fingerprint(..), start_hash);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
-    service2.insert(key.clone(), value.clone(), Utc::now());
+    service2.insert(key.clone(), value.clone());
     assert_until!(service1.get(&key).as_deref() == Some(&value));
 
     // remove value from tree1, and check that the tombstone is transferred to tree2
-    service1.remove(&key, Utc::now());
+    service1.remove(&key);
     assert_until!(service2.get(&key).is_none());
 
     // check that the more recent value always wins
@@ -89,26 +83,26 @@ async fn test() {
         let value2 = "Good bye, World!".to_string();
         if rng.gen() {
             // value1 vs value2
-            service1.insert(key.clone(), value1.clone(), Utc::now());
-            service2.insert(key.clone(), value2.clone(), Utc::now());
+            service1.insert(key.clone(), value1.clone());
+            service2.insert(key.clone(), value2.clone());
             assert_until!(service1.get(&key).as_deref() == Some(&value2));
             assert_until!(service2.get(&key).as_deref() == Some(&value2));
         } else if rng.gen() {
             // value2 vs value1
-            service1.insert(key.clone(), value2.clone(), Utc::now());
-            service2.insert(key.clone(), value1.clone(), Utc::now());
+            service1.insert(key.clone(), value2.clone());
+            service2.insert(key.clone(), value1.clone());
             assert_until!(service1.get(&key).as_deref() == Some(&value1));
             assert_until!(service2.get(&key).as_deref() == Some(&value1));
         } else if rng.gen() {
             // value1 vs tombstone
-            service1.insert(key.clone(), value1, Utc::now());
-            service2.remove(&key, Utc::now());
+            service1.insert(key.clone(), value1);
+            service2.remove(&key);
             assert_until!(service1.get(&key).is_none());
             assert_until!(service2.get(&key).is_none());
         } else {
             // tombstone vs value1
-            service1.remove(&key, Utc::now());
-            service2.insert(key.clone(), value1.clone(), Utc::now());
+            service1.remove(&key);
+            service2.insert(key.clone(), value1.clone());
             assert_until!(service1.get(&key).as_deref() == Some(&value1));
             assert_until!(service2.get(&key).as_deref() == Some(&value1));
         }
@@ -119,15 +113,15 @@ async fn test() {
     let value1 = "Hello, World!".to_string();
     let value2 = "Goodbye!".to_string();
     // insert (key, value1) pair
-    service1.insert(key.clone(), value1.clone(), Utc::now());
+    service1.insert(key.clone(), value1.clone());
     // wait until service2 has received it
     assert_until!(service2.get(&key).as_deref() == Some(&value1));
     // remove the key from service2
-    service2.remove(&key, Utc::now());
+    service2.remove(&key);
     // wait until service1 has received the tombstone
     assert_until!(service1.get(&key).is_none());
     // overwrite tombstone by inserting (key, value2)
-    service1.insert(key.clone(), value2.clone(), Utc::now());
+    service1.insert(key.clone(), value2.clone());
     // check that instance2 receives value2
     assert_until!(service2.get(&key).as_deref() == Some(&value2));
 

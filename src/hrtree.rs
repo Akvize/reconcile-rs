@@ -296,7 +296,7 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
         aux(self.root.as_ref(), key)
     }
 
-    pub fn get_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
+    pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
         fn aux<K: Hash + Ord, V: Hash, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
             key: &K,
@@ -847,12 +847,12 @@ mod tests {
         assert_eq!(tree1.get(&key_values[0].0), Some(&key_values[0].1));
 
         // test get_mut
-        tree1.get_mut(&rng.gen(), |v| assert_eq!(v, None));
+        tree1.with_mut(&rng.gen(), |v| assert_eq!(v, None));
         let key: u64 = rng.gen::<u64>();
         let value1: u64 = rng.gen();
         let value2: u64 = rng.gen();
         tree1.insert(key, value1);
-        tree1.get_mut(&key, |v| *v.unwrap() = value2);
+        tree1.with_mut(&key, |v| *v.unwrap() = value2);
         tree1.check_invariants();
         expected_hash ^= super::hash(&key, &value2);
         key_values.push((key, value2));
