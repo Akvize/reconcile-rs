@@ -4,7 +4,7 @@
 	  "dockerfile": "Dockerfile.dev",
 	  "context": ".."
 	},
-	"workspaceFolder": "/workspace",
+  	"workspaceFolder": "/workspaces/reconcile-rs",
 	"remoteUser": "dev",
 	"postCreateCommand": ".devcontainer/init.sh create",
 	"postStartCommand": ".devcontainer/init.sh start",
