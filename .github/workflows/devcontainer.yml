@@ -1,0 +1,72 @@
+name: Devcontainer CI
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  devcontainer-ci:
+    name: Build & Test in Devcontainer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Cache devcontainer build layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.devcontainer-cache
+          key: ${{ runner.os }}-devcontainer-${{ hashFiles('.devcontainer/Dockerfile.dev') }}
+          restore-keys: |
+            ${{ runner.os }}-devcontainer-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver: docker-container
+
+      - name: Setup Node.js (for Devcontainer CLI)
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Devcontainer CLI
+        run: |
+          npm config set prefix ~/.npm-global
+          npm install -g @devcontainers/cli
+
+      - name: Add npm-global bin to PATH
+        run: echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
+      - name: Build devcontainer image
+        run: |
+          devcontainer build \
+            --workspace-folder . \
+            --cache-from type=local,src=/tmp/.devcontainer-cache \
+            --cache-to type=local,dest=/tmp/.devcontainer-cache,mode=max \
+            --log-level info
+
+      - name: Start devcontainer
+        run: |
+          devcontainer up \
+            --workspace-folder . \
+            --skip-post-create \
+            --log-level info \
+            --cache-from type=local,src=/tmp/.devcontainer-cache
+
+      - name: Run checks inside devcontainer
+        run: |
+          devcontainer exec --workspace-folder . -- bash -lc "\
+            export CARGO_HOME=\$HOME/.cargo && \
+            mkdir -p \$CARGO_HOME && \
+            cargo fmt -- --check && \
+            cargo clippy --all -- -D warnings && \
+            cargo test --all --verbose \
+          "
