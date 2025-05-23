@@ -8,7 +8,8 @@ use criterion::{
     SamplingMode, Throughput,
 };
 
-use reconcile::{service::ServiceConfig, HRTree, HashRangeQueryable, Service};
+use reconcile::diff::HashRangeQueryable;
+use reconcile::{service::ServiceConfig, HRTree, Service};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");

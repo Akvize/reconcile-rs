@@ -27,11 +27,12 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
+use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
 use crate::reconcilable::Reconcilable;
 use crate::service::ServiceConfig;
-use crate::{HRTree, HashRangeQueryable};
+use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);

@@ -21,11 +21,11 @@ pub mod diff;
 pub mod gen_ip;
 pub mod hrtree;
 pub mod hrtree_iter;
-pub(crate) mod internal_service;
-pub mod reconcilable;
 pub mod service;
+
+pub(crate) mod internal_service;
+pub(crate) mod reconcilable;
 pub(crate) mod timeout_wheel;
 
-pub use diff::HashRangeQueryable;
 pub use hrtree::HRTree;
 pub use service::Service;

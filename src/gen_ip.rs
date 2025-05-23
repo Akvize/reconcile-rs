@@ -15,9 +15,9 @@ use rand::Rng;
 
 /// Select a random IP address from the given network
 /// ```
-/// use rand::SeedableRng;
-/// use reconcile::gen_ip::gen_ip;
-///
+/// # use rand::SeedableRng;
+/// # use reconcile::gen_ip::gen_ip;
+/// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "192.168.1.0/24".parse().unwrap();
 /// assert_eq!(gen_ip(&mut rng, net).to_string(), "192.168.1.162");
@@ -31,9 +31,9 @@ pub fn gen_ip<R: Rng>(rng: &mut R, network: IpNet) -> IpAddr {
 
 /// Select a random IPv4 address from the given network
 /// ```
-/// use rand::SeedableRng;
-/// use reconcile::gen_ip::gen_ipv4;
-///
+/// # use rand::SeedableRng;
+/// # use reconcile::gen_ip::gen_ipv4;
+/// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "192.168.42.0/24".parse().unwrap();
 /// assert_eq!(gen_ipv4(&mut rng, net).to_string(), "192.168.42.162");
@@ -45,9 +45,9 @@ pub fn gen_ipv4<R: Rng>(rng: &mut R, network: Ipv4Net) -> Ipv4Addr {
 
 /// Select a random IPv6 address from the given network
 /// ```
-/// use rand::SeedableRng;
-/// use reconcile::gen_ip::gen_ipv6;
-///
+/// # use rand::SeedableRng;
+/// # use reconcile::gen_ip::gen_ipv6;
+/// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "2001:db8::/32".parse().unwrap();
 /// assert_eq!(gen_ipv6(&mut rng, net).to_string(), "2001:db8:3fad:517d:86cc:7763:2227:24a2");
