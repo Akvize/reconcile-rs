@@ -23,9 +23,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::internal_service::InternalService;
 use crate::timeout_wheel::TimeoutWheel;
 
-pub type MaybeTombstone<V> = Option<V>;
-pub type DatedMaybeTombstone<V> = (DateTime<Utc>, MaybeTombstone<V>);
-
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.

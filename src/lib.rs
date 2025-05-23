@@ -28,4 +28,4 @@ pub(crate) mod timeout_wheel;
 
 pub use diff::HashRangeQueryable;
 pub use hrtree::HRTree;
-pub use service::{DatedMaybeTombstone, Service};
+pub use service::Service;
