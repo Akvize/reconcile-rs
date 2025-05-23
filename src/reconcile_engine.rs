@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`InternalService`], the inner layer of the [`Service`](crate::service::Service)
+//! Provides the [`ReconcileEngine`], the inner layer of the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
 //! that handles communication between instances at the network level.
 
 use std::collections::HashMap;
@@ -27,11 +27,12 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
+use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
 use crate::reconcilable::Reconcilable;
-use crate::service::ServiceConfig;
-use crate::{HRTree, HashRangeQueryable};
+use crate::reconcile_store::Config;
+use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -41,10 +42,10 @@ const MAX_SENDTO_RETRIES: u32 = 4;
 
 type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 
-/// The internal service at the network level.
+/// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
-/// For more information, see [`Service`](crate::service::Service).
-pub(crate) struct InternalService<K, V> {
+/// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
+pub(crate) struct ReconcileEngine<K, V> {
     pub(crate) map: Arc<RwLock<HRTree<K, V>>>,
     port: u16,
     socket: Arc<UdpSocket>,
@@ -54,9 +55,9 @@ pub(crate) struct InternalService<K, V> {
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
 }
 
-impl<K, V> Clone for InternalService<K, V> {
+impl<K, V> Clone for ReconcileEngine<K, V> {
     fn clone(&self) -> Self {
-        InternalService {
+        ReconcileEngine {
             map: self.map.clone(),
             port: self.port,
             socket: self.socket.clone(),
@@ -90,15 +91,15 @@ impl<
             + Serialize
             + Sync
             + 'static,
-    > InternalService<K, V>
+    > ReconcileEngine<K, V>
 {
-    pub async fn new(config: ServiceConfig) -> Self {
+    pub async fn new(config: Config) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
         let map = HRTree::<K, V>::new();
-        InternalService {
+        ReconcileEngine {
             map: Arc::new(RwLock::new(map)),
             port: config.port,
             socket: Arc::new(socket),
@@ -368,7 +369,7 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
 #[cfg(test)]
 mod deadlock_regressions {
 
-    use crate::{service::ServiceConfig, Service};
+    use crate::{reconcile_store::Config, ReconcileStore};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -376,18 +377,18 @@ mod deadlock_regressions {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
-        let config = ServiceConfig::default()
+        let config = Config::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
-        let svc = Service::new(config).await;
+        let svc = ReconcileStore::new(config).await;
         svc.insert_bulk(&vec![(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = flag.clone();
 
         let hook_svc = svc.clone();
-        // Install a pre-insert hook that itself calls insert on the same Service
+        // Install a pre-insert hook that itself calls insert on the same Store
         let once = Arc::new(AtomicBool::new(false));
         let guard = once.clone();
         svc.add_pre_insert(move |&k, &v| {

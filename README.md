@@ -20,7 +20,7 @@
 [docs-url]: https://docs.rs/reconcile/latest/reconcile/
 
 This crate provides a key-data map structure `HRTree` that can be used together
-with the reconciliation `Service`. Different instances can talk together over
+with the reconciliation `ReconcileStore`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
 
 All the data is available locally on all instances, and the user can be
@@ -32,17 +32,16 @@ scratch from other instances.
 
 The intended use case is a scalable Web service with a non-persistent and
 eventually consistent key-value store. The design enable high performance by
-avoiding any latency related to using an external service such as Redis.
+avoiding any latency related to using an external store such as Redis.
 
 ![Architecture diagram of a scalable Web service using reconcile-rs](img/illustration.png)
 
 In code, this would look like this:
 
 ```rust
-let tree = HRTree::new();
-let mut service = Service::new(tree, port, listen_addr, peer_net).await;
-tokio::spawn(service.clone().run());
-// use the reconciliation service as a key-value store in the API
+let mut store = ReconcileStore::new(Config::default()).await;
+tokio::spawn(store.clone().run());
+// use the reconciliation store as a key-value store in the API
 ```
 
 ## HRTree
@@ -57,8 +56,8 @@ published on Arxiv in February 2023: [Range-Based Set
 Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 
 Our implementation of this data structure is based on a B-Trees that we wrote
-ourselves. Although we put a limited amount of effort in this, did not use
-`unsafe` and have to maintain more invariants, we stay within a factor 2 of the
+ourselves. Although we put a limited amount of effort in this
+and have to maintain more invariants, we stay within a factor 2 of the
 standard `BTreeMap` from the standard library:
 
 ![Graph of the time needed to insert N elements in an empty tree](img/perf-fill.png)
@@ -107,9 +106,9 @@ Although there is likely still a lot of room for improvement regarding the
 performance of the `HRTree`, it is quite enough for our purposes, since we
 expect network delays to be orders of magnitude longer.
 
-## Service
+## ReconcileStore
 
-The service exploits the properties of `HRTree` to conduct a binary-search-like
+The ReconcileStore exploits the properties of `HRTree` to conduct a binary-search-like
 search in the collections of the two instances. Once difference are found, the
 corresponding key-value pairs are exchanged and conflicts are resolved.
 
@@ -117,7 +116,7 @@ corresponding key-value pairs are exchanged and conflicts are resolved.
 
 The graph above shows the amount of time **in microseconds** (abscissa, bottom
 axis) needed to send 1 insertion, then 1 removal** between two instances of
-`Service` that contain the same N elements (ordinate, left axis). Note that
+`ReconcileStore` that contain the same N elements (ordinate, left axis). Note that
 both axes use a logarithmic scale.
 
 The times are very consistent, hovering around 122 µs, showing that the
@@ -129,7 +128,7 @@ insertion/removal.
 
 The graph above shows the amount of time **in milliseconds** (abscissa, bottom
 axis) needed to reconcile 1 insertion, then 1 removal** between two instances of
-`Service` that contain the same other N elements (ordinate, left axis). Note that
+`ReconcileStore` that contain the same other N elements (ordinate, left axis). Note that
 both axes use a logarithmic scale.
 
 This time, the full reconciliation protocol must be run to identify the

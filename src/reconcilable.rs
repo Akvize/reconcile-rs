@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Utc};
 
-/// Values stored in a map to be synced by the [`Service`](crate::Service)
+/// Values stored in a map to be synced by the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
 pub trait Reconcilable {
     fn reconcile(&self, other: &Self) -> Self;
