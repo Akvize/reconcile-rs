@@ -3,7 +3,7 @@ name = "reconcile"
 version = "0.0.0-git"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "A reconciliation service to sync a key-value map over multiple instances"
+description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
 exclude = [
     "pre-commit",

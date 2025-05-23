@@ -9,7 +9,7 @@ use criterion::{
 };
 
 use reconcile::diff::HashRangeQueryable;
-use reconcile::{service::ServiceConfig, HRTree, Service};
+use reconcile::{reconcile_store::Config, HRTree, ReconcileStore};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
@@ -222,18 +222,18 @@ fn hrtree_hash(c: &mut Criterion) {
     }
 }
 
-/// Measure the time to send 1 insertion, and 1 removal between 2 Service instances containing N items
+/// Measure the time to send 1 insertion, and 1 removal between 2 ReconcileStore instances containing N items
 fn service_send(c: &mut Criterion) {
     let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
-    let cfg1 = ServiceConfig {
+    let cfg1 = Config {
         port,
         listen_addr: addr1,
         peer_net,
     };
-    let cfg2 = ServiceConfig {
+    let cfg2 = Config {
         port,
         listen_addr: addr2,
         peer_net,
@@ -246,7 +246,7 @@ fn service_send(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-    let mut group = c.benchmark_group("Service::send");
+    let mut group = c.benchmark_group("ReconcileStore::send");
     group.plot_config(plot_config);
     let mut size = 10;
     while size <= key_values.len() {
@@ -254,23 +254,23 @@ fn service_send(c: &mut Criterion) {
         group.sampling_mode(SamplingMode::Linear);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             rt.block_on(async {
-                // start reconciliation services
-                let service1 = Service::new(cfg1).await.with_seed(addr2);
-                service1.insert_bulk(&key_values[..size]);
-                let service2 = Service::new(cfg2).await.with_seed(addr1);
-                service2.insert_bulk(&key_values[..size]);
-                let task1 = tokio::spawn(service1.clone().run());
-                let task2 = tokio::spawn(service2.clone().run());
+                // start reconciliation stores
+                let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+                store1.insert_bulk(&key_values[..size]);
+                let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+                store2.insert_bulk(&key_values[..size]);
+                let task1 = tokio::spawn(store1.clone().run());
+                let task2 = tokio::spawn(store2.clone().run());
 
                 b.iter(|| {
                     let k: u32 = rng.gen();
                     let v: u32 = rng.gen();
-                    service1.insert(k, v);
-                    while service2.get(&k).is_none() {
+                    store1.insert(k, v);
+                    while store2.get(&k).is_none() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
-                    service1.remove(&k);
-                    while service2.get(&k).is_some() {
+                    store1.remove(&k);
+                    while store2.get(&k).is_some() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
                 });
@@ -284,17 +284,17 @@ fn service_send(c: &mut Criterion) {
     }
 }
 
-/// Measure the time to reconcile 1 insertion/removal between Service instances containing N items
+/// Measure the time to reconcile 1 insertion/removal between ReconcileStore instances containing N items
 fn service_reconcile(c: &mut Criterion) {
     let port = 8080;
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
-    let cfg1 = ServiceConfig::default()
+    let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
         .with_peer_net(peer_net);
-    let cfg2 = ServiceConfig::default()
+    let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_peer_net(peer_net);
@@ -306,7 +306,7 @@ fn service_reconcile(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-    let mut group = c.benchmark_group("Service::reconcile");
+    let mut group = c.benchmark_group("ReconcileStore::reconcile");
     group.plot_config(plot_config);
     let mut size = 10;
     while size <= key_values.len() {
@@ -315,27 +315,27 @@ fn service_reconcile(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             rt.block_on(async {
                 // start reconciliation services
-                let service1 = Service::new(cfg1).await.with_seed(addr2);
-                service1.insert_bulk(&key_values[..size]);
-                let service2 = Service::new(cfg2).await.with_seed(addr1);
-                service2.insert_bulk(&key_values[..size]);
-                let task1 = tokio::spawn(service1.clone().run());
-                let task2 = tokio::spawn(service2.clone().run());
+                let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+                store1.insert_bulk(&key_values[..size]);
+                let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+                store2.insert_bulk(&key_values[..size]);
+                let task1 = tokio::spawn(store1.clone().run());
+                let task2 = tokio::spawn(store2.clone().run());
 
                 b.iter(|| {
                     let k: u32 = rng.gen();
                     let v: u32 = rng.gen();
-                    service1.just_insert(k, v);
-                    let clone = service1.clone();
+                    store1.just_insert(k, v);
+                    let clone = store1.clone();
                     let task = tokio::spawn(async move { clone.start_reconciliation().await });
-                    while service2.get(&k).is_none() {
+                    while store2.get(&k).is_none() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
-                    service1.just_remove(&k);
+                    store1.just_remove(&k);
                     task.abort();
-                    let clone = service1.clone();
+                    let clone = store1.clone();
                     let task = tokio::spawn(async move { clone.start_reconciliation().await });
-                    while service2.get(&k).is_some() {
+                    while store2.get(&k).is_some() {
                         std::thread::sleep(Duration::from_micros(1));
                     }
                     task.abort();

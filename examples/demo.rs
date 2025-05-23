@@ -8,7 +8,7 @@ use rand::{
 };
 use tracing::info;
 
-use reconcile::{service::ServiceConfig, Service};
+use reconcile::{reconcile_store::Config, ReconcileStore};
 
 #[derive(Parser)]
 struct Args {
@@ -32,7 +32,7 @@ async fn main() {
         elements,
         log_level,
     } = Args::parse();
-    let config = ServiceConfig::default()
+    let config = Config::default()
         .with_port(port)
         .with_listen_addr(listen_addr)
         .with_peer_net(peer_net);
@@ -47,7 +47,7 @@ async fn main() {
         key_values.push((key, value));
     }
     let key_values = key_values.as_slice();
-    let mut service = Service::new(config).await;
+    let mut service = ReconcileStore::new(config).await;
     service.insert_bulk(key_values);
     info!("Global fingerprint is {}", service.fingerprint(..));
 
