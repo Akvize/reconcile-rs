@@ -10,24 +10,30 @@
 > - **Version manifeste :** `0.0.0-git` · **Version publiée crates.io :** `0.1.5` (~6,8k téléchargements, 3★)
 > - **Méthode :** lecture statique exhaustive de `src/`, `tests/`, `benches/`, `Cargo.toml`,
 >   `README.md`, `.github/workflows/` + revue de littérature SOTA. Aucune modification du code source.
+> - **Navigation :** un [glossaire (§9)](#9-glossaire) définit ~120 termes et un
+>   [index alphabétique (§11)](#11-index-alphabétique) les recense ; les premiers emplois dans le
+>   texte y renvoient par lien.
 
 ---
 
 ## 1. Résumé exécutif
 
-`reconcile-rs` fournit un magasin clé-valeur **distribué, en mémoire, *eventually
-consistent***, dont le cœur est le **HRTree** (« Hash-Range Tree ») : un B-tree maison
-augmenté, à chaque nœud, du XOR cumulé des hashs `(clé,valeur)` du sous-arbre et de sa
-taille. Cela permet une **requête de hash cumulé sur un intervalle en O(log n)**, qui pilote
-un protocole de **réconciliation par intervalles (Range-Based Set Reconciliation, RBSR)** au
-sens de Meyer (arXiv:2212.13567, 2023). La résolution de conflits est **Last-Write-Wins (LWW)
-par horloge physique `DateTime<Utc>`** ; les suppressions sont des *tombstones* purgés après
-60 s ; le transport est **UDP + bincode** ; la découverte de pairs se fait par **tirage d'IP
-aléatoire dans un CIDR**.
+> *Les termes techniques sont définis dans le [glossaire (§9)](#9-glossaire) et listés dans
+> l'[index alphabétique (§11)](#11-index-alphabétique). Les premiers emplois ci-dessous y renvoient.*
+
+`reconcile-rs` fournit un magasin clé-valeur **distribué, en mémoire, *[eventually
+consistent](#g93)***, dont le cœur est le **[HRTree](#g91)** (« Hash-Range Tree ») : un
+[B-tree](#g95) maison augmenté, à chaque nœud, du [XOR](#g94) cumulé des hashs `(clé,valeur)` du
+sous-arbre et de sa taille. Cela permet une **requête de hash cumulé sur un intervalle en
+[O(log n)](#g95)**, qui pilote un protocole de **réconciliation par intervalles
+([Range-Based Set Reconciliation, RBSR](#g92))** au sens de Meyer (arXiv:2212.13567, 2023). La
+résolution de conflits est **[Last-Write-Wins (LWW)](#g93) par horloge physique `DateTime<Utc>`** ;
+les suppressions sont des *[tombstones](#g91)* purgés après 60 s ; le transport est **[UDP](#g94) +
+[bincode](#g96)** ; la découverte de pairs se fait par **tirage d'IP aléatoire dans un CIDR**.
 
 **Verdict global.** Le **cœur algorithmique est réel, correct et SOTA-aligné** : le HRTree
-est, dans la terminologie de la littérature 2026, un *Range-Summarizable Order-Statistics
-Store* (RSOS, arXiv:2603.19820) — exactement le backend dont RBSR a besoin — et l'astuce du
+est, dans la terminologie de la littérature 2026, un *[Range-Summarizable Order-Statistics
+Store](#g92)* (RSOS, arXiv:2603.19820) — exactement le backend dont RBSR a besoin — et l'astuce du
 cache de hash par sous-arbre est implémentée correctement (O(log n) vérifié). En revanche, la
 **coquille d'ingénierie et les choix distribués sont de maturité pré-alpha** et comportent
 **plusieurs défauts critiques** : une divergence silencieuse permanente (sentinelle `hash==0`),
@@ -463,8 +469,10 @@ web » avec exigence de durabilité/correction : Redis/Dragonfly + cache local, 
 ## 7. Audit détaillé des concurrents et différenciants
 
 > Cette section recentre l'analyse sur le **HRTree en tant que structure de données** (et son
-> protocole), et non sur le système complet. Ancrage méthodologique : le HRTree **n'est pas un
-> Merkle tree au sens MST/prolly**. C'est un *Range-Summarizable Order-Statistics Store* (RSOS) —
+> protocole), et non sur le système complet. *(Tous les noms de structures/algos ci-dessous sont
+> définis au [glossaire §9.2](#g92).)* Ancrage méthodologique : le HRTree **n'est pas un
+> [Merkle tree](#g92) au sens [MST](#g92)/[prolly](#g92)**. C'est un
+> *[Range-Summarizable Order-Statistics Store](#g92)* (RSOS) —
 > un B-tree augmenté, par nœud, d'un **résumé composable de sous-arbre** (le XOR des hashs) **+ une
 > statistique d'ordre** (la taille de sous-arbre). Cette abstraction a été formalisée en 2026
 > (arXiv:2603.19820) comme le backend dont la réconciliation par intervalles (RBSR, Meyer 2023) a
@@ -674,6 +682,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 > cryptographie, réseau et complexité, **(d)** l'outillage Rust. Les renvois `Fxx` pointent vers les
 > findings de la §4 ; les renvois `fichier:ligne` vers le code.
 
+<a id="g91"></a>
 ### 9.1 — Termes et identifiants propres au dépôt
 
 | Terme | Définition |
@@ -713,6 +722,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 | **`peers` / `peer_net`** | Map des pairs connus (clé = `IpAddr`, expiration 60 s) ; CIDR sondé. Croissance non bornée sous IPs spoofées (F18). |
 | **Constantes de timing** | `DEFAULT_TIMEOUT` = 60 s (tombstones), `TOMBSTONE_CLEARING` = 1 s, `PEER_EXPIRATION` = 60 s, `ACTIVITY_TIMEOUT` = 1 s (déclenche le diff périodique), `BUFFER_SIZE` = 65507 (datagramme UDP max), `MAX_SENDTO_RETRIES` (renvois d'émission). |
 
+<a id="g92"></a>
 ### 9.2 — Structures de données et algorithmes concurrents
 
 | Terme | Définition |
@@ -742,6 +752,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 | **content-defined chunking (CDC) / rolling hash** | Découpage des frontières de nœuds là où un hash glissant sur le contenu atteint un motif cible (cœur des prolly-trees). |
 | **structural sharing / CAS / CID** | Partage de sous-structures inchangées entre versions ; *Content-Addressed Storage* ; *Content IDentifier* (hash servant d'adresse). |
 
+<a id="g93"></a>
 ### 9.3 — Cohérence, réplication et systèmes distribués
 
 | Terme | Définition |
@@ -773,6 +784,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 | **gossip / epidemic / rumor mongering** | Dissémination épidémique d'updates à des pairs aléatoires. |
 | **SWIM / HyParView / memberlist / Vivaldi** | Protocoles de **membership** et détection de défaillance (≠ sync de données). SWIM/`memberlist` (HashiCorp) : fan-out borné, convergence log N — recommandés pour F10. |
 
+<a id="g94"></a>
 ### 9.4 — Cryptographie, hachage et réseau
 
 | Terme | Définition |
@@ -791,6 +803,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 | **bincode allocation bomb** | Désérialisation où un préfixe de longueur attaquant-contrôlé force une pré-allocation massive (F18). |
 | **UDP / datagramme / MTU** | Protocole sans connexion, non fiable, source spoofable ; datagramme borné (ici 65507 octets) ; *Maximum Transmission Unit*. |
 
+<a id="g95"></a>
 ### 9.5 — Complexité, théorie et notations
 
 | Terme | Définition |
@@ -802,6 +815,7 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 | **n / d / U / b** | Notations SOTA : taille d'ensemble *n*, taille de différence symétrique *d*, univers de clés *U*, largeur en bits d'un élément *b*. |
 | **O(log n) / O(d log n)** | Coûts visés : requête de hash-range et opérations par mutation en O(log n) ; volume de messages de diff en O(d log n). |
 
+<a id="g96"></a>
 ### 9.6 — Outillage Rust et écosystème
 
 | Terme | Définition |
@@ -849,6 +863,62 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 - Pekko Distributed Data — https://pekko.apache.org/docs/pekko/current/typed/distributed-data.html
 - Hazelcast Replicated Map — https://docs.hazelcast.com/hazelcast/5.6/data-structures/replicated-map
 - iroh / iroh-docs — https://github.com/n0-computer/iroh ; automerge — https://github.com/automerge/automerge
+
+---
+
+## 11. Index alphabétique
+
+> Index des termes du [glossaire (§9)](#9-glossaire). Chaque entrée renvoie à la sous-section où le
+> terme est défini : [9.1 dépôt](#g91) · [9.2 structures/algos](#g92) · [9.3 distribué](#g93) ·
+> [9.4 crypto/réseau](#g94) · [9.5 complexité](#g95) · [9.6 Rust](#g96).
+
+**A** — AEAD [9.4](#g94) · AELMDB [9.2](#g92) · `ACTIVITY_TIMEOUT` [9.1](#g91) · `add_pre_insert` [9.1](#g91) · amplification [9.4](#g94) · anti-entropy [9.3](#g93) · `Arc` [9.6](#g96) · `ArrayVec` [9.6](#g96) · associatif [9.3](#g93)
+
+**B** — B-tree / B+-tree [9.5](#g95) · `B` (constante) [9.1](#g91) · BCH codes [9.2](#g92) · Berlekamp-Massey [9.2](#g92) · bincode [9.6](#g96) · bincode allocation bomb [9.4](#g94) · BIP 330 [9.2](#g92) · birthday bound [9.4](#g94) · BLAKE3 [9.4](#g94) · Bloom filter [9.2](#g92) · `BUFFER_SIZE` [9.1](#g91)
+
+**C** — CAP [9.3](#g93) · CAS [9.2](#g92) · Cassandra [9.2](#g92) · causal consistency / causal+ [9.3](#g93) · causal stability [9.3](#g93) · CDC (content-defined chunking) [9.2](#g92) · CertainSync [9.2](#g92) · `check_invariants` [9.1](#g91) · chrono [9.6](#g96) · CID [9.2](#g92) · clippy [9.6](#g96) · clock skew [9.3](#g93) · CmRDT [9.3](#g93) · collision [9.4](#g94) · commit-wait [9.3](#g93) · commutatif [9.3](#g93) · `ComparisonItem` [9.1](#g91) · `Config` [9.1](#g91) · content-addressing [9.2](#g92) · CPI / CPISync [9.2](#g92) · CRDT [9.3](#g93) · CvRDT [9.3](#g93)
+
+**D** — datagramme [9.4](#g94) · `DateTime<Utc>` [9.6](#g96) · `DEFAULT_TIMEOUT` [9.1](#g91) · `DefaultHasher` [9.4](#g94) · `Diffable` [9.1](#g91) · `diff_round` [9.1](#g91) · `DiffRange` [9.1](#g91) · Dolt / DoltHub [9.2](#g92) · `DoubleEndedIterator` [9.6](#g96) · DRDoS [9.4](#g94) · DTLS [9.4](#g94) · DVV (Dotted Version Vector) [9.3](#g93) · Dynamo [9.2](#g92)
+
+**E** — Earthstar [9.2](#g92) · epidemic [9.3](#g93) · Erlay [9.2](#g92) · eventual consistency [9.3](#g93) · `ExactSizeIterator` [9.6](#g96)
+
+**F** — fan-out [9.5](#g95) · fingerprint [9.1](#g91) · `FusedIterator` [9.6](#g96) · fuzzing [9.6](#g96)
+
+**G** — `gc_grace_seconds` [9.3](#g93) · `gen_ip` [9.1](#g91) · `get_mut` [9.1](#g91) · `get_range` [9.1](#g91) · GF(2)-linéaire [9.4](#g94) · gossip [9.3](#g93) · Graphene [9.2](#g92)
+
+**H** — `hash(key,value)` [9.1](#g91) · `HashRangeQueryable` [9.1](#g91) · `HashSegment` [9.1](#g91) · happens-before [9.3](#g93) · Hazelcast [9.2/produit](#g92) · hinted handoff [9.3](#g93) · history-independence [9.2](#g92) · HLC (Hybrid Logical Clock) [9.3](#g93) · HMAC [9.4](#g94) · homomorphic hash [9.4](#g94) · HRTree [9.1](#g91) · HyParView [9.3](#g93)
+
+**I** — IBLT [9.2](#g92) · idempotent [9.3](#g93) · incremental hash [9.4](#g94) · `insert` / `insert_bulk` [9.1](#g91) · `insertion_position` [9.1](#g91) · ipnet [9.6](#g96) · iroh / iroh-docs [9.2](#g92)
+
+**J** — join-semilattice [9.3](#g93) · `just_insert` / `just_remove` [9.1](#g91)
+
+**K** — `key_at` [9.1](#g91)
+
+**L** — Lamport clock [9.3](#g93) · leading-zeros (attaque) [9.2](#g92) · LtHash [9.4](#g94) · LWW (Last-Write-Wins) [9.3](#g93) · LWW-Register [9.3](#g93)
+
+**M** — MAC [9.4](#g94) · `MAX_CAPACITY` / `MIN_CAPACITY` [9.1](#g91) · `MAX_SENDTO_RETRIES` [9.1](#g91) · memberlist [9.3](#g93) · Merkle-CRDT [9.2](#g92) · Merkle-DAG [9.2](#g92) · Merkle radix / Patricia [9.2](#g92) · Merkle tree / root [9.2](#g92) · `Message` [9.1](#g91) · minisketch [9.2](#g92) · miri [9.6](#g96) · monoïde [9.5](#g95) · monotone [9.3](#g93) · MSet-Mu-Hash / MSet-XOR-Hash [9.4](#g94) · MSRV [9.6](#g96) · MST (Merkle Search Tree) [9.2](#g92) · MTU [9.4](#g94) · MV-Register [9.3](#g93)
+
+**N** — *n / d / U / b* (notations) [9.5](#g95) · Negentropy [9.2](#g92) · Noise [9.4](#g94) · Noms [9.2](#g92) · NTP [9.3](#g93)
+
+**O** — O(log n) / O(d log n) [9.5](#g95) · once_cell [9.6](#g96) · order statistics (rank/select) [9.5](#g95) · OR-Set [9.3](#g93) · over-streaming [9.2](#g92)
+
+**P** — PACELC [9.3](#g93) · `panic=abort` [9.6](#g96) · parking_lot [9.6](#g96) · partition [9.3](#g93) · Patricia trie [9.2](#g92) · `peer_net` / `peers` [9.1](#g91) · `PEER_EXPIRATION` [9.1](#g91) · Pekko Distributed Data [produit/§7](#g92) · PinSketch [9.2](#g92) · `pop_expired` [9.1](#g91) · `position` [9.1](#g91) · `pre_insert` [9.1](#g91) · prolly tree [9.2](#g92) · proptest [9.6](#g96) · PTP [9.3](#g93) · push / pull [9.3](#g93)
+
+**Q** — QUIC [9.4](#g94) · quickcheck [9.6](#g96) · quorum [9.3](#g93)
+
+**R** — rand [9.6](#g96) · range-cmp / `RangeOrdering` [9.6](#g96) · rank / select [9.5](#g95) · Rateless IBLT (RIBLT) [9.2](#g92) · RBSR [9.2](#g92) · read repair [9.3](#g93) · `rebalance_after_deletion` [9.1](#g91) · `Reconcilable` / `reconcile()` [9.1](#g91) · `ReconcileEngine` [9.1](#g91) · `ReconcileStore` [9.1](#g91) · `refresh_hash_size` [9.1](#g91) · `remove` / `remove_bulk` [9.1](#g91) · resurrection / zombie [9.3](#g93) · Riak [9.2](#g92) · rolling hash [9.2](#g92) · rumor mongering [9.3](#g93) · `RwLock` [9.6](#g96) · RSOS [9.2](#g92)
+
+**S** — ScyllaDB [9.2](#g92) · second-preimage [9.4](#g94) · SEC (Strong Eventual Consistency) [9.3](#g93) · serde [9.6](#g96) · session guarantees [9.3](#g93) · SipHash [9.4](#g94) · SMT (Sparse Merkle Tree) [9.2](#g92) · spoofing [9.4](#g94) · split-brain [9.3](#g93) · `start_diff` [9.1](#g91) · Strata Estimator [9.2](#g92) · structural sharing [9.2](#g92) · SWIM [9.3](#g93)
+
+**T** — Thomas write rule [9.3](#g93) · `TimeoutWheel` [9.1](#g91) · TLS [9.4](#g94) · tokio [9.6](#g96) · tombstone [9.1](#g91) · `TOMBSTONE_CLEARING` [9.1](#g91) · tracing [9.6](#g96) · transitive group [9.4](#g94) · `tree_hash` [9.1](#g91) · `tree_size` [9.1](#g91) · TrueTime [9.3](#g93)
+
+**U** — UDP [9.4](#g94) · `unwrap` [9.6](#g96) · `Update` [9.1](#g91) · `overflow-checks` [9.6](#g96)
+
+**V** — vector clock / version vector [9.3](#g93) · Vivaldi [9.3](#g93) · Voldemort [9.2](#g92)
+
+**W** — Willow [9.2](#g92) · `with_mut` [9.1](#g91) · `with_seed` / `with_port` / `with_peer_net` / `with_tombstone_timeout` [9.1](#g91) · Writes-Follow-Reads [9.3](#g93)
+
+**X** — XOR [9.4](#g94) · xxHash [9.4](#g94)
 
 ---
 
