@@ -667,7 +667,157 @@ lui manque face aux prolly-trees, et (3) une **fondation de tests par propriét�
 
 ---
 
-## 9. Bibliographie
+## 9. Glossaire
+
+> Recense **(a)** les identifiants et constantes introduits par le dépôt, **(b)** les structures et
+> algorithmes concurrents cités, **(c)** les acronymes et concepts de systèmes distribués,
+> cryptographie, réseau et complexité, **(d)** l'outillage Rust. Les renvois `Fxx` pointent vers les
+> findings de la §4 ; les renvois `fichier:ligne` vers le code.
+
+### 9.1 — Termes et identifiants propres au dépôt
+
+| Terme | Définition |
+|---|---|
+| **HRTree** (*Hash-Range Tree*) | La structure centrale (`hrtree.rs`) : B-tree maison où chaque nœud cache `tree_hash` (XOR des hashs du sous-arbre) et `tree_size`. Permet une requête de hash cumulé sur un intervalle en O(log n). C'est un RSOS (§9.2). |
+| **`tree_hash`** | Champ de nœud : XOR cumulé des `hash(clé,valeur)` de tous les éléments du sous-arbre. Résumé composable qui pilote le diff. Maintenu incrémentalement (`tree_hash ^= diff_hash`). |
+| **`tree_size`** | Champ de nœud : nombre d'éléments du sous-arbre (statistique d'ordre). Donne `len()` en O(1) et la navigation rank/select. |
+| **`hash(key, value)`** | Fonction (`hrtree.rs:35-40`) calculant le hash 64-bit d'un couple via `DefaultHasher`. Brique du fingerprint (F6, F8). |
+| **`B` / `MIN_CAPACITY` / `MAX_CAPACITY`** | Paramètres du B-tree : `B = 6`, capacité de nœud 5 à 11 clés (`hrtree.rs:42-44`). |
+| **`refresh_hash_size`** | Recalcule `tree_hash` et `tree_size` d'un nœud à partir de ses éléments et enfants (`hrtree.rs:70-84`). |
+| **`check_invariants`** | Fonction de test (`hrtree.rs:495-560`) qui revérifie ordre, taille min de nœud, équilibre de hauteur, et l'exactitude des caches `tree_hash`/`tree_size`. Excellent outil, mais lancé seulement sur séquences fixes (F11). |
+| **`insertion_position` / `key_at` / `position`** | Navigation par statistique d'ordre : index d'insertion d'une clé, clé à un index donné, index d'une clé. O(log n). |
+| **`get_range`** | Itérateur paresseux sur un intervalle de clés (O(log n + k)). Matérialisé avec clones dans le handler réseau (F16/perf). |
+| **`with_mut` / `get_mut`** | Mutation en place d'une valeur avec restauration de l'invariant de hash. Contient le `println!` parasite (F12, `hrtree.rs:315`). |
+| **`rebalance_after_deletion`** | Rééquilibrage du B-tree après suppression (vol-gauche/vol-droite/fusion). Comporte un `TODO` (`hrtree.rs:97`) sur un cas de split dégénéré. |
+| **`HashRangeQueryable`** | Trait (`diff.rs`) exposant la requête de hash cumulé sur un intervalle ; implémenté par HRTree. |
+| **`Diffable`** | Trait (`diff.rs`) portant `start_diff` et `diff_round` : la machinerie RBSR. |
+| **`start_diff`** | Émet le segment racine `{(−∞,+∞), hash global, size}` qui amorce une réconciliation. O(1). |
+| **`diff_round`** | Cœur du protocole (`diff.rs:85-169`) : compare un segment reçu au local, et soit conclut, soit subdivise l'intervalle en ~16 sous-segments. Contient la sentinelle `hash==0` (F1) et les `unimplemented!()` (F7). |
+| **`HashSegment`** | Message de comparaison sérialisé : `{ range: (Bound,Bound), hash: u64, size: usize }`. Désérialisé du réseau sans validation (F7). |
+| **`DiffRange`** | Intervalle identifié comme divergent, à réconcilier par échange d'éléments. |
+| **`Message`** | Enum du protocole de fil : `ComparisonItem(HashSegment)` ou `Update((K,V))`. Sérialisé via bincode. |
+| **`ComparisonItem` / `Update`** | Les deux variantes de `Message` : segment de hash à comparer, vs couple clé-valeur à appliquer. |
+| **`fingerprint`** | (1) Au sens général : le résumé d'un intervalle utilisé pour le diff (ici XOR 64-bit). (2) Méthode publique `ReconcileStore::fingerprint(range)`. |
+| **`Reconcilable` / `reconcile()`** | Trait de fusion de conflits (`reconcilable.rs`). Unique impl fournie : LWW sur `(DateTime<Utc>, V)` (F5). |
+| **`ReconcileStore`** | API publique du magasin (`reconcile_store.rs`) : wrappe l'`HRTree`, gère timestamps et tombstones. Son `clone()` est bon marché (partage `Arc`). |
+| **`ReconcileEngine`** | Couche transport/réconciliation (`reconcile_engine.rs`) : socket UDP, locks, boucle `run()`, découverte de pairs. |
+| **`Config`** | Configuration : `port`, `listen_addr`, `peer_net` (`reconcile_store.rs:240-269`). Défaut loopback-safe mais `port=0` inutilisable tel quel. |
+| **`with_seed` / `with_port` / `with_listen_addr` / `with_peer_net` / `with_tombstone_timeout`** | Builders de configuration. `with_seed` fournit un pair connu (atténue la découverte par scan, F10). |
+| **`insert` / `just_insert` / `*_bulk`** | `insert` = insertion locale **+** diffusion UDP ; `just_insert` = locale seule (footgun de nommage, F-API). Variantes `_bulk` clonent l'entrée entière (F16/perf). |
+| **`remove` / `just_remove` / `remove_bulk`** | Suppressions ; écrivent un tombstone `(now, None)`. |
+| **`pre_insert` / `add_pre_insert`** | Hook utilisateur appelé avant insertion. Censé tourner hors write-lock, mais exécuté **sous** le lock sur le chemin réseau (F14, contredit `reconcile_store.rs:98-101`). |
+| **`tombstone`** | Marqueur de suppression `(timestamp, None)` conservé dans l'arbre pour propager la suppression, puis purgé (F4). |
+| **`TimeoutWheel`** | Structure d'expiration des tombstones (`timeout_wheel.rs`), BTreeMap + HashMap, `std::sync::RwLock` (incohérent avec `parking_lot` ailleurs). |
+| **`pop_expired` / `clear_expired_tombstones`** | Purge des tombstones expirés à l'horloge murale (`reconcile_store.rs:208-215`) → résurrection (F4). |
+| **`gen_ip`** | Tire une IP aléatoire dans un CIDR (`gen_ip.rs`) pour la découverte de pairs (F10). |
+| **`peers` / `peer_net`** | Map des pairs connus (clé = `IpAddr`, expiration 60 s) ; CIDR sondé. Croissance non bornée sous IPs spoofées (F18). |
+| **Constantes de timing** | `DEFAULT_TIMEOUT` = 60 s (tombstones), `TOMBSTONE_CLEARING` = 1 s, `PEER_EXPIRATION` = 60 s, `ACTIVITY_TIMEOUT` = 1 s (déclenche le diff périodique), `BUFFER_SIZE` = 65507 (datagramme UDP max), `MAX_SENDTO_RETRIES` (renvois d'émission). |
+
+### 9.2 — Structures de données et algorithmes concurrents
+
+| Terme | Définition |
+|---|---|
+| **RBSR** (*Range-Based Set Reconciliation*) | Famille d'algos (Meyer 2023) : partition récursive d'un ensemble ordonné, échange de fingerprints d'intervalles, descente dans les ranges divergents. Ce qu'implémente reconcile-rs. O(log n) RTT. |
+| **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026) : ensemble ordonné offrant des résumés d'intervalle **composables** + navigation rank/select. Un B+-tree augmenté la réalise → **le HRTree est un RSOS**. |
+| **AELMDB** | Implémentation RSOS **persistante** (extension de LMDB, memory-mapped) du papier 2026, évaluée avec Negentropy. Concurrent le plus direct du HRTree. |
+| **MST** (*Merkle Search Tree*) | Auvolat & Taïani, SRDS 2019. B-tree dont le niveau d'une clé dérive du **hash de la clé** ⇒ history-independent. Diffe des **nœuds**. Vulnérable à l'attaque leading-zeros. Usage : Bluesky/atproto. |
+| **Prolly tree** (*probabilistic B-tree*) | Noms/Dolt. B-tree adressé par contenu, frontières par **rolling hash**. History-independent + **structural sharing** → versioning (Git-like). SOTA des stores ordonnés versionnés. |
+| **Merkle radix / Patricia trie** | Arbre Merkle où la position dépend des **bits de préfixe** de la clé. History-independent. Base d'Ethereum. |
+| **SMT** (*Sparse Merkle Tree*) | Merkle tree sur un espace de clés immense, majoritairement vide ; preuves d'inclusion/exclusion compactes. |
+| **Merkle tree / Merkle root** | Arbre de hachage où chaque nœud hashe ses enfants ; la racine résume tout. Base de l'anti-entropy classique. |
+| **Merkle-DAG / Merkle-CRDT** | DAG adressé par contenu et hash-lié (IPFS) ; les liens encodent l'histoire causale (Merkle-CRDT, arXiv:2004.00107). |
+| **IBLT** (*Invertible Bloom Lookup Table*) | Structure encodant un ensemble en cellules (XOR de clé/hash + compteur) ; la soustraction de deux IBLT révèle la différence symétrique par « peeling ». Comm. ∝ d, **nécessite d connu**. |
+| **Rateless IBLT (RIBLT)** | *Practical Rateless Set Reconciliation*, SIGCOMM 2024. Flux infini de symboles codés (fountain code) ; décode dès ~d symboles reçus. **Pas besoin de d**, calcul linéaire, robuste à l'adverse. **Choix SOTA single-shot.** |
+| **minisketch / PinSketch** | Lib Bitcoin Core implémentant PinSketch (formulation BCH de la réconciliation). Comm. **optimale ≈ b·d**, décodage O(d²), capacité à prédéfinir. |
+| **CPI / CPISync** (*Characteristic Polynomial Interpolation*) | Encode l'ensemble comme les racines d'un polynôme ; le ratio des polynômes donne la différence. Minsky-Trachtenberg-Zippel. Décodage O(d³). |
+| **BCH codes / Berlekamp-Massey** | Codes correcteurs d'erreurs / algo de décodage utilisés par PinSketch pour reconstruire le polynôme caractéristique. |
+| **Strata Estimator** | Pile d'IBLT échantillonnées estimant la taille de différence *d* sans tour préalable (Eppstein et al. 2011). |
+| **CertainSync** | arXiv:2504.08314 (SIGMETRICS 2025) : réconciliation rateless **à succès déterministe** (sans estimateur ni paramétrage). |
+| **Bloom filter** | Filtre probabiliste d'appartenance (faux positifs, pas de faux négatifs) ; composant de Graphene. |
+| **Erlay / Graphene / BIP 330** | Déploiements Bitcoin : Erlay (minisketch + flooding, spécifié dans BIP 330), Graphene (Bloom + IBLT). |
+| **Negentropy** | Implémentation RBSR de production (Nostr/NIP-77, relais strfry). A **abandonné le combineur XOR naïf** au profit d'un hash cryptographique incrémental — directement pertinent pour F6. |
+| **Willow / Earthstar / iroh / iroh-docs** | Écosystème de sync décentralisé : Willow (RBSR 3D, dont la spec documente l'insécurité du fingerprint XOR), iroh (QUIC chiffré + `iroh-docs` = KV CRDT persistant — concurrent Rust direct). |
+| **Dynamo / Cassandra / ScyllaDB / Riak / Voldemort** | Bases distribuées à anti-entropy par Merkle tree. Cassandra : `gc_grace_seconds`, over-streaming. ScyllaDB : GC de tombstones basé sur le repair. Référence pour F4. |
+| **Noms / Dolt / DoltHub** | Écosystème prolly-tree ; Dolt = « 1ʳᵉ base relationnelle versionnée ». |
+| **content-defined chunking (CDC) / rolling hash** | Découpage des frontières de nœuds là où un hash glissant sur le contenu atteint un motif cible (cœur des prolly-trees). |
+| **structural sharing / CAS / CID** | Partage de sous-structures inchangées entre versions ; *Content-Addressed Storage* ; *Content IDentifier* (hash servant d'adresse). |
+
+### 9.3 — Cohérence, réplication et systèmes distribués
+
+| Terme | Définition |
+|---|---|
+| **LWW** (*Last-Write-Wins*) | Résolution de conflit : la valeur au timestamp le plus grand gagne. Câblée ici sur horloge physique (F5). |
+| **Thomas write rule** | Règle formalisant LWW : ignorer une écriture plus ancienne qu'un état déjà appliqué. |
+| **eventual consistency** | Garantie faible : sans nouvelles écritures, les répliques convergent *à terme*. |
+| **SEC** (*Strong Eventual Consistency*) | Convergence *forte* : des répliques ayant reçu les mêmes updates ont un état identique, **quel que soit l'ordre**. Exige un merge commutatif/associatif/idempotent. Non atteinte ici (F5). |
+| **CRDT** (*Conflict-free Replicated Data Type*) | Type dont le merge garantit la SEC. **CvRDT** (état, merge = borne sup. d'un treillis) vs **CmRDT** (opérations commutatives). Shapiro et al. 2011. |
+| **LWW-Register / MV-Register / OR-Set** | CRDT classiques : registre LWW (lossy), registre multi-valeur (garde les concurrents), Observed-Remove Set (add-wins). |
+| **join-semilattice** | Treillis où toute paire a une borne supérieure ; structure mathématique sous-jacente aux CvRDT. |
+| **commutatif / associatif / idempotent / monotone** | Propriétés requises d'un merge CRDT. Le merge de reconcile-rs n'est **pas commutatif** sur égalité de timestamp (F5). |
+| **Lamport clock** | Horloge logique scalaire respectant *happens-before* ; ne détecte pas la concurrence. |
+| **vector clock / version vector** | Vecteur d'un compteur par nœud ; **détecte** la concurrence (vecteurs incomparables). Coût O(N), pruning délicat. |
+| **DVV** (*Dotted Version Vector*) | Version vector raffiné (Preguiça et al.) : causalité en O(1), métadonnée bornée par le degré de réplication. Adopté par Riak. |
+| **HLC** (*Hybrid Logical Clock*) | Kulkarni 2014. Timestamp 64-bit = physique + compteur logique : monotone, respecte la causalité, divergence bornée. **Correctif minimal recommandé** pour F5 (CockroachDB, MongoDB). |
+| **TrueTime / commit-wait** | Approche Spanner : intervalle d'incertitude d'horloge borné (GPS+atomique) + attente au commit → cohérence externe/linéarisabilité. |
+| **happens-before / causalité** | Ordre partiel des événements (Lamport 1978). Une écriture causalement postérieure ne doit pas être écrasée par celle dont elle dérive. |
+| **causal consistency / causal+** | Cohérence respectant *happens-before* ; *causal+* (COPS) = causale + résolution convergente des conflits. |
+| **causal stability** | Condition de GC sûre : un événement est purgeable seulement quand **aucune opération concurrente ne peut plus arriver** (toutes les répliques l'ont vu). Base du correctif de F4. |
+| **session guarantees** | (Bayou) Read-Your-Writes, Monotonic Reads, Monotonic Writes, Writes-Follow-Reads. Aucune fournie par le LWW physique multi-maître. |
+| **resurrection / zombie** | Réapparition d'une donnée supprimée quand un tombstone est purgé avant que tous l'aient vu (F4). |
+| **`gc_grace_seconds`** | Fenêtre Cassandra avant purge d'un tombstone (défaut **10 jours**), sûre *si* un repair complet la couvre. À comparer aux **60 s** d'ici (F4). |
+| **CAP / PACELC** | CAP : sous Partition, choisir Cohérence ou Disponibilité. PACELC : *Else* (régime normal), choisir Latence ou Cohérence. reconcile-rs est **PA/EL**. |
+| **clock skew / NTP / PTP** | Dérive entre horloges physiques ; protocoles de synchronisation (NTP ~sous-seconde, PTP plus précis). Cause des pertes LWW (F5). |
+| **quorum / read repair / hinted handoff** | Mécanismes Dynamo-like (absents ici) : majorité de répliques, réparation à la lecture, tampon pour pair injoignable. |
+| **split-brain / partition** | Cluster scindé en sous-groupes ne communiquant plus ; chacun diverge. |
+| **anti-entropy (push / pull)** | Réconciliation périodique pairwise. Push = pousser les mises à jour chaudes ; pull = interroger un pair. Demers et al. 1987. |
+| **gossip / epidemic / rumor mongering** | Dissémination épidémique d'updates à des pairs aléatoires. |
+| **SWIM / HyParView / memberlist / Vivaldi** | Protocoles de **membership** et détection de défaillance (≠ sync de données). SWIM/`memberlist` (HashiCorp) : fan-out borné, convergence log N — recommandés pour F10. |
+
+### 9.4 — Cryptographie, hachage et réseau
+
+| Terme | Définition |
+|---|---|
+| **XOR** | OU-exclusif. Commutatif, associatif, **auto-inverse**, GF(2)-linéaire. Pratique pour la soustraction de range mais faible comme fingerprint (F6). |
+| **GF(2)-linéaire** | Linéaire sur le corps à 2 éléments → un attaquant *résout* (élimination gaussienne) des éléments de collision au lieu de les chercher par force brute (F6). |
+| **collision / second-preimage / birthday bound** | Deux entrées → même hash ; trouver une 2ᵉ entrée collisionnant une donnée ; seuil probabiliste de collision (~2^(b/2), donc ~2³² pour 64-bit). Tous pertinents pour F6. |
+| **SipHash** | PRF rapide à clé, sortie 64-bit ; algo de `DefaultHasher`. **Pas** résistant aux collisions au sens cryptographique. |
+| **`DefaultHasher`** | Hasher de la std (`std::collections::hash_map`), **non stable** entre versions de Rust/plateformes → non-convergence cross-version (F8). |
+| **BLAKE3 / xxHash** | Hashs rapides et **stables** recommandés en remplacement (F8). |
+| **incremental / homomorphic hash** | Hash d'ensemble mis à jour incrémentalement et composable. **MSet-XOR-Hash** (faible, = l'approche actuelle), **MSet-Mu-Hash** (corps fini), **LtHash** (addition vectorielle/réseau) — alternatives sûres pour F6. |
+| **transitive group** | Structure algébrique minimale requise d'un fingerprint RBSR (associativité, neutre, inverses, transitivité) — XOR la satisfait, d'où sa commodité *et* sa fragilité. |
+| **MAC / HMAC / AEAD** | Code d'authentification de message ; HMAC (à base de hash) ; chiffrement authentifié avec données associées. Correctif de F3. |
+| **TLS / DTLS / Noise / QUIC** | Couches de transport sécurisé (DTLS = TLS sur datagramme ; Noise = framework de handshake ; QUIC = transport chiffré sur UDP). Options pour F3 ; cf. issue #96. |
+| **spoofing / amplification / reflection / DRDoS** | Falsification de l'IP source (trivial en UDP) ; réponse plus grosse que la requête vers une victime ; déni de service distribué par réflexion. Surface de F9. |
+| **bincode allocation bomb** | Désérialisation où un préfixe de longueur attaquant-contrôlé force une pré-allocation massive (F18). |
+| **UDP / datagramme / MTU** | Protocole sans connexion, non fiable, source spoofable ; datagramme borné (ici 65507 octets) ; *Maximum Transmission Unit*. |
+
+### 9.5 — Complexité, théorie et notations
+
+| Terme | Définition |
+|---|---|
+| **B-tree / B+-tree** | Arbre de recherche équilibré multi-voies. B+-tree : valeurs uniquement dans les feuilles. |
+| **order statistics (rank / select)** | Opérations « rang d'une clé » / « clé au rang i » en O(log n) grâce aux compteurs de sous-arbre (`tree_size`). |
+| **monoïde** | Ensemble avec opération associative et élément neutre ; structure idéale d'un résumé composable générique (P1 de §7.4). |
+| **fan-out** | Nombre de sous-intervalles par tour de récursion (ici ~16, `diff.rs:141`) ; arbitre RTT vs taille de message. |
+| **n / d / U / b** | Notations SOTA : taille d'ensemble *n*, taille de différence symétrique *d*, univers de clés *U*, largeur en bits d'un élément *b*. |
+| **O(log n) / O(d log n)** | Coûts visés : requête de hash-range et opérations par mutation en O(log n) ; volume de messages de diff en O(d log n). |
+
+### 9.6 — Outillage Rust et écosystème
+
+| Terme | Définition |
+|---|---|
+| **MSRV** (*Minimum Supported Rust Version*) | Version minimale de Rust supportée ; absente du `Cargo.toml` (F17). |
+| **clippy / `-Dwarnings`** | Linter Rust ; CI traitant les warnings en erreurs. Le warning `mismatched_lifetime_syntaxes` (`hrtree_iter.rs:177`) casserait la CI (F17). |
+| **miri** | Interpréteur détectant l'UB (*Undefined Behavior*) ; pertinent vu les itérateurs `unsafe` ; absent de la CI (F17). |
+| **proptest / quickcheck / fuzzing** | Tests par propriétés / génératifs / par entrées aléatoires. **Totalement absents** (F11). |
+| **`cargo audit` / `cargo deny`** | Audit des vulnérabilités / politiques de dépendances. Absents de la CI (F19). |
+| **bincode / serde / tokio / parking_lot / arrayvec / ipnet / range-cmp / chrono / rand / once_cell / tracing** | Dépendances : sérialisation binaire ; (dé)sérialisation ; runtime async ; locks sans poisoning ; `ArrayVec` (vecteur inline, nœuds du B-tree) ; types réseau/CIDR ; comparaison clé↔intervalle (`RangeOrdering`) ; `DateTime<Utc>` (timestamps LWW) ; aléatoire ; init paresseuse ; logs structurés. |
+| **`Arc` / `RwLock` / `unwrap` / `panic=abort` / `overflow-checks`** | Pointeur partagé atomique ; verrou lecteurs-écrivain ; déballage paniquant ; stratégie de panic ; vérification de débordement arithmétique (désactivée en release → F7). |
+| **`ExactSizeIterator` / `FusedIterator` / `DoubleEndedIterator`** | Traits d'itérateur Rust visés par les issues #90-92 (contrat RSOS complet, §7.4). |
+
+---
+
+## 10. Bibliographie
 
 **Réconciliation d'ensembles**
 - A. Meyer, *Range-Based Set Reconciliation*, arXiv:2212.13567 (IEEE SRDS 2023) — https://arxiv.org/abs/2212.13567 ; vulgarisation : https://logperiodic.com/rbsr.html
