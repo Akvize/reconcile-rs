@@ -1,511 +1,840 @@
 # Peer Review — `reconcile-rs` (crate `reconcile`)
 
-> Revue critique de niveau « peer-review scientifique » conduite par un panel de
-> reviewers indépendants (4 sous-panels SOTA + 8 reviewers de code en double aveugle,
-> 2 par thème). Chaque constat est étayé par une preuve `fichier:ligne` vérifiée et,
-> pour le positionnement SOTA, par des sources citées.
+> Scientific-style peer review conducted by a panel of independent reviewers (4 SOTA sub-panels +
+> 8 code reviewers in double-blind pairs, 2 per theme). Every claim is backed by a verified
+> `file:line` proof and, for SOTA positioning, by cited sources.
 >
-> - **Date :** 2026-05-30
-> - **Commit audité :** `64f1ebf` (branche `master`), audit sur `claude/merkle-tree-storage-review-LbYCp`
-> - **Version manifeste :** `0.0.0-git` · **Version publiée crates.io :** `0.1.5` (~6,8k téléchargements, 3★)
-> - **Méthode :** lecture statique exhaustive de `src/`, `tests/`, `benches/`, `Cargo.toml`,
->   `README.md`, `.github/workflows/` + revue de littérature SOTA. Aucune modification du code source.
+> - **Date:** 2026-05-30
+> - **Audited commit:** `64f1ebf` (branch `master`), review on `claude/merkle-tree-storage-review-LbYCp`
+> - **Manifest version:** `0.0.0-git` · **Published crates.io version:** `0.1.5` (~6.8k downloads, 3★)
+> - **Method:** exhaustive static reading of `src/`, `tests/`, `benches/`, `Cargo.toml`,
+>   `README.md`, `.github/workflows/` + SOTA literature review. No source file was modified.
+> - **Navigation:** a [glossary (§9)](#9-glossary) defines ~120 terms and an
+>   [alphabetical index (§11)](#11-alphabetical-index) lists them; first uses in the text link to it.
 
 ---
 
-## 1. Résumé exécutif
+## 1. Executive summary
 
-`reconcile-rs` fournit un magasin clé-valeur **distribué, en mémoire, *eventually
-consistent***, dont le cœur est le **HRTree** (« Hash-Range Tree ») : un B-tree maison
-augmenté, à chaque nœud, du XOR cumulé des hashs `(clé,valeur)` du sous-arbre et de sa
-taille. Cela permet une **requête de hash cumulé sur un intervalle en O(log n)**, qui pilote
-un protocole de **réconciliation par intervalles (Range-Based Set Reconciliation, RBSR)** au
-sens de Meyer (arXiv:2212.13567, 2023). La résolution de conflits est **Last-Write-Wins (LWW)
-par horloge physique `DateTime<Utc>`** ; les suppressions sont des *tombstones* purgés après
-60 s ; le transport est **UDP + bincode** ; la découverte de pairs se fait par **tirage d'IP
-aléatoire dans un CIDR**.
+> *Technical terms are defined in the [glossary (§9)](#9-glossary) and listed in the
+> [alphabetical index (§11)](#11-alphabetical-index). First uses below link to it.*
 
-**Verdict global.** Le **cœur algorithmique est réel, correct et SOTA-aligné** : le HRTree
-est, dans la terminologie de la littérature 2026, un *Range-Summarizable Order-Statistics
-Store* (RSOS, arXiv:2603.19820) — exactement le backend dont RBSR a besoin — et l'astuce du
-cache de hash par sous-arbre est implémentée correctement (O(log n) vérifié). En revanche, la
-**coquille d'ingénierie et les choix distribués sont de maturité pré-alpha** et comportent
-**plusieurs défauts critiques** : une divergence silencieuse permanente (sentinelle `hash==0`),
-un déni de service distant trivial (panic sur un seul paquet UDP malformé), une résurrection de
-données supprimées (GC de tombstones à l'horloge murale), un LWW non-commutatif sur égalité de
-timestamp, et l'absence totale d'authentification/chiffrement.
+`reconcile-rs` provides a **distributed, in-memory, *[eventually consistent](#g93)*** key-value
+store whose core is the **[HRTree](#g91)** ("Hash-Range Tree"): a hand-written [B-tree](#g95) where
+each node caches the cumulative [XOR](#g94) of the `(key,value)` hashes of its subtree plus the
+subtree size. This enables a **cumulative-hash range query in [O(log n)](#g95)**, which drives a
+**range-based reconciliation protocol ([Range-Based Set Reconciliation, RBSR](#g92))** in the sense
+of Meyer (arXiv:2212.13567, 2023). Conflict resolution is **[Last-Write-Wins (LWW)](#g93) by
+physical clock `DateTime<Utc>`**; deletions are *[tombstones](#g91)* purged after 60 s; transport is
+**[UDP](#g94) + [bincode](#g96)**; peer discovery is done by **random IP sampling within a CIDR**.
 
-Convergence du panel : les **deux reviewers indépendants de chaque thème ont identifié les mêmes
-findings critiques** — signal de haute confiance, pas d'artefact de formulation.
+**Overall verdict.** The **algorithmic core is real, correct and SOTA-aligned**: the HRTree is, in
+the terminology of the 2026 literature, a *[Range-Summarizable Order-Statistics Store](#g92)* (RSOS,
+arXiv:2603.19820) — exactly the backend RBSR needs — and the subtree-hash caching trick is correctly
+implemented (O(log n) verified). However, the **engineering shell and the distributed-design
+choices are pre-alpha** and contain **several critical defects**: silent permanent divergence (the
+`hash==0` sentinel), a trivial remote denial of service (panic on a single malformed UDP packet),
+resurrection of deleted data (wall-clock tombstone GC), a LWW that is non-commutative on equal
+timestamps, and the total absence of authentication/encryption.
 
-### Tableau de synthèse des findings
+Panel convergence: the **two independent reviewers of each theme identified the same critical
+findings** — a high-confidence signal, not a phrasing artifact.
 
-| # | Finding | Catégorie | Sévérité | Confiance | Preuve |
-|---|---------|-----------|----------|-----------|--------|
-| F1 | Sentinelle `hash==0` confondue avec un range non-vide → **divergence permanente silencieuse** | Algo/crypto | **Critique** | Haute (T1-A & T1-B) | `diff.rs:96-99` |
-| F2 | `panic!` sur paquet UDP malformé → **DoS distant** (process down ou nœud zombie) | Sécurité | **Critique** | Haute (T2-A & T2-B) | `reconcile_engine.rs:267` |
-| F3 | Pas d'auth/chiffrement + **timestamp LWW contrôlé par l'attaquant** → poisoning/suppression cluster-wide | Sécurité | **Critique** | Haute (T2-A & T2-B) | `reconcile_engine.rs:200-205,304-322` |
-| F4 | **Résurrection de tombstones** : GC à l'horloge murale (60 s), sans stabilité causale | Distribué | **Critique** | Haute (T3-A & T3-B) | `reconcile_store.rs:208-215` ; `timeout_wheel.rs:46-57` |
-| F5 | **LWW horloge physique** : perte d'update sous skew + **non-commutatif sur égalité** → divergence permanente + livelock | Distribué | **Élevée** | Haute (T3-A & T3-B) | `reconcilable.rs:19-27` |
-| F6 | **Fingerprint XOR 64-bit** : faible algébriquement (auto-inverse, GF(2)-linéaire) + birthday bound ; collision craftable | Algo/crypto | **Élevée** | Haute (T1-A & T1-B + SOTA) | `hrtree.rs:35-40,70-84` |
-| F7 | `unimplemented!()`/underflow atteignables depuis un `HashSegment` réseau → panic distant | Sécurité/Algo | **Élevée** | Haute (T1, T2) | `diff.rs:112,116,119` |
-| F8 | **`DefaultHasher` instable** entre versions de Rust/plateformes → non-convergence cross-version | Algo/qualité | **Élevée** | Haute (T1, T4) | `hrtree.rs:36` |
-| F9 | **Amplification/réflexion UDP** (dump de la DB vers victime spoofée) | Sécurité | **Élevée** | Moy-Haute (T2-A & T2-B) | `reconcile_engine.rs:290-301` ; `diff.rs:96-97` |
-| F10 | **Découverte par scan IP** O(espace d'adressage) + trafic O(N²) ; fuite de données | Distribué/Sécu | **Élevée** | Haute (T2, T3) | `reconcile_engine.rs:228-241` |
-| F11 | **Absence de property-testing/fuzzing** ; la convergence (propriété centrale) n'est pas testée génériquement | Qualité/tests | **Élevée** | Certaine (T4-A & T4-B) | `tests/`, `Cargo.toml` |
-| F12 | **`println!` de debug** dans le hot-path `with_mut` | Qualité | **Moyenne** (1 reviewer: Critique) | Certaine (T1, T4) | `hrtree.rs:315` |
-| F13 | **API panic-only** (aucun `Result`) ; `unwrap()` sur bind/send | Qualité | **Moyenne** | Haute (T4-A & T4-B) | `reconcile_engine.rs:99,240,354,359,365` |
-| F14 | Hook `pre_insert` exécuté **sous le write-lock** sur le chemin réseau — contredit la doc | Qualité/correction | **Moyenne** | Haute (T4-A & T4-B) | `reconcile_engine.rs:312,317` vs `reconcile_store.rs:98-101` |
-| F15 | **Pas de persistance** ; restart perd tout + aggrave la résurrection | Distribué | **Moyenne** | Haute (T3-A & T3-B) | `reconcile_engine.rs:101-110` |
-| F16 | Benchmarks **loopback** non représentatifs ; README auto-contradictoire (« factor 2 » vs « one-third ») | Perf/doc | **Moyenne** | Haute (T4-A & T4-B) | `README.md:60-71,122-139` ; `benches/bench.rs:226-351` |
-| F17 | Maturité : `0.0.0-git`, pas de MSRV, pas de CHANGELOG, clippy `mismatched_lifetime_syntaxes` casserait la CI `-Dwarnings` | Maturité | **Moyenne/Basse** | Certaine (T4-A & T4-B) | `Cargo.toml:3` ; `hrtree_iter.rs:177` |
-| F18 | Exhaustion mémoire : map `peers` via IPs spoofées, croissance non bornée ; bincode allocation-bomb | Sécurité | **Moyenne** | Haute (T2-A & T2-B) | `reconcile_engine.rs:117-121,208-210` |
-| F19 | Hygiène des dépendances : bincode 1.x sans `with_limit`, tokio floor ancien, `[profile.release] debug=true` sans `overflow-checks` | Sécurité/maturité | **Basse** | Moyenne (T2) | `Cargo.toml` |
+### Findings summary table
 
-**Points forts à créditer (consensus du panel) :** cœur RBSR/RSOS correct et élégant ;
-`check_invariants` rigoureux ; sécurité **pull-only du nœud vide** (un nœud fraîchement
-redémarré ne peut pas supprimer les données des pairs — `diff.rs:99-106`) ; défaut `Config`
-confiné au loopback ; détection de troncature de buffer ; `TimeoutWheel` propre ; gestion
-mémoire `Arc` pour le clone de `ReconcileStore` ; double-licence MIT/Apache propre.
+| # | Finding | Category | Severity | Confidence | Proof |
+|---|---------|----------|----------|------------|-------|
+| F1 | `hash==0` sentinel conflated with a non-empty range → **silent permanent divergence** | Algo/crypto | **Critical** | High (T1-A & T1-B) | `diff.rs:96-99` |
+| F2 | `panic!` on malformed UDP packet → **remote DoS** (process down or zombie node) | Security | **Critical** | High (T2-A & T2-B) | `reconcile_engine.rs:267` |
+| F3 | No auth/encryption + **attacker-controlled LWW timestamp** → cluster-wide poisoning/deletion | Security | **Critical** | High (T2-A & T2-B) | `reconcile_engine.rs:200-205,304-322` |
+| F4 | **Tombstone resurrection**: wall-clock GC (60 s), no causal stability | Distributed | **Critical** | High (T3-A & T3-B) | `reconcile_store.rs:208-215`; `timeout_wheel.rs:46-57` |
+| F5 | **Physical-clock LWW**: lost update under skew + **non-commutative on equal ts** → permanent divergence + livelock | Distributed | **High** | High (T3-A & T3-B) | `reconcilable.rs:19-27` |
+| F6 | **64-bit XOR fingerprint**: algebraically weak (self-inverse, GF(2)-linear) + birthday bound; craftable collision | Algo/crypto | **High** | High (T1-A & T1-B + SOTA) | `hrtree.rs:35-40,70-84` |
+| F7 | `unimplemented!()`/underflow reachable from a network `HashSegment` → remote panic | Security/Algo | **High** | High (T1, T2) | `diff.rs:112,116,119` |
+| F8 | **`DefaultHasher` unstable** across Rust versions/platforms → cross-version non-convergence | Algo/quality | **High** | High (T1, T4) | `hrtree.rs:36` |
+| F9 | **UDP amplification/reflection** (dump the DB to a spoofed victim) | Security | **High** | Med-High (T2-A & T2-B) | `reconcile_engine.rs:290-301`; `diff.rs:96-97` |
+| F10 | **IP-scan discovery** O(address-space) + O(N²) traffic; data leakage | Distributed/Sec | **High** | High (T2, T3) | `reconcile_engine.rs:228-241` |
+| F11 | **No property-testing/fuzzing**; convergence (the central property) is not tested generically | Quality/tests | **High** | Certain (T4-A & T4-B) | `tests/`, `Cargo.toml` |
+| F12 | **Debug `println!`** in the `with_mut` hot path | Quality | **Medium** (1 reviewer: Critical) | Certain (T1, T4) | `hrtree.rs:315` |
+| F13 | **Panic-only API** (no `Result`); `unwrap()` on bind/send | Quality | **Medium** | High (T4-A & T4-B) | `reconcile_engine.rs:99,240,354,359,365` |
+| F14 | `pre_insert` hook run **under the write-lock** on the network path — contradicts the docs | Quality/correctness | **Medium** | High (T4-A & T4-B) | `reconcile_engine.rs:312,317` vs `reconcile_store.rs:98-101` |
+| F15 | **No persistence**; restart loses everything + worsens resurrection | Distributed | **Medium** | High (T3-A & T3-B) | `reconcile_engine.rs:101-110` |
+| F16 | **Loopback** benchmarks unrepresentative; README self-contradictory ("factor 2" vs "one-third") | Perf/doc | **Medium** | High (T4-A & T4-B) | `README.md:60-71,122-139`; `benches/bench.rs:226-351` |
+| F17 | Maturity: `0.0.0-git`, no MSRV, no CHANGELOG, clippy `mismatched_lifetime_syntaxes` would break the `-Dwarnings` CI | Maturity | **Medium/Low** | Certain (T4-A & T4-B) | `Cargo.toml:3`; `hrtree_iter.rs:177` |
+| F18 | Memory exhaustion: `peers` map via spoofed IPs, unbounded growth; bincode allocation-bomb | Security | **Medium** | High (T2-A & T2-B) | `reconcile_engine.rs:117-121,208-210` |
+| F19 | Dependency hygiene: bincode 1.x without `with_limit`, old tokio floor, `[profile.release] debug=true` without `overflow-checks` | Security/maturity | **Low** | Medium (T2) | `Cargo.toml` |
+
+**Strengths to credit (panel consensus):** correct and elegant RBSR/RSOS core;
+rigorous `check_invariants`; **empty-node pull-only** safety (a freshly restarted node cannot delete
+peers' data — `diff.rs:99-106`); loopback-confined default `Config`; buffer-truncation detection;
+clean `TimeoutWheel`; `Arc`-based memory management for `ReconcileStore` cloning; clean dual
+MIT/Apache license.
 
 ---
 
-## 2. Objectif et pertinence vis-à-vis du SOTA
+## 2. Objective and relevance vs the SOTA
 
-### 2.1 L'objectif annoncé
+### 2.1 The stated objective
 
-D'après le README : *« a scalable Web service with a non-persistent and eventually consistent
-key-value store [...] avoiding any latency related to using an external store such as Redis. All
-the data is available locally on all instances »*. Autrement dit : **chaque réplique de service
-web embarque le dataset complet en mémoire**, les répliques se réconcilient en pair-à-pair, et
-l'utilisateur est notifié des changements via un hook d'insertion.
+Per the README: *"a scalable Web service with a non-persistent and eventually consistent key-value
+store [...] avoiding any latency related to using an external store such as Redis. All the data is
+available locally on all instances"*. In other words: **each web-service replica embeds the full
+dataset in memory**, replicas reconcile peer-to-peer, and the user is notified of changes via an
+insertion hook.
 
-### 2.2 Pertinence et niche réelle
+### 2.2 Relevance and real niche
 
-La niche est **réelle mais étroite** : il n'existe pas, dans l'écosystème Rust/Tokio,
-d'équivalent mûr du *Replicated Map* de Hazelcast ou de *Distributed Data* d'Akka/Pekko (tous
-JVM). Pour un service web Rust **read-heavy**, à working-set modéré et à conflits rares/bénins
-(feature flags, tables de routage, présence, configuration), un cache répliqué en mémoire avec
-des lectures en O(log n) locales et sans dépendance Redis est légitimement attractif.
+The niche is **real but narrow**: there is no mature equivalent in the Rust/Tokio ecosystem of
+Hazelcast's *Replicated Map* or Akka/Pekko's *Distributed Data* (all JVM). For a **read-heavy** Rust
+web service with a moderate working set and rare/benign conflicts (feature flags, routing tables,
+presence, configuration), an in-memory replicated cache with local O(log n) reads and no Redis
+dependency is legitimately attractive.
 
-**Mais le positionnement « scalable / avoid Redis » inverse les vrais compromis :**
+**But the "scalable / avoid Redis" positioning inverts the real trade-offs:**
 
-- L'argument latence ne vaut que pour les **lectures**. Les écritures ne sont visibles
-  qu'*éventuellement* sur les pairs ; « éviter la latence Redis » revient en réalité à
-  **troquer un magasin cohérent synchrone contre un magasin incohérent asynchrone** — un
-  changement de modèle de cohérence déguisé en optimisation de latence.
-- La topologie **n'est pas scalable par construction** : dataset complet sur chaque réplique →
-  mémoire bornée par le plus petit nœud, et **chaque écriture est amplifiée vers tous les
-  nœuds** → le débit d'écriture *diminue* quand on ajoute des répliques. C'est le mode d'échec
-  documenté des caches répliqués (Oracle Coherence, Apache Ignite). Pekko Distributed Data
-  recommande explicitement de **ne pas dépasser ~100 000 entrées** en réplication complète — à
-  comparer à la promesse « millions of elements » du README.
+- The latency argument only holds for **reads**. Writes are only *eventually* visible on peers;
+  "avoiding Redis latency" actually amounts to **trading a synchronous consistent store for an
+  asynchronous inconsistent one** — a consistency-model change dressed up as a latency optimization.
+- The topology **does not scale by construction**: full dataset on every replica → memory bounded by
+  the smallest node, and **every write is amplified to all nodes** → write throughput *decreases* as
+  replicas are added. This is the documented failure mode of replicated caches (Oracle Coherence,
+  Apache Ignite). Pekko Distributed Data explicitly recommends **not exceeding ~100,000 entries** in
+  full replication — to be compared with the README's "millions of elements" promise.
 
-### 2.3 Le SOTA de la réconciliation d'ensembles (sourcé)
+### 2.3 The SOTA of set reconciliation (sourced)
 
-| Famille | Comm. | Calcul | RTT | Connaît *d* ? | Robustesse adverse | Maturité |
+| Family | Comm. | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **RBSR XOR (= reconcile-rs)** | O(d log n) | O(d log n) | **O(log n)** | Non (auto-adaptatif) | **Faible** (XOR forgeable) | Earthstar, Willow, Negentropy |
-| RBSR fingerprint sûr (≥256-bit) | O(d log n) | O(d log n) | O(log n) | Non | Bonne | Negentropy (prod) |
-| IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Oui** | Faible | blockchains |
-| **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linéaire** (2-2000× < minisketch) | **1 streaming** | **Non** | **Conçu pour l'adverse** | Ethereum state-sync |
-| minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Oui (capacité)** | déterministe si capacité OK | Bitcoin Erlay (BIP 330) |
-| Merkle-tree diffing | O(d log n) | O(d log n) | O(log n) | Non | dépend du hash | Dynamo, Cassandra, Riak |
+| **XOR RBSR (= reconcile-rs)** | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow, Negentropy |
+| Secure-fingerprint RBSR (≥256-bit) | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod) |
+| IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
+| **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
+| minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
+| Merkle-tree diffing | O(d log n) | O(d log n) | O(log n) | No | hash-dependent | Dynamo, Cassandra, Riak |
 
-Sources : Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html ; *Practical Rateless Set
-Reconciliation*, SIGCOMM 2024, arXiv:2402.02668 ; minisketch (bitcoin-core) & BIP 330 ; Erlay
-(CCS 2019) ; arXiv:2603.19820 (RSOS, 2026).
+Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless Set
+Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
+(CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
-**Constat clé :** pour le profil **grand-n / petit-d / sensible à la latence**, RBSR est la
-**pire famille sur la latence** (O(log n) RTT séquentiels) là où **Rateless IBLT** trouve le
-diff en un seul échange streaming, sans estimation de *d*, et avec robustesse adverse — c'est le
-**choix SOTA actuel** pour ce cas d'usage.
+**Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, RBSR is the **worst
+family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a single
+streaming exchange, with no *d* estimation, and with adversarial robustness — it is the **current
+SOTA choice** for this use case.
 
-### 2.4 Le SOTA des structures Merkle/anti-entropy
+### 2.4 The SOTA of Merkle/anti-entropy structures
 
-Nuance importante du panel : **HRTree n'appartient PAS à la famille Merkle Search Tree
-(MST) / prolly-tree**, et c'est un point en sa faveur. MST (Auvolat & Taïani, SRDS 2019) et les
-prolly-trees (Dolt/Noms) ont *besoin* de l'**indépendance à l'ordre d'insertion** parce qu'ils
-diffent en comparant les hashs des **nœuds internes** de l'arbre. HRTree, lui, diffe des
-**intervalles définis par la valeur** : le XOR cumulé sur `[a,b)` est identique chez deux pairs
-ssi le *contenu* de l'intervalle est identique, **quelle que soit la forme du B-tree de chacun**.
-HRTree obtient donc la garantie de convergence que MST/prolly paient par l'history-independence,
-**sans la payer** — et échappe ainsi à l'attaque « leading-zeros » de MST. L'ordre-dépendance du
-B-tree n'est donc **pas** un défaut ici.
+Important panel nuance: **HRTree does NOT belong to the Merkle Search Tree (MST) / prolly-tree
+family**, and that is a point in its favor. MST (Auvolat & Taïani, SRDS 2019) and prolly-trees
+(Dolt/Noms) *need* **insertion-order independence** because they diff by comparing the hashes of the
+tree's **internal nodes**. HRTree, by contrast, diffs **value-defined ranges**: the cumulative XOR
+over `[a,b)` is identical on two peers iff the *content* of the range is identical, **regardless of
+each one's B-tree shape**. HRTree therefore obtains the convergence guarantee that MST/prolly pay
+for with history-independence, **without paying for it** — and thereby escapes the MST
+"leading-zeros" attack. The B-tree's order-dependence is therefore **not** a defect here.
 
-### 2.5 Le SOTA de la cohérence et de la résolution de conflits
+### 2.5 The SOTA of consistency and conflict resolution
 
-- **LWW horloge physique** : anti-pattern documenté (Jepsen/Kingsbury « The trouble with
-  timestamps » ; incidents NTP réels). Le « gagnant » est le nœud à l'horloge la plus en avance,
-  pas l'écriture causalement la plus récente → perte d'update silencieuse.
-- **Correctif minimal SOTA** : **Hybrid Logical Clocks (HLC, Kulkarni 2014)** — drop-in 64-bit,
-  monotone, respecte la causalité, divergence bornée par ε ; adopté par CockroachDB et MongoDB.
-- **Tie-break** : doit être un **ordre total déterministe** (ex. `(HLC, node_id)`). Le `keep
-  local on equal` actuel est non-convergent.
-- **GC de tombstones** : doit être **par stabilité causale** (acquittement de toutes les
-  répliques) — Cassandra : `gc_grace_seconds` = **10 jours** + repair complet dans la fenêtre ;
-  ScyllaDB : GC basé sur le repair. **60 s** rend la précondition de sûreté quasi impossible à
-  honorer.
+- **Physical-clock LWW**: a documented anti-pattern (Jepsen/Kingsbury "The trouble with
+  timestamps"; real NTP incidents). The "winner" is the node with the most-advanced clock, not the
+  causally latest write → silent lost update.
+- **Minimal SOTA fix**: **Hybrid Logical Clocks (HLC, Kulkarni 2014)** — 64-bit drop-in, monotonic,
+  respects causality, divergence bounded by ε; adopted by CockroachDB and MongoDB.
+- **Tie-break**: must be a **deterministic total order** (e.g. `(HLC, node_id)`). The current `keep
+  local on equal` is non-convergent.
+- **Tombstone GC**: must be by **causal stability** (acknowledgment by all replicas) — Cassandra:
+  `gc_grace_seconds` = **10 days** + a complete repair within the window; ScyllaDB: repair-based GC.
+  **60 s** makes the safety precondition nearly impossible to honor.
 
 ---
 
-## 3. Architecture et algorithmes
+## 3. Architecture and algorithms
 
 ### 3.1 Modules
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `hrtree.rs` | B-tree maison (B=6, capacité 5-11) avec cache `tree_hash` (XOR) + `tree_size` ; requête de hash cumulé O(log n) |
-| `diff.rs` | Traits `HashRangeQueryable` / `Diffable` ; protocole RBSR (`start_diff` + `diff_round` à découpage ~16) |
-| `reconcile_engine.rs` | Transport UDP + bincode ; locks `parking_lot::RwLock` ; découverte de pairs (`gen_ip`) |
-| `reconcile_store.rs` | API publique ; timestamps LWW ; GC de tombstones |
-| `reconcilable.rs` | Trait `Reconcilable` (merge LWW) |
-| `timeout_wheel.rs` | Expiration des tombstones (BTreeMap + HashMap, `std::sync::RwLock`) |
-| `gen_ip.rs`, `hrtree_iter.rs`, `lib.rs` | Génération d'IP, itérateurs, ré-exports |
+| `hrtree.rs` | Hand-written B-tree (B=6, capacity 5-11) with `tree_hash` (XOR) + `tree_size` caches; O(log n) cumulative-hash query |
+| `diff.rs` | `HashRangeQueryable` / `Diffable` traits; RBSR protocol (`start_diff` + `diff_round` with ~16-way split) |
+| `reconcile_engine.rs` | UDP + bincode transport; `parking_lot::RwLock` locks; peer discovery (`gen_ip`) |
+| `reconcile_store.rs` | Public API; LWW timestamps; tombstone GC |
+| `reconcilable.rs` | `Reconcilable` trait (LWW merge) |
+| `timeout_wheel.rs` | Tombstone expiry (BTreeMap + HashMap, `std::sync::RwLock`) |
+| `gen_ip.rs`, `hrtree_iter.rs`, `lib.rs` | IP generation, iterators, re-exports |
 
-### 3.2 Flux du protocole de réconciliation
+### 3.2 Reconciliation protocol flow
 
 ```mermaid
 sequenceDiagram
-    participant A as Nœud A
-    participant B as Nœud B
-    Note over A: timeout 1s d'inactivité<br/>ou démarrage
-    A->>B: start_diff : HashSegment{(−∞,+∞), hash=XOR global, size=n}
+    participant A as Node A
+    participant B as Node B
+    Note over A: 1s inactivity timeout<br/>or startup
+    A->>B: start_diff: HashSegment{(−∞,+∞), hash=global XOR, size=n}
     Note over B: diff_round
-    alt hash identique
-        B-->>A: (rien — convergé)
-    else hash différent
-        B->>A: ~16 sous-segments {sous-range, hash, size}
-        Note over A: diff_round récursif
-        A->>B: Update(k,v) pour les ranges isolés
-        B->>A: Update(k,v) symétriques
-        Note over B: reconcile() = LWW par timestamp
+    alt identical hash
+        B-->>A: (nothing — converged)
+    else differing hash
+        B->>A: ~16 sub-segments {sub-range, hash, size}
+        Note over A: recursive diff_round
+        A->>B: Update(k,v) for isolated ranges
+        B->>A: symmetric Update(k,v)
+        Note over B: reconcile() = LWW by timestamp
     end
 ```
 
-Chaque `diff_round` divise un intervalle non concordant en ~16 sous-intervalles
-(`diff.rs:141`) jusqu'à isoler les éléments différents → **O(log₁₆ n) tours**, **O(d·log n)**
-messages. Astuce centrale (correcte) : `hash(range)` retourne instantanément le `tree_hash`
-caché quand un sous-arbre est entièrement inclus, ne récursant que le long des deux bornes
-(`hrtree.rs:608-611`).
+Each `diff_round` splits a non-matching range into ~16 sub-ranges (`diff.rs:141`) until the
+differing elements are isolated → **O(log₁₆ n) rounds**, **O(d·log n)** messages. Central (correct)
+trick: `hash(range)` instantly returns the cached `tree_hash` when a subtree is fully contained,
+recursing only along the two bounds (`hrtree.rs:608-611`).
 
-### 3.3 Décisions de conception et compromis
+### 3.3 Design decisions and trade-offs
 
-| Décision | Pro | Con / compromis |
+| Decision | Pro | Con / trade-off |
 |---|---|---|
-| HRTree (B-tree augmenté = RSOS) | O(log n) pour ops + hash-range ; diff par valeur (pas de besoin d'history-independence) | B-tree maison à maintenir ; ~2-3× plus lent que `BTreeMap` |
-| Fingerprint XOR 64-bit | commutatif/inversible → soustraction de range O(log n), incrémental | **auto-inverse + GF(2)-linéaire + 64-bit** → collisions accidentelles (birthday ~2³²) et **craftables** ; sentinelle `0` ambiguë (F1) |
-| RBSR (Meyer 2023) | peu de RTT, auto-adaptatif à *d*, fingerprints incrémentaux | **O(log n) RTT séquentiels** : pire famille sur la latence pour grand-n/petit-d |
-| LWW `DateTime<Utc>` | trivial, métadonnée O(1) | perte d'update sous skew ; **non-commutatif sur égalité** ; pas de causalité |
-| Tombstones + GC 60 s | suppression propagée ; mémoire bornée | **résurrection** si partition > 60 s ; pas de stabilité causale |
-| Transport UDP + bincode | faible latence, sans connexion | **aucune auth/chiffrement** ; panic sur malformé ; amplification |
-| Découverte par scan CIDR | pas de coordinateur | O(espace d'adressage) ; trafic O(N²) ; fuite de données ; scan réseau |
-| In-memory only | performance, simplicité | perte totale au restart ; aggrave la résurrection |
+| HRTree (augmented B-tree = RSOS) | O(log n) for ops + hash-range; value-based diff (no need for history-independence) | hand-written B-tree to maintain; ~2-3× slower than `BTreeMap` |
+| 64-bit XOR fingerprint | commutative/invertible → O(log n) range subtraction, incremental | **self-inverse + GF(2)-linear + 64-bit** → accidental collisions (birthday ~2³²) and **craftable**; ambiguous `0` sentinel (F1) |
+| RBSR (Meyer 2023) | few RTTs, self-adapting to *d*, incremental fingerprints | **O(log n) sequential RTTs**: worst family on latency for large-n/small-d |
+| LWW `DateTime<Utc>` | trivial, O(1) metadata | lost update under skew; **non-commutative on equality**; no causality |
+| Tombstones + 60 s GC | propagated deletion; bounded memory | **resurrection** if partition > 60 s; no causal stability |
+| UDP + bincode transport | low latency, connectionless | **no auth/encryption**; panic on malformed; amplification |
+| CIDR-scan discovery | no coordinator | O(address-space); O(N²) traffic; data leakage; network scan |
+| In-memory only | performance, simplicity | total loss on restart; worsens resurrection |
 
 ---
 
-## 4. Revue de l'implémentation (findings détaillés)
+## 4. Implementation review (detailed findings)
 
-> Format : constat → preuve → impact → recommandation. Les findings confirmés par les **deux**
-> reviewers indépendants d'un thème sont marqués « **[2/2]** » (haute confiance).
+> Format: claim → proof → impact → recommendation. Findings confirmed by **both** independent
+> reviewers of a theme are marked "**[2/2]**" (high confidence).
 
-### F1 — [CRITIQUE] Sentinelle `hash==0` ≡ range vide → divergence permanente silencieuse **[2/2]**
+### F1 — [CRITICAL] `hash==0` sentinel ≡ empty range → silent permanent divergence **[2/2]**
 
-`diff.rs:96-99` traite `hash==0` comme « range vide/absent ». Or le fingerprint est un XOR :
-**un multiset non-vide peut XOR-er à 0** (deux éléments de hashs égaux, ou tout ensemble pair
-qui s'annule). Et `HRTree.hash(range vide) == 0` (confirmé `hrtree.rs:795`), donc la sentinelle
-**aliase une valeur réelle atteignable**. Le champ `size` n'est consulté qu'*après* les tests de
-hash (`diff.rs:119-138`), donc un range non-vide de hash 0 court-circuite avant.
+`diff.rs:96-99` treats `hash==0` as "empty/absent range". But the fingerprint is an XOR: **a
+non-empty multiset can XOR to 0** (two elements with equal hashes, or any even set that cancels).
+And `HRTree.hash(empty range) == 0` (confirmed `hrtree.rs:795`), so the sentinel **aliases a real,
+reachable value**. The `size` field is only consulted *after* the hash checks (`diff.rs:119-138`),
+so a non-empty range with hash 0 short-circuits beforehand.
 
-**Contre-exemple (les deux reviewers convergent) :** A = `{X, Y}` avec `h(X)==h(Y)`, B vide.
-`A.start_diff()` émet `{(−∞,+∞), hash:0, size:2}`. Chez B : `local_hash=0`, donc
-`hash==local_hash` → `continue`. **B se croit synchronisé alors qu'il manque 2 éléments.**
-Divergence permanente, sans panic ni log. Déclenchable par un attaquant qui choisit les données.
+**Counterexample (both reviewers converge):** A = `{X, Y}` with `h(X)==h(Y)`, B empty.
+`A.start_diff()` emits `{(−∞,+∞), hash:0, size:2}`. On B: `local_hash=0`, so `hash==local_hash` →
+`continue`. **B believes it is synced while missing 2 elements.** Permanent divergence, with no
+panic or log. Triggerable by an attacker who chooses the data.
 
-**Recommandation (consensus) :** brancher sur **`size==0` / `local_size==0`** (le champ existe
-déjà dans `HashSegment` et est exact), jamais sur `hash==0`. Correctif d'une ligne, à bloquer en
-release. *C'est le finding le plus grave du dépôt.*
+**Recommendation (consensus):** branch on **`size==0` / `local_size==0`** (the field already exists
+in `HashSegment` and is exact), never on `hash==0`. A one-line fix, to block before release. *This
+is the most serious finding in the repository.*
 
-### F2 — [CRITIQUE] `panic!` sur paquet UDP malformé → DoS distant **[2/2]**
+### F2 — [CRITICAL] `panic!` on malformed UDP packet → remote DoS **[2/2]**
 
-`reconcile_engine.rs:267` : tout datagramme qui n'est pas une troncature EOF propre déclenche
-`panic!`. Un seul octet invalide (`0xFF`) suffit (tag d'enum bincode invalide). Analyse fine du
-panel : `Cargo.toml` n'a **pas** `panic="abort"` (unwind). Dans le pattern `demo.rs`
-(`run().await` sur `#[tokio::main]`), le panic **arrête le process**. Dans le pattern
-`tokio::spawn` (les tests), la tâche meurt et le panic est **silencieusement avalé** → **nœud
-zombie** : le process vit, les lectures locales marchent, mais la run-loop ET le GC de tombstones
-sont morts à jamais. Non authentifié, scriptable sur tout un sous-réseau.
+`reconcile_engine.rs:267`: any datagram that is not a clean EOF truncation triggers `panic!`. A
+single invalid byte (`0xFF`) is enough (invalid bincode enum tag). Detailed panel analysis:
+`Cargo.toml` does **not** set `panic="abort"` (unwind). In the `demo.rs` pattern (`run().await`
+under `#[tokio::main]`), the panic **kills the process**. In the `tokio::spawn` pattern (the tests),
+the task dies and the panic is **silently swallowed** → **zombie node**: the process lives, local
+reads work, but the run-loop AND the tombstone GC are dead forever. Unauthenticated, scriptable
+across an entire subnet.
 
-**Recommandation :** remplacer `panic!` par `warn!` + `return` (exactement le pattern déjà
-présent pour le buffer trop petit, `:250-253`). Ne jamais paniquer sur une entrée réseau.
+**Recommendation:** replace `panic!` with `warn!` + `return` (exactly the pattern already present
+for the too-small buffer, `:250-253`). Never panic on network input.
 
-### F3 — [CRITIQUE] Aucune auth/chiffrement + timestamp LWW attaquant-contrôlé **[2/2]**
+### F3 — [CRITICAL] No auth/encryption + attacker-controlled LWW timestamp **[2/2]**
 
-`reconcile_engine.rs:200-205` ne fait que *logger* un warning sur port inattendu puis traite le
-paquet ; `:304-322` fusionne tout `Update` reçu. La valeur étant `(DateTime<Utc>, Option<V>)` et
-le merge un LWW par timestamp, **l'attaquant contrôle le timestamp sérialisé** : `Update((k,
-(Utc.year_9999, Some(evil))))` gagne contre toute écriture légitime pour toujours, ou
-`None` forge une suppression. Le poison se **propage à tout le cluster** via la réconciliation.
-IP source spoofable (UDP).
+`reconcile_engine.rs:200-205` merely *logs* a warning on unexpected port then processes the packet;
+`:304-322` merges every received `Update`. Since the value is `(DateTime<Utc>, Option<V>)` and the
+merge is LWW by timestamp, **the attacker controls the serialized timestamp**: `Update((k,
+(Utc.year_9999, Some(evil))))` wins against any legitimate write forever, or `None` forges a
+deletion. The poison **propagates to the whole cluster** via reconciliation. Source IP is spoofable
+(UDP).
 
-**Recommandation :** MAC à secret partagé (HMAC/BLAKE3 keyed) vérifié avant désérialisation +
-allow-list de pairs ; pour la confidentialité, DTLS/Noise/QUIC. À défaut, **documenter en grand**
-que le protocole exige un réseau de confiance.
+**Recommendation:** shared-secret MAC (keyed HMAC/BLAKE3) verified before deserialization + a peer
+allow-list; for confidentiality, DTLS/Noise/QUIC. Failing that, **document loudly** that the
+protocol requires a trusted network.
 
-### F4 — [CRITIQUE] Résurrection de tombstones (GC à l'horloge murale, sans stabilité causale) **[2/2]**
+### F4 — [CRITICAL] Tombstone resurrection (wall-clock GC, no causal stability) **[2/2]**
 
-`reconcile_store.rs:208-215` + `timeout_wheel.rs:46-57` : un tombstone est purgé 60 s après la
-suppression (`instant + timeout < Utc::now()`), **sans vérifier que tous les pairs l'ont vu**.
-Timeline (les deux reviewers la construisent) : C partitionné > 60 s ; A & B suppriment `k`,
-tombstone GC'd ; C revient avec l'ancienne valeur ; via le branch `None => insert(remote_v)`
-(`reconcile_engine.rs:316-319`), A & B **réinsèrent** la valeur → **la suppression est annulée,
-la donnée ressuscite cluster-wide**. C'est le hazard classique (Dynamo/Cassandra
-`gc_grace_seconds`), mais à 60 s contre 10 jours.
+`reconcile_store.rs:208-215` + `timeout_wheel.rs:46-57`: a tombstone is purged 60 s after the
+deletion (`instant + timeout < Utc::now()`), **without checking that all peers have seen it**.
+Timeline (both reviewers build it): C partitioned > 60 s; A & B delete `k`, tombstone GC'd; C comes
+back with the old value; via the `None => insert(remote_v)` branch (`reconcile_engine.rs:316-319`),
+A & B **re-insert** the value → **the deletion is undone, the data resurrects cluster-wide**. This
+is the classic hazard (Dynamo/Cassandra `gc_grace_seconds`), but at 60 s vs 10 days.
 
-**Recommandation :** GC conditionné à la **stabilité causale** (acquittement de toutes les
-répliques) ou à un repair complet dans la fenêtre ; ou tombstones versionnés (HLC/VV) comme état
-de première classe. *Sévérité : Critique (T3-A) / Élevée (T3-B) → retenue Critique.*
+**Recommendation:** GC gated on **causal stability** (acknowledgment by all replicas) or on a
+complete repair within the window; or versioned tombstones (HLC/VV) as first-class state. *Severity:
+Critical (T3-A) / High (T3-B) → retained as Critical.*
 
-### F5 — [ÉLEVÉE] LWW horloge physique : perte sous skew + non-commutatif sur égalité **[2/2]**
+### F5 — [HIGH] Physical-clock LWW: loss under skew + non-commutative on equality **[2/2]**
 
-`reconcilable.rs:19-27` : `if other.0 > self.0 { other } else { self }`. (a) **Skew** : une
-écriture causalement plus récente est écrasée par une plus ancienne venant d'un nœud à l'horloge
-en avance → perte silencieuse. (b) **Égalité de timestamp** : `>` strict garde le local des deux
-côtés → A garde "a", B garde "b" → **divergence permanente + livelock** (chaque `diff_round`
-ré-échange éternellement la paire, le hash inclut le timestamp donc les segments ne convergent
-jamais). Le merge **n'est donc pas commutatif** → viole la SEC.
+`reconcilable.rs:19-27`: `if other.0 > self.0 { other } else { self }`. (a) **Skew**: a causally
+later write is overwritten by an older one coming from a node with an advanced clock → silent loss.
+(b) **Equal timestamp**: strict `>` keeps local on both sides → A keeps "a", B keeps "b" →
+**permanent divergence + livelock** (each `diff_round` re-exchanges the pair forever; the hash
+includes the timestamp so the segments never converge). The merge is therefore **not commutative** →
+violates SEC.
 
-**Recommandation :** HLC + tie-break par ordre total déterministe `(timestamp, node_id)`.
+**Recommendation:** HLC + a deterministic total-order tie-break `(timestamp, node_id)`.
 
-### F6 — [ÉLEVÉE] Fingerprint XOR 64-bit faible **[2/2 + 2 panels SOTA]**
+### F6 — [HIGH] Weak 64-bit XOR fingerprint **[2/2 + 2 SOTA panels]**
 
-`hrtree.rs:35-40,70-84`. XOR est commutatif et **auto-inverse** (nécessaire pour la soustraction
-de range, mais) → collisions par permutation/annulation. **GF(2)-linéaire** : un attaquant
-*résout* (élimination gaussienne, ~2 s même en 256-bit selon Log Periodic) pour des éléments qui
-font collisionner le fingerprint d'un range divergent → **censure / perte silencieuse** (attaque
-documentée par la spec Willow). **64 bits** : collisions accidentelles au seuil d'anniversaire
-(~2³²) sur le grand nombre de ranges comparés. Negentropy (inspiré de Meyer) a abandonné le
-combineur naïf au profit d'un hash cryptographique incrémental ≥256-bit.
+`hrtree.rs:35-40,70-84`. XOR is commutative and **self-inverse** (needed for range subtraction, but)
+→ collisions via permutation/cancellation. **GF(2)-linear**: an attacker *solves* (Gaussian
+elimination, ~2 s even in 256-bit per Log Periodic) for elements that collide the fingerprint of a
+divergent range → **censorship / silent loss** (the attack documented by the Willow spec). **64
+bits**: accidental collisions at the birthday bound (~2³²) over the large number of compared ranges.
+Negentropy (inspired by Meyer) abandoned the naive combiner for an incremental cryptographic hash
+≥256-bit.
 
-**Recommandation :** fingerprint large (≥256-bit) et non GF(2)-linéaire (hash-then-add mod 2²⁵⁶,
-MSet-Mu-Hash/LtHash) ou keyed ; incorporer `size` dans la décision d'égalité (corrige aussi F1).
+**Recommendation:** wide (≥256-bit) and non-GF(2)-linear fingerprint (hash-then-add mod 2²⁵⁶,
+MSet-Mu-Hash/LtHash) or keyed; incorporate `size` into the equality decision (also fixes F1).
 
-### F7 — [ÉLEVÉE] `unimplemented!()` / underflow atteignables depuis le réseau **[T1 + T2]**
+### F7 — [HIGH] `unimplemented!()` / underflow reachable from the network **[T1 + T2]**
 
-`diff.rs:112,116` : `diff_round` suppose des bornes `(Included|Unbounded, Excluded|Unbounded)` ;
-or `HashSegment.range` est désérialisé du réseau sans validation. Un segment crafté avec
-`Bound::Excluded` en début → `unimplemented!()` → panic distant. Pire (T2-B) : un range inversé
-`Included(100)..Excluded(5)` provoque `end_index - start_index` (`diff.rs:119`) → **underflow**
-(panic en debug, wrap en `usize` géant en release → index OOB dans `key_at`).
+`diff.rs:112,116`: `diff_round` assumes bounds `(Included|Unbounded, Excluded|Unbounded)`; but
+`HashSegment.range` is deserialized from the network without validation. A segment crafted with
+`Bound::Excluded` as start → `unimplemented!()` → remote panic. Worse (T2-B): an inverted range
+`Included(100)..Excluded(5)` causes `end_index - start_index` (`diff.rs:119`) → **underflow** (panic
+in debug, wrap to a huge `usize` in release → OOB index in `key_at`).
 
-**Recommandation :** valider/normaliser les bornes en entrée ; gérer les 4 combinaisons ou
-dropper le segment sans paniquer ; `overflow-checks = true`.
+**Recommendation:** validate/normalize incoming bounds; handle all 4 combinations or drop the
+segment without panicking; `overflow-checks = true`.
 
-### F8 — [ÉLEVÉE] `DefaultHasher` instable cross-version **[T1 + T4]**
+### F8 — [HIGH] `DefaultHasher` unstable cross-version **[T1 + T4]**
 
-`hrtree.rs:36` : `DefaultHasher` n'est **pas stable** entre versions de Rust/plateformes (doc
-std). Le hash étant le **jeton de réconciliation sur le fil**, deux nœuds compilés avec des
-toolchains différentes (upgrade progressif, 32 vs 64-bit) calculent des hashs différents pour des
-données identiques → ils se croient perpétuellement différents et **ne convergent jamais** (ou
-ré-échangent tout en boucle).
+`hrtree.rs:36`: `DefaultHasher` is **not stable** across Rust versions/platforms (std docs). Since
+the hash is the **reconciliation token on the wire**, two nodes built with different toolchains
+(rolling upgrade, 32 vs 64-bit) compute different hashes for identical data → they believe they
+perpetually differ and **never converge** (or re-exchange everything in a loop).
 
-**Recommandation :** hasher fixe et versionné (SipHash à clé constante, xxHash, BLAKE3) ; traiter
-l'algo de hash comme partie du protocole de fil + golden-vector test.
+**Recommendation:** fixed, versioned hasher (constant-key SipHash, xxHash, BLAKE3); treat the hash
+algorithm as part of the wire protocol + golden-vector test.
 
-### F9 — [ÉLEVÉE] Amplification / réflexion UDP **[2/2]**
+### F9 — [HIGH] UDP amplification / reflection **[2/2]**
 
-`reconcile_engine.rs:290-301` répond à l'adresse *source* (spoofable). Un petit
-`ComparisonItem` `{(−∞,+∞), hash:1, size:0}` force, via le branch `hash==0` (`diff.rs:96-97`), le
-nœud à **déverser toute sa DB** en `Update` vers la victime spoofée. Facteur d'amplification ≈
-taille DB / taille requête (potentiellement milliers). Réflecteur DRDoS + canal d'exfiltration.
+`reconcile_engine.rs:290-301` replies to the *source* address (spoofable). A tiny `ComparisonItem`
+`{(−∞,+∞), hash:1, size:0}` forces, via the `hash==0` branch (`diff.rs:96-97`), the node to **dump
+its entire DB** as `Update`s to the spoofed victim. Amplification factor ≈ DB size / request size
+(potentially thousands). DRDoS reflector + exfiltration channel.
 
-**Recommandation :** ne pas répondre à des pairs non authentifiés/non confirmés ; rate-limiting ;
-cookie de validation de chemin avant tout envoi volumineux. L'auth (F3) ferme l'essentiel.
+**Recommendation:** do not reply to unauthenticated/unconfirmed peers; rate-limiting; a path-
+validation cookie before any bulk send. Auth (F3) closes most of it.
 
-### F10 — [ÉLEVÉE] Découverte par scan IP non scalable + fuite **[T2 + T3]**
+### F10 — [HIGH] Non-scalable IP-scan discovery + leakage **[T2 + T3]**
 
-`reconcile_engine.rs:228-241` : **une** IP aléatoire du CIDR sondée par cycle ; pairs appris
-uniquement des paquets reçus, expirés à 60 s. En `/8` (défaut) avec N nœuds, l'espérance de
-découverte d'un pair ≈ 2²⁴/N cycles → **pratiquement impossible sans `with_seed`**. En régime
-établi, chaque nœud gossipe avec **tous** les pairs → **trafic O(N²)** (pas de fan-out borné à la
-SWIM/HyParView). Le sondage envoie la charge de diff complète (révélant existence, port,
-`len()`) à des hôtes potentiellement tiers/hostiles.
+`reconcile_engine.rs:228-241`: **one** random CIDR IP probed per cycle; peers learned only from
+received packets, expired at 60 s. In a `/8` (default) with N nodes, the expected discovery of a
+peer ≈ 2²⁴/N cycles → **practically impossible without `with_seed`**. In steady state, every node
+gossips with **all** peers → **O(N²) traffic** (no bounded fan-out à la SWIM/HyParView). The probe
+sends the full diff payload (revealing existence, port, `len()`) to potentially third-party/hostile
+hosts.
 
-**Recommandation :** protocole de membership réel (SWIM/HyParView) avec gossip de la liste de
-pairs (découverte O(log N)) et fan-out borné (sous-ensemble aléatoire) ; sonder avec des pings,
-pas des diffs ; refuser/avertir sur CIDR routable.
+**Recommendation:** a real membership protocol (SWIM/HyParView) with peer-list gossip (O(log N)
+discovery) and bounded fan-out (random subset); probe with pings, not diffs; refuse/warn on routable
+CIDR.
 
-### F11 — [ÉLEVÉE] Absence de property-testing / fuzzing **[2/2]**
+### F11 — [HIGH] No property-testing / fuzzing **[2/2]**
 
-19 tests, **0** `proptest`/`quickcheck`/`fuzz` (vérifié). La propriété centrale — *deux magasins
-quelconques convergent après échange, quel que soit l'ordre* — n'est exercée que par **un** test
-d'intégration à seed fixe (`tests/service.rs`). `check_invariants` (excellent) n'est lancé que
-sur des séquences choisies par l'auteur. Le rebalancing manuel du B-tree (avec un `TODO` à
-`hrtree.rs:97`) est exactement le code où un proptest trouverait les cas limites.
+19 tests, **0** `proptest`/`quickcheck`/`fuzz` (verified). The central property — *any two stores
+converge after exchange, regardless of order* — is exercised only by **one** fixed-seed integration
+test (`tests/service.rs`). `check_invariants` (excellent) is only run on author-chosen sequences.
+The hand-written B-tree rebalancing (with a `TODO` at `hrtree.rs:97`) is exactly the code where a
+proptest would find edge cases.
 
-**Recommandation :** proptest générant deux arbres aléatoires → boucle de diff complète →
-assertions convergence + invariants + « ranges retournés = diff symétrique réel » ; test contre
-oracle `BTreeMap` ; test de paquets malformés (corrige aussi l'angle mort de F2/F7).
+**Recommendation:** proptest generating two random trees → full diff loop → convergence + invariant
+assertions + "returned ranges = true symmetric difference"; test against a `BTreeMap` oracle;
+malformed-packet test (also covers the F2/F7 blind spot).
 
-### F12 — [MOYENNE] `println!` de debug dans le hot-path **[T1 + T4]**
+### F12 — [MEDIUM] Debug `println!` in the hot path **[T1 + T4]**
 
-`hrtree.rs:315` : `println!("{diff_hash}")` exécuté à **chaque** mutation `with_mut`/`get_mut`.
-Pollution stdout + syscall+lock par mutation, hors infrastructure `tracing`. *Sévérité : Critique
-(T4-B) / High (T4-A) / Low (T1) → retenue Moyenne, mais correctif trivial et prioritaire.*
-**Recommandation :** supprimer la ligne (ou `trace!`).
+`hrtree.rs:315`: `println!("{diff_hash}")` executed on **every** `with_mut`/`get_mut` mutation.
+stdout pollution + syscall+lock per mutation, outside the `tracing` infrastructure. *Severity:
+Critical (T4-B) / High (T4-A) / Low (T1) → retained as Medium, but a trivial and priority fix.*
+**Recommendation:** delete the line (or `trace!`).
 
-### F13 — [MOYENNE] API panic-only **[2/2]**
+### F13 — [MEDIUM] Panic-only API **[2/2]**
 
-Aucune méthode publique ne retourne `Result`. `new()` fait `bind(...).unwrap()`
-(`reconcile_engine.rs:99`) ; `send_to_retry(...).unwrap()` (`:240,354,359,365`) panique la
-run-loop sur échec d'envoi persistant. Impossible de gérer « port occupé » ou « pair injoignable »
-proprement.
-**Recommandation :** `new()/run() -> io::Result<…>` ; log-and-continue sur erreurs d'envoi.
+No public method returns `Result`. `new()` does `bind(...).unwrap()` (`reconcile_engine.rs:99`);
+`send_to_retry(...).unwrap()` (`:240,354,359,365`) panics the run-loop on a persistent send failure.
+Impossible to handle "port in use" or "peer unreachable" cleanly.
+**Recommendation:** `new()/run() -> io::Result<…>`; log-and-continue on send errors.
 
-### F14 — [MOYENNE] Hook `pre_insert` sous write-lock sur le chemin réseau **[2/2]**
+### F14 — [MEDIUM] `pre_insert` hook under the write-lock on the network path **[2/2]**
 
-`reconcile_engine.rs:312,317` appellent le hook **en tenant** `map.write()`, ce qui **contredit
-la doc** `add_pre_insert` (`reconcile_store.rs:98-101` : « executed outside the map's write
-lock ») et le chemin direct `just_insert` (`:123-130`) qui, lui, l'exécute hors lock. Le test
-anti-deadlock ne couvre que le chemin direct → garantie fausse et non testée pour le chemin
-dangereux (un hook qui réinsère depuis le chemin réseau ré-entre le write-lock → deadlock).
-**Recommandation :** collecter les valeurs fusionnées sous lock, relâcher, exécuter les hooks,
-puis ré-acquérir pour appliquer ; aligner sur le chemin direct.
+`reconcile_engine.rs:312,317` call the hook **while holding** `map.write()`, which **contradicts the
+docs** of `add_pre_insert` (`reconcile_store.rs:98-101`: "executed outside the map's write lock")
+and the direct `just_insert` path (`:123-130`) which does run it outside the lock. The anti-deadlock
+test only covers the direct path → the guarantee is false and untested for the dangerous path (a
+hook that re-inserts from the network path re-enters the write-lock → deadlock).
+**Recommendation:** collect merged values under the lock, release it, run hooks, then re-acquire to
+apply; align with the direct path.
 
-### F15 — [MOYENNE] Pas de persistance **[2/2]**
+### F15 — [MEDIUM] No persistence **[2/2]**
 
-`reconcile_engine.rs:101-110` : HRTree en mémoire uniquement. Restart = perte totale + **trigger
-de résurrection** (un nœud qui redémarre a perdu ses tombstones → réapprend des valeurs déjà
-supprimées). **Point positif confirmé par les deux reviewers :** un nœud vide ne fait que
-**pull** (`diff.rs:99-106`) et **ne peut pas supprimer** les données des pairs — l'absence n'est
-jamais interprétée comme une suppression.
-**Recommandation :** snapshot/WAL optionnel persistant **incluant les tombstones** ;
-pull-then-quiesce au démarrage.
+`reconcile_engine.rs:101-110`: HRTree in memory only. Restart = total loss + **resurrection trigger**
+(a node that restarts loses its tombstones → re-learns already-deleted values). **Positive point
+confirmed by both reviewers:** an empty node only **pulls** (`diff.rs:99-106`) and **cannot delete**
+peers' data — absence is never interpreted as a deletion.
+**Recommendation:** optional persistent snapshot/WAL **including the tombstones**; pull-then-quiesce
+at startup.
 
-### F16 — [MOYENNE] Benchmarks loopback + README auto-contradictoire **[2/2]**
+### F16 — [MEDIUM] Loopback benchmarks + self-contradictory README **[2/2]**
 
-`benches/bench.rs:226-351` mesure sur loopback (busy-spin `sleep(1µs)`), or le README admet
-lui-même (`:138-139`) que la transmission réseau domine en réel — donc les « 240-640 µs » ne
-prouvent rien sur le déploiement (ils prouvent surtout le faible **nombre de RTT**, qui est la
-vraie contribution). Incohérence : « within a factor 2 of BTreeMap » (`:60-61`) vs « one third to
-one half the throughput » (`:71`) = 2-3× plus lent. Typos « 700 s »/« 800 s » pour ns.
-**Recommandation :** présenter nombre de RTT / coût CPU comme métrique phare ; harnais avec
-RTT/perte injectés (netem) ; corriger le texte.
+`benches/bench.rs:226-351` measures on loopback (busy-spin `sleep(1µs)`), yet the README itself
+admits (`:138-139`) that network transmission dominates in practice — so the "240-640 µs" prove
+nothing about deployment (they mostly prove the small **RTT count**, which is the real
+contribution). Inconsistency: "within a factor 2 of BTreeMap" (`:60-61`) vs "one third to one half
+the throughput" (`:71`) = 2-3× slower. Typos "700 s"/"800 s" for ns.
+**Recommendation:** present RTT count / CPU cost as the headline metric; harness with injected
+RTT/loss (netem); fix the text.
 
-### F17 — [MOYENNE/BASSE] Signaux de maturité **[2/2]**
+### F17 — [MEDIUM/LOW] Maturity signals **[2/2]**
 
-`Cargo.toml:3` `version = "0.0.0-git"` (badges crates.io/docs.rs trompeurs ; `publish
---dry-run` en CI rejetterait cette version) ; pas de `rust-version` (MSRV) ; pas de CHANGELOG ;
-warning clippy `mismatched_lifetime_syntaxes` (`hrtree_iter.rs:177`) qui **casserait la CI**
-`-Dwarnings` sur toolchain récent → le projet n'est plus vert contre stable courant ; CI
-mono-OS, sans miri (malgré les itérateurs `unsafe`), sans MSRV, sans `cargo audit`.
-**Recommandation :** vraie version + MSRV + CHANGELOG ; `cargo clippy --fix` ; jobs miri/MSRV/audit.
+`Cargo.toml:3` `version = "0.0.0-git"` (misleading crates.io/docs.rs badges; CI's `publish
+--dry-run` would reject this version); no `rust-version` (MSRV); no CHANGELOG; clippy warning
+`mismatched_lifetime_syntaxes` (`hrtree_iter.rs:177`) that would **break the CI** under `-Dwarnings`
+on a recent toolchain → the project is no longer green against current stable; single-OS CI, no miri
+(despite the `unsafe` iterators), no MSRV, no `cargo audit`.
+**Recommendation:** real version + MSRV + CHANGELOG; `cargo clippy --fix`; miri/MSRV/audit jobs.
 
-### F18 — [MOYENNE] Exhaustion de ressources **[2/2]**
+### F18 — [MEDIUM] Resource exhaustion **[2/2]**
 
-`reconcile_engine.rs:208-210` insère `peer.ip()` dans la map `peers` à chaque datagramme ; avec
-des IPs spoofées (IPv6 ≈ illimité) la map enfle sans borne dans la fenêtre de 60 s, et chaque
-cycle envoie à **tous**. Bincode 1.x lit un préfixe de longueur attaquant-contrôlé → pré-allocation
-(allocation-bomb) si `K`/`V` contient `Vec`/`String`.
-**Recommandation :** borner la taille de `peers` (LRU/handshake) ; `bincode::…with_limit()` ;
-borner le nombre de messages/segments par datagramme.
+`reconcile_engine.rs:208-210` inserts `peer.ip()` into the `peers` map on every datagram; with
+spoofed IPs (IPv6 ≈ unbounded) the map balloons without bound within the 60 s window, and every
+cycle sends to **all** of them. bincode 1.x reads an attacker-controlled length prefix →
+pre-allocation (allocation-bomb) if `K`/`V` contains `Vec`/`String`.
+**Recommendation:** bound the `peers` map size (LRU/handshake); `bincode::…with_limit()`; bound the
+number of messages/segments per datagram.
 
-### F19 — [BASSE] Hygiène des dépendances **[T2]**
+### F19 — [LOW] Dependency hygiene **[T2]**
 
-`bincode = "1.3.3"` (1.x en maintenance, sans limite d'allocation par défaut) ; `tokio` floor
-ancien (1.33) ; `range-cmp = "0.1.1"` peu populaire (à auditer) ; `[profile.release] debug=true`
-(`Cargo.toml:13-14`) sans `overflow-checks` (laisse F7 exploitable en wrap).
-**Recommandation :** `cargo audit`/`cargo deny` en CI ; remonter les floors ; `overflow-checks=true`.
+`bincode = "1.3.3"` (1.x in maintenance, no default allocation limit); old `tokio` floor (1.33);
+`range-cmp = "0.1.1"` low-popularity (to audit); `[profile.release] debug=true`
+(`Cargo.toml:13-14`) without `overflow-checks` (leaves F7 exploitable as a wrap).
+**Recommendation:** `cargo audit`/`cargo deny` in CI; raise the floors; `overflow-checks=true`.
 
 ---
 
-## 5. Pros / cons et compromis (synthèse)
+## 5. Pros / cons and trade-offs (synthesis)
 
-**Ce qui est bien fait (à conserver) :**
-- Cœur RBSR/RSOS **correct et SOTA-aligné** ; O(log n) vérifié ; cache de hash élégant.
-- **Diff par intervalle de valeur** → convergence sans besoin d'history-independence, immunité à
-  l'attaque leading-zeros de MST. *Vraie force conceptuelle.*
-- `check_invariants` rigoureux ; `TimeoutWheel` propre ; **nœud vide pull-only** (ne détruit pas
-  les données des pairs) ; défaut loopback-safe ; détection de troncature ; double-licence propre.
+**What is well done (to keep):**
+- RBSR/RSOS core **correct and SOTA-aligned**; O(log n) verified; elegant hash caching.
+- **Value-based range diff** → convergence without needing history-independence, immunity to the MST
+  leading-zeros attack. *A real conceptual strength.*
+- Rigorous `check_invariants`; clean `TimeoutWheel`; **empty-node pull-only** (does not destroy
+  peers' data); loopback-safe default; truncation detection; clean dual license.
 
-**Ce qui plombe le projet (par ordre de gravité) :**
-1. Correction silencieuse compromise (F1, F6, F8) — divergence permanente non détectée.
-2. Surface réseau hostile (F2, F3, F7, F9, F10, F18) — DoS/poisoning triviaux, non authentifiés.
-3. Sémantique distribuée non sûre (F4, F5, F15) — perte de données, résurrection, non-SEC.
-4. Maturité d'ingénierie (F11, F12, F13, F14, F16, F17, F19) — tests, API, doc, perf.
+**What weighs the project down (by severity):**
+1. Silent correctness compromised (F1, F6, F8) — undetected permanent divergence.
+2. Hostile network surface (F2, F3, F7, F9, F10, F18) — trivial unauthenticated DoS/poisoning.
+3. Unsafe distributed semantics (F4, F5, F15) — data loss, resurrection, non-SEC.
+4. Engineering maturity (F11, F12, F13, F14, F16, F17, F19) — tests, API, docs, perf.
 
 ---
 
-## 6. Gap analysis vs cible SOTA
+## 6. Gap analysis vs SOTA target
 
-| Axe | reconcile-rs | Cible SOTA | Gap |
+| Axis | reconcile-rs | SOTA target | Gap |
 |---|---|---|---|
-| **Algo de réconciliation** | RBSR XOR, O(log n) RTT | Rateless IBLT (1 échange, no-*d*, robuste) pour grand-n/petit-d | Latence O(log n) RTT vs 1 ; pas de robustesse adverse |
-| **Fingerprint** | XOR 64-bit, GF(2)-linéaire, sentinelle 0 | ≥256-bit incrémental non-linéaire / keyed (Negentropy) | Collisions accidentelles + craftables ; F1 |
-| **Backend de diff** | B-tree augmenté = RSOS | RSOS (arXiv:2603.19820) | **Conforme** (point fort) |
-| **Structure** | ordre-dépendant, diff par valeur | MST/prolly (history-independent) OU RSOS | **OK** (diff par valeur lève le besoin) |
-| **Résolution de conflits** | LWW horloge physique, tie-break non-commutatif | HLC + tie-break total déterministe ; CRDT pour zéro-perte | Perte sous skew ; divergence sur égalité |
-| **Suppressions** | tombstones, GC 60 s temporel | GC par stabilité causale / repair complet | **Résurrection** garantie sous partition > 60 s |
-| **Cohérence** | « eventually consistent » annoncé | SEC (strong eventual consistency) | N'atteint pas la SEC ; divergence permanente possible |
-| **Sécurité transport** | UDP clair, aucune auth | AEAD/HMAC + allow-list (memberlist, iroh) | Poisoning/DoS/amplification non authentifiés |
-| **Membership** | scan IP aléatoire, O(N²) | SWIM/HyParView, fan-out borné, gossip de membres | Découverte impraticable à l'échelle ; trafic O(N²) |
-| **Persistance** | aucune | snapshot/WAL (prolly, iroh-docs) | Perte au restart ; aggrave la résurrection |
-| **Tests** | exemples à seed fixe | property-testing + fuzzing convergence/invariants | Propriété centrale non testée |
-| **Maturité** | 0.0.0-git, pas de MSRV/CHANGELOG | versioning sémantique, MSRV, miri/audit en CI | Signaux pré-alpha |
+| **Reconciliation algo** | XOR RBSR, O(log n) RTT | Rateless IBLT (1 exchange, no-*d*, robust) for large-n/small-d | O(log n) RTT latency vs 1; no adversarial robustness |
+| **Fingerprint** | 64-bit XOR, GF(2)-linear, sentinel 0 | ≥256-bit incremental non-linear / keyed (Negentropy) | accidental + craftable collisions; F1 |
+| **Diff backend** | augmented B-tree = RSOS | RSOS (arXiv:2603.19820) | **Conformant** (strength) |
+| **Structure** | order-dependent, value-based diff | MST/prolly (history-independent) OR RSOS | **OK** (value-based diff removes the need) |
+| **Conflict resolution** | physical-clock LWW, non-commutative tie-break | HLC + deterministic total tie-break; CRDT for zero loss | loss under skew; divergence on equality |
+| **Deletions** | tombstones, 60 s time-based GC | causal-stability GC / complete repair | **resurrection** guaranteed under partition > 60 s |
+| **Consistency** | "eventually consistent" claimed | SEC (strong eventual consistency) | does not reach SEC; permanent divergence possible |
+| **Transport security** | plaintext UDP, no auth | AEAD/HMAC + allow-list (memberlist, iroh) | unauthenticated poisoning/DoS/amplification |
+| **Membership** | random IP scan, O(N²) | SWIM/HyParView, bounded fan-out, member gossip | impractical discovery at scale; O(N²) traffic |
+| **Persistence** | none | snapshot/WAL (prolly, iroh-docs) | loss on restart; worsens resurrection |
+| **Tests** | fixed-seed examples | property-testing + convergence/invariant fuzzing | central property untested |
+| **Maturity** | 0.0.0-git, no MSRV/CHANGELOG | semantic versioning, MSRV, miri/audit in CI | pre-alpha signals |
 
-**Concurrents directs à connaître :** Pekko/Akka Distributed Data (CRDT + gossip, JVM) ;
-`merkle-search-tree` (domodwyer, Rust) ; iroh + iroh-docs (Rust, QUIC chiffré + CRDT KV
-persistant) ; Hazelcast Replicated Map. Pour « état mutable partagé entre répliques de service
-web » avec exigence de durabilité/correction : Redis/Dragonfly + cache local, ou rqlite/FoundationDB.
+**Direct competitors worth knowing:** Pekko/Akka Distributed Data (CRDT + gossip, JVM);
+`merkle-search-tree` (domodwyer, Rust); iroh + iroh-docs (Rust, encrypted QUIC + persistent CRDT
+KV); Hazelcast Replicated Map. For "shared mutable state across web-service replicas" with a
+durability/correctness requirement: Redis/Dragonfly + local cache, or rqlite/FoundationDB.
 
 ---
 
-## 7. Recommandations priorisées
+## 7. Detailed competitor audit and differentiators
 
-**P0 — Bloquants (correction silencieuse & sécurité) :**
-1. **F1** : brancher la détection de vide sur `size==0`, jamais `hash==0` (correctif d'une ligne).
-2. **F2** : remplacer `panic!` (`reconcile_engine.rs:267`) par `warn!`+`return`.
-3. **F7** : valider les bornes des `HashSegment` réseau ; supprimer les `unimplemented!()` ;
+> This section refocuses the analysis on the **HRTree as a data structure** (and its protocol),
+> not on the full system. *(All structure/algo names below are defined in the
+> [glossary §9.2](#g92).)* Methodological anchor: the HRTree **is not a [Merkle tree](#g92) in the
+> [MST](#g92)/[prolly](#g92) sense**. It is a *[Range-Summarizable Order-Statistics Store](#g92)*
+> (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (the XOR of hashes)
+> **+ an order statistic** (the subtree size). This abstraction was formalized in 2026
+> (arXiv:2603.19820) as the backend that range-based reconciliation (RBSR, Meyer 2023) needs. Its
+> **true peer group** = the other diffable structures; its **true algorithmic competitor** = the
+> other set-reconciliation families.
+
+### 7.1 Competitors at the "diffable data structure" level
+
+#### Merkle Search Tree (MST) — Auvolat & Taïani, SRDS 2019
+A search B-tree where a key's **level** is derived from the **hash of the key** (leading zeros →
+fanout) ⇒ two replicas with the same key set produce the **same tree and same root hash**,
+regardless of insertion order (*history-independence*). Diff = root-hash comparison (O(1)) then
+descent comparing **internal node hashes**.
+- ✅ History-independent (necessary because it diffs *nodes*); compact page serialization/diff;
+  mature, **fuzz-tested** Rust crate (`merkle-search-tree`, domodwyer); production **Bluesky/atproto**
+  (one MST per repository).
+- ❌ **"Leading-zeros" attack**: an attacker forges keys with very deep hashes to inflate height and
+  unbalance the tree. ❌ Only probabilistic balancing; no native rank/select.
+- **vs HRTree:** MST *pays* for history-independence; HRTree does not (value-based diff, §7.3) and
+  **escapes the leading-zeros attack**. But MST gains structural sharing (versioning) that HRTree
+  lacks.
+
+#### Prolly trees (Noms, Dolt) — *probabilistic B-trees*
+A **content-addressed** B-tree, boundaries fixed by a **rolling-hash chunker** (~4 KB).
+History-independent, self-balancing, and crucially **structural sharing**: unchanged subtrees share
+identical chunks across versions.
+- ✅ SOTA of **diffable AND versioned** ordered stores: diff/merge touch only changed chunks (the
+  foundation of Dolt, "the first version-controlled relational database"). Dolt hashes **keys only**
+  → a value update does not move boundaries. Resists the leading-zeros attack.
+- ❌ Heavy machinery (rolling hash, chunks, CAS); higher latency than an in-mem B-tree; designed for
+  **persistence**.
+- **vs HRTree:** prolly = SOTA if you want **versioning + persistence + branch/merge**. HRTree is
+  simpler/faster in memory but offers **none** of those. Central trade-off "simplicity/speed vs
+  versioning/durability".
+
+#### Merkle radix / Sparse Merkle Tree / "Merklized KV" (Gustafson 2023)
+Position by the key's **prefix bits** (trie); history-independent by construction; the basis of
+Ethereum (Merkle-Patricia) and SMTs.
+- ✅ Deterministic, prefix scans, compact inclusion proofs.
+- ❌ Depth ∝ key length (not log n); fixed fanout; less suited to arbitrary range diffs. Relevant
+  mostly for **cryptographic proofs**, not for the "large in-memory KV, small diffs" profile.
+
+#### Fixed-depth Merkle tree (Dynamo / Cassandra / Riak)
+- ✅ Proven at massive production scale (anti-entropy repair).
+- ❌ **Over-streaming**: a leaf covers a *range* of partitions (Cassandra: depth 15 = 32K leaves) →
+  a single differing row forces streaming the whole leaf (~30 partitions for 1 bad in 1M). ❌ Tree
+  rebuild when token ranges move.
+- **vs HRTree:** this is precisely the defect RBSR/HRTree fix (the recursion tightens onto the
+  actually-differing elements). **Clear advantage to HRTree** on this axis.
+
+#### RSOS / AELMDB (arXiv:2603.19820, 2026) — *the most direct competitor*
+The paper formalizes "**B+-tree augmented with subtree counts + composable summaries**" as the RSOS
+abstraction, proves RBSR's local-cost bounds on this backend, and ships **AELMDB**: a **persistent,
+memory-mapped** LMDB extension, evaluated with Negentropy.
+- **vs HRTree:** **it is the same design**, but (a) **persistent** (LMDB) and (b) with a **secure
+  summary** (Negentropy). HRTree *is* an RSOS — but the in-memory, 64-bit-XOR, non-persistent
+  version. **The structure's SOTA in this niche = "persistent RSOS + secure fingerprint", and the
+  HRTree→SOTA delta reads directly as that gap.**
+
+| Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
+|---|---|---|---|---|---|---|---|
+| **HRTree** | B-tree splits (insertion order) | **No** | **value ranges** | No | No (in-mem) | **Yes** (n/a) | pre-alpha |
+| MST | level = hash(key) | Yes | nodes | partial | impl-dependent | **No** | mature (Bluesky) |
+| Prolly tree | rolling-hash on content | Yes | chunks | **Yes** (CAS) | **Yes** | Yes | mature (Dolt) |
+| Merkle radix/SMT | prefix bits | Yes | hash paths | partial | yes | Yes | mature (Ethereum) |
+| Fixed-depth Merkle | token range | partial (rebuild) | nodes | no | yes | yes | mature (Cassandra) |
+| **RSOS/AELMDB** | augmented B+-tree | not required | ranges | no | **Yes** (LMDB) | yes | research 2026 |
+
+### 7.2 Competitors at the "reconciliation algorithm" level
+
+The HRTree implements **RBSR**; its competitors are not tree structures.
+
+| Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
+|---|---|---|---|---|---|---|
+| **XOR RBSR (HRTree)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Weak** | Earthstar/Willow/Negentropy |
+| **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
+| minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
+| CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
+| Classic IBLT | O(d·(b+log U)) | O(d) | 1 (+estim.) | **Yes** | weak | blockchains |
+
+**Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
+- RBSR is the **worst family on latency**: O(log n) **sequential RTTs** (≈3 for 1M, ≈4 for 1B). On a
+  1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback benchmarks hide
+  (cf. F16).
+- **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
+  explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
+- **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
+  if *d* is mis-guessed) and **ordered-range reconciliation** (partial sync by prefix/subspace —
+  what Willow exploits in 3D). Sketches reconcile an *opaque* set.
+- **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a sketch (Rateless IBLT) to
+  drain divergent leaves in one shot — would beat pure HRTree on latency without losing
+  adaptiveness.
+
+### 7.3 Real differentiators of the approach (strengths verified in the code)
+
+1. **Value-based range diff ⇒ history-independence is not needed** *(the deepest differentiator)*.
+   MST/prolly *must* be history-independent because they compare **internal node hashes** (different
+   tree shapes → false positives). HRTree never compares nodes: it computes the **cumulative XOR
+   over `[a,b)`**, identical on two peers **iff the range content is identical**, regardless of each
+   one's B-tree shape. → Convergence guaranteed **without paying** for history-independence, and
+   **immunity to the MST leading-zeros attack**.
+2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
+   (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
+   contract). Core *aligned* with the most recent theory.
+3. **Cheap incremental maintenance**: `tree_hash ^= diff_hash` + `tree_size += 1` propagated along
+   the single root→leaf path → O(log n) amortized. The 2-3× factor vs `BTreeMap` is the *expected*
+   price of these two invariants, not an anomaly.
+4. **A single structure stores AND reconciles**: no separate Merkle tree to maintain (contrast
+   Cassandra which builds the tree at repair time). The store *is* the reconciliation index.
+5. **Avoids Cassandra's over-streaming** (16-way recursion tightened onto real diffs).
+6. **Rust-native, in-process, embeddable**: a real ecosystem niche (mature equivalents = JVM).
+
+### 7.4 What is missing to make it a *true* SOTA structure
+
+The delta = the gap between the HRTree and the ideal "persistent RSOS with a secure, generic
+fingerprint".
+
+**P0 — Correctness of the structure itself:**
+1. **Secure and wide fingerprint**: replace the 64-bit XOR with a **≥256-bit, non-GF(2)-linear**
+   combiner (hash-then-add mod 2²⁵⁶, MSet-Mu-Hash/LtHash) or *keyed*. XOR = self-inverse + linear →
+   craftable collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³². The path
+   taken by Negentropy. **This is THE criterion that separates a "toy" structure from a SOTA one.**
+   (cf. F6)
+2. **Decouple "empty" from "hash==0"** (`size==0`) — otherwise the structure can claim "converged"
+   while having lost data. (cf. F1)
+3. **Stable, versioned hash as a wire contract** (pinned SipHash/xxHash/BLAKE3 + golden-vector).
+   (cf. F8)
+
+**P1 — Generality (what makes it a *structure*, not a special case):**
+4. **Generic summary over a monoid**: `HRTree<XOR>` → `RSOS<M: Monoid>` (secure fingerprint, but
+   also sum/min/max/count, sketches). Enables **embedding a sketch in the leaves** (hybrid RBSR +
+   Rateless IBLT) to break the O(log n) RTT cost (§7.2).
+5. **Fully expose the RSOS contract**: **lazy + double-ended** iterators (repo issues #90-92),
+   public `rank`/`select`/`seek_lower_bound`/`seek_upper_bound` → a reusable generic building block.
+
+**P2 — Durability & distributed properties carried by the structure:**
+6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
+   tombstones, or (b) the true SOTA step — **node content-addressing** for *structural sharing*
+   (versioning, diff between snapshots, incremental cold start).
+7. **Conflict metadata in the value**: HLC + total tie-break `(timestamp, node_id)`; ideally
+   **pluggable CRDT** values; versioned tombstones with **causal-stability GC**. (cf. F4, F5)
+
+**P3 — What makes it *believed* to be SOTA:**
+8. **Property-testing + fuzzing as a foundation**: `proptest` vs `BTreeMap` oracle +
+   `check_invariants`, and especially **the convergence property** (two random trees → diff loop →
+   identical state + ranges = true symmetric difference, under reordered/duplicated/dropped
+   messages). The category standard (`merkle-search-tree` is fuzz-tested). (cf. F11)
+9. **First-class adversarial robustness**: segment-bound validation, allocation bounds, bounded
+   fan-out — to hold up against hostile peers (the MST/Willow use case).
+
+**Delta synthesis:**
+
+| Axis | HRTree today | SOTA target | Missing |
+|---|---|---|---|
+| Summary | 64-bit XOR | ≥256-bit non-linear/keyed, **generic (monoid)** | security + generality |
+| Empty vs hash | `hash==0` sentinel | `size==0` | correctness (1 line) |
+| Hash | `DefaultHasher` (unstable) | fixed, versioned, wire contract | portability |
+| Backend | augmented in-mem B-tree (RSOS ✓) | **persistent RSOS** (AELMDB) | durability, content-addressing |
+| Algo | pure RBSR (O(log n) RTT) | **hybrid RBSR + Rateless IBLT** | single-shot latency |
+| Conflicts | physical-clock LWW | HLC + total tie-break / CRDT | real convergence |
+| Deletions | 60 s time-based GC | causal stability | no resurrection |
+| Confidence | 19 fixed-seed tests | property tests + convergence fuzz | invariant proof |
+
+**In one sentence:** the HRTree already has the **right skeleton** (an RSOS — the design validated
+by 2026 research — with a real differentiator: value-based diff that removes the need for
+history-independence). To become a *true* SOTA structure it mainly needs (1) a **secure, wide,
+stable and generic fingerprint**, (2) the **persistence / content-addressing** it lacks vs
+prolly-trees, and (3) a **property-testing foundation**; the rest (conflicts, GC, robustness)
+belongs to the surrounding system.
+
+---
+
+## 8. Prioritized recommendations
+
+**P0 — Blocking (silent correctness & security):**
+1. **F1**: branch empty detection on `size==0`, never `hash==0` (one-line fix).
+2. **F2**: replace `panic!` (`reconcile_engine.rs:267`) with `warn!`+`return`.
+3. **F7**: validate the bounds of network `HashSegment`s; remove the `unimplemented!()`;
    `overflow-checks=true`.
-4. **F3** : auth/intégrité (HMAC à secret de cluster) + allow-list de pairs ; à défaut, documenter
-   en grand l'exigence de réseau de confiance.
-5. **F12** : supprimer le `println!` (`hrtree.rs:315`).
+4. **F3**: auth/integrity (cluster-secret HMAC) + peer allow-list; failing that, document loudly the
+   trusted-network requirement.
+5. **F12**: remove the `println!` (`hrtree.rs:315`).
 
-**P1 — Correction distribuée & robustesse :**
-6. **F4** : GC de tombstones par stabilité causale (acquittement de toutes les répliques).
-7. **F5** : HLC + tie-break par ordre total déterministe `(timestamp, node_id)`.
-8. **F6 + F8** : fingerprint large (≥256-bit), non-linéaire, **stable et versionné**.
-9. **F9 + F10 + F18** : pas de réponse aux pairs non authentifiés ; membership SWIM + fan-out
-   borné ; bincode `with_limit` ; bornes sur `peers`.
-10. **F11** : property-tests de convergence/invariants + tests de paquets malformés.
+**P1 — Distributed correctness & robustness:**
+6. **F4**: causal-stability tombstone GC (acknowledgment by all replicas).
+7. **F5**: HLC + deterministic total-order tie-break `(timestamp, node_id)`.
+8. **F6 + F8**: wide (≥256-bit), non-linear, **stable and versioned** fingerprint.
+9. **F9 + F10 + F18**: do not reply to unauthenticated peers; SWIM membership + bounded fan-out;
+   bincode `with_limit`; bounds on `peers`.
+10. **F11**: convergence/invariant property tests + malformed-packet tests.
 
-**P2 — Maturité & qualité :**
-11. **F13/F14** : API faillible (`Result`) ; hooks hors write-lock sur le chemin réseau.
-12. **F15** : persistance optionnelle (snapshot/WAL avec tombstones).
-13. **F16/F17/F19** : reframer les benchmarks (RTT/CPU) ; vraie version + MSRV + CHANGELOG ;
-    `clippy --fix` ; `cargo audit`/miri en CI.
+**P2 — Maturity & quality:**
+11. **F13/F14**: fallible API (`Result`); hooks outside the write-lock on the network path.
+12. **F15**: optional persistence (snapshot/WAL with tombstones).
+13. **F16/F17/F19**: reframe the benchmarks (RTT/CPU); real version + MSRV + CHANGELOG;
+    `clippy --fix`; `cargo audit`/miri in CI.
 
 ---
 
-## 8. Bibliographie
+## 9. Glossary
 
-**Réconciliation d'ensembles**
-- A. Meyer, *Range-Based Set Reconciliation*, arXiv:2212.13567 (IEEE SRDS 2023) — https://arxiv.org/abs/2212.13567 ; vulgarisation : https://logperiodic.com/rbsr.html
+> Lists **(a)** the identifiers and constants introduced by the repository, **(b)** the competing
+> structures and algorithms cited, **(c)** the acronyms and concepts of distributed systems,
+> cryptography, networking and complexity, **(d)** the Rust tooling. `Fxx` references point to the
+> §4 findings; `file:line` references to the code.
+
+<a id="g91"></a>
+### 9.1 — Repository-specific terms and identifiers
+
+| Term | Definition |
+|---|---|
+| **HRTree** (*Hash-Range Tree*) | The central structure (`hrtree.rs`): a hand-written B-tree where each node caches `tree_hash` (XOR of the subtree hashes) and `tree_size`. Enables a cumulative-hash range query in O(log n). It is an RSOS (§9.2). |
+| **`tree_hash`** | Node field: cumulative XOR of the `hash(key,value)` of all subtree elements. The composable summary that drives the diff. Maintained incrementally (`tree_hash ^= diff_hash`). |
+| **`tree_size`** | Node field: number of subtree elements (order statistic). Gives `len()` in O(1) and rank/select navigation. |
+| **`hash(key, value)`** | Function (`hrtree.rs:35-40`) computing the 64-bit hash of a pair via `DefaultHasher`. The fingerprint building block (F6, F8). |
+| **`B` / `MIN_CAPACITY` / `MAX_CAPACITY`** | B-tree parameters: `B = 6`, node capacity 5 to 11 keys (`hrtree.rs:42-44`). |
+| **`refresh_hash_size`** | Recomputes a node's `tree_hash` and `tree_size` from its elements and children (`hrtree.rs:70-84`). |
+| **`check_invariants`** | Test function (`hrtree.rs:495-560`) that re-verifies ordering, min node size, height balance, and the correctness of the `tree_hash`/`tree_size` caches. An excellent tool, but only run on fixed sequences (F11). |
+| **`insertion_position` / `key_at` / `position`** | Order-statistic navigation: insertion index of a key, key at a given index, index of a key. O(log n). |
+| **`get_range`** | Lazy iterator over a key range (O(log n + k)). Materialized with clones in the network handler (F16/perf). |
+| **`with_mut` / `get_mut`** | In-place mutation of a value with restoration of the hash invariant. Contains the stray `println!` (F12, `hrtree.rs:315`). |
+| **`rebalance_after_deletion`** | B-tree rebalancing after deletion (steal-left/steal-right/merge). Has a `TODO` (`hrtree.rs:97`) on a degenerate split case. |
+| **`HashRangeQueryable`** | Trait (`diff.rs`) exposing the cumulative-hash range query; implemented by HRTree. |
+| **`Diffable`** | Trait (`diff.rs`) carrying `start_diff` and `diff_round`: the RBSR machinery. |
+| **`start_diff`** | Emits the root segment `{(−∞,+∞), global hash, size}` that bootstraps a reconciliation. O(1). |
+| **`diff_round`** | Protocol core (`diff.rs:85-169`): compares a received segment to the local one, then either concludes or subdivides the range into ~16 sub-segments. Contains the `hash==0` sentinel (F1) and the `unimplemented!()` (F7). |
+| **`HashSegment`** | Serialized comparison message: `{ range: (Bound,Bound), hash: u64, size: usize }`. Deserialized from the network without validation (F7). |
+| **`DiffRange`** | A range identified as divergent, to be reconciled by element exchange. |
+| **`Message`** | Wire-protocol enum: `ComparisonItem(HashSegment)` or `Update((K,V))`. Serialized via bincode. |
+| **`ComparisonItem` / `Update`** | The two `Message` variants: a hash segment to compare, vs a key-value pair to apply. |
+| **`fingerprint`** | (1) Generally: the range summary used for the diff (here 64-bit XOR). (2) The public method `ReconcileStore::fingerprint(range)`. |
+| **`Reconcilable` / `reconcile()`** | Conflict-merge trait (`reconcilable.rs`). The only impl provided: LWW over `(DateTime<Utc>, V)` (F5). |
+| **`ReconcileStore`** | The store's public API (`reconcile_store.rs`): wraps the `HRTree`, manages timestamps and tombstones. Its `clone()` is cheap (shares an `Arc`). |
+| **`ReconcileEngine`** | Transport/reconciliation layer (`reconcile_engine.rs`): UDP socket, locks, `run()` loop, peer discovery. |
+| **`Config`** | Configuration: `port`, `listen_addr`, `peer_net` (`reconcile_store.rs:240-269`). Loopback-safe default but `port=0` unusable as-is. |
+| **`with_seed` / `with_port` / `with_listen_addr` / `with_peer_net` / `with_tombstone_timeout`** | Configuration builders. `with_seed` provides a known peer (mitigates scan discovery, F10). |
+| **`insert` / `just_insert` / `*_bulk`** | `insert` = local insertion **+** UDP broadcast; `just_insert` = local only (naming footgun, F-API). `_bulk` variants clone the entire input (F16/perf). |
+| **`remove` / `just_remove` / `remove_bulk`** | Deletions; write a tombstone `(now, None)`. |
+| **`pre_insert` / `add_pre_insert`** | User hook called before insertion. Supposed to run outside the write-lock, but executed **under** the lock on the network path (F14, contradicts `reconcile_store.rs:98-101`). |
+| **`tombstone`** | Deletion marker `(timestamp, None)` kept in the tree to propagate the deletion, then purged (F4). |
+| **`TimeoutWheel`** | Tombstone-expiry structure (`timeout_wheel.rs`), BTreeMap + HashMap, `std::sync::RwLock` (inconsistent with `parking_lot` elsewhere). |
+| **`pop_expired` / `clear_expired_tombstones`** | Purge of wall-clock-expired tombstones (`reconcile_store.rs:208-215`) → resurrection (F4). |
+| **`gen_ip`** | Draws a random IP within a CIDR (`gen_ip.rs`) for peer discovery (F10). |
+| **`peers` / `peer_net`** | Map of known peers (key = `IpAddr`, 60 s expiry); probed CIDR. Unbounded growth under spoofed IPs (F18). |
+| **Timing constants** | `DEFAULT_TIMEOUT` = 60 s (tombstones), `TOMBSTONE_CLEARING` = 1 s, `PEER_EXPIRATION` = 60 s, `ACTIVITY_TIMEOUT` = 1 s (triggers the periodic diff), `BUFFER_SIZE` = 65507 (max UDP datagram), `MAX_SENDTO_RETRIES` (send retries). |
+
+<a id="g92"></a>
+### 9.2 — Competing data structures and algorithms
+
+| Term | Definition |
+|---|---|
+| **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): recursive partition of an ordered set, exchange of range fingerprints, descent into divergent ranges. What reconcile-rs implements. O(log n) RTT. |
+| **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026): an ordered set offering **composable** range summaries + rank/select navigation. An augmented B+-tree realizes it → **the HRTree is an RSOS**. |
+| **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the HRTree. |
+| **MST** (*Merkle Search Tree*) | Auvolat & Taïani, SRDS 2019. A B-tree whose key level derives from the **hash of the key** ⇒ history-independent. Diffs **nodes**. Vulnerable to the leading-zeros attack. Usage: Bluesky/atproto. |
+| **Prolly tree** (*probabilistic B-tree*) | Noms/Dolt. Content-addressed B-tree, boundaries by **rolling hash**. History-independent + **structural sharing** → versioning (Git-like). SOTA of versioned ordered stores. |
+| **Merkle radix / Patricia trie** | A Merkle tree where position depends on the key's **prefix bits**. History-independent. The basis of Ethereum. |
+| **SMT** (*Sparse Merkle Tree*) | Merkle tree over a huge, mostly-empty key space; compact inclusion/exclusion proofs. |
+| **Merkle tree / Merkle root** | Hash tree where each node hashes its children; the root summarizes everything. Basis of classic anti-entropy. |
+| **Merkle-DAG / Merkle-CRDT** | Content-addressed, hash-linked DAG (IPFS); the links encode causal history (Merkle-CRDT, arXiv:2004.00107). |
+| **IBLT** (*Invertible Bloom Lookup Table*) | A structure encoding a set into cells (XOR of key/hash + counter); subtracting two IBLTs reveals the symmetric difference via "peeling". Comm. ∝ d, **needs d known**. |
+| **Rateless IBLT (RIBLT)** | *Practical Rateless Set Reconciliation*, SIGCOMM 2024. An infinite stream of coded symbols (fountain code); decodes as soon as ~d symbols are received. **No need for d**, linear compute, adversarially robust. **Single-shot SOTA choice.** |
+| **minisketch / PinSketch** | Bitcoin Core library implementing PinSketch (BCH formulation of reconciliation). Comm. **optimal ≈ b·d**, O(d²) decoding, capacity to predefine. |
+| **CPI / CPISync** (*Characteristic Polynomial Interpolation*) | Encodes the set as the roots of a polynomial; the ratio of the polynomials yields the difference. Minsky-Trachtenberg-Zippel. O(d³) decoding. |
+| **BCH codes / Berlekamp-Massey** | Error-correcting codes / decoding algorithm used by PinSketch to reconstruct the characteristic polynomial. |
+| **Strata Estimator** | A stack of sampled IBLTs estimating the difference size *d* without a prior round (Eppstein et al. 2011). |
+| **CertainSync** | arXiv:2504.08314 (SIGMETRICS 2025): rateless reconciliation with **deterministic success** (no estimator or parametrization). |
+| **Bloom filter** | Probabilistic membership filter (false positives, no false negatives); a Graphene component. |
+| **Erlay / Graphene / BIP 330** | Bitcoin deployments: Erlay (minisketch + flooding, specified in BIP 330), Graphene (Bloom + IBLT). |
+| **Negentropy** | Production RBSR implementation (Nostr/NIP-77, strfry relay). **Abandoned the naive XOR combiner** for an incremental cryptographic hash — directly relevant to F6. |
+| **Willow / Earthstar / iroh / iroh-docs** | Decentralized-sync ecosystem: Willow (3D RBSR, whose spec documents XOR-fingerprint insecurity), iroh (encrypted QUIC + `iroh-docs` = persistent CRDT KV — a direct Rust competitor). |
+| **Dynamo / Cassandra / ScyllaDB / Riak / Voldemort** | Distributed databases with Merkle-tree anti-entropy. Cassandra: `gc_grace_seconds`, over-streaming. ScyllaDB: repair-based tombstone GC. Reference for F4. |
+| **Noms / Dolt / DoltHub** | Prolly-tree ecosystem; Dolt = "the first version-controlled relational database". |
+| **content-defined chunking (CDC) / rolling hash** | Placing node boundaries where a rolling hash over the content matches a target pattern (core of prolly-trees). |
+| **structural sharing / CAS / CID** | Sharing unchanged substructures across versions; *Content-Addressed Storage*; *Content IDentifier* (hash used as an address). |
+
+<a id="g93"></a>
+### 9.3 — Consistency, replication and distributed systems
+
+| Term | Definition |
+|---|---|
+| **LWW** (*Last-Write-Wins*) | Conflict resolution: the value with the largest timestamp wins. Wired here on a physical clock (F5). |
+| **Thomas write rule** | The rule formalizing LWW: ignore a write older than an already-applied state. |
+| **eventual consistency** | Weak guarantee: with no new writes, replicas converge *eventually*. |
+| **SEC** (*Strong Eventual Consistency*) | *Strong* convergence: replicas that received the same updates have identical state, **regardless of order**. Requires a commutative/associative/idempotent merge. Not reached here (F5). |
+| **CRDT** (*Conflict-free Replicated Data Type*) | A type whose merge guarantees SEC. **CvRDT** (state, merge = least upper bound of a lattice) vs **CmRDT** (commutative operations). Shapiro et al. 2011. |
+| **LWW-Register / MV-Register / OR-Set** | Classic CRDTs: LWW register (lossy), multi-value register (keeps concurrent values), Observed-Remove Set (add-wins). |
+| **join-semilattice** | A lattice where any pair has a least upper bound; the mathematical structure underlying CvRDTs. |
+| **commutative / associative / idempotent / monotone** | Properties required of a CRDT merge. reconcile-rs's merge is **not commutative** on equal timestamps (F5). |
+| **Lamport clock** | A scalar logical clock respecting *happens-before*; does not detect concurrency. |
+| **vector clock / version vector** | A vector of one counter per node; **detects** concurrency (incomparable vectors). O(N) cost, delicate pruning. |
+| **DVV** (*Dotted Version Vector*) | A refined version vector (Preguiça et al.): O(1) causality, metadata bounded by the replication degree. Adopted by Riak. |
+| **HLC** (*Hybrid Logical Clock*) | Kulkarni 2014. 64-bit timestamp = physical + logical counter: monotonic, respects causality, bounded divergence. **Recommended minimal fix** for F5 (CockroachDB, MongoDB). |
+| **TrueTime / commit-wait** | Spanner approach: bounded clock-uncertainty interval (GPS+atomic) + commit wait → external consistency/linearizability. |
+| **happens-before / causality** | Partial order of events (Lamport 1978). A causally later write must not be overwritten by the one it derives from. |
+| **causal consistency / causal+** | Consistency respecting *happens-before*; *causal+* (COPS) = causal + convergent conflict resolution. |
+| **causal stability** | A safe-GC condition: an event is purgeable only when **no concurrent operation can still arrive** (all replicas have seen it). The basis of the F4 fix. |
+| **session guarantees** | (Bayou) Read-Your-Writes, Monotonic Reads, Monotonic Writes, Writes-Follow-Reads. None provided by multi-master physical LWW. |
+| **resurrection / zombie** | Reappearance of deleted data when a tombstone is purged before all have seen it (F4). |
+| **`gc_grace_seconds`** | Cassandra window before purging a tombstone (default **10 days**), safe *if* a complete repair covers it. Compare to the **60 s** here (F4). |
+| **CAP / PACELC** | CAP: under a Partition, choose Consistency or Availability. PACELC: *Else* (normal operation), choose Latency or Consistency. reconcile-rs is **PA/EL**. |
+| **clock skew / NTP / PTP** | Drift between physical clocks; synchronization protocols (NTP ~sub-second, PTP more precise). Cause of LWW losses (F5). |
+| **quorum / read repair / hinted handoff** | Dynamo-like mechanisms (absent here): majority of replicas, repair at read time, buffer for an unreachable peer. |
+| **split-brain / partition** | A cluster split into sub-groups that no longer communicate; each diverges. |
+| **anti-entropy (push / pull)** | Periodic pairwise reconciliation. Push = push hot updates; pull = query a peer. Demers et al. 1987. |
+| **gossip / epidemic / rumor mongering** | Epidemic dissemination of updates to random peers. |
+| **SWIM / HyParView / memberlist / Vivaldi** | **Membership** and failure-detection protocols (≠ data sync). SWIM/`memberlist` (HashiCorp): bounded fan-out, log N convergence — recommended for F10. |
+
+<a id="g94"></a>
+### 9.4 — Cryptography, hashing and networking
+
+| Term | Definition |
+|---|---|
+| **XOR** | Exclusive-OR. Commutative, associative, **self-inverse**, GF(2)-linear. Convenient for range subtraction but weak as a fingerprint (F6). |
+| **GF(2)-linear** | Linear over the two-element field → an attacker *solves* (Gaussian elimination) for collision elements instead of brute-forcing them (F6). |
+| **collision / second-preimage / birthday bound** | Two inputs → same hash; finding a 2nd input colliding given data; probabilistic collision threshold (~2^(b/2), i.e. ~2³² for 64-bit). All relevant to F6. |
+| **SipHash** | A fast keyed PRF, 64-bit output; the `DefaultHasher` algorithm. **Not** collision-resistant in the cryptographic sense. |
+| **`DefaultHasher`** | The std hasher (`std::collections::hash_map`), **not stable** across Rust versions/platforms → cross-version non-convergence (F8). |
+| **BLAKE3 / xxHash** | Fast and **stable** hashes recommended as replacements (F8). |
+| **incremental / homomorphic hash** | A set hash updated incrementally and composable. **MSet-XOR-Hash** (weak, = the current approach), **MSet-Mu-Hash** (finite field), **LtHash** (lattice/vector addition) — secure alternatives for F6. |
+| **transitive group** | The minimal algebraic structure required of an RBSR fingerprint (associativity, identity, inverses, transitivity) — XOR satisfies it, hence its convenience *and* its fragility. |
+| **MAC / HMAC / AEAD** | Message Authentication Code; HMAC (hash-based); Authenticated Encryption with Associated Data. The F3 fix. |
+| **TLS / DTLS / Noise / QUIC** | Secure transport layers (DTLS = TLS over datagrams; Noise = a handshake framework; QUIC = encrypted transport over UDP). Options for F3; cf. issue #96. |
+| **spoofing / amplification / reflection / DRDoS** | Forging the source IP (trivial in UDP); a response larger than the request toward a victim; distributed reflection denial of service. The F9 surface. |
+| **bincode allocation bomb** | Deserialization where an attacker-controlled length prefix forces a massive pre-allocation (F18). |
+| **UDP / datagram / MTU** | Connectionless, unreliable protocol with a spoofable source; bounded datagram (here 65507 bytes); *Maximum Transmission Unit*. |
+
+<a id="g95"></a>
+### 9.5 — Complexity, theory and notation
+
+| Term | Definition |
+|---|---|
+| **B-tree / B+-tree** | A balanced multi-way search tree. B+-tree: values only in the leaves. |
+| **order statistics (rank / select)** | "Rank of a key" / "key at rank i" operations in O(log n) thanks to subtree counters (`tree_size`). |
+| **monoid** | A set with an associative operation and an identity element; the ideal structure of a generic composable summary (P1 of §7.4). |
+| **fan-out** | Number of sub-ranges per recursion round (here ~16, `diff.rs:141`); trades RTT vs message size. |
+| **n / d / U / b** | SOTA notation: set size *n*, symmetric-difference size *d*, key universe *U*, element bit-width *b*. |
+| **O(log n) / O(d log n)** | Target costs: hash-range query and per-mutation operations in O(log n); diff message volume in O(d log n). |
+
+<a id="g96"></a>
+### 9.6 — Rust tooling and ecosystem
+
+| Term | Definition |
+|---|---|
+| **MSRV** (*Minimum Supported Rust Version*) | The minimum supported Rust version; absent from `Cargo.toml` (F17). |
+| **clippy / `-Dwarnings`** | The Rust linter; CI treating warnings as errors. The `mismatched_lifetime_syntaxes` warning (`hrtree_iter.rs:177`) would break CI (F17). |
+| **miri** | An interpreter detecting UB (*Undefined Behavior*); relevant given the `unsafe` iterators; absent from CI (F17). |
+| **proptest / quickcheck / fuzzing** | Property-based / generative / random-input testing. **Entirely absent** (F11). |
+| **`cargo audit` / `cargo deny`** | Vulnerability audit / dependency policies. Absent from CI (F19). |
+| **bincode / serde / tokio / parking_lot / arrayvec / ipnet / range-cmp / chrono / rand / once_cell / tracing** | Dependencies: binary serialization; (de)serialization; async runtime; non-poisoning locks; `ArrayVec` (inline vector, B-tree nodes); network/CIDR types; key↔range comparison (`RangeOrdering`); `DateTime<Utc>` (LWW timestamps); randomness; lazy init; structured logs. |
+| **`Arc` / `RwLock` / `unwrap` / `panic=abort` / `overflow-checks`** | Atomic shared pointer; reader-writer lock; panicking unwrap; panic strategy; arithmetic-overflow checking (disabled in release → F7). |
+| **`ExactSizeIterator` / `FusedIterator` / `DoubleEndedIterator`** | Rust iterator traits targeted by issues #90-92 (full RSOS contract, §7.4). |
+
+---
+
+## 10. Bibliography
+
+**Set reconciliation**
+- A. Meyer, *Range-Based Set Reconciliation*, arXiv:2212.13567 (IEEE SRDS 2023) — https://arxiv.org/abs/2212.13567 ; primer: https://logperiodic.com/rbsr.html
 - L. Yang, Y. Gilad, M. Alizadeh, *Practical Rateless Set Reconciliation*, SIGCOMM 2024, arXiv:2402.02668 — https://arxiv.org/abs/2402.02668 ; impl. https://github.com/yangl1996/riblt
 - minisketch (Bitcoin Core) — https://github.com/bitcoin-core/minisketch ; BIP 330 — https://bips.dev/330/
 - Erlay (Naumenko et al., CCS 2019) — https://arxiv.org/abs/1905.10518
-- E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores*, arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820
+- E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores* (RSOS / AELMDB), arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820
+- *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
 
-**Structures Merkle / anti-entropy**
-- A. Auvolat, F. Taïani, *Merkle Search Trees*, SRDS 2019 — https://inria.hal.science/hal-02303490 ; crate https://github.com/domodwyer/merkle-search-tree
+**Merkle / anti-entropy structures**
+- A. Auvolat, F. Taïani, *Merkle Search Trees*, SRDS 2019 — https://inria.hal.science/hal-02303490 ; crate https://github.com/domodwyer/merkle-search-tree ; Bluesky/atproto usage — https://atproto.com/specs/repository
 - Prolly trees (Dolt/Noms) — https://docs.dolthub.com/architecture/storage-engine/prolly-tree ; https://www.dolthub.com/blog/2025-06-03-people-keep-inventing-prolly-trees/
+- J. Gustafson, *Merklizing the key/value store* (Merkle radix / SMT) — https://joelgustafson.com/posts/2023-05-04/merklizing-the-key-value-store-for-fun-and-profit/
 - Merkle-CRDTs, arXiv:2004.00107 — https://arxiv.org/abs/2004.00107
 - Dynamo (DeCandia et al., SOSP 2007) — https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf
 - Cassandra repair / over-streaming — https://www.pythian.com/blog/effective-anti-entropy-repair-cassandra
-- Willow 3d-RBSR (sécurité du fingerprint) — https://willowprotocol.org/specs/3d-range-based-set-reconciliation/index.html ; Negentropy — https://github.com/hoytech/negentropy
+- Willow 3d-RBSR (fingerprint security) — https://willowprotocol.org/specs/3d-range-based-set-reconciliation/index.html ; Negentropy — https://github.com/hoytech/negentropy
 - Demers et al., *Epidemic Algorithms*, PODC 1987 ; SWIM — https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf ; memberlist — https://github.com/hashicorp/memberlist
 
-**Cohérence & résolution de conflits**
+**Consistency & conflict resolution**
 - Kingsbury (Jepsen), *The trouble with timestamps* — https://aphyr.com/posts/299-the-trouble-with-timestamps ; *Jepsen: Cassandra* — https://aphyr.com/posts/294-jepsen-cassandra
 - S. Kulkarni et al., *Hybrid Logical Clocks*, 2014 — https://cse.buffalo.edu/tech-reports/2014-04.pdf
 - Shapiro et al., *CRDTs*, INRIA RR-7506 / SSS 2011 — https://inria.hal.science/inria-00555588/en/
@@ -513,14 +842,70 @@ web » avec exigence de durabilité/correction : Redis/Dragonfly + cache local, 
 - Clarke et al., *Incremental Multiset Hash Functions*, ASIACRYPT 2003 — https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
 - Abadi, *PACELC* — https://en.wikipedia.org/wiki/PACELC_design_principle ; ScyllaDB repair-based tombstone GC — https://www.scylladb.com/2022/06/30/preventing-data-resurrection-with-repair-based-tombstone-garbage-collection/
 
-**Positionnement produit**
+**Product positioning**
 - Pekko Distributed Data — https://pekko.apache.org/docs/pekko/current/typed/distributed-data.html
 - Hazelcast Replicated Map — https://docs.hazelcast.com/hazelcast/5.6/data-structures/replicated-map
 - iroh / iroh-docs — https://github.com/n0-computer/iroh ; automerge — https://github.com/automerge/automerge
 
 ---
 
-*Revue produite selon une méthodologie de peer-review : 4 sous-panels SOTA + 8 reviewers de code
-en double aveugle (2 par thème : correction algo/crypto, sécurité/robustesse, distribué/cohérence,
-perf/qualité), suivis d'une synthèse éditoriale croisant les viewpoints. Findings marqués « [2/2] »
-= confirmés indépendamment par les deux reviewers du thème. Aucun fichier source n'a été modifié.*
+## 11. Alphabetical index
+
+> Index of the [glossary (§9)](#9-glossary) terms. Each entry links to the subsection where the term
+> is defined: [9.1 repo](#g91) · [9.2 structures/algos](#g92) · [9.3 distributed](#g93) ·
+> [9.4 crypto/network](#g94) · [9.5 complexity](#g95) · [9.6 Rust](#g96).
+
+**A** — AEAD [9.4](#g94) · AELMDB [9.2](#g92) · `ACTIVITY_TIMEOUT` [9.1](#g91) · `add_pre_insert` [9.1](#g91) · amplification [9.4](#g94) · anti-entropy [9.3](#g93) · `Arc` [9.6](#g96) · `ArrayVec` [9.6](#g96) · associative [9.3](#g93)
+
+**B** — B-tree / B+-tree [9.5](#g95) · `B` (constant) [9.1](#g91) · BCH codes [9.2](#g92) · Berlekamp-Massey [9.2](#g92) · bincode [9.6](#g96) · bincode allocation bomb [9.4](#g94) · BIP 330 [9.2](#g92) · birthday bound [9.4](#g94) · BLAKE3 [9.4](#g94) · Bloom filter [9.2](#g92) · `BUFFER_SIZE` [9.1](#g91)
+
+**C** — CAP [9.3](#g93) · CAS [9.2](#g92) · Cassandra [9.2](#g92) · causal consistency / causal+ [9.3](#g93) · causal stability [9.3](#g93) · CDC (content-defined chunking) [9.2](#g92) · CertainSync [9.2](#g92) · `check_invariants` [9.1](#g91) · chrono [9.6](#g96) · CID [9.2](#g92) · clippy [9.6](#g96) · clock skew [9.3](#g93) · CmRDT [9.3](#g93) · collision [9.4](#g94) · commit-wait [9.3](#g93) · commutative [9.3](#g93) · `ComparisonItem` [9.1](#g91) · `Config` [9.1](#g91) · content-addressing [9.2](#g92) · CPI / CPISync [9.2](#g92) · CRDT [9.3](#g93) · CvRDT [9.3](#g93)
+
+**D** — datagram [9.4](#g94) · `DateTime<Utc>` [9.6](#g96) · `DEFAULT_TIMEOUT` [9.1](#g91) · `DefaultHasher` [9.4](#g94) · `Diffable` [9.1](#g91) · `diff_round` [9.1](#g91) · `DiffRange` [9.1](#g91) · Dolt / DoltHub [9.2](#g92) · `DoubleEndedIterator` [9.6](#g96) · DRDoS [9.4](#g94) · DTLS [9.4](#g94) · DVV (Dotted Version Vector) [9.3](#g93) · Dynamo [9.2](#g92)
+
+**E** — Earthstar [9.2](#g92) · epidemic [9.3](#g93) · Erlay [9.2](#g92) · eventual consistency [9.3](#g93) · `ExactSizeIterator` [9.6](#g96)
+
+**F** — fan-out [9.5](#g95) · fingerprint [9.1](#g91) · `FusedIterator` [9.6](#g96) · fuzzing [9.6](#g96)
+
+**G** — `gc_grace_seconds` [9.3](#g93) · `gen_ip` [9.1](#g91) · `get_mut` [9.1](#g91) · `get_range` [9.1](#g91) · GF(2)-linear [9.4](#g94) · gossip [9.3](#g93) · Graphene [9.2](#g92)
+
+**H** — `hash(key,value)` [9.1](#g91) · `HashRangeQueryable` [9.1](#g91) · `HashSegment` [9.1](#g91) · happens-before [9.3](#g93) · Hazelcast [§7/product](#g92) · hinted handoff [9.3](#g93) · history-independence [9.2](#g92) · HLC (Hybrid Logical Clock) [9.3](#g93) · HMAC [9.4](#g94) · homomorphic hash [9.4](#g94) · HRTree [9.1](#g91) · HyParView [9.3](#g93)
+
+**I** — IBLT [9.2](#g92) · idempotent [9.3](#g93) · incremental hash [9.4](#g94) · `insert` / `insert_bulk` [9.1](#g91) · `insertion_position` [9.1](#g91) · ipnet [9.6](#g96) · iroh / iroh-docs [9.2](#g92)
+
+**J** — join-semilattice [9.3](#g93) · `just_insert` / `just_remove` [9.1](#g91)
+
+**K** — `key_at` [9.1](#g91)
+
+**L** — Lamport clock [9.3](#g93) · leading-zeros (attack) [9.2](#g92) · LtHash [9.4](#g94) · LWW (Last-Write-Wins) [9.3](#g93) · LWW-Register [9.3](#g93)
+
+**M** — MAC [9.4](#g94) · `MAX_CAPACITY` / `MIN_CAPACITY` [9.1](#g91) · `MAX_SENDTO_RETRIES` [9.1](#g91) · memberlist [9.3](#g93) · Merkle-CRDT [9.2](#g92) · Merkle-DAG [9.2](#g92) · Merkle radix / Patricia [9.2](#g92) · Merkle tree / root [9.2](#g92) · `Message` [9.1](#g91) · minisketch [9.2](#g92) · miri [9.6](#g96) · monoid [9.5](#g95) · monotone [9.3](#g93) · MSet-Mu-Hash / MSet-XOR-Hash [9.4](#g94) · MSRV [9.6](#g96) · MST (Merkle Search Tree) [9.2](#g92) · MTU [9.4](#g94) · MV-Register [9.3](#g93)
+
+**N** — *n / d / U / b* (notation) [9.5](#g95) · Negentropy [9.2](#g92) · Noise [9.4](#g94) · Noms [9.2](#g92) · NTP [9.3](#g93)
+
+**O** — O(log n) / O(d log n) [9.5](#g95) · once_cell [9.6](#g96) · order statistics (rank/select) [9.5](#g95) · OR-Set [9.3](#g93) · over-streaming [9.2](#g92)
+
+**P** — PACELC [9.3](#g93) · `panic=abort` [9.6](#g96) · parking_lot [9.6](#g96) · partition [9.3](#g93) · Patricia trie [9.2](#g92) · `peer_net` / `peers` [9.1](#g91) · `PEER_EXPIRATION` [9.1](#g91) · Pekko Distributed Data [§7/product](#g92) · PinSketch [9.2](#g92) · `pop_expired` [9.1](#g91) · `position` [9.1](#g91) · `pre_insert` [9.1](#g91) · prolly tree [9.2](#g92) · proptest [9.6](#g96) · PTP [9.3](#g93) · push / pull [9.3](#g93)
+
+**Q** — QUIC [9.4](#g94) · quickcheck [9.6](#g96) · quorum [9.3](#g93)
+
+**R** — rand [9.6](#g96) · range-cmp / `RangeOrdering` [9.6](#g96) · rank / select [9.5](#g95) · Rateless IBLT (RIBLT) [9.2](#g92) · RBSR [9.2](#g92) · read repair [9.3](#g93) · `rebalance_after_deletion` [9.1](#g91) · `Reconcilable` / `reconcile()` [9.1](#g91) · `ReconcileEngine` [9.1](#g91) · `ReconcileStore` [9.1](#g91) · `refresh_hash_size` [9.1](#g91) · `remove` / `remove_bulk` [9.1](#g91) · resurrection / zombie [9.3](#g93) · Riak [9.2](#g92) · rolling hash [9.2](#g92) · rumor mongering [9.3](#g93) · `RwLock` [9.6](#g96) · RSOS [9.2](#g92)
+
+**S** — ScyllaDB [9.2](#g92) · second-preimage [9.4](#g94) · SEC (Strong Eventual Consistency) [9.3](#g93) · serde [9.6](#g96) · session guarantees [9.3](#g93) · SipHash [9.4](#g94) · SMT (Sparse Merkle Tree) [9.2](#g92) · spoofing [9.4](#g94) · split-brain [9.3](#g93) · `start_diff` [9.1](#g91) · Strata Estimator [9.2](#g92) · structural sharing [9.2](#g92) · SWIM [9.3](#g93)
+
+**T** — Thomas write rule [9.3](#g93) · `TimeoutWheel` [9.1](#g91) · TLS [9.4](#g94) · tokio [9.6](#g96) · tombstone [9.1](#g91) · `TOMBSTONE_CLEARING` [9.1](#g91) · tracing [9.6](#g96) · transitive group [9.4](#g94) · `tree_hash` [9.1](#g91) · `tree_size` [9.1](#g91) · TrueTime [9.3](#g93)
+
+**U** — UDP [9.4](#g94) · `unwrap` [9.6](#g96) · `Update` [9.1](#g91) · `overflow-checks` [9.6](#g96)
+
+**V** — vector clock / version vector [9.3](#g93) · Vivaldi [9.3](#g93) · Voldemort [9.2](#g92)
+
+**W** — Willow [9.2](#g92) · `with_mut` [9.1](#g91) · `with_seed` / `with_port` / `with_peer_net` / `with_tombstone_timeout` [9.1](#g91) · Writes-Follow-Reads [9.3](#g93)
+
+**X** — XOR [9.4](#g94) · xxHash [9.4](#g94)
+
+---
+
+*Produced via a peer-review methodology: 4 SOTA sub-panels + 8 code reviewers in double-blind pairs
+(2 per theme: algo/crypto correctness, security/robustness, distributed/consistency, perf/quality),
+followed by an editorial synthesis cross-checking the viewpoints. Findings marked "[2/2]" were
+confirmed independently by the two reviewers of the theme. No source file was modified.*
