@@ -312,7 +312,6 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
                     node.hashes[index] = new_hash;
                     let diff_hash = old_hash ^ new_hash;
                     node.tree_hash ^= diff_hash;
-                    println!("{diff_hash}");
                     diff_hash
                 }
                 Err(index) => {
