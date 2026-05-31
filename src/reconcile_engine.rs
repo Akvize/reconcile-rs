@@ -300,7 +300,12 @@ impl<
                             break;
                         }
                     }
-                    panic!("failed to deserialize message: {:?}", kind);
+                    // Never panic on network input: a single malformed datagram from any
+                    // host would otherwise kill the receive loop (unauthenticated remote
+                    // DoS). Drop the rest of the datagram and keep the loop alive, just like
+                    // the oversized-datagram case above.
+                    warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
+                    break;
                 }
                 Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
                 Ok(Message::Update(update)) => updates.push(update),

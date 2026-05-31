@@ -260,3 +260,45 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
     task1.abort();
     task2.abort();
 }
+
+/// Regression test for the remote DoS where a single malformed UDP datagram panicked the
+/// receive loop, silently killing reconciliation (issue #107).
+///
+/// We send a malformed datagram to each node, then check that reconciliation still works.
+/// Before the fix, the receive loop task would panic and die, and the propagation assertion
+/// below would time out.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_malformed_datagram_does_not_crash() {
+    let port = 8082;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.46".parse().unwrap();
+    let addr2 = "127.0.0.47".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net);
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+
+    // 0x02 is an invalid bincode enum tag for `Message`; before the fix this panicked the
+    // receive loop. Send it to both nodes' protocol sockets from an unrelated socket.
+    let attacker = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    attacker.send_to(&[0x02], (addr1, port)).await.unwrap();
+    attacker.send_to(&[0x02], (addr2, port)).await.unwrap();
+
+    // Reconciliation must still work: a value inserted on one node reaches the other.
+    let key = "key".to_string();
+    let value = "value".to_string();
+    store1.insert(key.clone(), value.clone());
+    assert_until!(store2.get(&key).as_deref() == Some(&value));
+
+    task2.abort();
+    task1.abort();
+}
