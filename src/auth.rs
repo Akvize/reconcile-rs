@@ -8,20 +8,29 @@
 
 //! Per-datagram message authentication for the reconciliation protocol.
 //!
-//! The UDP protocol performs no authentication by itself: any host that can
-//! send a datagram to the port can forge an update and poison the whole
-//! cluster through last-write-wins (see the crate-level "Security model"
-//! documentation). To close that vector, when a cluster key is configured
-//! (see [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key)),
-//! every outgoing datagram is framed as `tag || payload` where `tag` is a
-//! 32-byte keyed MAC over `payload`, and every incoming datagram is verified
-//! **before** any deserialization. Datagrams whose tag is missing or invalid
-//! are silently dropped.
+//! The UDP protocol performs no authentication by itself: any host that can send a datagram to the
+//! port can forge an update and poison the whole cluster through last-write-wins (see the
+//! crate-level "Security model" documentation). To close that vector, when a cluster key is
+//! configured (see
+//! [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key)), every outgoing
+//! datagram is framed as `tag || payload` where `tag` is a keyed MAC over `payload`, and every
+//! incoming datagram is verified **before** any deserialization.
 //!
-//! The MAC primitive is abstracted behind a Cargo feature so it can be swapped
-//! without touching the protocol: `mac-blake3` (default, keyed BLAKE3) or
-//! `mac-hmac` (HMAC-SHA256). All nodes in a cluster must use the same key and
-//! the same backend.
+//! # Design
+//!
+//! The module is layered so the type system carries the security invariants ("parse, don't
+//! validate"):
+//!
+//! - [`Mac`] is the cryptographic primitive — a compile-time-selected trait with one concrete
+//!   backend per Cargo feature ([`Blake3Mac`] for `mac-blake3`, the default, or `HmacSha256Mac`
+//!   for `mac-hmac`). [`ClusterMac`] aliases the active backend.
+//! - [`ClusterKey`] and [`Tag`] are newtypes around raw byte arrays so keys, tags and arbitrary
+//!   buffers cannot be confused.
+//! - [`Authenticator`] holds the policy (authentication enabled or not) plus framing. It is the
+//!   only producer of a [`Payload`].
+//! - [`Payload`] is an opaque wrapper that can only be obtained from [`Authenticator::open`].
+//!   Because message handling consumes a `Payload` rather than `&[u8]`, it is structurally
+//!   impossible to deserialize bytes that have not cleared the authentication gate.
 
 /// Length in bytes of the authentication tag prepended to every datagram.
 pub(crate) const TAG_LEN: usize = 32;
@@ -34,80 +43,172 @@ compile_error!(
     "reconcile: no MAC backend selected. Enable feature `mac-blake3` (default) or `mac-hmac`."
 );
 
-// `mac-blake3` takes precedence when both backends are enabled (e.g. under
-// `--all-features`), so that such builds still compile instead of hitting a
-// hard error.
-#[cfg(feature = "mac-blake3")]
-mod backend {
-    use super::{KEY_LEN, TAG_LEN};
+/// A shared cluster secret. Constructing one is the only way to enable authentication.
+#[derive(Clone, Copy)]
+pub(crate) struct ClusterKey([u8; KEY_LEN]);
 
-    pub fn tag(key: &[u8; KEY_LEN], payload: &[u8]) -> [u8; TAG_LEN] {
-        *blake3::keyed_hash(key, payload).as_bytes()
+impl ClusterKey {
+    pub(crate) fn new(bytes: [u8; KEY_LEN]) -> Self {
+        ClusterKey(bytes)
     }
 
-    pub fn verify(key: &[u8; KEY_LEN], payload: &[u8], tag: &[u8]) -> bool {
+    fn as_bytes(&self) -> &[u8; KEY_LEN] {
+        &self.0
+    }
+}
+
+/// A MAC tag. Can only be produced by a [`Mac`] backend.
+pub(crate) struct Tag([u8; TAG_LEN]);
+
+impl Tag {
+    fn as_bytes(&self) -> &[u8; TAG_LEN] {
+        &self.0
+    }
+}
+
+/// A datagram payload that has cleared the authentication gate — either its tag was verified, or
+/// the store is running in (explicitly) unauthenticated mode. The rest of the engine can only
+/// obtain one through [`Authenticator::open`], so message handling cannot, by construction, run on
+/// bytes that were not cleared first ("parse, don't validate").
+pub(crate) struct Payload<'a>(&'a [u8]);
+
+impl<'a> Payload<'a> {
+    pub(crate) fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+}
+
+/// The keyed MAC primitive used to authenticate datagrams.
+///
+/// The active backend is selected at compile time through the `mac-*` Cargo features and aliased
+/// as [`ClusterMac`]; this trait makes the contract that every backend must satisfy explicit and
+/// compiler-checked, rather than relying on convention.
+pub(crate) trait Mac {
+    /// Compute the authentication tag of `message` under `key`.
+    fn tag(key: &ClusterKey, message: &[u8]) -> Tag;
+
+    /// Constant-time check that `tag` authenticates `message` under `key`.
+    ///
+    /// `tag` is the untrusted on-the-wire slice; an incorrect length yields `false`.
+    fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool;
+}
+
+#[cfg(feature = "mac-blake3")]
+pub(crate) struct Blake3Mac;
+
+#[cfg(feature = "mac-blake3")]
+impl Mac for Blake3Mac {
+    fn tag(key: &ClusterKey, message: &[u8]) -> Tag {
+        Tag(*blake3::keyed_hash(key.as_bytes(), message).as_bytes())
+    }
+
+    fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool {
         let Ok(tag) = <[u8; TAG_LEN]>::try_from(tag) else {
             return false;
         };
         // `blake3::Hash`'s `PartialEq` is constant-time.
-        blake3::keyed_hash(key, payload) == blake3::Hash::from_bytes(tag)
+        blake3::keyed_hash(key.as_bytes(), message) == blake3::Hash::from_bytes(tag)
     }
 }
 
+// Compiled only when it is actually the selected backend (`mac-blake3` takes precedence), so an
+// `--all-features` build does not carry an unused struct.
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
-mod backend {
-    use super::{KEY_LEN, TAG_LEN};
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
+pub(crate) struct HmacSha256Mac;
 
-    type HmacSha256 = Hmac<Sha256>;
-
-    pub fn tag(key: &[u8; KEY_LEN], payload: &[u8]) -> [u8; TAG_LEN] {
-        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-        mac.update(payload);
-        // SHA-256 produces exactly 32 bytes, matching TAG_LEN: no truncation.
-        mac.finalize().into_bytes().into()
+#[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
+impl Mac for HmacSha256Mac {
+    fn tag(key: &ClusterKey, message: &[u8]) -> Tag {
+        use hmac::{Hmac, Mac as _};
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(message);
+        // SHA-256 produces exactly TAG_LEN bytes: no truncation.
+        Tag(mac.finalize().into_bytes().into())
     }
 
-    pub fn verify(key: &[u8; KEY_LEN], payload: &[u8], tag: &[u8]) -> bool {
-        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-        mac.update(payload);
+    fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool {
+        use hmac::{Hmac, Mac as _};
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(message);
         // `verify_slice` is constant-time and length-checked.
         mac.verify_slice(tag).is_ok()
     }
 }
 
-/// Compute a 32-byte authentication tag over `payload` under `key`.
-pub(crate) fn tag(key: &[u8; KEY_LEN], payload: &[u8]) -> [u8; TAG_LEN] {
-    backend::tag(key, payload)
-}
+// `mac-blake3` takes precedence when both backends are enabled (e.g. under `--all-features`), so
+// such builds still compile instead of hitting a hard error.
+#[cfg(feature = "mac-blake3")]
+pub(crate) type ClusterMac = Blake3Mac;
+#[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
+pub(crate) type ClusterMac = HmacSha256Mac;
 
-/// Constant-time verification that `tag` authenticates `payload` under `key`.
-pub(crate) fn verify(key: &[u8; KEY_LEN], payload: &[u8], tag: &[u8]) -> bool {
-    backend::verify(key, payload, tag)
-}
-
-/// Frame an outgoing datagram as `tag(payload) || payload`.
-pub(crate) fn seal(key: &[u8; KEY_LEN], payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(TAG_LEN + payload.len());
-    out.extend_from_slice(&tag(key, payload));
-    out.extend_from_slice(payload);
-    out
-}
-
-/// Verify and strip a received datagram framed as `tag || payload`.
+/// Authentication policy and datagram framing for one node.
 ///
-/// Returns `Some(payload)` if the datagram is long enough and the tag is valid,
-/// `None` otherwise (too short or invalid tag).
-pub(crate) fn open<'a>(key: &[u8; KEY_LEN], datagram: &'a [u8]) -> Option<&'a [u8]> {
-    if datagram.len() < TAG_LEN {
-        return None;
+/// Holds the cluster key (or the absence thereof) and is the sole producer of [`Payload`] values.
+#[derive(Clone, Copy)]
+pub(crate) enum Authenticator {
+    /// No cluster key configured: the protocol runs unauthenticated.
+    Disabled,
+    /// A cluster key is configured: datagrams are sealed and verified.
+    Enabled(ClusterKey),
+}
+
+impl Authenticator {
+    /// Build an authenticator from an optional raw cluster key.
+    pub(crate) fn new(key: Option<[u8; KEY_LEN]>) -> Self {
+        match key {
+            Some(bytes) => Authenticator::Enabled(ClusterKey::new(bytes)),
+            None => Authenticator::Disabled,
+        }
     }
-    let (tag, payload) = datagram.split_at(TAG_LEN);
-    if verify(key, payload, tag) {
-        Some(payload)
-    } else {
-        None
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        matches!(self, Authenticator::Enabled(_))
+    }
+
+    /// Number of extra bytes a sealed datagram adds, for MTU/buffer accounting.
+    pub(crate) fn overhead(&self) -> usize {
+        match self {
+            Authenticator::Disabled => 0,
+            Authenticator::Enabled(_) => TAG_LEN,
+        }
+    }
+
+    /// Frame an outgoing datagram as `tag(payload) || payload`.
+    ///
+    /// Returns `Some(framed)` when enabled, or `None` when disabled (the caller then sends
+    /// `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
+    pub(crate) fn seal(&self, payload: &[u8]) -> Option<Vec<u8>> {
+        match self {
+            Authenticator::Disabled => None,
+            Authenticator::Enabled(key) => {
+                let tag = ClusterMac::tag(key, payload);
+                let mut framed = Vec::with_capacity(TAG_LEN + payload.len());
+                framed.extend_from_slice(tag.as_bytes());
+                framed.extend_from_slice(payload);
+                Some(framed)
+            }
+        }
+    }
+
+    /// Authenticate an incoming datagram, returning the [`Payload`] cleared for processing.
+    ///
+    /// When enabled, the datagram must be `tag || payload` with a valid tag; otherwise (too short
+    /// or invalid tag) `None` is returned and the caller drops it silently. When disabled, the
+    /// whole datagram is returned as the payload.
+    pub(crate) fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a>> {
+        match self {
+            Authenticator::Disabled => Some(Payload(datagram)),
+            Authenticator::Enabled(key) => {
+                if datagram.len() < TAG_LEN {
+                    return None;
+                }
+                let (tag, payload) = datagram.split_at(TAG_LEN);
+                ClusterMac::verify(key, payload, tag).then_some(Payload(payload))
+            }
+        }
     }
 }
 
@@ -115,55 +216,77 @@ pub(crate) fn open<'a>(key: &[u8; KEY_LEN], datagram: &'a [u8]) -> Option<&'a [u
 mod tests {
     use super::*;
 
-    const K1: [u8; KEY_LEN] = [0x11; KEY_LEN];
-    const K2: [u8; KEY_LEN] = [0x22; KEY_LEN];
+    fn key(byte: u8) -> ClusterKey {
+        ClusterKey::new([byte; KEY_LEN])
+    }
 
     #[test]
     fn tag_verify_roundtrip() {
-        let t = tag(&K1, b"hello world");
-        assert!(verify(&K1, b"hello world", &t));
+        let k = key(0x11);
+        let t = ClusterMac::tag(&k, b"hello world");
+        assert!(ClusterMac::verify(&k, b"hello world", t.as_bytes()));
     }
 
     #[test]
     fn tamper_detection() {
+        let k = key(0x11);
         let payload = b"the quick brown fox".to_vec();
-        let t = tag(&K1, &payload);
+        let t = ClusterMac::tag(&k, &payload);
 
         // Flip a payload byte.
         let mut bad_payload = payload.clone();
         bad_payload[0] ^= 0x01;
-        assert!(!verify(&K1, &bad_payload, &t));
+        assert!(!ClusterMac::verify(&k, &bad_payload, t.as_bytes()));
 
         // Flip a tag byte.
-        let mut bad_tag = t;
+        let mut bad_tag = *t.as_bytes();
         bad_tag[0] ^= 0x01;
-        assert!(!verify(&K1, &payload, &bad_tag));
+        assert!(!ClusterMac::verify(&k, &payload, &bad_tag));
     }
 
     #[test]
     fn wrong_key_rejected() {
-        let t = tag(&K1, b"payload");
-        assert!(!verify(&K2, b"payload", &t));
+        let t = ClusterMac::tag(&key(0x11), b"payload");
+        assert!(!ClusterMac::verify(&key(0x22), b"payload", t.as_bytes()));
     }
 
     #[test]
     fn seal_open_roundtrip() {
-        let payload = b"some serialized message".to_vec();
-        let sealed = seal(&K1, &payload);
+        let auth = Authenticator::new(Some([0x11; KEY_LEN]));
+        let payload = b"some serialized message";
+        let sealed = auth.seal(payload).expect("enabled");
         assert_eq!(sealed.len(), TAG_LEN + payload.len());
-        assert_eq!(open(&K1, &sealed), Some(payload.as_slice()));
+        assert_eq!(auth.open(&sealed).map(|p| p.as_bytes()), Some(&payload[..]));
     }
 
     #[test]
     fn open_too_short() {
+        let auth = Authenticator::new(Some([0x11; KEY_LEN]));
         // Fewer than TAG_LEN bytes can never carry a valid tag.
-        assert_eq!(open(&K1, &[0u8; 10]), None);
-        assert_eq!(open(&K1, &[]), None);
+        assert!(auth.open(&[0u8; 10]).is_none());
+        assert!(auth.open(&[]).is_none());
     }
 
     #[test]
     fn open_wrong_key() {
-        let sealed = seal(&K1, b"payload");
-        assert_eq!(open(&K2, &sealed), None);
+        let sealed = Authenticator::new(Some([0x11; KEY_LEN]))
+            .seal(b"payload")
+            .expect("enabled");
+        assert!(Authenticator::new(Some([0x22; KEY_LEN]))
+            .open(&sealed)
+            .is_none());
+    }
+
+    #[test]
+    fn disabled_passes_through_and_does_not_seal() {
+        let auth = Authenticator::new(None);
+        assert!(!auth.is_enabled());
+        assert_eq!(auth.overhead(), 0);
+        assert!(auth.seal(b"payload").is_none());
+        // Any datagram clears the gate unchanged in unauthenticated mode.
+        assert_eq!(
+            auth.open(b"raw bytes").map(|p| p.as_bytes()),
+            Some(&b"raw bytes"[..])
+        );
     }
 }

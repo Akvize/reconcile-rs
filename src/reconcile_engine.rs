@@ -54,8 +54,8 @@ pub(crate) struct ReconcileEngine<K, V> {
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
-    /// Shared cluster secret for per-datagram MAC authentication; `None` runs unauthenticated.
-    cluster_key: Option<[u8; auth::KEY_LEN]>,
+    /// Per-datagram authentication policy; carries the cluster key when enabled.
+    authenticator: auth::Authenticator,
 }
 
 impl<K, V> Clone for ReconcileEngine<K, V> {
@@ -68,7 +68,7 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             pre_insert: self.pre_insert.clone(),
-            cluster_key: self.cluster_key,
+            authenticator: self.authenticator,
         }
     }
 }
@@ -102,14 +102,16 @@ impl<
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
-        match config.cluster_key {
-            Some(_) => debug!("per-datagram MAC authentication ENABLED"),
-            None => warn!(
+        let authenticator = auth::Authenticator::new(config.cluster_key);
+        if authenticator.is_enabled() {
+            debug!("per-datagram MAC authentication ENABLED");
+        } else {
+            warn!(
                 "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
                  that can send UDP to this port can forge updates and poison the cluster via \
                  last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
                  network to a trusted underlay. See issue #108 / REVIEW.md F3."
-            ),
+            );
         }
         let map = HRTree::<K, V>::new();
         ReconcileEngine {
@@ -120,7 +122,7 @@ impl<
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
-            cluster_key: config.cluster_key,
+            authenticator,
         }
     }
 
@@ -148,7 +150,7 @@ impl<
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
-        let cluster_key = self.cluster_key;
+        let authenticator = self.authenticator;
         tokio::spawn(async move {
             let message = Message::Update::<K, V>((key, value));
             let messages = vec![message];
@@ -158,7 +160,7 @@ impl<
                 send_messages_to(
                     &messages,
                     Arc::clone(&socket),
-                    cluster_key.as_ref(),
+                    &authenticator,
                     &peer,
                     &mut send_buf,
                 )
@@ -189,7 +191,7 @@ impl<
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
-        let cluster_key = self.cluster_key;
+        let authenticator = self.authenticator;
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for addr in peers {
@@ -197,7 +199,7 @@ impl<
                 send_messages_to(
                     &messages,
                     Arc::clone(&socket),
-                    cluster_key.as_ref(),
+                    &authenticator,
                     &peer,
                     &mut send_buf,
                 )
@@ -233,8 +235,17 @@ impl<
                             self.port
                         );
                     }
-                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf)
-                        .await;
+                    if size == recv_buf.len() {
+                        warn!("Buffer too small for message, discarded");
+                    } else {
+                        // Authenticate the datagram *before* any deserialization. Only a cleared
+                        // `Payload` can reach `handle_messages`; a missing or invalid tag is
+                        // dropped silently (trace-only, to avoid attacker-driven log flooding).
+                        match self.authenticator.open(&recv_buf[..size]) {
+                            Some(payload) => self.handle_messages(payload, peer, &mut send_buf).await,
+                            None => trace!("dropped datagram from {peer}: missing or invalid MAC"),
+                        }
+                    }
                     let now = Instant::now();
                     let addr = peer.ip();
                     self.peers.write().insert(addr, now);
@@ -265,41 +276,23 @@ impl<
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(
-                &self.socket,
-                self.cluster_key.as_ref(),
-                send_buf,
-                (peer, self.port),
-            )
-            .await
-            .unwrap();
+            send_to_retry(&self.socket, &self.authenticator, send_buf, (peer, self.port))
+                .await
+                .unwrap();
         }
     }
 
+    /// Handle the messages contained in an already-authenticated [`Payload`].
+    ///
+    /// Taking a [`auth::Payload`] rather than raw bytes makes it structurally impossible to
+    /// process a datagram that has not cleared the authentication gate.
     async fn handle_messages(
         &self,
-        recv_buf: &[u8],
-        (size, peer): (usize, SocketAddr),
+        payload: auth::Payload<'_>,
+        peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) {
-        if size == recv_buf.len() {
-            warn!("Buffer too small for message, discarded");
-            return;
-        }
-        let datagram = &recv_buf[..size];
-        // Authenticate the whole datagram *before* deserializing anything. Datagrams with a
-        // missing or invalid tag are silently dropped (trace-only, to avoid attacker-driven log
-        // flooding). Without a cluster key, behavior is unchanged.
-        let payload: &[u8] = match self.cluster_key {
-            Some(ref key) => match auth::open(key, datagram) {
-                Some(payload) => payload,
-                None => {
-                    trace!("dropped datagram from {peer}: missing or invalid MAC");
-                    return;
-                }
-            },
-            None => datagram,
-        };
+        let payload = payload.as_bytes();
         trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
         let mut updates = Vec::new();
@@ -350,7 +343,7 @@ impl<
                 send_messages_to(
                     &messages,
                     Arc::clone(&self.socket),
-                    self.cluster_key.as_ref(),
+                    &self.authenticator,
                     &peer,
                     send_buf,
                 )
@@ -381,14 +374,13 @@ impl<
 
 async fn send_to_retry<A: ToSocketAddrs>(
     socket: &UdpSocket,
-    key: Option<&[u8; auth::KEY_LEN]>,
+    authenticator: &auth::Authenticator,
     buf: &[u8],
     target: A,
 ) -> std::io::Result<usize> {
-    // When a cluster key is set, frame the datagram once as `tag || payload` and reuse the framed
-    // buffer across retries. Without a key the wire bytes are identical to the unauthenticated
-    // behavior.
-    let framed = key.map(|k| auth::seal(k, buf));
+    // Frame the datagram once and reuse it across retries. When authentication is disabled,
+    // `seal` returns `None` and the wire bytes are identical to the unauthenticated behavior.
+    let framed = authenticator.seal(buf);
     let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
@@ -404,17 +396,13 @@ async fn send_to_retry<A: ToSocketAddrs>(
 async fn send_messages_to<K: Serialize, V: Serialize>(
     messages: &[Message<K, V>],
     socket: Arc<UdpSocket>,
-    key: Option<&[u8; auth::KEY_LEN]>,
+    authenticator: &auth::Authenticator,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
-    let max_payload = if key.is_some() {
-        BUFFER_SIZE - auth::TAG_LEN
-    } else {
-        BUFFER_SIZE
-    };
+    let max_payload = BUFFER_SIZE - authenticator.overhead();
     send_buf.clear();
     for message in messages {
         let last_size = send_buf.len();
@@ -423,7 +411,7 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
             .unwrap();
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            send_to_retry(&socket, key, &send_buf[..last_size], &peer)
+            send_to_retry(&socket, authenticator, &send_buf[..last_size], &peer)
                 .await
                 .unwrap();
             trace!("sent {} bytes to {peer}", last_size);
@@ -431,7 +419,9 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    send_to_retry(&socket, key, send_buf, &peer).await.unwrap();
+    send_to_retry(&socket, authenticator, send_buf, &peer)
+        .await
+        .unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
 }
 
@@ -527,7 +517,9 @@ mod auth_attack {
         // (a) forged update sent WITHOUT any authentication tag
         attacker.send_to(&forged, &target).await.unwrap();
         // (b) forged update sealed with the WRONG key
-        let wrong_key_sealed = auth::seal(&[0x99u8; auth::KEY_LEN], &forged);
+        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]))
+            .seal(&forged)
+            .expect("enabled");
         attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
 
         // give the victim time to (not) process the forged datagrams
