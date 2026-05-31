@@ -43,17 +43,20 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         self.map.write().unwrap().insert(e, instant);
     }
 
-    pub fn pop_expired(&self) -> Option<T> {
+    /// Return all entries whose timeout has elapsed, **without removing them**.
+    ///
+    /// Used by causal-stability-gated tombstone GC: a tombstone may be old enough to
+    /// expire by wall-clock age but must be retained until every replica has acknowledged
+    /// it, so the caller needs to peek expired candidates without dropping the tracking.
+    pub fn expired(&self) -> Vec<T> {
+        let now = Utc::now();
         self.wheel
-            .write()
+            .read()
             .unwrap()
-            .first_entry()
-            .filter(|entry| *entry.key() + self.timeout < Utc::now())
-            .map(|entry| {
-                let value = entry.remove();
-                self.map.write().unwrap().remove(&value);
-                value
-            })
+            .iter()
+            .take_while(|(instant, _)| **instant + self.timeout < now)
+            .map(|(_, value)| value.clone())
+            .collect()
     }
 
     pub fn remove(&self, value: &T) -> Option<T> {
