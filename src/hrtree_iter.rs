@@ -174,7 +174,7 @@ impl<K, V> HRTree<K, V> {
     /// let pairs: Vec<_> = tree.iter().collect();
     /// assert_eq!(pairs, vec![(&1, &"a"), (&2, &"b")]);
     /// ```
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.into_iter()
     }
 }
