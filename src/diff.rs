@@ -134,10 +134,11 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
             };
             // NOTE: decisions about emptiness and equality are made on the exact
             // `size`/`local_size`, never on `hash`/`local_hash`. A range fingerprint
-            // is an XOR of per-element hashes, so a *non-empty* range can legitimately
-            // hash to 0; using `hash == 0` as an "empty" sentinel (or `hash ==
+            // combines per-element hashes by addition modulo 2²⁵⁶ (see
+            // `crate::fingerprint`), so a *non-empty* range can legitimately fingerprint
+            // to `ZERO`; using `hash == ZERO` as an "empty" sentinel (or `hash ==
             // local_hash` alone as "equal") would alias such ranges and cause silent,
-            // permanent divergence. See issue #106.
+            // permanent divergence. See issues #106 and #111.
             if hash == local_hash && size == local_size {
                 continue;
             } else if size == 0 {
@@ -223,12 +224,13 @@ mod tests {
     impl HashRangeQueryable for MockStore {
         type Key = i32;
 
-        fn hash<R: RangeBounds<i32>>(&self, range: &R) -> u64 {
+        fn hash<R: RangeBounds<i32>>(&self, range: &R) -> Fingerprint {
             self.keys
                 .iter()
                 .filter(|k| range.contains(k))
-                .fold(0, |acc, &k| {
-                    acc ^ (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1
+                .fold(Fingerprint::ZERO, |acc, &k| {
+                    let m = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+                    acc + Fingerprint([m, 0, 0, 0])
                 })
         }
 
@@ -266,7 +268,7 @@ mod tests {
         let store = MockStore::new(vec![10, 20, 30]);
         let segment = HashSegment {
             range: (Bound::Excluded(0), Bound::Unbounded),
-            hash: 1,
+            hash: Fingerprint([1, 0, 0, 0]),
             size: 1,
         };
         let (out_comparison, differences) = round(&store, segment);
@@ -280,7 +282,7 @@ mod tests {
         let store = MockStore::new(vec![10, 20, 30]);
         let segment = HashSegment {
             range: (Bound::Unbounded, Bound::Included(20)),
-            hash: 1,
+            hash: Fingerprint([1, 0, 0, 0]),
             size: 1,
         };
         let (out_comparison, differences) = round(&store, segment);
@@ -297,7 +299,7 @@ mod tests {
         let segment = HashSegment {
             // start_index = insertion_position(100) = 3, end_index = insertion_position(5) = 0
             range: (Bound::Included(100), Bound::Excluded(5)),
-            hash: 1,
+            hash: Fingerprint([1, 0, 0, 0]),
             size: 1,
         };
         let (out_comparison, differences) = round(&store, segment);
@@ -313,7 +315,7 @@ mod tests {
         let store = MockStore::new(vec![10, 20, 30]);
         let segment = HashSegment {
             range: (Bound::Unbounded, Bound::Unbounded),
-            hash: 0,
+            hash: Fingerprint::ZERO,
             size: 0,
         };
         let (_out_comparison, differences) = round(&store, segment);
