@@ -129,6 +129,138 @@ async fn test() {
     task1.abort();
 }
 
+/// Regression test for issue #109: a tombstone must not be garbage-collected while a replica
+/// that has not acknowledged it is still a member (causal stability), and decommissioning that
+/// replica must release the tombstone for GC.
+#[tokio::test(flavor = "multi_thread")]
+async fn tombstone_is_retained_until_peer_acknowledges() {
+    let port = 8080;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.72".parse().unwrap();
+    let addr2 = "127.0.0.73".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net);
+
+    // Aggressive wall-clock expiry so that, without causal-stability gating, the tombstone
+    // would be GC'd almost immediately.
+    let store1 = ReconcileStore::<i32, i32>::new(cfg1)
+        .await
+        .with_seed(addr2)
+        .with_tombstone_timeout(Duration::from_millis(50));
+    let store2 = ReconcileStore::<i32, i32>::new(cfg2)
+        .await
+        .with_seed(addr1)
+        .with_tombstone_timeout(Duration::from_millis(50));
+
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+
+    // Establish mutual membership by exchanging a value in each direction.
+    store1.insert(1, 11);
+    assert_until!(store2.get(&1).as_deref() == Some(&11));
+    store2.insert(2, 22);
+    assert_until!(store1.get(&2).as_deref() == Some(&22));
+
+    // "Partition" store2: stop processing its network/GC but keep its in-memory data.
+    task2.abort();
+
+    // Delete key 1 on store1; store2 (a member) cannot acknowledge while partitioned.
+    store1.remove(&1);
+    assert!(store1.get(&1).is_none());
+    let hash_with_tombstone = store1.fingerprint(..);
+
+    // Wait well past both the tombstone timeout (50 ms) and the GC scan period (1 s): the
+    // tombstone must still be present because store2 has not acknowledged it.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        store1.fingerprint(..),
+        hash_with_tombstone,
+        "tombstone was garbage-collected before the partitioned peer acknowledged it (resurrection hazard)"
+    );
+
+    // Decommission the silent peer: the tombstone is now causally stable and may be GC'd.
+    store1.forget_peer(addr2);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_ne!(
+        store1.fingerprint(..),
+        hash_with_tombstone,
+        "tombstone was not collected after the silent peer was decommissioned"
+    );
+
+    task1.abort();
+}
+
+/// Regression test for issue #109: a value deleted while a replica is partitioned must not be
+/// resurrected when that replica returns with the stale value.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleted_value_is_not_resurrected_by_returning_peer() {
+    let port = 8080;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.70".parse().unwrap();
+    let addr2 = "127.0.0.71".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net);
+
+    let store1 = ReconcileStore::<i32, i32>::new(cfg1)
+        .await
+        .with_seed(addr2)
+        .with_tombstone_timeout(Duration::from_millis(50));
+    let store2 = ReconcileStore::<i32, i32>::new(cfg2)
+        .await
+        .with_seed(addr1)
+        .with_tombstone_timeout(Duration::from_millis(50));
+
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+
+    // Both replicas hold key 1 = v, and become members of each other.
+    store1.insert(1, 11);
+    assert_until!(store2.get(&1).as_deref() == Some(&11));
+    store2.insert(2, 22);
+    assert_until!(store1.get(&1).as_deref() == Some(&11));
+    assert_until!(store1.get(&2).as_deref() == Some(&22));
+
+    // Partition store2 while it still holds the stale value 1 = 11.
+    task2.abort();
+    assert_eq!(store2.get(&1).as_deref(), Some(&11));
+
+    // Delete key 1 on store1. The tombstone is held back (store2 has not acknowledged it),
+    // even across many GC scans.
+    store1.remove(&1);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(store1.get(&1).is_none());
+
+    // store2 returns with the stale value and reconciles.
+    let task2 = tokio::spawn(store2.clone().run());
+
+    // The deletion propagates to store2; crucially, the stale value never resurrects on store1.
+    assert_until!(store2.get(&1).is_none());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        store1.get(&1).is_none(),
+        "deleted value was resurrected by the returning partitioned peer"
+    );
+    assert!(
+        store2.get(&1).is_none(),
+        "deletion did not reach the returning peer"
+    );
+
+    task1.abort();
+    task2.abort();
+}
+
 /// Regression test for the remote DoS where a single malformed UDP datagram panicked the
 /// receive loop, silently killing reconciliation (issue #107).
 ///

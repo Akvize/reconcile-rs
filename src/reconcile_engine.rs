@@ -9,9 +9,10 @@
 //! Provides the [`ReconcileEngine`], the inner layer of the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
 //! that handles communication between instances at the network level.
 
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -30,7 +31,7 @@ use tracing::{debug, trace, warn};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
-use crate::reconcilable::Reconcilable;
+use crate::reconcilable::{MaybeTombstone, Reconcilable};
 use crate::reconcile_store::Config;
 use crate::HRTree;
 
@@ -41,6 +42,18 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 const MAX_SENDTO_RETRIES: u32 = 4;
 
 type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
+
+/// Compute a deterministic, cross-node version token for a value.
+///
+/// Used to acknowledge a *specific* version of a tombstone across replicas: a peer
+/// acknowledges the exact value it holds, so a stale acknowledgment for an older
+/// tombstone cannot authorize GC of a newer one. [`DefaultHasher::new`] uses fixed
+/// keys, so the same value hashes identically on every node.
+pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
@@ -53,6 +66,16 @@ pub(crate) struct ReconcileEngine<K, V> {
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
+    /// Monotonic set of every peer this node has ever exchanged messages with.
+    ///
+    /// Unlike [`peers`](Self::peers), entries are never expired automatically: a tombstone
+    /// must be acknowledged by every member (or the member explicitly decommissioned) before
+    /// it can be garbage-collected. This is what gates tombstone GC on *causal stability* and
+    /// prevents a peer that is partitioned for longer than the peer-expiration window from
+    /// resurrecting a deleted value on its return.
+    pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
+    /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
+    pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
 }
 
 impl<K, V> Clone for ReconcileEngine<K, V> {
@@ -65,6 +88,8 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             pre_insert: self.pre_insert.clone(),
+            members: self.members.clone(),
+            tombstone_acks: self.tombstone_acks.clone(),
         }
     }
 }
@@ -78,6 +103,10 @@ enum Message<K: Serialize, V: Serialize> {
     /// Provides an individual key-value pair when the protocol
     /// has identified that it differs on the two instances
     Update((K, V)),
+    /// Acknowledges that the sender now holds the tombstone for the given key with the
+    /// given version token (see [`version_hash`]). Enables causal-stability-gated
+    /// tombstone garbage collection on the receiver.
+    Ack((K, u64)),
 }
 
 impl<
@@ -85,6 +114,7 @@ impl<
         V: Clone
             + DeserializeOwned
             + Hash
+            + MaybeTombstone
             + PartialEq
             + Reconcilable
             + Send
@@ -107,6 +137,8 @@ impl<
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+            members: Arc::new(RwLock::new(HashSet::new())),
+            tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -208,6 +240,9 @@ impl<
                     let now = Instant::now();
                     let addr = peer.ip();
                     self.peers.write().insert(addr, now);
+                    // Record the peer as a permanent member so that its acknowledgment is
+                    // required before any tombstone can be garbage-collected (causal stability).
+                    self.members.write().insert(addr);
                 }
             }
         }
@@ -254,6 +289,7 @@ impl<
         trace!("received {} bytes from {peer}", size);
         let mut in_comparison = Vec::new();
         let mut updates = Vec::new();
+        let mut acks: Vec<(K, u64)> = Vec::new();
         let mut deserializer = Deserializer::from_slice(&recv_buf[..size], DefaultOptions::new());
         // read messages in buffer
         loop {
@@ -273,6 +309,36 @@ impl<
                 }
                 Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
                 Ok(Message::Update(update)) => updates.push(update),
+                Ok(Message::Ack(ack)) => acks.push(ack),
+            }
+        }
+        // record tombstone acknowledgments received from the peer
+        if !acks.is_empty() {
+            let peer_ip = peer.ip();
+            // Reciprocate acks for tombstones we also hold, so that the deletion originator
+            // (which never receives the tombstone as an inbound update, hence is never acked
+            // by the peer) can still reach causal stability. The `already`-guard bounds this
+            // to at most one extra round-trip and prevents an infinite ack ping-pong.
+            let mut reciprocal_acks = Vec::new();
+            {
+                let map_guard = self.map.read();
+                let mut guard = self.tombstone_acks.write();
+                for (key, version) in acks {
+                    let entry = guard.entry(key.clone()).or_default();
+                    let already = entry.get(&peer_ip) == Some(&version);
+                    entry.insert(peer_ip, version);
+                    if !already {
+                        let holds_same_tombstone = map_guard
+                            .get(&key)
+                            .is_some_and(|v| v.is_tombstone() && version_hash(v) == version);
+                        if holds_same_tombstone {
+                            reciprocal_acks.push(Message::Ack::<K, V>((key, version)));
+                        }
+                    }
+                }
+            }
+            if !reciprocal_acks.is_empty() {
+                send_messages_to(&reciprocal_acks, Arc::clone(&self.socket), &peer, send_buf).await;
             }
         }
         // handle messages
@@ -308,22 +374,77 @@ impl<
         }
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
-            let mut guard = self.map.write();
-            for (k, remote_v) in updates {
-                match guard.get(&k) {
-                    Some(local_v) => {
-                        let merged_v = local_v.reconcile(&remote_v);
-                        if merged_v != *local_v {
-                            (self.pre_insert.read())(&k, &merged_v);
-                            guard.insert(k, merged_v);
+            // Tombstones we now hold as a result of these updates, to be acknowledged back to
+            // the peer so it can eventually garbage-collect them once causally stable.
+            let mut acks_to_send = Vec::new();
+            {
+                let mut guard = self.map.write();
+                for (k, remote_v) in updates {
+                    let tombstone_version = match guard.get(&k) {
+                        Some(local_v) => {
+                            let merged_v = local_v.reconcile(&remote_v);
+                            if merged_v != *local_v {
+                                (self.pre_insert.read())(&k, &merged_v);
+                                let version =
+                                    merged_v.is_tombstone().then(|| version_hash(&merged_v));
+                                guard.insert(k.clone(), merged_v);
+                                version
+                            } else {
+                                // We already hold an equal-or-newer value; still acknowledge it
+                                // if it is the same tombstone, so the peer learns we have it.
+                                local_v.is_tombstone().then(|| version_hash(local_v))
+                            }
                         }
-                    }
-                    None => {
-                        (self.pre_insert.read())(&k, &remote_v);
-                        guard.insert(k, remote_v);
+                        None => {
+                            (self.pre_insert.read())(&k, &remote_v);
+                            let version = remote_v.is_tombstone().then(|| version_hash(&remote_v));
+                            guard.insert(k.clone(), remote_v);
+                            version
+                        }
+                    };
+                    if let Some(version) = tombstone_version {
+                        acks_to_send.push(Message::Ack::<K, V>((k, version)));
                     }
                 }
             }
+            if !acks_to_send.is_empty() {
+                send_messages_to(&acks_to_send, Arc::clone(&self.socket), &peer, send_buf).await;
+            }
+        }
+    }
+
+    /// Returns `true` if the tombstone for `key` with the given version token has been
+    /// acknowledged by every member (causal stability) and is therefore safe to
+    /// garbage-collect.
+    ///
+    /// When no other replica is known, there is nothing that could resurrect the value, so
+    /// GC is allowed.
+    pub(crate) fn is_tombstone_stable(&self, key: &K, version: u64) -> bool {
+        let members = self.members.read();
+        if members.is_empty() {
+            return true;
+        }
+        let acks = self.tombstone_acks.read();
+        let Some(key_acks) = acks.get(key) else {
+            return false;
+        };
+        members
+            .iter()
+            .all(|peer| key_acks.get(peer) == Some(&version))
+    }
+
+    /// Drop the acknowledgment bookkeeping for a key once its tombstone has been collected.
+    pub(crate) fn forget_tombstone(&self, key: &K) {
+        self.tombstone_acks.write().remove(key);
+    }
+
+    /// Permanently remove a peer from the membership set so that tombstones are no longer held
+    /// back waiting for its acknowledgment. Use when a replica is decommissioned or will never
+    /// return. Also clears any acknowledgments it had recorded.
+    pub(crate) fn decommission_peer(&self, peer: IpAddr) {
+        self.members.write().remove(&peer);
+        for key_acks in self.tombstone_acks.write().values_mut() {
+            key_acks.remove(&peer);
         }
     }
 }
@@ -411,5 +532,94 @@ mod deadlock_regressions {
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
         );
+    }
+}
+
+#[cfg(test)]
+mod causal_stability {
+    use std::net::IpAddr;
+
+    use chrono::{DateTime, Utc};
+
+    use crate::reconcile_engine::{version_hash, ReconcileEngine};
+    use crate::reconcile_store::Config;
+
+    type Tombstoned = (DateTime<Utc>, Option<i32>);
+
+    async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
+        let config = Config::default()
+            .with_port(8080)
+            .with_listen_addr(addr.parse().unwrap());
+        ReconcileEngine::new(config).await
+    }
+
+    #[tokio::test]
+    async fn tombstone_not_stable_until_all_members_ack() {
+        let eng = engine("127.0.0.60").await;
+        let peer_a: IpAddr = "127.0.0.61".parse().unwrap();
+        let peer_b: IpAddr = "127.0.0.62".parse().unwrap();
+        let key = 7;
+        let tombstone: Tombstoned = (Utc::now(), None);
+        let version = version_hash(&tombstone);
+
+        // No member known yet: nothing could resurrect the value, so GC is allowed.
+        assert!(eng.is_tombstone_stable(&key, version));
+
+        // Two members known, neither has acknowledged: not stable.
+        eng.members.write().insert(peer_a);
+        eng.members.write().insert(peer_b);
+        assert!(!eng.is_tombstone_stable(&key, version));
+
+        // Only one member acknowledges: still not stable.
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(peer_a, version);
+        assert!(!eng.is_tombstone_stable(&key, version));
+
+        // A stale acknowledgment (wrong version) from the other member does not count.
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(peer_b, version.wrapping_add(1));
+        assert!(!eng.is_tombstone_stable(&key, version));
+
+        // The correct acknowledgment from every member makes it stable.
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(peer_b, version);
+        assert!(eng.is_tombstone_stable(&key, version));
+    }
+
+    #[tokio::test]
+    async fn decommission_releases_a_silent_peer() {
+        let eng = engine("127.0.0.63").await;
+        let live: IpAddr = "127.0.0.64".parse().unwrap();
+        let gone: IpAddr = "127.0.0.65".parse().unwrap();
+        let key = 9;
+        let tombstone: Tombstoned = (Utc::now(), None);
+        let version = version_hash(&tombstone);
+
+        eng.members.write().insert(live);
+        eng.members.write().insert(gone);
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(live, version);
+        // `gone` never acknowledges: not stable.
+        assert!(!eng.is_tombstone_stable(&key, version));
+
+        // Decommissioning the silent peer makes the tombstone stable.
+        eng.decommission_peer(gone);
+        assert!(eng.is_tombstone_stable(&key, version));
+
+        // Forgetting the tombstone clears its bookkeeping.
+        eng.forget_tombstone(&key);
+        assert!(eng.tombstone_acks.read().get(&key).is_none());
     }
 }

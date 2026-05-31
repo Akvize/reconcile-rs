@@ -25,3 +25,20 @@ impl<V: Clone> Reconcilable for (DateTime<Utc>, V) {
         }
     }
 }
+
+/// Marks values that may represent a deletion (a *tombstone*).
+///
+/// The reconciliation engine uses this to decide which applied updates require
+/// causal-stability tracking before the corresponding key can be garbage-collected.
+/// See the tombstone-resurrection discussion on
+/// [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
+pub trait MaybeTombstone {
+    /// Returns `true` if this value is a deletion marker (tombstone).
+    fn is_tombstone(&self) -> bool;
+}
+
+impl<V> MaybeTombstone for (DateTime<Utc>, Option<V>) {
+    fn is_tombstone(&self) -> bool {
+        self.1.is_none()
+    }
+}
