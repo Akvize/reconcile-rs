@@ -20,7 +20,7 @@ use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::reconcile_engine::ReconcileEngine;
+use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
@@ -205,10 +205,43 @@ impl<
         self.engine.start_reconciliation(&mut buf).await;
     }
 
+    /// Permanently forget a peer (e.g. a replica that has been decommissioned and will never
+    /// return), so that tombstones are no longer held back waiting for its acknowledgment
+    /// before garbage collection.
+    ///
+    /// This is the escape hatch for the causal-stability contract: a tombstone is normally
+    /// retained until every peer this node has ever communicated with has acknowledged it.
+    /// A replica that is permanently gone must be decommissioned, otherwise its tombstones are
+    /// retained forever.
+    pub fn forget_peer(&self, peer: IpAddr) {
+        self.engine.decommission_peer(peer);
+    }
+
+    /// Garbage-collect tombstones, **gated on causal stability**.
+    ///
+    /// A tombstone is removed from the map only once it is both older than the configured
+    /// timeout *and* acknowledged by every replica this node has ever communicated with (or
+    /// those replicas have been decommissioned via [`forget_peer`](Self::forget_peer)). This
+    /// prevents the classic tombstone-resurrection hazard: a replica partitioned for longer
+    /// than the timeout cannot resurrect a deleted value on its return, because the tombstone
+    /// is kept until that replica has seen it.
     async fn clear_expired_tombstones(&self) {
         loop {
-            while let Some(value) = self.tombstones.pop_expired() {
-                self.engine.map.write().remove(&value);
+            for key in self.tombstones.expired() {
+                // Version token of the tombstone actually stored, matched against peer acks.
+                let version = self.engine.map.read().get(&key).map(version_hash);
+                let Some(version) = version else {
+                    // The key is no longer present (overwritten or already removed): stop
+                    // tracking it.
+                    self.tombstones.remove(&key);
+                    continue;
+                };
+                if self.engine.is_tombstone_stable(&key, version) {
+                    self.tombstones.remove(&key);
+                    self.engine.map.write().remove(&key);
+                    self.engine.forget_tombstone(&key);
+                }
+                // Otherwise keep the tombstone and re-check on a later iteration.
             }
             tokio::time::sleep(TOMBSTONE_CLEARING).await;
         }
@@ -315,7 +348,8 @@ mod reconcile_store_tests {
         store.remove(&0);
         tokio::time::sleep(Duration::from_millis(10)).await; // await its expiration
                                                              // The tombstone should be expired by now
-        assert_eq!(store.tombstones.pop_expired(), Some(0));
+        assert_eq!(store.tombstones.expired(), vec![0]);
+        assert_eq!(store.tombstones.remove(&0), Some(0));
         assert_eq!(store.tombstones.remove(&0), None);
 
         task.abort();
