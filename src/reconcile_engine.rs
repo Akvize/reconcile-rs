@@ -68,7 +68,7 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             pre_insert: self.pre_insert.clone(),
-            authenticator: self.authenticator,
+            authenticator: self.authenticator.clone(),
         }
     }
 }
@@ -150,7 +150,7 @@ impl<
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
-        let authenticator = self.authenticator;
+        let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
             let message = Message::Update::<K, V>((key, value));
             let messages = vec![message];
@@ -191,7 +191,7 @@ impl<
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
-        let authenticator = self.authenticator;
+        let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for addr in peers {

@@ -67,7 +67,8 @@ runs unauthenticated.
 
 The MAC primitive is selected at build time via Cargo features: `mac-blake3` (default, keyed
 BLAKE3) or `mac-hmac` (HMAC-SHA256). All nodes in a cluster must share the identical key **and** be
-built with the same backend.
+built with the same backend. The optional `zeroize` feature wipes the cluster key from memory when
+it is dropped (defense in depth).
 
 **Scope.** This provides message integrity and authenticity. It does **not** provide
 confidentiality (the payload is not encrypted — see issue #96), replay protection (replaying a

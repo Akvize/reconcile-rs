@@ -44,7 +44,13 @@ compile_error!(
 );
 
 /// A shared cluster secret. Constructing one is the only way to enable authentication.
-#[derive(Clone, Copy)]
+///
+/// The type is deliberately `Clone` but **not** `Copy`: with the `zeroize` feature enabled it
+/// implements a `Drop` that wipes the key bytes from memory, which `Copy` would forbid (and which
+/// would be meaningless for a freely-duplicated value). Cloning a 32-byte array is trivial, so the
+/// absence of `Copy` costs nothing at runtime.
+#[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
+#[derive(Clone)]
 pub(crate) struct ClusterKey([u8; KEY_LEN]);
 
 impl ClusterKey {
@@ -147,7 +153,8 @@ pub(crate) type ClusterMac = HmacSha256Mac;
 /// Authentication policy and datagram framing for one node.
 ///
 /// Holds the cluster key (or the absence thereof) and is the sole producer of [`Payload`] values.
-#[derive(Clone, Copy)]
+/// Not `Copy` because it may carry a [`ClusterKey`]; cloning it is cheap.
+#[derive(Clone)]
 pub(crate) enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
     Disabled,
