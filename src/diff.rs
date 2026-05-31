@@ -89,22 +89,8 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
         differences: &mut Vec<Self::DifferenceItem>,
     ) {
         for segment in in_comparison {
-            let HashSegment { range, hash, size } = segment.clone();
+            let HashSegment { range, hash, size } = segment;
             let local_hash = self.hash(&range);
-            if hash == local_hash {
-                continue;
-            } else if hash == 0 {
-                differences.push(range);
-                continue;
-            } else if local_hash == 0 {
-                // present on remote; bounce back to the remote
-                out_comparison.push(HashSegment {
-                    range,
-                    hash: 0,
-                    size: 0,
-                });
-                continue;
-            }
             let (start_bound, end_bound) = range;
             let start_index = match start_bound.as_ref() {
                 Bound::Unbounded => 0,
@@ -117,9 +103,25 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 Bound::Excluded(key) => self.insertion_position(key),
             };
             let local_size = end_index - start_index;
-            if size == 0 || local_size == 0 {
-                // handled by the hash checks above
-                unreachable!();
+            // NOTE: decisions about emptiness and equality are made on the exact
+            // `size`/`local_size`, never on `hash`/`local_hash`. A range fingerprint
+            // is an XOR of per-element hashes, so a *non-empty* range can legitimately
+            // hash to 0; using `hash == 0` as an "empty" sentinel (or `hash ==
+            // local_hash` alone as "equal") would alias such ranges and cause silent,
+            // permanent divergence. See issue #106.
+            if hash == local_hash && size == local_size {
+                continue;
+            } else if size == 0 {
+                differences.push((start_bound, end_bound));
+                continue;
+            } else if local_size == 0 {
+                // present on remote; bounce back to the remote
+                out_comparison.push(HashSegment {
+                    range: (start_bound, end_bound),
+                    hash: 0,
+                    size: 0,
+                });
+                continue;
             } else if size == 1 && local_size == 1 {
                 // ask the remote to send us the conflicting item
                 out_comparison.push(HashSegment {
