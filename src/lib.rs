@@ -17,12 +17,23 @@
 //! number of round-trips. It should also work well to populate an instance from
 //! scratch from other instances.
 
+//! # Security model
+//!
+//! By default the UDP reconciliation protocol is **unauthenticated**: any host able to send a
+//! datagram to the port can forge an update and poison the whole cluster through last-write-wins.
+//! To prevent this, configure a shared cluster secret with
+//! [`Config::with_cluster_key`](reconcile_store::Config::with_cluster_key) on **every** node: this
+//! enables a per-datagram keyed MAC that is verified before deserialization, silently dropping
+//! unauthenticated or forged datagrams. See the README "Security model" section for the full
+//! threat model and scope.
+
 pub mod diff;
 pub mod gen_ip;
 pub mod hrtree;
 pub mod hrtree_iter;
 pub mod reconcile_store;
 
+pub(crate) mod auth;
 pub(crate) mod reconcilable;
 pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;

@@ -28,6 +28,7 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
+use crate::auth;
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
@@ -66,6 +67,8 @@ pub(crate) struct ReconcileEngine<K, V> {
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
+    /// Per-datagram authentication policy; carries the cluster key when enabled.
+    authenticator: auth::Authenticator,
     /// Monotonic set of every peer this node has ever exchanged messages with.
     ///
     /// Unlike [`peers`](Self::peers), entries are never expired automatically: a tombstone
@@ -88,6 +91,7 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             pre_insert: self.pre_insert.clone(),
+            authenticator: self.authenticator.clone(),
             members: self.members.clone(),
             tombstone_acks: self.tombstone_acks.clone(),
         }
@@ -128,6 +132,17 @@ impl<
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
+        let authenticator = auth::Authenticator::new(config.cluster_key);
+        if authenticator.is_enabled() {
+            debug!("per-datagram MAC authentication ENABLED");
+        } else {
+            warn!(
+                "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
+                 that can send UDP to this port can forge updates and poison the cluster via \
+                 last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
+                 network to a trusted underlay. See issue #108 / REVIEW.md F3."
+            );
+        }
         let map = HRTree::<K, V>::new();
         ReconcileEngine {
             map: Arc::new(RwLock::new(map)),
@@ -137,6 +152,7 @@ impl<
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+            authenticator,
             members: Arc::new(RwLock::new(HashSet::new())),
             tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -166,13 +182,21 @@ impl<
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
+        let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
             let message = Message::Update::<K, V>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&socket),
+                    &authenticator,
+                    &peer,
+                    &mut send_buf,
+                )
+                .await;
             }
         });
         ret
@@ -199,11 +223,19 @@ impl<
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
+        let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&socket),
+                    &authenticator,
+                    &peer,
+                    &mut send_buf,
+                )
+                .await;
             }
         });
     }
@@ -235,14 +267,28 @@ impl<
                             self.port
                         );
                     }
-                    self.handle_messages(&recv_buf, (size, peer), &mut send_buf)
-                        .await;
-                    let now = Instant::now();
-                    let addr = peer.ip();
-                    self.peers.write().insert(addr, now);
-                    // Record the peer as a permanent member so that its acknowledgment is
-                    // required before any tombstone can be garbage-collected (causal stability).
-                    self.members.write().insert(addr);
+                    if size == recv_buf.len() {
+                        warn!("Buffer too small for message, discarded");
+                    } else {
+                        // Authenticate the datagram *before* any deserialization. Only a cleared
+                        // `Payload` can reach `handle_messages`; a missing or invalid tag is
+                        // dropped silently (trace-only, to avoid attacker-driven log flooding).
+                        match self.authenticator.open(&recv_buf[..size]) {
+                            Some(payload) => {
+                                self.handle_messages(payload, peer, &mut send_buf).await;
+                                // Only record senders whose datagram was accepted. With
+                                // authentication enabled this stops a spoofed/unauthenticated host
+                                // from being registered as a peer (and receiving DB dumps) or as a
+                                // permanent member (which would block tombstone GC forever, since
+                                // causal stability requires an ack from every member). In
+                                // unauthenticated mode `open` always succeeds, so this is unchanged.
+                                let addr = peer.ip();
+                                self.peers.write().insert(addr, Instant::now());
+                                self.members.write().insert(addr);
+                            }
+                            None => trace!("dropped datagram from {peer}: missing or invalid MAC"),
+                        }
+                    }
                 }
             }
         }
@@ -270,27 +316,33 @@ impl<
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(&self.socket, send_buf, (peer, self.port))
-                .await
-                .unwrap();
+            send_to_retry(
+                &self.socket,
+                &self.authenticator,
+                send_buf,
+                (peer, self.port),
+            )
+            .await
+            .unwrap();
         }
     }
 
+    /// Handle the messages contained in an already-authenticated [`Payload`].
+    ///
+    /// Taking a [`auth::Payload`] rather than raw bytes makes it structurally impossible to
+    /// process a datagram that has not cleared the authentication gate.
     async fn handle_messages(
         &self,
-        recv_buf: &[u8],
-        (size, peer): (usize, SocketAddr),
+        payload: auth::Payload<'_>,
+        peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) {
-        if size == recv_buf.len() {
-            warn!("Buffer too small for message, discarded");
-            return;
-        }
-        trace!("received {} bytes from {peer}", size);
+        let payload = payload.as_bytes();
+        trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
         let mut updates = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
-        let mut deserializer = Deserializer::from_slice(&recv_buf[..size], DefaultOptions::new());
+        let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
         // read messages in buffer
         loop {
             match Message::deserialize(&mut deserializer) {
@@ -338,7 +390,14 @@ impl<
                 }
             }
             if !reciprocal_acks.is_empty() {
-                send_messages_to(&reciprocal_acks, Arc::clone(&self.socket), &peer, send_buf).await;
+                send_messages_to(
+                    &reciprocal_acks,
+                    Arc::clone(&self.socket),
+                    &self.authenticator,
+                    &peer,
+                    send_buf,
+                )
+                .await;
             }
         }
         // handle messages
@@ -369,7 +428,14 @@ impl<
                 }
             }
             if !messages.is_empty() {
-                send_messages_to(&messages, Arc::clone(&self.socket), &peer, send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&self.socket),
+                    &self.authenticator,
+                    &peer,
+                    send_buf,
+                )
+                .await;
             }
         }
         if !updates.is_empty() {
@@ -408,7 +474,14 @@ impl<
                 }
             }
             if !acks_to_send.is_empty() {
-                send_messages_to(&acks_to_send, Arc::clone(&self.socket), &peer, send_buf).await;
+                send_messages_to(
+                    &acks_to_send,
+                    Arc::clone(&self.socket),
+                    &self.authenticator,
+                    &peer,
+                    send_buf,
+                )
+                .await;
             }
         }
     }
@@ -451,12 +524,17 @@ impl<
 
 async fn send_to_retry<A: ToSocketAddrs>(
     socket: &UdpSocket,
+    authenticator: &auth::Authenticator,
     buf: &[u8],
     target: A,
 ) -> std::io::Result<usize> {
+    // Frame the datagram once and reuse it across retries. When authentication is disabled,
+    // `seal` returns `None` and the wire bytes are identical to the unauthenticated behavior.
+    let framed = authenticator.seal(buf);
+    let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(buf, &target).await;
+        res = socket.send_to(wire, &target).await;
         if res.is_ok() {
             break;
         }
@@ -468,19 +546,22 @@ async fn send_to_retry<A: ToSocketAddrs>(
 async fn send_messages_to<K: Serialize, V: Serialize>(
     messages: &[Message<K, V>],
     socket: Arc<UdpSocket>,
+    authenticator: &auth::Authenticator,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
     debug!("sending {} messages to {peer}", messages.len());
+    // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
+    let max_payload = BUFFER_SIZE - authenticator.overhead();
     send_buf.clear();
     for message in messages {
         let last_size = send_buf.len();
         message
             .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
             .unwrap();
-        if send_buf.len() > BUFFER_SIZE {
+        if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            send_to_retry(&socket, &send_buf[..last_size], &peer)
+            send_to_retry(&socket, authenticator, &send_buf[..last_size], &peer)
                 .await
                 .unwrap();
             trace!("sent {} bytes to {peer}", last_size);
@@ -488,7 +569,9 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    send_to_retry(&socket, send_buf, &peer).await.unwrap();
+    send_to_retry(&socket, authenticator, send_buf, &peer)
+        .await
+        .unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
 }
 
@@ -532,6 +615,70 @@ mod deadlock_regressions {
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
         );
+    }
+}
+
+#[cfg(test)]
+mod auth_attack {
+    use std::time::Duration;
+
+    use bincode::{DefaultOptions, Serializer};
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde::Serialize;
+    use tokio::net::UdpSocket;
+
+    use super::Message;
+    use crate::{auth, reconcile_store::Config, ReconcileStore};
+
+    /// Serialize the F3 attack payload: an `Update` with a year-9999 timestamp that, if merged,
+    /// would win against every legitimate write forever.
+    fn forged_update() -> Vec<u8> {
+        let far_future = Utc.with_ymd_and_hms(9999, 1, 1, 0, 0, 0).unwrap();
+        let message = Message::Update::<i32, (DateTime<Utc>, Option<String>)>((
+            0,
+            (far_future, Some("evil".to_string())),
+        ));
+        let mut buf = Vec::new();
+        message
+            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .unwrap();
+        buf
+    }
+
+    /// A node with a cluster key must drop forged datagrams (no tag, or wrong key) before
+    /// deserialization, so an attacker cannot poison it via last-write-wins.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forged_datagram_is_ignored() {
+        let key = [0x42u8; auth::KEY_LEN];
+        let port = 8082;
+        let victim_addr = "127.0.0.48";
+        let config = Config::default()
+            .with_port(port)
+            .with_listen_addr(victim_addr.parse().unwrap())
+            .with_cluster_key(key);
+        let store = ReconcileStore::<i32, String>::new(config).await;
+        store.just_insert(0, "legit".to_string());
+        let task = tokio::spawn(store.clone().run());
+
+        let attacker = UdpSocket::bind("127.0.0.49:0").await.unwrap();
+        let target = format!("{victim_addr}:{port}");
+        let forged = forged_update();
+
+        // (a) forged update sent WITHOUT any authentication tag
+        attacker.send_to(&forged, &target).await.unwrap();
+        // (b) forged update sealed with the WRONG key
+        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]))
+            .seal(&forged)
+            .expect("enabled");
+        attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
+
+        // give the victim time to (not) process the forged datagrams
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // the legitimate value must be untouched
+        assert_eq!(store.get(&0).as_deref(), Some(&"legit".to_string()));
+
+        task.abort();
     }
 }
 

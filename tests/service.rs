@@ -129,6 +129,53 @@ async fn test() {
     task1.abort();
 }
 
+/// Two nodes sharing the same cluster key must still converge, proving that authenticated
+/// datagrams round-trip end-to-end through the MAC layer.
+#[tokio::test(flavor = "multi_thread")]
+async fn authenticated_nodes_converge() {
+    let port = 8081;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.46".parse().unwrap();
+    let addr2 = "127.0.0.47".parse().unwrap();
+    let key = [0x42u8; 32];
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net)
+        .with_cluster_key(key);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net)
+        .with_cluster_key(key);
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
+        let key: String = Alphanumeric.sample_string(&mut rng, 100);
+        let value: String = Alphanumeric.sample_string(&mut rng, 100);
+        (key, value)
+    });
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert_bulk(&key_values);
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // store2 should receive all of store1's values across the authenticated channel
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    // a fresh incremental insert also propagates
+    let key = "auth-key".to_string();
+    let value = "authenticated value".to_string();
+    store2.insert(key.clone(), value.clone());
+    assert_until!(store1.get(&key).as_deref() == Some(&value));
+
+    task2.abort();
+    task1.abort();
+}
+
 /// Regression test for issue #109: a tombstone must not be garbage-collected while a replica
 /// that has not acknowledged it is still a member (causal stability), and decommissioning that
 /// replica must release the tombstone for GC.

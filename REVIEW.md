@@ -249,6 +249,16 @@ deletion. The poison **propagates to the whole cluster** via reconciliation. Sou
 allow-list; for confidentiality, DTLS/Noise/QUIC. Failing that, **document loudly** that the
 protocol requires a trusted network.
 
+**Status — partially mitigated (issue #108).** A per-datagram keyed MAC is now implemented
+(`src/auth.rs`): when a cluster key is set via `Config::with_cluster_key`, every datagram is framed
+`tag || payload` and **verified before deserialization**, with unauthenticated/forged datagrams
+silently dropped (`reconcile_engine.rs`, `handle_messages`). The MAC primitive is feature-abstracted
+(`mac-blake3` default, `mac-hmac`). Authentication is opt-in: when no key is set, the store logs a
+loud startup warning, and the README now carries a "Security model" section — so **"document
+loudly" is satisfied**. Still **out of scope** / tracked separately: the peer allow-list, and
+confidentiality (DTLS/Noise/QUIC, issue #96). The attacker-controlled-timestamp vector is closed for
+external attackers once a key is configured; the broader physical-clock concern remains F5.
+
 ### F4 — [CRITICAL] Tombstone resurrection (wall-clock GC, no causal stability) **[2/2]**
 
 `reconcile_store.rs:208-215` + `timeout_wheel.rs:46-57`: a tombstone is purged 60 s after the
