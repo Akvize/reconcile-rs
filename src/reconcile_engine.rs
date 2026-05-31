@@ -316,9 +316,14 @@ impl<
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(&self.socket, &self.authenticator, send_buf, (peer, self.port))
-                .await
-                .unwrap();
+            send_to_retry(
+                &self.socket,
+                &self.authenticator,
+                send_buf,
+                (peer, self.port),
+            )
+            .await
+            .unwrap();
         }
     }
 
