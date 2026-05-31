@@ -31,6 +31,7 @@ use tracing::{debug, trace, warn};
 use crate::auth;
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
+use crate::fingerprint::Fingerprint;
 use crate::gen_ip::gen_ip;
 use crate::reconcilable::{MaybeTombstone, Reconcilable};
 use crate::reconcile_store::Config;
@@ -158,7 +159,7 @@ impl<
         }
     }
 
-    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> u64 {
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.map.read().hash(&range)
     }
 

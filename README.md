@@ -80,7 +80,10 @@ For confidentiality, run the protocol over a trusted/encrypted underlay.
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
 allows `O(log(n))` access, insertion and removal, as well as `O(log(n))`
 cumulated hash range-query. The latter property enables querying
-the cumulated (XORed) hash of all key-value pairs between two keys.
+the cumulated fingerprint of all key-value pairs between two keys. The fingerprint is a
+256-bit BLAKE3-per-element hash combined by addition modulo 2²⁵⁶ — a stable, portable wire
+token, chosen over a 64-bit XOR for collision resistance and cross-version interoperability
+(see `src/fingerprint.rs`).
 
 Although we did come we the idea independently, it exactly matches a paper
 published on Arxiv in February 2023: [Range-Based Set

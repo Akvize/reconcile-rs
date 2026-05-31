@@ -5,7 +5,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{reconcile_store::Config, Fingerprint, ReconcileStore};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -56,7 +56,7 @@ async fn test() {
     let start_hash = store1.fingerprint(..);
     let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
     let task2 = tokio::spawn(store2.clone().run());
-    assert_eq!(store2.fingerprint(..), 0);
+    assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
     let task1 = tokio::spawn(store1.clone().run());
     assert_eq!(store1.fingerprint(..), start_hash);
 

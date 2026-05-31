@@ -28,6 +28,7 @@
 //! threat model and scope.
 
 pub mod diff;
+pub mod fingerprint;
 pub mod gen_ip;
 pub mod hrtree;
 pub mod hrtree_iter;
@@ -38,5 +39,6 @@ pub(crate) mod reconcilable;
 pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
+pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
 pub use reconcile_store::ReconcileStore;

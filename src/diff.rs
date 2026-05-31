@@ -13,6 +13,8 @@ use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 
+use crate::fingerprint::Fingerprint;
+
 /// Provides the necessary methods to be able
 /// to efficiently determine and compare
 /// differences between two key stores:
@@ -26,8 +28,10 @@ use serde::{Deserialize, Serialize};
 /// This is a low-level trait.
 pub trait HashRangeQueryable {
     type Key;
-    /// Cumulated hash over a given range of keys. For instance, it could be the XOR of all the hashes of the elements in the range.
-    fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> u64;
+    /// Cumulated [`Fingerprint`] over a given range of keys: the combination
+    /// (256-bit addition, see [`crate::fingerprint`]) of the per-element hashes
+    /// of every element in the range.
+    fn hash<R: RangeBounds<Self::Key>>(&self, range: &R) -> Fingerprint;
     /// Position of the given key in the collection, if it exists, or position where it would be after insertion otherwise
     fn insertion_position(&self, key: &Self::Key) -> usize;
     /// Reference to the [`Key`](HashRangeQueryable::Key) at a given position. Panics if the key is not in the collection.
@@ -43,7 +47,7 @@ pub trait HashRangeQueryable {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HashSegment<K> {
     range: (Bound<K>, Bound<K>),
-    hash: u64,
+    hash: Fingerprint,
     size: usize,
 }
 
@@ -118,7 +122,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 // present on remote; bounce back to the remote
                 out_comparison.push(HashSegment {
                     range: (start_bound, end_bound),
-                    hash: 0,
+                    hash: Fingerprint::ZERO,
                     size: 0,
                 });
                 continue;
@@ -126,7 +130,7 @@ impl<K: Clone, T: HashRangeQueryable<Key = K>> Diffable for T {
                 // ask the remote to send us the conflicting item
                 out_comparison.push(HashSegment {
                     range: (start_bound.clone(), end_bound.clone()),
-                    hash: 0,
+                    hash: Fingerprint::ZERO,
                     size: 0,
                 });
                 // send the conflicting item to the remote
