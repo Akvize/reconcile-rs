@@ -27,6 +27,7 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
+use crate::auth;
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::gen_ip::gen_ip;
@@ -53,6 +54,8 @@ pub(crate) struct ReconcileEngine<K, V> {
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
+    /// Shared cluster secret for per-datagram MAC authentication; `None` runs unauthenticated.
+    cluster_key: Option<[u8; auth::KEY_LEN]>,
 }
 
 impl<K, V> Clone for ReconcileEngine<K, V> {
@@ -65,6 +68,7 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             pre_insert: self.pre_insert.clone(),
+            cluster_key: self.cluster_key,
         }
     }
 }
@@ -98,6 +102,15 @@ impl<
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
+        match config.cluster_key {
+            Some(_) => debug!("per-datagram MAC authentication ENABLED"),
+            None => warn!(
+                "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
+                 that can send UDP to this port can forge updates and poison the cluster via \
+                 last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
+                 network to a trusted underlay. See issue #108 / REVIEW.md F3."
+            ),
+        }
         let map = HRTree::<K, V>::new();
         ReconcileEngine {
             map: Arc::new(RwLock::new(map)),
@@ -107,6 +120,7 @@ impl<
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+            cluster_key: config.cluster_key,
         }
     }
 
@@ -134,13 +148,21 @@ impl<
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
+        let cluster_key = self.cluster_key;
         tokio::spawn(async move {
             let message = Message::Update::<K, V>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&socket),
+                    cluster_key.as_ref(),
+                    &peer,
+                    &mut send_buf,
+                )
+                .await;
             }
         });
         ret
@@ -167,11 +189,19 @@ impl<
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
+        let cluster_key = self.cluster_key;
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(&messages, Arc::clone(&socket), &peer, &mut send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&socket),
+                    cluster_key.as_ref(),
+                    &peer,
+                    &mut send_buf,
+                )
+                .await;
             }
         });
     }
@@ -235,9 +265,14 @@ impl<
         // initiate the reconciliation protocol with all the known peers, and a random one
         for peer in peers {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(&self.socket, send_buf, (peer, self.port))
-                .await
-                .unwrap();
+            send_to_retry(
+                &self.socket,
+                self.cluster_key.as_ref(),
+                send_buf,
+                (peer, self.port),
+            )
+            .await
+            .unwrap();
         }
     }
 
@@ -251,10 +286,24 @@ impl<
             warn!("Buffer too small for message, discarded");
             return;
         }
-        trace!("received {} bytes from {peer}", size);
+        let datagram = &recv_buf[..size];
+        // Authenticate the whole datagram *before* deserializing anything. Datagrams with a
+        // missing or invalid tag are silently dropped (trace-only, to avoid attacker-driven log
+        // flooding). Without a cluster key, behavior is unchanged.
+        let payload: &[u8] = match self.cluster_key {
+            Some(ref key) => match auth::open(key, datagram) {
+                Some(payload) => payload,
+                None => {
+                    trace!("dropped datagram from {peer}: missing or invalid MAC");
+                    return;
+                }
+            },
+            None => datagram,
+        };
+        trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
         let mut updates = Vec::new();
-        let mut deserializer = Deserializer::from_slice(&recv_buf[..size], DefaultOptions::new());
+        let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
         // read messages in buffer
         loop {
             match Message::deserialize(&mut deserializer) {
@@ -298,7 +347,14 @@ impl<
                 }
             }
             if !messages.is_empty() {
-                send_messages_to(&messages, Arc::clone(&self.socket), &peer, send_buf).await;
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&self.socket),
+                    self.cluster_key.as_ref(),
+                    &peer,
+                    send_buf,
+                )
+                .await;
             }
         }
         if !updates.is_empty() {
@@ -325,12 +381,18 @@ impl<
 
 async fn send_to_retry<A: ToSocketAddrs>(
     socket: &UdpSocket,
+    key: Option<&[u8; auth::KEY_LEN]>,
     buf: &[u8],
     target: A,
 ) -> std::io::Result<usize> {
+    // When a cluster key is set, frame the datagram once as `tag || payload` and reuse the framed
+    // buffer across retries. Without a key the wire bytes are identical to the unauthenticated
+    // behavior.
+    let framed = key.map(|k| auth::seal(k, buf));
+    let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(buf, &target).await;
+        res = socket.send_to(wire, &target).await;
         if res.is_ok() {
             break;
         }
@@ -342,19 +404,26 @@ async fn send_to_retry<A: ToSocketAddrs>(
 async fn send_messages_to<K: Serialize, V: Serialize>(
     messages: &[Message<K, V>],
     socket: Arc<UdpSocket>,
+    key: Option<&[u8; auth::KEY_LEN]>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
     debug!("sending {} messages to {peer}", messages.len());
+    // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
+    let max_payload = if key.is_some() {
+        BUFFER_SIZE - auth::TAG_LEN
+    } else {
+        BUFFER_SIZE
+    };
     send_buf.clear();
     for message in messages {
         let last_size = send_buf.len();
         message
             .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
             .unwrap();
-        if send_buf.len() > BUFFER_SIZE {
+        if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            send_to_retry(&socket, &send_buf[..last_size], &peer)
+            send_to_retry(&socket, key, &send_buf[..last_size], &peer)
                 .await
                 .unwrap();
             trace!("sent {} bytes to {peer}", last_size);
@@ -362,7 +431,7 @@ async fn send_messages_to<K: Serialize, V: Serialize>(
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    send_to_retry(&socket, send_buf, &peer).await.unwrap();
+    send_to_retry(&socket, key, send_buf, &peer).await.unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
 }
 
@@ -406,5 +475,67 @@ mod deadlock_regressions {
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
         );
+    }
+}
+
+#[cfg(test)]
+mod auth_attack {
+    use std::time::Duration;
+
+    use bincode::{DefaultOptions, Serializer};
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde::Serialize;
+    use tokio::net::UdpSocket;
+
+    use super::Message;
+    use crate::{auth, reconcile_store::Config, ReconcileStore};
+
+    /// Serialize the F3 attack payload: an `Update` with a year-9999 timestamp that, if merged,
+    /// would win against every legitimate write forever.
+    fn forged_update() -> Vec<u8> {
+        let far_future = Utc.with_ymd_and_hms(9999, 1, 1, 0, 0, 0).unwrap();
+        let message = Message::Update::<i32, (DateTime<Utc>, Option<String>)>((
+            0,
+            (far_future, Some("evil".to_string())),
+        ));
+        let mut buf = Vec::new();
+        message
+            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .unwrap();
+        buf
+    }
+
+    /// A node with a cluster key must drop forged datagrams (no tag, or wrong key) before
+    /// deserialization, so an attacker cannot poison it via last-write-wins.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forged_datagram_is_ignored() {
+        let key = [0x42u8; auth::KEY_LEN];
+        let port = 8082;
+        let victim_addr = "127.0.0.48";
+        let config = Config::default()
+            .with_port(port)
+            .with_listen_addr(victim_addr.parse().unwrap())
+            .with_cluster_key(key);
+        let store = ReconcileStore::<i32, String>::new(config).await;
+        store.just_insert(0, "legit".to_string());
+        let task = tokio::spawn(store.clone().run());
+
+        let attacker = UdpSocket::bind("127.0.0.49:0").await.unwrap();
+        let target = format!("{victim_addr}:{port}");
+        let forged = forged_update();
+
+        // (a) forged update sent WITHOUT any authentication tag
+        attacker.send_to(&forged, &target).await.unwrap();
+        // (b) forged update sealed with the WRONG key
+        let wrong_key_sealed = auth::seal(&[0x99u8; auth::KEY_LEN], &forged);
+        attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
+
+        // give the victim time to (not) process the forged datagrams
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // the legitimate value must be untouched
+        assert_eq!(store.get(&0).as_deref(), Some(&"legit".to_string()));
+
+        task.abort();
     }
 }

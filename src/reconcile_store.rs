@@ -242,6 +242,13 @@ pub struct Config {
     pub port: u16,
     pub listen_addr: IpAddr,
     pub peer_net: IpNet,
+    /// Optional shared cluster secret enabling per-datagram MAC authentication.
+    ///
+    /// When `None` (the default), the protocol is **unauthenticated**: any host able to send a
+    /// UDP datagram to the port can forge updates and poison the cluster. When set, every node in
+    /// the cluster must use the **same** 32-byte key (and the same MAC backend feature). See
+    /// [`Config::with_cluster_key`].
+    pub cluster_key: Option<[u8; 32]>,
     // may include other options in the future: use_tls, tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -250,6 +257,7 @@ impl Default for Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
+            cluster_key: None,
         }
     }
 }
@@ -266,6 +274,21 @@ impl Config {
         self.peer_net = peer_net;
         self
     }
+
+    /// Enable per-datagram MAC authentication using a shared 32-byte cluster secret.
+    ///
+    /// Every outgoing datagram is then framed with a keyed MAC over its payload, and every
+    /// incoming datagram is verified **before** deserialization; datagrams with a missing or
+    /// invalid tag are silently dropped. This closes the unauthenticated last-write-wins
+    /// poisoning vector.
+    ///
+    /// All nodes in the same cluster **must** share the identical key and be built with the same
+    /// MAC backend feature (`mac-blake3`, the default, or `mac-hmac`). Without a key, the store
+    /// logs a loud warning at startup and runs unauthenticated.
+    pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
+        self.cluster_key = Some(key);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +303,7 @@ mod reconcile_store_tests {
             port: 8080,
             listen_addr: "127.0.0.45".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
+            cluster_key: None,
         };
         let store = ReconcileStore::<i32, i32>::new(config)
             .await

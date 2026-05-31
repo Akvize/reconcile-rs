@@ -44,6 +44,36 @@ tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
 
+## Security model
+
+> **By default, the UDP reconciliation protocol is _unauthenticated_.** Any host that can send a
+> UDP datagram to the port can forge an update — including one with a year-9999 timestamp that
+> wins against every legitimate write forever, or a forged tombstone that deletes a key — and the
+> poison propagates to the whole cluster through last-write-wins. UDP source addresses are
+> spoofable, so this is anonymous.
+
+To close this vector, provide a shared 32-byte cluster secret on **every** node:
+
+```rust
+let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
+let config = Config::default().with_cluster_key(key);
+let store = ReconcileStore::new(config).await;
+```
+
+With a key set, every outgoing datagram is framed with a per-datagram keyed MAC over its payload,
+and every incoming datagram is **verified before deserialization**; datagrams with a missing or
+invalid tag are silently dropped. When no key is set, the store logs a loud warning at startup and
+runs unauthenticated.
+
+The MAC primitive is selected at build time via Cargo features: `mac-blake3` (default, keyed
+BLAKE3) or `mac-hmac` (HMAC-SHA256). All nodes in a cluster must share the identical key **and** be
+built with the same backend.
+
+**Scope.** This provides message integrity and authenticity. It does **not** provide
+confidentiality (the payload is not encrypted — see issue #96), replay protection (replaying a
+captured datagram is benign for idempotent last-write-wins reconciliation), or a peer allow-list.
+For confidentiality, run the protocol over a trusted/encrypted underlay.
+
 ## HRTree
 
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which

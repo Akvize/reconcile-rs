@@ -232,11 +232,13 @@ fn service_send(c: &mut Criterion) {
         port,
         listen_addr: addr1,
         peer_net,
+        cluster_key: None,
     };
     let cfg2 = Config {
         port,
         listen_addr: addr2,
         peer_net,
+        cluster_key: None,
     };
 
     let mut rng = rand::rngs::ThreadRng::default();
