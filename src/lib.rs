@@ -36,7 +36,12 @@ pub mod hrtree_iter;
 pub mod persistence;
 pub mod reconcile_store;
 
+/// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
+#[cfg(feature = "metrics-prometheus")]
+pub mod prometheus;
+
 pub(crate) mod auth;
+pub(crate) mod observability;
 pub(crate) mod reconcilable;
 pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;

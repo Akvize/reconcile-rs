@@ -28,6 +28,14 @@ mac-blake3 = []
 mac-hmac = ["dep:hmac", "dep:sha2"]
 # Wipe the cluster key from memory on drop (defense in depth).
 zeroize = ["dep:zeroize"]
+# Emit runtime metrics via the `metrics` facade. Off by default: when disabled, every
+# metric call site compiles to a no-op (see `src/observability.rs`), so the default build
+# keeps its lean dependency footprint.
+metrics = ["dep:metrics"]
+# Install a Prometheus recorder and expose a `/metrics` HTTP endpoint (see
+# `src/prometheus.rs`). Pulls the exporter's HTTP listener stack; opt-in only. Implies
+# `metrics`, which feeds the same facade.
+metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
 arrayvec = "0.7.4"
@@ -36,6 +44,8 @@ blake3 = "1.5"
 chrono = { version = "0.4.31", features = ["serde"] }
 hmac = { version = "0.12", optional = true }
 ipnet = "2.9.0"
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
 once_cell = "1.21.3"
 parking_lot = "0.12.1"
 rand = "0.8.5"
@@ -49,6 +59,7 @@ zeroize = { version = "1.7", optional = true, features = ["derive"] }
 [dev-dependencies]
 clap = { version = "4.4.6", features = ["derive"] }
 criterion = "0.5.1"
+metrics-util = { version = "0.19", default-features = false, features = ["debugging"] }
 proptest = "1.11.0"
 rand = "0.8.5"
 tempfile = "3"
