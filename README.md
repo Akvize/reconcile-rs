@@ -30,9 +30,12 @@ The protocol allows finding a difference over millions of elements with a limite
 number of round-trips. It should also work well to populate an instance from
 scratch from other instances.
 
-The intended use case is a scalable Web service with a non-persistent and
-eventually consistent key-value store. The design enable high performance by
-avoiding any latency related to using an external store such as Redis.
+The intended use case is a scalable Web service with an in-memory, eventually
+consistent key-value store. The design enable high performance by avoiding any
+latency related to using an external store such as Redis. Durability is
+optional and pluggable — see [Persistence](#persistence) — so a node can
+recover its state (including tombstones) across a restart instead of rejoining
+the cluster as an empty replica.
 
 ![Architecture diagram of a scalable Web service using reconcile-rs](img/illustration.png)
 
@@ -74,6 +77,38 @@ it is dropped (defense in depth).
 confidentiality (the payload is not encrypted — see issue #96), replay protection (replaying a
 captured datagram is benign for idempotent last-write-wins reconciliation), or a peer allow-list.
 For confidentiality, run the protocol over a trusted/encrypted underlay.
+
+## Persistence
+
+By default a `ReconcileStore` is held purely in memory: a process restart loses the entire dataset,
+**including tombstones**. Losing tombstones is not just a durability problem — it is a correctness
+hazard. A node that restarts empty behaves like a brand-new replica, re-learns already-deleted
+values from peers, and can resurrect them (the tombstone-resurrection problem of issue #109).
+
+Every store therefore always owns a persistence backend (the `Persistence` trait is mandatory).
+What varies is *which* backend is plugged in:
+
+- `InMemoryPersistence` (the default) keeps the latest snapshot in RAM and loses it on restart —
+  i.e. the historical behaviour.
+- `FileSnapshot` durably stores a single atomically-written snapshot on disk.
+
+Plug in a durable backend between `new()` and `run()`. The previous state — live values,
+tombstones, and the issue-#109 causal-stability bookkeeping (membership and per-tombstone
+acknowledgments) — is reloaded **before** the node rejoins the gossip protocol, so a restart does
+not look like a fresh, empty replica:
+
+```rust
+use std::sync::Arc;
+use reconcile::{reconcile_store::Config, FileSnapshot, ReconcileStore};
+
+let store = ReconcileStore::new(Config::default())
+    .await
+    .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
+tokio::spawn(store.clone().run()); // periodically snapshots in the background
+```
+
+The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
+S3, or any other medium.
 
 ## HRTree
 

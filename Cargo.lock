@@ -920,6 +920,7 @@ dependencies = [
  "range-cmp",
  "serde",
  "sha2",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

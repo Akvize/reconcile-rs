@@ -51,5 +51,6 @@ clap = { version = "4.4.6", features = ["derive"] }
 criterion = "0.5.1"
 proptest = "1.11.0"
 rand = "0.8.5"
+tempfile = "3"
 tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"

@@ -33,6 +33,7 @@ pub mod gen_ip;
 pub mod hlc;
 pub mod hrtree;
 pub mod hrtree_iter;
+pub mod persistence;
 pub mod reconcile_store;
 
 pub(crate) mod auth;
@@ -43,4 +44,5 @@ pub(crate) mod timeout_wheel;
 pub use fingerprint::Fingerprint;
 pub use hlc::Hlc;
 pub use hrtree::HRTree;
+pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
 pub use reconcile_store::ReconcileStore;

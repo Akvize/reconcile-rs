@@ -13,19 +13,25 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::ops::RangeBounds;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
+use tracing::warn;
 
 use crate::fingerprint::Fingerprint;
 use crate::hlc::Hlc;
+use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
+
+/// How often the background task writes a full snapshot to the persistence backend.
+const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
@@ -46,6 +52,9 @@ where
     engine: ReconcileEngine<K, (Hlc, Option<V>)>,
     /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<K>,
+    /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
+    /// [`InMemoryPersistence`], swapped out via [`with_persistence`](ReconcileStore::with_persistence).
+    persistence: Arc<dyn Persistence<K, V>>,
 }
 
 impl<K, V> Clone for ReconcileStore<K, V>
@@ -57,6 +66,7 @@ where
         ReconcileStore {
             engine: self.engine.clone(),
             tombstones: self.tombstones.clone(),
+            persistence: self.persistence.clone(),
         }
     }
 }
@@ -71,9 +81,66 @@ impl<
         let svc = ReconcileStore {
             engine: ReconcileEngine::<K, (Hlc, Option<V>)>::new(config).await,
             tombstones: TimeoutWheel::new(),
+            persistence: Arc::new(InMemoryPersistence::default()),
         };
         svc.add_pre_insert(|_, _| {});
         svc
+    }
+
+    /// Plug in a durable persistence backend, **loading any previously saved state first**.
+    ///
+    /// Every store always owns a backend; by default that is the non-durable
+    /// [`InMemoryPersistence`], so a process restart starts empty. Call this with a durable
+    /// backend (e.g. [`FileSnapshot`](crate::FileSnapshot)) between
+    /// [`new`](ReconcileStore::new) and [`run`](ReconcileStore::run) to recover the previous
+    /// state — entries, tombstones, and the causal-stability membership/acks — **before** the
+    /// node rejoins the gossip protocol, so a restart does not look like a fresh, empty replica.
+    ///
+    /// Loaded entries are replayed through the pre-insert hook, which preserves each tombstone's
+    /// original deletion timestamp and rebuilds the tombstone-expiry wheel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the backend fails to load (e.g. a corrupt snapshot file): recovering from a
+    /// damaged durable state is a deliberate, explicit decision rather than a silent fresh start.
+    pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
+        if let Some(state) = backend.load().expect("failed to load persisted state") {
+            *self.engine.members.write() = state.members;
+            *self.engine.tombstone_acks.write() = state.tombstone_acks;
+            // Replay through the wrapped pre-insert hook so the tombstone wheel is rebuilt with the
+            // original deletion timestamps (do NOT route through the public insert helpers, which
+            // would overwrite timestamps with `Utc::now()`).
+            self.engine.just_insert_bulk(&state.entries);
+        }
+        self.persistence = backend;
+        self
+    }
+
+    /// Capture the full store state and hand it to the persistence backend.
+    fn snapshot(&self) {
+        let entries: DatedEntries<K, V> = self
+            .engine
+            .map
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let state = PersistedState {
+            entries,
+            members: self.engine.members.read().clone(),
+            tombstone_acks: self.engine.tombstone_acks.read().clone(),
+        };
+        if let Err(err) = self.persistence.save(&state) {
+            warn!("failed to persist reconcile store snapshot: {err}");
+        }
+    }
+
+    /// Periodically snapshot the full store state to the persistence backend.
+    async fn snapshot_periodically(&self) {
+        loop {
+            tokio::time::sleep(SNAPSHOT_INTERVAL).await;
+            self.snapshot();
+        }
     }
 
     /// Provides the address of a known peer to the store
@@ -269,8 +336,13 @@ impl<
     }
 
     pub async fn run(self) {
-        let clone = self.clone();
-        tokio::join!(self.engine.run(), clone.clear_expired_tombstones());
+        let tombstones = self.clone();
+        let snapshots = self.clone();
+        tokio::join!(
+            self.engine.run(),
+            tombstones.clear_expired_tombstones(),
+            snapshots.snapshot_periodically(),
+        );
     }
 }
 
@@ -365,9 +437,24 @@ impl Config {
 
 #[cfg(test)]
 mod reconcile_store_tests {
+    use std::net::IpAddr;
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::{reconcile_store::Config, ReconcileStore};
+    use crate::reconcile_engine::version_hash;
+    use crate::{reconcile_store::Config, FileSnapshot, ReconcileStore};
+
+    /// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
+    /// stores without colliding on a fixed port.
+    fn ephemeral_config() -> Config {
+        Config {
+            port: 0,
+            listen_addr: "127.0.0.1".parse().unwrap(),
+            peer_net: "127.0.0.1/8".parse().unwrap(),
+            cluster_key: None,
+            node_id: None,
+        }
+    }
 
     #[tokio::test]
     async fn tombstones_expiration() {
@@ -397,5 +484,131 @@ mod reconcile_store_tests {
         assert_eq!(store.tombstones.expired(), vec![0]);
         assert_eq!(store.tombstones.remove(&0), Some(0));
         assert_eq!(store.tombstones.remove(&0), None);
+    }
+
+    /// A durable backend must let a restarted store recover both live values and tombstones, with
+    /// identical timestamps (hence an identical fingerprint).
+    #[tokio::test]
+    async fn persistence_roundtrip_recovers_entries_and_tombstones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        store.insert(1, 11); // live value
+        store.insert(2, 22);
+        store.remove(&2); // tombstone
+        let expected = store.fingerprint(..);
+        store.snapshot(); // force a durable write
+
+        // A brand-new store recovers the previous state from the same file.
+        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        assert_eq!(restarted.get(&1).as_deref(), Some(&11));
+        assert!(restarted.get(&2).is_none(), "tombstone was not recovered");
+        assert_eq!(
+            restarted.fingerprint(..),
+            expected,
+            "recovered state must hash identically (timestamps preserved)"
+        );
+        // The recovered tombstone is back in the expiry wheel (replayed through the hook).
+        assert!(restarted.tombstones.remove(&2).is_some());
+    }
+
+    /// The causal-stability state from issue #109 (membership + per-tombstone acks) must survive a
+    /// restart, otherwise GC gating is lost.
+    #[tokio::test]
+    async fn restart_preserves_membership_and_acks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        let peer: IpAddr = "127.0.0.99".parse().unwrap();
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        store.engine.members.write().insert(peer);
+        store.insert(5, 55);
+        store.remove(&5); // tombstone
+        store
+            .engine
+            .tombstone_acks
+            .write()
+            .entry(5)
+            .or_default()
+            .insert(peer, 123);
+        store.snapshot();
+
+        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        assert!(
+            restarted.engine.members.read().contains(&peer),
+            "membership set was not restored"
+        );
+        assert_eq!(
+            restarted
+                .engine
+                .tombstone_acks
+                .read()
+                .get(&5)
+                .and_then(|acks| acks.get(&peer)),
+            Some(&123),
+            "tombstone acknowledgments were not restored"
+        );
+    }
+
+    /// Regression for issue #122 ↔ #109: a restart must not turn a held-back tombstone into a
+    /// collectable (and thus resurrectable) one. A fresh, empty store would treat the tombstone as
+    /// causally stable (no members ⇒ GC allowed); a store that recovered its membership must still
+    /// gate GC because the unacknowledged peer is restored too.
+    #[tokio::test]
+    async fn restart_keeps_tombstone_gc_gated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        let peer: IpAddr = "127.0.0.98".parse().unwrap();
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        store.engine.members.write().insert(peer);
+        store.insert(1, 11);
+        store.remove(&1); // tombstone, never acknowledged by `peer`
+
+        let version = store.engine.map.read().get(&1).map(version_hash).unwrap();
+        assert!(
+            !store.engine.is_tombstone_stable(&1, version),
+            "precondition: tombstone is gated before restart"
+        );
+        store.snapshot();
+
+        // Sanity check the hazard: a *fresh* store (no recovered membership) would consider the
+        // same tombstone stable and collect it.
+        let fresh = ReconcileStore::<i32, i32>::new(ephemeral_config()).await;
+        fresh.insert(1, 11);
+        fresh.remove(&1);
+        let fresh_version = fresh.engine.map.read().get(&1).map(version_hash).unwrap();
+        assert!(
+            fresh.engine.is_tombstone_stable(&1, fresh_version),
+            "a fresh restart with no membership would (wrongly) GC the tombstone — the hazard #122 describes"
+        );
+
+        // The recovered store keeps the tombstone gated, preventing resurrection.
+        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        assert!(restarted.get(&1).is_none(), "tombstone was not recovered");
+        let version = restarted
+            .engine
+            .map
+            .read()
+            .get(&1)
+            .map(version_hash)
+            .unwrap();
+        assert!(
+            !restarted.engine.is_tombstone_stable(&1, version),
+            "restart dropped causal-stability state: tombstone would be GC'd and could resurrect"
+        );
     }
 }
