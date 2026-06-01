@@ -20,6 +20,7 @@ use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 
+use crate::fingerprint::Fingerprint;
 use crate::hlc::Hlc;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
@@ -122,7 +123,7 @@ impl<
         *self.engine.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
-    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> u64 {
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.fingerprint(range)
     }
 

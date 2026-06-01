@@ -22,7 +22,9 @@ default = ["mac-blake3"]
 # Per-datagram MAC authentication backends (see `src/auth.rs`).
 # Exactly one backend is used at build time; `mac-blake3` takes precedence if
 # both are enabled. At least one must be enabled or the crate fails to compile.
-mac-blake3 = ["dep:blake3"]
+# (BLAKE3 itself is always pulled in: it backs the range fingerprint, see
+# `src/fingerprint.rs`.)
+mac-blake3 = []
 mac-hmac = ["dep:hmac", "dep:sha2"]
 # Wipe the cluster key from memory on drop (defense in depth).
 zeroize = ["dep:zeroize"]
@@ -30,7 +32,7 @@ zeroize = ["dep:zeroize"]
 [dependencies]
 arrayvec = "0.7.4"
 bincode = "1.3.3"
-blake3 = { version = "1.5", optional = true }
+blake3 = "1.5"
 chrono = { version = "0.4.31", features = ["serde"] }
 hmac = { version = "0.12", optional = true }
 ipnet = "2.9.0"

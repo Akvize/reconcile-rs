@@ -5,7 +5,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{reconcile_store::Config, Fingerprint, ReconcileStore};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -58,7 +58,7 @@ async fn test() {
     // Check the initial state *before* spawning the run loops: store1's `insert_bulk` already
     // spawned a background broadcast to its seeded peer (store2), so once store2 starts
     // receiving these asserts would race with reconciliation.
-    assert_eq!(store2.fingerprint(..), 0);
+    assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
     assert_eq!(store1.fingerprint(..), start_hash);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
