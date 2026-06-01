@@ -9,7 +9,7 @@ use criterion::{
 };
 
 use reconcile::diff::HashRangeQueryable;
-use reconcile::{reconcile_store::Config, HRTree, ReconcileStore};
+use reconcile::{reconcile_store::Config, HRTree, Hlc, ReconcileStore, ValueOnly};
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
@@ -222,6 +222,65 @@ fn hrtree_hash(c: &mut Criterion) {
     }
 }
 
+/// Compare the in-memory cost of a **naive dated mirror** (`HRTree<K, (Hlc, Option<V>)>`, which
+/// drags along a timestamp it never uses) against the **lightweight value-only mirror**
+/// (`HRTree<K, ValueOnly<V>>`) that issue #128 introduces.
+///
+/// Criterion times the *fill* of each tree at growing sizes; the value-only tree both builds faster
+/// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
+/// entry — the whole point of the optimization for fleets with many passive read replicas.
+fn mirror_memory(c: &mut Criterion) {
+    let dated = std::mem::size_of::<(Hlc, Option<u32>)>();
+    let light = std::mem::size_of::<ValueOnly<u32>>();
+    println!(
+        "[mirror memory] per-entry value size: dated (Hlc, Option<u32>) = {dated} B, \
+         value-only ValueOnly<u32> = {light} B, saved = {} B/entry",
+        dated - light
+    );
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut keys = Vec::new();
+    for _ in 0..1_000_000 {
+        keys.push(rng.gen::<u32>());
+    }
+    let keys = &keys;
+
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("mirror_memory::fill");
+    group.plot_config(plot_config);
+    let mut size = 10;
+    while size <= keys.len() {
+        group.throughput(Throughput::Elements(size as u64));
+        group.sample_size(10.max(1_000_000 / size).min(100));
+        group.sampling_mode(SamplingMode::Linear);
+        group.bench_with_input(
+            BenchmarkId::new("dated (Hlc, Option<u32>)", size),
+            &size,
+            |b, &size| {
+                b.iter(|| {
+                    let mut tree = HRTree::<u32, (Hlc, Option<u32>)>::new();
+                    for &k in keys[..size].iter() {
+                        tree.insert(k, (Hlc::new(k as u64, 0, 0), Some(k)));
+                    }
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("value-only ValueOnly<u32>", size),
+            &size,
+            |b, &size| {
+                b.iter(|| {
+                    let mut tree = HRTree::<u32, ValueOnly<u32>>::new();
+                    for &k in keys[..size].iter() {
+                        tree.insert(k, ValueOnly(Some(k)));
+                    }
+                })
+            },
+        );
+        size *= 10;
+    }
+}
+
 /// Measure the time to send 1 insertion, and 1 removal between 2 ReconcileStore instances containing N items
 fn service_send(c: &mut Criterion) {
     let port = 8080;
@@ -361,6 +420,7 @@ criterion_group!(
     hrtree_insert,
     hrtree_remove,
     hrtree_hash,
+    mirror_memory,
     service_send,
     service_reconcile,
 );
