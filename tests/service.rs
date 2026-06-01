@@ -55,10 +55,13 @@ async fn test() {
     store1.insert_bulk(&key_values);
     let start_hash = store1.fingerprint(..);
     let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
-    let task2 = tokio::spawn(store2.clone().run());
+    // Check the initial state *before* spawning the run loops: store1's `insert_bulk` already
+    // spawned a background broadcast to its seeded peer (store2), so once store2 starts
+    // receiving these asserts would race with reconciliation.
     assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
-    let task1 = tokio::spawn(store1.clone().run());
     assert_eq!(store1.fingerprint(..), start_hash);
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
 
     // check that tree2 is filled with the values from tree1
     assert_until!(store2.fingerprint(..) == start_hash);
@@ -76,35 +79,50 @@ async fn test() {
     store1.remove(&key);
     assert_until!(store2.get(&key).is_none());
 
-    // check that the more recent value always wins
-    for _ in 0..20 {
-        let key = "42".to_string();
-        let value1 = "Hello, World!".to_string();
-        let value2 = "Good bye, World!".to_string();
+    // Check that a *causally later* write always wins. The conflict order is established by
+    // making the second writer observe the first write before acting (we wait for the first
+    // value to propagate). Under the Hybrid Logical Clock this means the second writer's clock
+    // has advanced past the first timestamp, so its write is ordered strictly after — the
+    // deterministic, causality-respecting LWW contract. (We deliberately do *not* rely on
+    // wall-clock real-time order across the two independent node clocks: two writes in the same
+    // millisecond on different nodes are genuinely concurrent and resolved by node id, which is
+    // exactly the ambiguity issue #110 is about.)
+    let key = "42".to_string();
+    for i in 0..20 {
+        // Unique values per iteration so each `assert_until` observes *this* write, not a value
+        // left over from a previous iteration.
+        let first = format!("first-{i}");
+        let second = format!("second-{i}");
         if rng.gen() {
-            // value1 vs value2
-            store1.insert(key.clone(), value1.clone());
-            store2.insert(key.clone(), value2.clone());
-            assert_until!(store1.get(&key).as_deref() == Some(&value2));
-            assert_until!(store2.get(&key).as_deref() == Some(&value2));
+            // store1 writes, store2 observes it, then store2 overwrites: store2's value wins.
+            store1.insert(key.clone(), first.clone());
+            assert_until!(store2.get(&key).as_deref() == Some(&first));
+            store2.insert(key.clone(), second.clone());
+            assert_until!(store1.get(&key).as_deref() == Some(&second));
+            assert_until!(store2.get(&key).as_deref() == Some(&second));
         } else if rng.gen() {
-            // value2 vs value1
-            store1.insert(key.clone(), value2.clone());
-            store2.insert(key.clone(), value1.clone());
-            assert_until!(store1.get(&key).as_deref() == Some(&value1));
-            assert_until!(store2.get(&key).as_deref() == Some(&value1));
+            // Symmetric: store2 writes first, store1 observes, then store1 wins.
+            store2.insert(key.clone(), first.clone());
+            assert_until!(store1.get(&key).as_deref() == Some(&first));
+            store1.insert(key.clone(), second.clone());
+            assert_until!(store1.get(&key).as_deref() == Some(&second));
+            assert_until!(store2.get(&key).as_deref() == Some(&second));
         } else if rng.gen() {
-            // value1 vs tombstone
-            store1.insert(key.clone(), value1);
+            // value then tombstone: the deletion observes the value and wins.
+            store1.insert(key.clone(), first.clone());
+            assert_until!(store2.get(&key).as_deref() == Some(&first));
             store2.remove(&key);
             assert_until!(store1.get(&key).is_none());
             assert_until!(store2.get(&key).is_none());
         } else {
-            // tombstone vs value1
+            // tombstone then value: the insert observes the tombstone and wins.
+            store1.insert(key.clone(), first.clone());
+            assert_until!(store2.get(&key).as_deref() == Some(&first));
             store1.remove(&key);
-            store2.insert(key.clone(), value1.clone());
-            assert_until!(store1.get(&key).as_deref() == Some(&value1));
-            assert_until!(store2.get(&key).as_deref() == Some(&value1));
+            assert_until!(store2.get(&key).is_none());
+            store2.insert(key.clone(), second.clone());
+            assert_until!(store1.get(&key).as_deref() == Some(&second));
+            assert_until!(store2.get(&key).as_deref() == Some(&second));
         }
     }
 
@@ -176,12 +194,74 @@ async fn authenticated_nodes_converge() {
     task1.abort();
 }
 
+/// Regression test for issue #110: two replicas that concurrently write *different* values to
+/// the same key must converge to a single agreed value, with matching fingerprints.
+///
+/// Before the Hybrid Logical Clock fix, conflict resolution keyed on the physical wall clock
+/// with a non-commutative tie-break: on equal timestamps each replica kept its own value, and
+/// because the timestamp is part of the reconciliation hash the fingerprints never matched, so
+/// the protocol re-exchanged the pair forever (permanent divergence + livelock). With the
+/// total-order HLC the survivor is deterministic, so both replicas agree and the fingerprints
+/// equalize. If the regression returned, the convergence assertions below would time out.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_writes_converge() {
+    let port = 8083;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.80".parse().unwrap();
+    let addr2 = "127.0.0.81".parse().unwrap();
+    // Fixed, distinct node ids give a deterministic conflict winner (the higher id).
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net)
+        .with_node_id(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net)
+        .with_node_id(2);
+
+    let store1 = ReconcileStore::<String, String>::new(cfg1)
+        .await
+        .with_seed(addr2);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+
+    // Hammer the same key from both nodes with different values, back to back, so that some
+    // writes race closely in time.
+    let key = "contended".to_string();
+    for i in 0..50 {
+        store1.insert(key.clone(), format!("from-1-{i}"));
+        store2.insert(key.clone(), format!("from-2-{i}"));
+    }
+
+    // Both replicas must converge: identical fingerprints over the whole range, and the same
+    // value for the contended key. (A surviving divergence/livelock would never equalize.)
+    assert_until!(store1.fingerprint(..) == store2.fingerprint(..));
+    let v1 = store1.get(&key).map(|g| g.clone());
+    let v2 = store2.get(&key).map(|g| g.clone());
+    assert_eq!(
+        v1, v2,
+        "replicas disagree on the contended key: {v1:?} vs {v2:?}"
+    );
+    assert!(v1.is_some(), "the contended key vanished entirely");
+
+    task1.abort();
+    task2.abort();
+}
+
 /// Regression test for issue #109: a tombstone must not be garbage-collected while a replica
 /// that has not acknowledged it is still a member (causal stability), and decommissioning that
 /// replica must release the tombstone for GC.
 #[tokio::test(flavor = "multi_thread")]
 async fn tombstone_is_retained_until_peer_acknowledges() {
-    let port = 8080;
+    // A dedicated port isolates this test from the others: peer discovery probes a random
+    // address in 127.0.0.0/8 on this port, so sharing a port lets concurrently-running tests
+    // cross-talk and pollute each other's stores.
+    let port = 8084;
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.72".parse().unwrap();
     let addr2 = "127.0.0.73".parse().unwrap();
@@ -247,7 +327,8 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
 /// resurrected when that replica returns with the stale value.
 #[tokio::test(flavor = "multi_thread")]
 async fn deleted_value_is_not_resurrected_by_returning_peer() {
-    let port = 8080;
+    // Dedicated port for test isolation (see `tombstone_is_retained_until_peer_acknowledges`).
+    let port = 8085;
     let peer_net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.70".parse().unwrap();
     let addr2 = "127.0.0.71".parse().unwrap();
