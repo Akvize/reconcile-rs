@@ -28,11 +28,17 @@ mac-blake3 = []
 mac-hmac = ["dep:hmac", "dep:sha2"]
 # Wipe the cluster key from memory on drop (defense in depth).
 zeroize = ["dep:zeroize"]
+# Per-datagram payload confidentiality via authenticated encryption (AEAD).
+# When enabled, `Config::with_encryption` upgrades the keyed protocol from a
+# plaintext-payload MAC to XChaCha20-Poly1305 over the same cluster key. See
+# `src/auth.rs` and issue #96.
+encryption = ["dep:chacha20poly1305"]
 
 [dependencies]
 arrayvec = "0.7.4"
 bincode = "1.3.3"
 blake3 = "1.5"
+chacha20poly1305 = { version = "0.10", optional = true }
 chrono = { version = "0.4.31", features = ["serde"] }
 hmac = { version = "0.12", optional = true }
 ipnet = "2.9.0"

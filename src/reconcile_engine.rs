@@ -139,8 +139,10 @@ impl<
             .await
             .unwrap();
         debug!("Listening on: {}", socket.local_addr().unwrap());
-        let authenticator = auth::Authenticator::new(config.cluster_key);
-        if authenticator.is_enabled() {
+        let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
+        if authenticator.is_encrypted() {
+            debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
+        } else if authenticator.is_enabled() {
             debug!("per-datagram MAC authentication ENABLED");
         } else {
             warn!(
@@ -685,7 +687,7 @@ mod auth_attack {
         // (a) forged update sent WITHOUT any authentication tag
         attacker.send_to(&forged, &target).await.unwrap();
         // (b) forged update sealed with the WRONG key
-        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]))
+        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false)
             .seal(&forged)
             .expect("enabled");
         attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
