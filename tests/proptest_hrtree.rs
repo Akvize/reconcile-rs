@@ -29,7 +29,8 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
-use reconcile::hrtree::{hash, HRTree};
+use reconcile::fingerprint::{hash, Fingerprint};
+use reconcile::hrtree::HRTree;
 
 // ---------------------------------------------------------------------------
 // Property 1: HRTree is observationally equivalent to a BTreeMap oracle, and
@@ -85,9 +86,11 @@ proptest! {
         let want: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(got, want);
 
-        // The cumulated hash equals the XOR of the per-element hashes (and is
-        // order-independent), matching the diff protocol's fingerprint.
-        let expected_hash = oracle.iter().fold(0u64, |acc, (k, v)| acc ^ hash(k, v));
+        // The cumulated fingerprint equals the sum of the per-element hashes
+        // (and is order-independent), matching the diff protocol's fingerprint.
+        let expected_hash = oracle
+            .iter()
+            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
         prop_assert_eq!(tree.hash(&..), expected_hash);
     }
 
@@ -110,8 +113,10 @@ proptest! {
         let want: Vec<(u8, u16)> = oracle.range(range).map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(&got, &want);
 
-        // Range hash is consistent with iterating the same range.
-        let expected = want.iter().fold(0u64, |acc, (k, v)| acc ^ hash(k, v));
+        // Range fingerprint is consistent with iterating the same range.
+        let expected = want
+            .iter()
+            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
         prop_assert_eq!(tree.hash(&range), expected);
     }
 }
