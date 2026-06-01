@@ -115,7 +115,10 @@ S3, or any other medium.
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
 allows `O(log(n))` access, insertion and removal, as well as `O(log(n))`
 cumulated hash range-query. The latter property enables querying
-the cumulated (XORed) hash of all key-value pairs between two keys.
+the cumulated fingerprint of all key-value pairs between two keys. The fingerprint is a
+256-bit BLAKE3-per-element hash combined by addition modulo 2²⁵⁶ — a stable, portable wire
+token, chosen over a 64-bit XOR for collision resistance and cross-version interoperability
+(see `src/fingerprint.rs`).
 
 Although we did come we the idea independently, it exactly matches a paper
 published on Arxiv in February 2023: [Range-Based Set
@@ -177,6 +180,35 @@ expect network delays to be orders of magnitude longer.
 The ReconcileStore exploits the properties of `HRTree` to conduct a binary-search-like
 search in the collections of the two instances. Once difference are found, the
 corresponding key-value pairs are exchanged and conflicts are resolved.
+
+## Conflict resolution
+
+Conflicts are resolved with last-write-wins (LWW), but keyed on a **Hybrid Logical Clock**
+(`Hlc`, after Kulkarni et al. 2014) rather than a raw wall clock. Each value carries an
+`Hlc` timestamp, and the winner is the one with the greater timestamp under the **total
+order** `(wall_ms, counter, node_id)`.
+
+This matters for correctness. A naive physical-clock LWW is unsafe on two counts:
+
+* under clock skew, a node whose clock runs ahead always wins, **silently losing**
+  causally-newer writes from other nodes;
+* on *equal* timestamps a non-commutative tie-break lets two replicas each keep their own
+  value forever. Because the timestamp is part of the reconciliation hash, their
+  fingerprints never match and the protocol re-exchanges the pair eternally — **permanent
+  divergence and reconciliation livelock**.
+
+The HLC fixes both. On receiving a peer's value, a node advances its own clock past the
+remote timestamp, so a later local write is ordered strictly after everything it has seen
+(no lost update under bounded skew). The `node_id` makes the order total and deterministic,
+so every replica picks the *same* survivor — the merge is commutative, associative and
+idempotent, i.e. genuine Strong Eventual Consistency.
+
+Each node uses a random `node_id` by default; set an explicit one with
+`Config::with_node_id` for a stable, reproducible ordering (e.g. in tests). Each node in a
+cluster must use a distinct id.
+
+LWW still discards one of two *genuinely concurrent* writes by design; recovering both would
+require version vectors or a CRDT, which is out of scope.
 
 ![Graph of the time needed to send 1 insertion and 1 removal](img/perf-send.png)
 

@@ -41,19 +41,20 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::hlc::Hlc;
+
 /// The store's keyed entries in their internal dated, tombstone-aware form: each key maps to a
 /// `(timestamp, Option<V>)`, where a `None` payload is a tombstone.
-pub type DatedEntries<K, V> = Vec<(K, (DateTime<Utc>, Option<V>))>;
+pub type DatedEntries<K, V> = Vec<(K, (Hlc, Option<V>))>;
 
 /// A snapshot of everything a [`ReconcileStore`](crate::ReconcileStore) needs to durably survive a
 /// restart without behaving like a fresh replica.
 ///
 /// `V` is the user value type; entries store the internal dated, tombstone-aware representation
-/// `(DateTime<Utc>, Option<V>)`.
+/// `(Hlc, Option<V>)`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(bound(
     serialize = "K: Serialize, V: Serialize",
@@ -193,8 +194,8 @@ mod tests {
 
         PersistedState {
             entries: vec![
-                (1, (Utc::now(), Some("alive".to_string()))),
-                (2, (Utc::now(), None)), // tombstone
+                (1, (Hlc::new(1_000, 0, 7), Some("alive".to_string()))),
+                (2, (Hlc::new(2_000, 1, 7), None)), // tombstone
             ],
             members,
             tombstone_acks: acks,
@@ -230,11 +231,11 @@ mod tests {
         let backend = InMemoryPersistence::<i32, String>::new();
 
         let mut first = sample_state();
-        first.entries = vec![(1, (Utc::now(), Some("first".to_string())))];
+        first.entries = vec![(1, (Hlc::new(1, 0, 0), Some("first".to_string())))];
         backend.save(&first).unwrap();
 
         let mut second = sample_state();
-        second.entries = vec![(1, (Utc::now(), Some("second".to_string())))];
+        second.entries = vec![(1, (Hlc::new(2, 0, 0), Some("second".to_string())))];
         backend.save(&second).unwrap();
 
         let loaded = backend.load().unwrap().unwrap();
@@ -266,11 +267,11 @@ mod tests {
         let backend = FileSnapshot::new(dir.path().join("snapshot.bin"));
 
         let mut first = sample_state();
-        first.entries = vec![(1, (Utc::now(), Some("first".to_string())))];
+        first.entries = vec![(1, (Hlc::new(1, 0, 0), Some("first".to_string())))];
         Persistence::<i32, String>::save(&backend, &first).unwrap();
 
         let mut second = sample_state();
-        second.entries = vec![(1, (Utc::now(), Some("second".to_string())))];
+        second.entries = vec![(1, (Hlc::new(2, 0, 0), Some("second".to_string())))];
         Persistence::<i32, String>::save(&backend, &second).unwrap();
 
         // No leftover temporary file, and the latest snapshot wins.

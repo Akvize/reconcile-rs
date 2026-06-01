@@ -22,6 +22,8 @@ use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::warn;
 
+use crate::fingerprint::Fingerprint;
+use crate::hlc::Hlc;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
@@ -47,7 +49,7 @@ where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
     /// Internal map and hooks container.
-    engine: ReconcileEngine<K, (DateTime<Utc>, Option<V>)>,
+    engine: ReconcileEngine<K, (Hlc, Option<V>)>,
     /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<K>,
     /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
@@ -77,7 +79,7 @@ impl<
     /// Create a new `ReconcileStore`, set up network and tombstones.
     pub async fn new(config: Config) -> Self {
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, (DateTime<Utc>, Option<V>)>::new(config).await,
+            engine: ReconcileEngine::<K, (Hlc, Option<V>)>::new(config).await,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
         };
@@ -166,24 +168,29 @@ impl<
     ///
     /// Hooks are executed outside of the map’s write lock, so calling back into any insert
     /// method from within a hook will not block or deadlock.
-    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(DateTime<Utc>, Option<V>)) + 'static>(
+    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(Hlc, Option<V>)) + 'static>(
         &self,
         pre_insert: F,
     ) {
         let tombstones = self.tombstones.clone();
-        let wrapped_pre_insert = move |k: &K, v: &(DateTime<Utc>, Option<V>)| {
+        let wrapped_pre_insert = move |k: &K, v: &(Hlc, Option<V>)| {
             pre_insert(k, v);
             if v.1.is_some() {
                 tombstones.remove(k);
             } else {
-                tombstones.insert(k.clone(), v.0);
+                // The timeout wheel ages tombstones by wall-clock time; use the HLC's
+                // physical component so all replicas expire a tombstone at the same logical
+                // wall time. GC is in any case gated on causal stability.
+                let when =
+                    DateTime::from_timestamp_millis(v.0.wall_ms() as i64).unwrap_or_else(Utc::now);
+                tombstones.insert(k.clone(), when);
             }
         };
         // Swap in the new hook
         *self.engine.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
-    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> u64 {
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.fingerprint(range)
     }
 
@@ -204,13 +211,17 @@ impl<
     ///
     /// Returns the overwritten value if the key already existed.
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
-        let ret = self.engine.just_insert(key, (Utc::now(), Some(value)));
+        let ret = self
+            .engine
+            .just_insert(key, (self.engine.clock_now(), Some(value)));
         ret.and_then(|t| t.1)
     }
 
     /// Fully-qualified insert: just_insert + async broadcast.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        let ret = self.engine.insert(key, (Utc::now(), Some(value)));
+        let ret = self
+            .engine
+            .insert(key, (self.engine.clock_now(), Some(value)));
         ret.and_then(|t| t.1)
     }
 
@@ -224,7 +235,7 @@ impl<
         self.engine.just_insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v)| (k.clone(), (Utc::now(), Some(v.clone()))))
+                .map(|(k, v)| (k.clone(), (self.engine.clock_now(), Some(v.clone()))))
                 .collect::<Vec<_>>(),
         );
     }
@@ -234,18 +245,22 @@ impl<
         self.engine.insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v)| (k.clone(), (Utc::now(), Some(v.clone()))))
+                .map(|(k, v)| (k.clone(), (self.engine.clock_now(), Some(v.clone()))))
                 .collect::<Vec<_>>(),
         );
     }
 
     pub fn just_remove(&self, key: &K) -> Option<V> {
-        let ret = self.engine.just_insert(key.clone(), (Utc::now(), None));
+        let ret = self
+            .engine
+            .just_insert(key.clone(), (self.engine.clock_now(), None));
         ret.and_then(|t| t.1)
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
-        let ret = self.engine.insert(key.clone(), (Utc::now(), None));
+        let ret = self
+            .engine
+            .insert(key.clone(), (self.engine.clock_now(), None));
         ret.and_then(|t| t.1)
     }
 
@@ -253,16 +268,22 @@ impl<
         self.engine.just_insert_bulk(
             &keys
                 .iter()
-                .map(|k| (k.clone(), (Utc::now(), None)))
+                .map(|k| (k.clone(), (self.engine.clock_now(), None)))
                 .collect::<Vec<_>>(),
         );
     }
 
-    pub fn remove_bulk(&self, keys: &[(K, DateTime<Utc>)]) {
+    /// Bulk-remove: stamps a fresh Hybrid Logical Clock timestamp for each key and
+    /// broadcasts the resulting tombstones.
+    ///
+    /// Unlike the previous physical-clock API, callers no longer supply timestamps: a
+    /// caller-chosen `DateTime` could collide with another replica's and trigger the
+    /// non-commutative tie-break that caused permanent divergence (issue #110).
+    pub fn remove_bulk(&self, keys: &[K]) {
         self.engine.insert_bulk(
             &keys
                 .iter()
-                .map(|(k, t)| (k.clone(), (*t, None)))
+                .map(|k| (k.clone(), (self.engine.clock_now(), None)))
                 .collect::<Vec<_>>(),
         );
     }
@@ -354,6 +375,14 @@ pub struct Config {
     /// the cluster must use the **same** 32-byte key (and the same MAC backend feature). See
     /// [`Config::with_cluster_key`].
     pub cluster_key: Option<[u8; 32]>,
+    /// Identity of this node, used as the deterministic tie-break in the Hybrid Logical
+    /// Clock total order. When `None` (the default), a random id is generated at startup.
+    ///
+    /// Two nodes must not share the same id, or conflicts between equal `(wall, counter)`
+    /// timestamps would no longer be resolved deterministically. A random 64-bit id makes
+    /// collisions negligible; set an explicit id only when you need a stable, reproducible
+    /// ordering (e.g. in tests).
+    pub node_id: Option<u64>,
     // may include other options in the future: use_tls, tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -363,6 +392,7 @@ impl Default for Config {
             listen_addr: "127.0.0.1".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
             cluster_key: None,
+            node_id: None,
         }
     }
 }
@@ -394,6 +424,15 @@ impl Config {
         self.cluster_key = Some(key);
         self
     }
+
+    /// Set an explicit node identity for the Hybrid Logical Clock tie-break.
+    ///
+    /// Each node in a cluster must use a distinct id. Leave unset to use a random id (the
+    /// default); set it for a stable, reproducible conflict ordering.
+    pub fn with_node_id(mut self, node_id: u64) -> Self {
+        self.node_id = Some(node_id);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -413,22 +452,30 @@ mod reconcile_store_tests {
             listen_addr: "127.0.0.1".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
             cluster_key: None,
+            node_id: None,
         }
     }
 
     #[tokio::test]
     async fn tombstones_expiration() {
         let config = Config {
-            port: 8080,
+            // A dedicated port (and a singleton peer net) isolates this test from the
+            // integration tests: peer discovery probes random addresses in the peer net on
+            // this port, so an overlapping port lets a concurrently-running test's node inject
+            // updates here.
+            port: 8090,
             listen_addr: "127.0.0.45".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
+            peer_net: "127.0.0.45/32".parse().unwrap(),
             cluster_key: None,
+            node_id: None,
         };
         let store = ReconcileStore::<i32, i32>::new(config)
             .await
             .with_tombstone_timeout(Duration::from_millis(1));
 
-        let task = tokio::spawn(store.clone().run());
+        // This test exercises the tombstone TimeoutWheel directly; it deliberately does *not*
+        // spawn `run()`, whose periodic causal-stability-gated GC would itself remove the
+        // expired tombstone and race these assertions.
 
         // insert a tombstone
         store.remove(&0);
@@ -437,8 +484,6 @@ mod reconcile_store_tests {
         assert_eq!(store.tombstones.expired(), vec![0]);
         assert_eq!(store.tombstones.remove(&0), Some(0));
         assert_eq!(store.tombstones.remove(&0), None);
-
-        task.abort();
     }
 
     /// A durable backend must let a restarted store recover both live values and tombstones, with

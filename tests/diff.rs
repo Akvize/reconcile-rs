@@ -2,6 +2,7 @@ use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
 use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
+use reconcile::fingerprint::Fingerprint;
 use reconcile::hrtree::HRTree;
 
 pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
@@ -116,10 +117,17 @@ fn test_compare() {
 /// This lets us deterministically reproduce issue #106 (the `hash == 0` sentinel
 /// aliasing a non-empty range) without relying on a real, non-portable
 /// `DefaultHasher` collision.
-fn elem_hash(key: i32) -> u64 {
+fn elem_hash(key: i32) -> Fingerprint {
     match key {
-        1 | 2 => 7,
-        k => (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
+        // Keys 1 and 2 are crafted to cancel under the additive combiner:
+        // `elem_hash(1) + elem_hash(2) == ZERO (mod 2²⁵⁶)`, so the non-empty
+        // range {1, 2} fingerprints to ZERO — exactly the issue #106 hazard.
+        1 => Fingerprint([7, 0, 0, 0]),
+        2 => -Fingerprint([7, 0, 0, 0]),
+        k => {
+            let m = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            Fingerprint([m, m ^ 0x5555_5555_5555_5555, m.rotate_left(17), m | 0x80])
+        }
     }
 }
 
@@ -155,11 +163,11 @@ impl MockStore {
 impl HashRangeQueryable for MockStore {
     type Key = i32;
 
-    fn hash<R: RangeBounds<i32>>(&self, range: &R) -> u64 {
+    fn hash<R: RangeBounds<i32>>(&self, range: &R) -> Fingerprint {
         self.keys
             .iter()
             .filter(|k| range.contains(k))
-            .fold(0, |acc, &k| acc ^ elem_hash(k))
+            .fold(Fingerprint::ZERO, |acc, &k| acc + elem_hash(k))
     }
 
     fn insertion_position(&self, key: &i32) -> usize {
@@ -188,8 +196,8 @@ fn nonempty_range_hashing_to_zero_vs_empty() {
     let b = MockStore::new(vec![]);
 
     // Sanity: the non-empty range really does hash to the empty sentinel value.
-    assert_eq!(a.hash(&..), 0);
-    assert_eq!(b.hash(&..), 0);
+    assert_eq!(a.hash(&..), Fingerprint::ZERO);
+    assert_eq!(b.hash(&..), Fingerprint::ZERO);
 
     let (local_diff_ranges, remote_diff_ranges) = diff(&a, &b);
 
@@ -211,8 +219,8 @@ fn nonempty_collision_vs_different_content() {
     let a = MockStore::new(vec![1, 2]);
     let b = MockStore::new(vec![1, 2, 5]);
 
-    assert_eq!(a.hash(&..), 0);
-    assert_ne!(b.hash(&..), 0);
+    assert_eq!(a.hash(&..), Fingerprint::ZERO);
+    assert_ne!(b.hash(&..), Fingerprint::ZERO);
 
     let (local_diff_ranges, remote_diff_ranges) = diff(&a, &b);
 
