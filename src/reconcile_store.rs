@@ -385,10 +385,10 @@ pub struct Config {
     pub node_id: Option<u64>,
     /// Whether to encrypt datagram payloads (not just authenticate them).
     ///
-    /// Only ever set through [`Config::with_encryption`], which requires both the `encryption`
-    /// cargo feature and a [`cluster_key`](Self::cluster_key). When `false` (the default), a set
-    /// cluster key authenticates plaintext datagrams with a MAC; when `true`, the same key is used
-    /// to authenticate *and* encrypt them with XChaCha20-Poly1305.
+    /// Only ever set through `Config::with_encryption` (available with the `encryption` cargo
+    /// feature), which also requires a [`cluster_key`](Self::cluster_key). When `false` (the
+    /// default), a set cluster key authenticates plaintext datagrams with a MAC; when `true`, the
+    /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
     pub encrypt: bool,
     // may include other options in the future: tombstone_ttl, metrics, etc.
 }
