@@ -507,8 +507,9 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
     let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
     store1.insert("secret".to_string(), "value".to_string());
     let start_hash = store1.fingerprint(..);
-    let store2: ReconcileStore<String, String> =
-        ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
