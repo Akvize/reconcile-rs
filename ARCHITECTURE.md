@@ -263,21 +263,130 @@ tight and necessary). The bloat is in **scaffolding**, not logic.
 
 ---
 
-## 5. Migration phases (each independently committable, test-green)
+## 5. Migration phases — one issue per phase
 
-| Phase | What | Risk | Oracle |
-|---|---|---|---|
-| **0 — Iso-functional cleanups** (§4) | Iterator cursor, `Arc<Inner>` + derive `Clone`, broadcast helper, drop redundant bounds. Pure refactor, no contract change. | low | whole suite compiles + passes unchanged. |
-| **1 — Bound bundles + hide the plumbing** | Add `Key`/`Value`; demote `diff`, `fingerprint` internals, `hrtree_iter`, `gen_ip`, `hlc::HlcClock`, `auth` from `pub` to `pub(crate)` in `lib.rs`. | low | suite green; check `tests/diff.rs` imports of demoted paths. |
-| **2 — Dissolve plumbing traits** | Delete `Diffable`/`HashRangeQueryable`; `diff_round`/`start_diff` → `pub(crate)` free fns over `HRTree` (**verbatim**). | low | `tests/diff.rs` (#106/#111/#112), `proptest_hrtree.rs`. |
-| **3 — `Clock` port** | Extract `Clock`; `HlcClock` becomes its adapter; move the `chrono::Utc` read into the adapter so the domain is time-source-free. `Timestamped` → field access. | low | `hlc.rs` unit tests (monotonicity, observe, tie-break). |
-| **4 — `Entry`/`State` domain type** | Replace `(Hlc,Option<V>)`; dissolve `MaybeTombstone`; `Reconcilable` → `Entry::merge`; fix public `add_pre_insert`; update `PersistedState`. **Changes encoding.** | **highest** | `tests/service.rs` (resurrection, conflicts, convergence), `proptest_hrtree.rs`, `FileSnapshot` round-trips. |
-| **5 — `Transport` + `Codec` ports** | Extract both; `UdpTransport`/`BincodeCodec` adapters; rewrite the engine loop as a thin driver delegating to ports; keep `Authenticator` ahead of the codec; freeze `DefaultOptions`/`Message` tag order. **Unlocks in-memory transport for deterministic tests.** | medium | `tests/service.rs` convergence, `fuzz_packets.rs`, lossy-transport proptest. |
-| **6 — Workspace split** | Promote modules to `reconcile-core` / `reconcile-net` / `reconcile-store` / `reconcile`; ports defined in `-core`; verify `-core` has no infra deps. | medium | full suite green; `cargo tree` shows no tokio/bincode under `reconcile-core`. |
+> **How to use this section.** After this PR merges, open **one GitHub issue per phase** (or one
+> Project item) by copying its block verbatim — each is written to stand alone: goal, dependency,
+> files, a `- [ ]` task list, and acceptance criteria that double as the issue's *definition of
+> done*. Phases are strictly ordered by the **Depends on** field; the dependency graph is linear
+> (`0 → 1 → 2 → 3 → 4 → 5 → 6`) except that **Phase 0 is independent** and can ship immediately.
+> Suggested labels are given per phase. "Oracle" = the existing test(s) that must stay green and
+> therefore prove the change is behaviour-preserving (except Phase 4, which changes encoding).
 
-Phase 0 delivers immediate, risk-free value. The encoding change (Phase 4) sits in the middle where
-the oracle is richest. The workspace split is last, once layers are stable — but it is now a
-*goal*, not a hedge, because it enforces the hexagon's dependency direction.
+| # | Phase | Depends on | Risk | Net LoC | Contract change? |
+|---|---|---|---|---|---|
+| 0 | Iso-functional cleanups | — | low | **−450** | none |
+| 1 | Bound bundles + hide the plumbing | 0 | low | −40 | public surface shrinks |
+| 2 | Dissolve `Diffable`/`HashRangeQueryable` | 1 | low | −60 | none (internals) |
+| 3 | `Clock` port | 1 | low | +30 | none |
+| 4 | `Entry`/`State` domain type | 2, 3 | **high** | ~0 | **wire + on-disk** |
+| 5 | `Transport` + `Codec` ports | 4 | medium | ~0 | wire frozen, not changed |
+| 6 | Workspace split | 5 | medium | ~0 | none |
+
+---
+
+### Phase 0 — Iso-functional cleanups
+**Goal:** remove ~450 lines of scaffolding with zero behaviour change, to shrink the surface every
+later phase touches. · **Depends on:** nothing (ship first). · **Risk:** low. ·
+**Labels:** `refactor`, `good-first-issue`.
+
+**Tasks**
+- [ ] Collapse the 8 iterator types + 3 twin `*Layer` enums into one shared cursor + projection (`hrtree_iter.rs:63-530`).
+- [ ] Fold the 7 flat `Arc<RwLock<…>>` fields into one `Arc<Inner>`; replace the 11-field manual `Clone` with `#[derive(Clone)]` (`reconcile_engine.rs:64-105`).
+- [ ] Extract the broadcast logic duplicated 3× into one `broadcast_messages` helper (`reconcile_engine.rs:194-254,407-502`).
+- [ ] Drop the nested `fn aux(...)` bound re-declarations now covered by the `impl` block (`hrtree.rs` `get/insert/remove/position`).
+- [ ] Derive `Clone` on `ReconcileStore`/`TimeoutWheel` once `Arc<Inner>` lands; put the dual index behind one lock (`reconcile_store.rs:60-72`, `timeout_wheel.rs:11-25`).
+- [ ] Deduplicate steal-left/steal-right rebalance (`hrtree.rs:142-259`); turn silent `.unwrap()` on network serialize into `.expect("…")` (`reconcile_engine.rs:320,579+`).
+
+**Acceptance** — `cargo test` passes unchanged; `cargo clippy` clean; net diff is negative; **no
+public signature changes** (`cargo public-api diff` empty).
+
+---
+
+### Phase 1 — Bound bundles + hide the plumbing
+**Goal:** introduce `Key`/`Value` supertrait bundles and demote internal mechanism out of the
+public surface. · **Depends on:** Phase 0. · **Risk:** low. · **Labels:** `refactor`, `api`.
+
+**Tasks**
+- [ ] Add `pub trait Key: …` and `pub trait Value: …` with blanket impls (§3.6).
+- [ ] Replace the 11-line `where` block at `reconcile_engine.rs:122-135` (and the `reconcile_store.rs:75` / `get_mut` sites) with `impl<K: Key, V: Value>`.
+- [ ] In `lib.rs`, demote from `pub` to `pub(crate)`: `mod diff` internals, `fingerprint` internals, `hrtree_iter`, `gen_ip`, `hlc::HlcClock` internals, `auth` (keep `Persistence` and the `Store` facade public).
+- [ ] Audit `tests/` for imports of newly-demoted paths; move those tests into `#[cfg(test)]` units inside the crate where needed.
+
+**Acceptance** — suite green; `cargo public-api diff` shows **only removals** (surface shrinks, nothing added yet); no `tests/diff.rs` import resolves to a demoted public path.
+
+---
+
+### Phase 2 — Dissolve `Diffable` / `HashRangeQueryable`
+**Goal:** delete the two exposed-mechanism traits; the diff algorithm becomes `pub(crate)` functions
+over the concrete `HRTree`. · **Depends on:** Phase 1. · **Risk:** low. · **Labels:** `refactor`.
+
+**Tasks**
+- [ ] Move `start_diff`/`diff_round` **verbatim** into a `pub(crate) mod proto` as free functions taking `&HRTree` (preserve invariants §6.3, §6.4 byte-for-byte).
+- [ ] Turn `HashRangeQueryable`'s methods into inherent methods on `HRTree`; delete the trait.
+- [ ] Delete `Diffable`; make `HashSegment`/`DiffRange` `pub(crate)`.
+- [ ] Drop the test-only `MockStore`; point the diff test at `HRTree` directly.
+
+**Acceptance** — `tests/diff.rs` (regression cases #106/#111/#112) and `proptest_hrtree.rs` green; `grep -r 'Diffable\|HashRangeQueryable' src/` empty; nothing diff-related is `pub`.
+
+---
+
+### Phase 3 — `Clock` port
+**Goal:** make the domain time-source-free; the HLC algorithm stays, only the physical-time read
+moves to an adapter. · **Depends on:** Phase 1. · **Risk:** low. · **Labels:** `feature`, `api`.
+
+**Tasks**
+- [ ] Define `pub trait Clock { type Timestamp; fn now(); fn observe(); }` (§3.2) in the domain.
+- [ ] Make `HlcClock` the default adapter implementing `Clock<Timestamp = Hlc>`; move the `chrono::Utc::now()` read (`hlc.rs:35`) inside it.
+- [ ] Thread `C: Clock` through the engine; replace `Timestamped` tuple access with `entry.stamp` field access.
+- [ ] Add a `FixedClock`/`ManualClock` test adapter.
+
+**Acceptance** — `hlc.rs` unit tests (monotonicity, `observe`, `(wall,counter,node)` tie-break, §6.2) green; domain modules import no `chrono`; a test using `FixedClock` produces deterministic stamps.
+
+---
+
+### Phase 4 — `Entry` / `State` domain type ⚠️ encoding change
+**Goal:** replace the leaky `(Hlc, Option<V>)` tuple with a screaming domain type and dissolve the
+value-shape traits. · **Depends on:** Phases 2 and 3. · **Risk:** HIGH (changes wire + on-disk
+format — acceptable while unpublished). · **Labels:** `feature`, `breaking`, `api`.
+
+**Tasks**
+- [ ] Add `Entry<T, V>` + `enum State<V> { Present(V), Tombstone }` with inherent `is_tombstone`/`value`/`merge` (default LWW, §3.3); derive `Hash`/`Serialize`.
+- [ ] Replace every `(Hlc, Option<V>)` with `Entry<Hlc, V>`; delete `MaybeTombstone` and `Timestamped`; fold `Reconcilable` into `Entry::merge`.
+- [ ] Fix the public hook signature `add_pre_insert` (`reconcile_store.rs:171`) to take `&Entry<…>` instead of the tuple.
+- [ ] Update `PersistedState`/`DatedEntries` (`persistence.rs:51`) to the named type; bump any on-disk version marker.
+- [ ] Confirm `version_hash` (`reconcile_engine.rs:55`) still hashes deterministically over `Entry` (§6.7).
+
+**Acceptance** — `tests/service.rs` (resurrection, conflict, convergence), `proptest_hrtree.rs`, and a `FileSnapshot` save→load round-trip all green; **`add_pre_insert` no longer mentions `(Hlc, Option<V>)`** anywhere public; LWW `>` (not `>=`) preserved (§6.2).
+
+---
+
+### Phase 5 — `Transport` + `Codec` ports
+**Goal:** lift the last infrastructure (tokio/UDP, bincode) out of the domain; the engine becomes a
+thin driver over ports. · **Depends on:** Phase 4. · **Risk:** medium. ·
+**Labels:** `feature`, `api`.
+
+**Tasks**
+- [ ] Define `Transport` and `Codec` ports (§3.2); keep `Authenticator`/MAC **ahead of** the codec (verify-then-decode, §6.5).
+- [ ] Implement `UdpTransport(Arc<UdpSocket>)` and `BincodeCodec(DefaultOptions)` adapters; freeze the bincode `DefaultOptions` config and the `Message` enum tag order.
+- [ ] Rewrite the engine recv/send loop (`reconcile_engine.rs`) to delegate to the ports; remove direct `tokio::net`/`bincode` imports from the engine.
+- [ ] Add an in-memory (optionally lossy/reordering) `Transport` test adapter.
+
+**Acceptance** — `tests/service.rs` convergence and `fuzz_packets.rs` green; a **deterministic** convergence proptest runs over the in-memory transport with no real sockets; engine module imports neither `tokio::net` nor `bincode`.
+
+---
+
+### Phase 6 — Workspace split
+**Goal:** promote the layers to crates so the compiler enforces the inward-only dependency
+direction. · **Depends on:** Phase 5. · **Risk:** medium. · **Labels:** `build`, `refactor`.
+
+**Tasks**
+- [ ] Create the workspace: `reconcile-core` (domain + ports), `reconcile-net` (Transport/Codec/auth/discovery), `reconcile-store` (persistence adapters), `reconcile` (wiring + driving API).
+- [ ] Move modules accordingly; ports are **defined in `reconcile-core`**.
+- [ ] Pin dependencies so `reconcile-core` lists only `serde` + `blake3` (no tokio/bincode/chrono-IO/ipnet/rand-runtime).
+- [ ] Re-export the public API from the top-level `reconcile` crate so downstream `use` paths are unchanged where possible.
+
+**Acceptance** — full suite green from the workspace root; `cargo tree -p reconcile-core` shows **no** tokio/bincode/chrono/ipnet; adding `use tokio::…;` to `reconcile-core` fails to compile (the guarantee a single crate cannot give).
 
 ---
 
