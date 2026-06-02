@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`LightReconcileStore`], a lightweight, **dateless, read-only mirror** of a dated
+//! Provides the [`ReconcileMirror`], a lightweight, **dateless, read-only mirror** of a dated
 //! [`ReconcileStore`](crate::ReconcileStore).
 //!
 //! # What it is for
@@ -14,7 +14,7 @@
 //! A dated store keeps a [`Hlc`] timestamp next to every value so it can resolve conflicts
 //! (last-write-wins) and run the #109 tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
-//! bytes per entry that the replica never needs. A `LightReconcileStore` stores only
+//! bytes per entry that the replica never needs. A `ReconcileMirror` stores only
 //! [`ValueOnly<V>`] — the `Option<V>` payload, no timestamp — and still converges with a dated peer
 //! over the **existing range-based diff protocol**, on the same UDP port.
 //!
@@ -86,8 +86,8 @@ type WireDated<V> = (Hlc, Option<V>);
 
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
-/// See the [module documentation](crate::light) for the design and the #109-safety guarantees.
-pub struct LightReconcileStore<K, V> {
+/// See the [module documentation](crate::mirror) for the design and the #109-safety guarantees.
+pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`ValueOnly`]), matching a dated peer's value-only projection.
     tree: Arc<RwLock<HRTree<K, ValueOnly<V>>>>,
@@ -101,9 +101,9 @@ pub struct LightReconcileStore<K, V> {
     on_update: Arc<RwLock<OnUpdateCallback<K, V>>>,
 }
 
-impl<K, V> Clone for LightReconcileStore<K, V> {
+impl<K, V> Clone for ReconcileMirror<K, V> {
     fn clone(&self) -> Self {
-        LightReconcileStore {
+        ReconcileMirror {
             tree: self.tree.clone(),
             port: self.port,
             socket: self.socket.clone(),
@@ -119,7 +119,7 @@ impl<K, V> Clone for LightReconcileStore<K, V> {
 impl<
         K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
         V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
-    > LightReconcileStore<K, V>
+    > ReconcileMirror<K, V>
 {
     /// Create a new mirror bound to the configured UDP socket.
     ///
@@ -132,7 +132,7 @@ impl<
             .await
             .unwrap();
         debug!(
-            "LightReconcileStore listening on: {}",
+            "ReconcileMirror listening on: {}",
             socket.local_addr().unwrap()
         );
         let authenticator = auth::Authenticator::new(config.cluster_key);
@@ -142,7 +142,7 @@ impl<
                  datagrams. Set Config::with_cluster_key to match the dated cluster."
             );
         }
-        LightReconcileStore {
+        ReconcileMirror {
             tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
@@ -236,7 +236,7 @@ impl<
         let addr = gen_ip(&mut *self.rng.write(), self.peer_net);
         peers.push(addr);
         for peer in peers {
-            trace!("light start_diff {} bytes to {peer}", send_buf.len());
+            trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
             send_to_retry(
                 &self.socket,
                 &self.authenticator,
@@ -372,7 +372,7 @@ mod tests {
     /// `get` returns the live value, and absent keys are `None`.
     #[tokio::test]
     async fn get_returns_integrated_value() {
-        let mirror = LightReconcileStore::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
         assert!(mirror.get(&1).is_none());
         mirror.integrate(vec![(1, ValueOnly(Some("hello".to_string())))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"hello".to_string()));
@@ -383,7 +383,7 @@ mod tests {
     /// A mirrored tombstone (`ValueOnly(None)`) hides the value but is still a stored entry.
     #[tokio::test]
     async fn mirrors_tombstones() {
-        let mirror = LightReconcileStore::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
         mirror.integrate(vec![(1, ValueOnly(Some("v".to_string())))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"v".to_string()));
 
@@ -399,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn on_update_hook_fires() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let mirror = LightReconcileStore::<i32, i32>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, i32>::new(ephemeral_config()).await;
         let count = Arc::new(AtomicUsize::new(0));
         let count2 = count.clone();
         mirror.add_on_update(move |_, _| {
@@ -413,7 +413,7 @@ mod tests {
     /// content — i.e. timestamps genuinely play no part in the hash.
     #[tokio::test]
     async fn value_fingerprint_is_timestamp_independent() {
-        let mirror = LightReconcileStore::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
         mirror.integrate(vec![
             (1, ValueOnly(Some("a".to_string()))),
             (2, ValueOnly(None)),

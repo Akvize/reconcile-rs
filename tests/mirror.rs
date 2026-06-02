@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Interop between a dated [`ReconcileStore`] and a dateless [`LightReconcileStore`] (issue #128).
+//! Interop between a dated [`ReconcileStore`] and a dateless [`ReconcileMirror`] (issue #128).
 //!
 //! These cover the two properties the lightweight-mirror design must guarantee:
 //! 1. **Convergence**: the mirror receives the dated store's current values (timestamps dropped),
@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use reconcile::{reconcile_store::Config, LightReconcileStore, ReconcileStore};
+use reconcile::{reconcile_store::Config, ReconcileMirror, ReconcileStore};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..200 {
@@ -54,7 +54,7 @@ async fn mirror_converges_with_dated_store() {
     .await;
     // Seed the mirror with the dated store's address: the mirror *drives* reconciliation over the
     // value-only channel, so it just needs to know where to send.
-    let mirror = LightReconcileStore::<String, String>::new(
+    let mirror = ReconcileMirror::<String, String>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)
@@ -118,7 +118,7 @@ async fn mirror_does_not_block_tombstone_gc() {
     )
     .await
     .with_tombstone_timeout(Duration::from_millis(50));
-    let mirror = LightReconcileStore::<i32, i32>::new(
+    let mirror = ReconcileMirror::<i32, i32>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)

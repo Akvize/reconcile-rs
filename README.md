@@ -110,11 +110,11 @@ tokio::spawn(store.clone().run()); // periodically snapshots in the background
 The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
 S3, or any other medium.
 
-## Lightweight read-only mirror
+## Read-only mirror (`ReconcileMirror`)
 
 For fleets with many *passive read replicas*, the per-value `Hlc` timestamp a dated `ReconcileStore`
 keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
-only consumes values never needs it. `LightReconcileStore` is a **dateless, read-only mirror** that
+only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
 stores only the value (`ValueOnly<V>`, ~24 bytes lighter per entry for a small payload) and still
 converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
 
@@ -125,10 +125,10 @@ mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is nev
 causal-stability member, so it cannot hold back a dated node's garbage collection.
 
 ```rust
-use reconcile::{reconcile_store::Config, LightReconcileStore};
+use reconcile::{reconcile_store::Config, ReconcileMirror};
 
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
-let mirror = LightReconcileStore::<String, String>::new(Config::default())
+let mirror = ReconcileMirror::<String, String>::new(Config::default())
     .await
     .with_seed(dated_addr);
 tokio::spawn(mirror.clone().run());

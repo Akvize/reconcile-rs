@@ -200,7 +200,7 @@ impl<
     /// Fingerprint of the **value-only projection** over a range — the timestamp-less counterpart of
     /// [`fingerprint`](Self::fingerprint).
     ///
-    /// A [`LightReconcileStore`](crate::light::LightReconcileStore) that has converged with this
+    /// A [`ReconcileMirror`](crate::mirror::ReconcileMirror) that has converged with this
     /// store computes the same value over the same range, even though it never stores timestamps.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.value_fingerprint(range)

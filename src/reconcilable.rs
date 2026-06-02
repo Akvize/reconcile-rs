@@ -57,7 +57,7 @@ impl<V> MaybeTombstone for (Hlc, Option<V>) {
 }
 
 /// A timestamp-less projection of a value, used by lightweight read-only mirrors
-/// ([`LightReconcileStore`](crate::light::LightReconcileStore)) and by the value-only
+/// ([`ReconcileMirror`](crate::mirror::ReconcileMirror)) and by the value-only
 /// *projection* tree a dated store maintains to answer them.
 ///
 /// Its [`Hash`] is **value-only by construction**: it wraps just the [`Option<V>`] payload, with no
