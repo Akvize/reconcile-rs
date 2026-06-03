@@ -47,6 +47,15 @@ tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
 
+## Documentation
+
+- [`REVIEW.md`](REVIEW.md) — a peer review of the crate. The original audit's critical findings
+  (silent divergence, remote DoS, unauthenticated poisoning, tombstone resurrection, weak
+  fingerprint) have since been fixed on `master`; the document's *Resolution status* section tracks
+  each finding.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
+  ports & adapters) the codebase is being refactored toward.
+
 ## Security model
 
 > **By default, the UDP reconciliation protocol is _unauthenticated_.** Any host that can send a
