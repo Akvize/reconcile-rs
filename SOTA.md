@@ -85,9 +85,11 @@ for with history-independence, **without paying for it** — and thereby escapes
   respects causality, divergence bounded by ε; adopted by CockroachDB and MongoDB.
 - **Tie-break**: must be a **deterministic total order** (e.g. `(HLC, node_id)`). The current `keep
   local on equal` is non-convergent.
-- **Tombstone GC**: must be by **causal stability** (acknowledgment by all replicas) — Cassandra:
-  `gc_grace_seconds` = **10 days** + a complete repair within the window; ScyllaDB: repair-based GC.
-  **60 s** makes the safety precondition nearly impossible to honor.
+- **Tombstone GC**: the safe criterion is **causal stability** (acknowledgment by all replicas), not
+  a wall-clock timer. Even Cassandra's `gc_grace_seconds` (default **10 days**) is safe *only on the
+  condition* that a complete repair covers the window — i.e. no fixed duration, short or long, is
+  sufficient on its own (ScyllaDB makes this explicit with repair-based GC). The pre-fix **60 s**
+  wall-clock purge could not honor that precondition; GC is now gated on causal stability (F4/#109).
 
 ---
 
@@ -371,7 +373,7 @@ surrounding system.
 | **causal stability** | A safe-GC condition: an event is purgeable only when **no concurrent operation can still arrive** (all replicas have seen it). The basis of the F4 fix. |
 | **session guarantees** | (Bayou) Read-Your-Writes, Monotonic Reads, Monotonic Writes, Writes-Follow-Reads. None provided by multi-master physical LWW. |
 | **resurrection / zombie** | Reappearance of deleted data when a tombstone is purged before all have seen it (F4). |
-| **`gc_grace_seconds`** | Cassandra window before purging a tombstone (default **10 days**), safe *if* a complete repair covers it. Compare to the **60 s** here (F4). |
+| **`gc_grace_seconds`** | Cassandra window before purging a tombstone (default **10 days**), safe *only if* a complete repair covers it — a heuristic, not a guarantee. The pre-#109 design here used a **60 s** wall-clock purge (F4); GC is now gated on causal stability instead. |
 | **CAP / PACELC** | CAP: under a Partition, choose Consistency or Availability. PACELC: *Else* (normal operation), choose Latency or Consistency. reconcile-rs is **PA/EL**. |
 | **clock skew / NTP / PTP** | Drift between physical clocks; synchronization protocols (NTP ~sub-second, PTP more precise). Cause of LWW losses (F5). |
 | **quorum / read repair / hinted handoff** | Dynamo-like mechanisms (absent here): majority of replicas, repair at read time, buffer for an unreachable peer. |
