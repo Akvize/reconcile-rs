@@ -7,21 +7,11 @@ use chrono::{DateTime, Utc};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
     wheel: Arc<RwLock<BTreeMap<DateTime<Utc>, T>>>,
     map: Arc<RwLock<HashMap<T, DateTime<Utc>>>>,
     timeout: Duration,
-}
-
-impl<T: Clone + Hash + std::cmp::Eq> Clone for TimeoutWheel<T> {
-    fn clone(&self) -> Self {
-        TimeoutWheel {
-            wheel: self.wheel.clone(),
-            map: self.map.clone(),
-            timeout: self.timeout,
-        }
-    }
 }
 
 impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
