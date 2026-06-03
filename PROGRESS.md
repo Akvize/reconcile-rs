@@ -11,7 +11,7 @@
 >   architecture migration (one sub-issue per phase).
 
 - **Last updated:** 2026-06-03
-- **Baseline:** `master` @ `d766c4e`
+- **Baseline:** `master` @ `0307379`
 - **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
 
 ---
@@ -21,8 +21,9 @@
 The **algorithmic core** (HRTree + range fingerprint + RBSR diff) is correct and SOTA-aligned. The
 **critical engineering and distributed-design defects** found by the original review have since been
 fixed: the crate now has a collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution,
-causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication, and
-pluggable persistence. Remaining work is **maturity, scaling, and the confidentiality roadmap** — no
+causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication and
+payload encryption, pluggable persistence, runtime observability, and a lightweight dateless
+read-only mirror. Remaining work is **maturity, scaling, and the confidentiality roadmap** — no
 known correctness hazard is open.
 
 ---
@@ -69,7 +70,7 @@ resolved; all but one High resolved or mitigated.
 - [ ] Real semantic version (still `0.0.0-git`)
 - [ ] Declared MSRV (`rust-version`)
 - [ ] `CHANGELOG.md`
-- [ ] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97))
+- [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
 - [ ] miri job for the `unsafe` iterators
 - [ ] `overflow-checks = true` in the release profile ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
@@ -91,7 +92,8 @@ resolved; all but one High resolved or mitigated.
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
   (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).
 - ◯ Larger-than-datagram payloads — [#2](https://github.com/Akvize/reconcile-rs/issues/2).
-- ◯ Observability: `tracing` spans + metrics — [#94](https://github.com/Akvize/reconcile-rs/issues/94).
+- ✅ Lightweight dateless read-only mirror (`ReconcileMirror`), #109-safe — PR #133 ([#128](https://github.com/Akvize/reconcile-rs/issues/128)).
+- ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — PR #130 ([#94](https://github.com/Akvize/reconcile-rs/issues/94)).
 
 ### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
 - Reconciliation latency: RBSR uses O(log n) sequential RTTs; a Rateless-IBLT pass to drain
