@@ -430,3 +430,96 @@ async fn test_malformed_datagram_does_not_crash() {
     task2.abort();
     task1.abort();
 }
+
+/// Two nodes sharing the same cluster key with encryption enabled must converge, proving that
+/// payloads round-trip end-to-end through the XChaCha20-Poly1305 layer (issue #96).
+#[cfg(feature = "encryption")]
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_nodes_converge() {
+    let port = 8083;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.48".parse().unwrap();
+    let addr2 = "127.0.0.49".parse().unwrap();
+    let key = [0x42u8; 32];
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net)
+        .with_cluster_key(key)
+        .with_encryption();
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net)
+        .with_cluster_key(key)
+        .with_encryption();
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
+        let key: String = Alphanumeric.sample_string(&mut rng, 100);
+        let value: String = Alphanumeric.sample_string(&mut rng, 100);
+        (key, value)
+    });
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert_bulk(&key_values);
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // store2 should receive all of store1's values across the encrypted channel
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    // a fresh incremental insert also propagates
+    let key = "enc-key".to_string();
+    let value = "encrypted value".to_string();
+    store2.insert(key.clone(), value.clone());
+    assert_until!(store1.get(&key).as_deref() == Some(&value));
+
+    task2.abort();
+    task1.abort();
+}
+
+/// A node with the wrong key must be rejected: its encrypted datagrams fail to decrypt on the
+/// peer (and vice versa), so the two never converge. This is the confidentiality analog of an
+/// "invalid certificate" rejection — only a holder of the shared secret can join.
+#[cfg(feature = "encryption")]
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypted_node_with_wrong_key_is_rejected() {
+    let port = 8084;
+    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.50".parse().unwrap();
+    let addr2 = "127.0.0.51".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(peer_net)
+        .with_cluster_key([0x42u8; 32])
+        .with_encryption();
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(peer_net)
+        .with_cluster_key([0x99u8; 32]) // different key
+        .with_encryption();
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert("secret".to_string(), "value".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // store2 must NOT be able to read store1's data: with a wrong key every datagram fails
+    // authentication and is dropped, so it never reaches store1's fingerprint.
+    assert!(
+        !wait_until(|| store2.fingerprint(..) == start_hash).await,
+        "node with the wrong key must not converge"
+    );
+
+    task2.abort();
+    task1.abort();
+}

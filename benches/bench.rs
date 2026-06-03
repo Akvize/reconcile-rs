@@ -293,6 +293,7 @@ fn service_send(c: &mut Criterion) {
         peer_net,
         cluster_key: None,
         node_id: None,
+        encrypt: false,
     };
     let cfg2 = Config {
         port,
@@ -300,6 +301,7 @@ fn service_send(c: &mut Criterion) {
         peer_net,
         cluster_key: None,
         node_id: None,
+        encrypt: false,
     };
 
     let mut rng = rand::rngs::ThreadRng::default();

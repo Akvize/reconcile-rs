@@ -16,6 +16,12 @@
 //! datagram is framed as `tag || payload` where `tag` is a keyed MAC over `payload`, and every
 //! incoming datagram is verified **before** any deserialization.
 //!
+//! With the `encryption` feature and
+//! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), this keyed mode is
+//! upgraded from authentication-only to **authenticated encryption**: each datagram is framed as
+//! `nonce || ciphertext || tag` using XChaCha20-Poly1305 over the same cluster key, adding
+//! confidentiality (issue #96) on top of the integrity and authenticity the MAC already provides.
+//!
 //! # Design
 //!
 //! The module is layered so the type system carries the security invariants ("parse, don't
@@ -32,11 +38,24 @@
 //!   Because message handling consumes a `Payload` rather than `&[u8]`, it is structurally
 //!   impossible to deserialize bytes that have not cleared the authentication gate.
 
+use std::borrow::Cow;
+
 /// Length in bytes of the authentication tag prepended to every datagram.
 pub(crate) const TAG_LEN: usize = 32;
 
 /// Length in bytes of a cluster key.
 pub(crate) const KEY_LEN: usize = 32;
+
+/// Length in bytes of the XChaCha20-Poly1305 nonce prepended to each encrypted datagram.
+///
+/// A 192-bit nonce is large enough that drawing it at random for every datagram has negligible
+/// collision probability, so the encrypted mode needs no per-peer counter or connection state.
+#[cfg(feature = "encryption")]
+pub(crate) const AEAD_NONCE_LEN: usize = 24;
+
+/// Length in bytes of the XChaCha20-Poly1305 (Poly1305) authentication tag.
+#[cfg(feature = "encryption")]
+pub(crate) const AEAD_TAG_LEN: usize = 16;
 
 #[cfg(not(any(feature = "mac-blake3", feature = "mac-hmac")))]
 compile_error!(
@@ -72,15 +91,19 @@ impl Tag {
     }
 }
 
-/// A datagram payload that has cleared the authentication gate — either its tag was verified, or
-/// the store is running in (explicitly) unauthenticated mode. The rest of the engine can only
-/// obtain one through [`Authenticator::open`], so message handling cannot, by construction, run on
-/// bytes that were not cleared first ("parse, don't validate").
-pub(crate) struct Payload<'a>(&'a [u8]);
+/// A datagram payload that has cleared the authentication gate — either its tag was verified (or it
+/// was authenticated and decrypted), or the store is running in (explicitly) unauthenticated mode.
+/// The rest of the engine can only obtain one through [`Authenticator::open`], so message handling
+/// cannot, by construction, run on bytes that were not cleared first ("parse, don't validate").
+///
+/// The bytes are borrowed from the receive buffer in the MAC and unauthenticated modes (zero-copy),
+/// and owned in the encrypted mode where decryption produces a fresh plaintext buffer; [`Cow`]
+/// captures both without forcing an allocation on the common path.
+pub(crate) struct Payload<'a>(Cow<'a, [u8]>);
 
-impl<'a> Payload<'a> {
-    pub(crate) fn as_bytes(&self) -> &'a [u8] {
-        self.0
+impl Payload<'_> {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -158,21 +181,52 @@ pub(crate) type ClusterMac = HmacSha256Mac;
 pub(crate) enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
     Disabled,
-    /// A cluster key is configured: datagrams are sealed and verified.
+    /// A cluster key is configured: datagrams are MAC-sealed and verified (plaintext payload).
     Enabled(ClusterKey),
+    /// A cluster key is configured and the `encryption` feature is active: datagrams are
+    /// authenticated *and* encrypted with XChaCha20-Poly1305 over the cluster key.
+    #[cfg(feature = "encryption")]
+    Encrypted(ClusterKey),
 }
 
 impl Authenticator {
-    /// Build an authenticator from an optional raw cluster key.
-    pub(crate) fn new(key: Option<[u8; KEY_LEN]>) -> Self {
-        match key {
-            Some(bytes) => Authenticator::Enabled(ClusterKey::new(bytes)),
-            None => Authenticator::Disabled,
+    /// Build an authenticator from an optional raw cluster key and whether to encrypt.
+    ///
+    /// `encrypt` is only ever `true` when [`Config::with_encryption`] was used, which is gated on
+    /// the `encryption` feature; the `cfg(not(...))` arm keeps the match exhaustive and turns any
+    /// other route into a clear panic instead of a silent downgrade.
+    ///
+    /// [`Config::with_encryption`]: crate::reconcile_store::Config::with_encryption
+    pub(crate) fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
+        match (key, encrypt) {
+            (None, _) => Authenticator::Disabled,
+            (Some(bytes), false) => Authenticator::Enabled(ClusterKey::new(bytes)),
+            #[cfg(feature = "encryption")]
+            (Some(bytes), true) => Authenticator::Encrypted(ClusterKey::new(bytes)),
+            #[cfg(not(feature = "encryption"))]
+            (Some(_), true) => panic!(
+                "reconcile: encryption requested but the crate was built without the \
+                 `encryption` feature"
+            ),
         }
     }
 
+    /// Whether datagrams are authenticated (MAC or AEAD), as opposed to running unauthenticated.
     pub(crate) fn is_enabled(&self) -> bool {
-        matches!(self, Authenticator::Enabled(_))
+        !matches!(self, Authenticator::Disabled)
+    }
+
+    /// Whether payloads are encrypted (not just authenticated). Always `false` without the
+    /// `encryption` feature.
+    pub(crate) fn is_encrypted(&self) -> bool {
+        #[cfg(feature = "encryption")]
+        {
+            matches!(self, Authenticator::Encrypted(_))
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
+            false
+        }
     }
 
     /// Number of extra bytes a sealed datagram adds, for MTU/buffer accounting.
@@ -180,13 +234,18 @@ impl Authenticator {
         match self {
             Authenticator::Disabled => 0,
             Authenticator::Enabled(_) => TAG_LEN,
+            #[cfg(feature = "encryption")]
+            Authenticator::Encrypted(_) => AEAD_NONCE_LEN + AEAD_TAG_LEN,
         }
     }
 
-    /// Frame an outgoing datagram as `tag(payload) || payload`.
+    /// Frame an outgoing datagram.
     ///
-    /// Returns `Some(framed)` when enabled, or `None` when disabled (the caller then sends
-    /// `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
+    /// - `Enabled`: `tag(payload) || payload`.
+    /// - `Encrypted`: `nonce || ciphertext || tag` (the payload is never sent in the clear).
+    ///
+    /// Returns `Some(framed)` when enabled/encrypted, or `None` when disabled (the caller then
+    /// sends `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
     pub(crate) fn seal(&self, payload: &[u8]) -> Option<Vec<u8>> {
         match self {
             Authenticator::Disabled => None,
@@ -197,25 +256,77 @@ impl Authenticator {
                 framed.extend_from_slice(payload);
                 Some(framed)
             }
+            #[cfg(feature = "encryption")]
+            Authenticator::Encrypted(key) => Some(encryption::seal(key, payload)),
         }
     }
 
-    /// Authenticate an incoming datagram, returning the [`Payload`] cleared for processing.
+    /// Authenticate (and, in encrypted mode, decrypt) an incoming datagram, returning the
+    /// [`Payload`] cleared for processing.
     ///
-    /// When enabled, the datagram must be `tag || payload` with a valid tag; otherwise (too short
-    /// or invalid tag) `None` is returned and the caller drops it silently. When disabled, the
-    /// whole datagram is returned as the payload.
+    /// - `Enabled`: the datagram must be `tag || payload` with a valid tag.
+    /// - `Encrypted`: the datagram must be `nonce || ciphertext || tag` that decrypts under the
+    ///   cluster key.
+    ///
+    /// On any failure (too short, invalid tag, decryption error) `None` is returned and the caller
+    /// drops it silently. When disabled, the whole datagram is returned as the payload.
     pub(crate) fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a>> {
         match self {
-            Authenticator::Disabled => Some(Payload(datagram)),
+            Authenticator::Disabled => Some(Payload(Cow::Borrowed(datagram))),
             Authenticator::Enabled(key) => {
                 if datagram.len() < TAG_LEN {
                     return None;
                 }
                 let (tag, payload) = datagram.split_at(TAG_LEN);
-                ClusterMac::verify(key, payload, tag).then_some(Payload(payload))
+                ClusterMac::verify(key, payload, tag).then_some(Payload(Cow::Borrowed(payload)))
+            }
+            #[cfg(feature = "encryption")]
+            Authenticator::Encrypted(key) => {
+                encryption::open(key, datagram).map(|plaintext| Payload(Cow::Owned(plaintext)))
             }
         }
+    }
+}
+
+/// XChaCha20-Poly1305 authenticated encryption over the cluster key.
+///
+/// A child module so it can reuse [`ClusterKey`]'s private accessor while keeping all the
+/// `chacha20poly1305` plumbing — and the feature gate — in one place.
+#[cfg(feature = "encryption")]
+mod encryption {
+    use chacha20poly1305::aead::{Aead, OsRng};
+    use chacha20poly1305::{AeadCore, Key, KeyInit, XChaCha20Poly1305, XNonce};
+
+    use super::{ClusterKey, AEAD_NONCE_LEN, AEAD_TAG_LEN};
+
+    fn cipher(key: &ClusterKey) -> XChaCha20Poly1305 {
+        XChaCha20Poly1305::new(Key::from_slice(key.as_bytes()))
+    }
+
+    /// Encrypt `payload`, returning `nonce || ciphertext || tag`.
+    pub(super) fn seal(key: &ClusterKey, payload: &[u8]) -> Vec<u8> {
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        // No associated data. Encryption only fails for a multi-gigabyte plaintext, which a single
+        // UDP datagram can never reach, so the buffer-size invariant makes this infallible.
+        let ciphertext = cipher(key)
+            .encrypt(&nonce, payload)
+            .expect("XChaCha20-Poly1305 encryption of a datagram-sized payload cannot fail");
+        let mut framed = Vec::with_capacity(AEAD_NONCE_LEN + ciphertext.len());
+        framed.extend_from_slice(nonce.as_slice());
+        framed.extend_from_slice(&ciphertext);
+        framed
+    }
+
+    /// Decrypt a `nonce || ciphertext || tag` datagram, returning the plaintext, or `None` if it is
+    /// too short or fails authentication.
+    pub(super) fn open(key: &ClusterKey, datagram: &[u8]) -> Option<Vec<u8>> {
+        if datagram.len() < AEAD_NONCE_LEN + AEAD_TAG_LEN {
+            return None;
+        }
+        let (nonce, ciphertext) = datagram.split_at(AEAD_NONCE_LEN);
+        cipher(key)
+            .decrypt(XNonce::from_slice(nonce), ciphertext)
+            .ok()
     }
 }
 
@@ -259,16 +370,19 @@ mod tests {
 
     #[test]
     fn seal_open_roundtrip() {
-        let auth = Authenticator::new(Some([0x11; KEY_LEN]));
+        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
         let payload = b"some serialized message";
         let sealed = auth.seal(payload).expect("enabled");
         assert_eq!(sealed.len(), TAG_LEN + payload.len());
-        assert_eq!(auth.open(&sealed).map(|p| p.as_bytes()), Some(&payload[..]));
+        assert_eq!(
+            auth.open(&sealed).map(|p| p.as_bytes().to_vec()),
+            Some(payload.to_vec())
+        );
     }
 
     #[test]
     fn open_too_short() {
-        let auth = Authenticator::new(Some([0x11; KEY_LEN]));
+        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
         // Fewer than TAG_LEN bytes can never carry a valid tag.
         assert!(auth.open(&[0u8; 10]).is_none());
         assert!(auth.open(&[]).is_none());
@@ -276,24 +390,98 @@ mod tests {
 
     #[test]
     fn open_wrong_key() {
-        let sealed = Authenticator::new(Some([0x11; KEY_LEN]))
+        let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false)
             .seal(b"payload")
             .expect("enabled");
-        assert!(Authenticator::new(Some([0x22; KEY_LEN]))
+        assert!(Authenticator::new(Some([0x22; KEY_LEN]), false)
             .open(&sealed)
             .is_none());
     }
 
     #[test]
     fn disabled_passes_through_and_does_not_seal() {
-        let auth = Authenticator::new(None);
+        let auth = Authenticator::new(None, false);
         assert!(!auth.is_enabled());
+        assert!(!auth.is_encrypted());
         assert_eq!(auth.overhead(), 0);
         assert!(auth.seal(b"payload").is_none());
         // Any datagram clears the gate unchanged in unauthenticated mode.
         assert_eq!(
-            auth.open(b"raw bytes").map(|p| p.as_bytes()),
-            Some(&b"raw bytes"[..])
+            auth.open(b"raw bytes").map(|p| p.as_bytes().to_vec()),
+            Some(b"raw bytes".to_vec())
         );
+    }
+
+    #[cfg(feature = "encryption")]
+    mod encryption {
+        use super::*;
+
+        fn encryptor(byte: u8) -> Authenticator {
+            Authenticator::new(Some([byte; KEY_LEN]), true)
+        }
+
+        #[test]
+        fn roundtrip_and_overhead() {
+            let auth = encryptor(0x11);
+            assert!(auth.is_enabled());
+            assert!(auth.is_encrypted());
+            assert_eq!(auth.overhead(), AEAD_NONCE_LEN + AEAD_TAG_LEN);
+
+            let payload = b"some serialized message";
+            let sealed = auth.seal(payload).expect("encrypted");
+            assert_eq!(sealed.len(), AEAD_NONCE_LEN + payload.len() + AEAD_TAG_LEN);
+            assert_eq!(
+                auth.open(&sealed).map(|p| p.as_bytes().to_vec()),
+                Some(payload.to_vec())
+            );
+        }
+
+        #[test]
+        fn ciphertext_hides_plaintext() {
+            let payload = b"the quick brown fox jumps over the lazy dog";
+            let sealed = encryptor(0x11).seal(payload).expect("encrypted");
+            // The plaintext must not appear anywhere in the framed datagram.
+            assert!(!sealed
+                .windows(payload.len())
+                .any(|window| window == payload));
+        }
+
+        #[test]
+        fn fresh_nonce_per_datagram() {
+            // The same payload sealed twice must differ (random nonce), so an observer cannot even
+            // tell two identical messages apart.
+            let auth = encryptor(0x11);
+            let payload = b"identical payload";
+            assert_ne!(
+                auth.seal(payload).expect("encrypted"),
+                auth.seal(payload).expect("encrypted")
+            );
+        }
+
+        #[test]
+        fn tamper_is_rejected() {
+            let auth = encryptor(0x11);
+            let mut sealed = auth.seal(b"payload").expect("encrypted");
+            // Flip a ciphertext byte (past the nonce): authentication must fail.
+            let last = sealed.len() - 1;
+            sealed[last] ^= 0x01;
+            assert!(auth.open(&sealed).is_none());
+        }
+
+        #[test]
+        fn wrong_key_is_rejected() {
+            let sealed = encryptor(0x11).seal(b"payload").expect("encrypted");
+            assert!(encryptor(0x22).open(&sealed).is_none());
+        }
+
+        #[test]
+        fn truncated_is_rejected() {
+            let auth = encryptor(0x11);
+            // Shorter than nonce + tag can never carry a valid datagram.
+            assert!(auth
+                .open(&[0u8; AEAD_NONCE_LEN + AEAD_TAG_LEN - 1])
+                .is_none());
+            assert!(auth.open(&[]).is_none());
+        }
     }
 }

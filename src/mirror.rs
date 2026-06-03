@@ -135,7 +135,7 @@ impl<
             "ReconcileMirror listening on: {}",
             socket.local_addr().unwrap()
         );
-        let authenticator = auth::Authenticator::new(config.cluster_key);
+        let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if !authenticator.is_enabled() {
             warn!(
                 "SECURITY: no cluster key set — the lightweight mirror accepts UNAUTHENTICATED \
@@ -366,6 +366,7 @@ mod tests {
             peer_net: "127.0.0.1/8".parse().unwrap(),
             cluster_key: None,
             node_id: None,
+            encrypt: false,
         }
     }
 

@@ -83,10 +83,30 @@ BLAKE3) or `mac-hmac` (HMAC-SHA256). All nodes in a cluster must share the ident
 built with the same backend. The optional `zeroize` feature wipes the cluster key from memory when
 it is dropped (defense in depth).
 
-**Scope.** This provides message integrity and authenticity. It does **not** provide
-confidentiality (the payload is not encrypted — see issue #96), replay protection (replaying a
-captured datagram is benign for idempotent last-write-wins reconciliation), or a peer allow-list.
-For confidentiality, run the protocol over a trusted/encrypted underlay.
+### Confidentiality (encryption)
+
+By default the keyed mode authenticates a **plaintext** payload. With the `encryption` Cargo
+feature, `Config::with_encryption()` upgrades it to authenticated **encryption**: each datagram is
+framed as `nonce || ciphertext || tag` with [XChaCha20-Poly1305] over the same 32-byte cluster key,
+and is decrypted-and-verified before deserialization.
+
+```rust
+// requires the `encryption` feature
+let config = Config::default().with_cluster_key(key).with_encryption();
+```
+
+This reuses the cluster key as the AEAD key (so `with_cluster_key` is still required, and all nodes
+must enable encryption together), draws a fresh random 192-bit nonce per datagram, and adds 40 bytes
+of overhead (24-byte nonce + 16-byte tag).
+
+**Scope.** The MAC mode provides message integrity and authenticity; the `encryption` mode adds
+confidentiality on top. Neither provides replay protection (replaying a captured datagram is benign
+for idempotent last-write-wins reconciliation) or a peer allow-list, and the trust model stays a
+single shared secret — there is no per-peer identity or forward secrecy. Mutual peer authentication
+and forward secrecy would require a handshake (TLS/Noise), which is intentionally out of scope; if
+you need them, run the protocol over a trusted/encrypted underlay.
+
+[XChaCha20-Poly1305]: https://docs.rs/chacha20poly1305
 
 ## Persistence
 

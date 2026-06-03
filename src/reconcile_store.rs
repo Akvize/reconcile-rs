@@ -405,7 +405,14 @@ pub struct Config {
     /// collisions negligible; set an explicit id only when you need a stable, reproducible
     /// ordering (e.g. in tests).
     pub node_id: Option<u64>,
-    // may include other options in the future: use_tls, tombstone_ttl, metrics, etc.
+    /// Whether to encrypt datagram payloads (not just authenticate them).
+    ///
+    /// Only ever set through `Config::with_encryption` (available with the `encryption` cargo
+    /// feature), which also requires a [`cluster_key`](Self::cluster_key). When `false` (the
+    /// default), a set cluster key authenticates plaintext datagrams with a MAC; when `true`, the
+    /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
+    pub encrypt: bool,
+    // may include other options in the future: tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
     fn default() -> Self {
@@ -415,6 +422,7 @@ impl Default for Config {
             peer_net: "127.0.0.1/8".parse().unwrap(),
             cluster_key: None,
             node_id: None,
+            encrypt: false,
         }
     }
 }
@@ -455,6 +463,27 @@ impl Config {
         self.node_id = Some(node_id);
         self
     }
+
+    /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
+    /// authentication-only to authenticated **encryption** (issue #96).
+    ///
+    /// This reuses the shared [`cluster_key`](Self::cluster_key) as the AEAD key, so
+    /// [`with_cluster_key`](Self::with_cluster_key) must also be set on every node; a node
+    /// without a key will not converge with encrypted peers. Each datagram is framed as
+    /// `nonce || ciphertext || tag`, adding 40 bytes of overhead, and is decrypted-and-verified
+    /// before deserialization; datagrams that fail are silently dropped.
+    ///
+    /// The trust model is unchanged from the MAC mode: a single shared secret, so any holder can
+    /// read and write. It provides confidentiality and integrity but **not** per-peer identity,
+    /// forward secrecy, or replay protection — those would require a handshake (TLS/Noise), which
+    /// is intentionally out of scope.
+    ///
+    /// Requires the `encryption` cargo feature.
+    #[cfg(feature = "encryption")]
+    pub fn with_encryption(mut self) -> Self {
+        self.encrypt = true;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -475,6 +504,7 @@ mod reconcile_store_tests {
             peer_net: "127.0.0.1/8".parse().unwrap(),
             cluster_key: None,
             node_id: None,
+            encrypt: false,
         }
     }
 
@@ -490,6 +520,7 @@ mod reconcile_store_tests {
             peer_net: "127.0.0.45/32".parse().unwrap(),
             cluster_key: None,
             node_id: None,
+            encrypt: false,
         };
         let store = ReconcileStore::<i32, i32>::new(config)
             .await
