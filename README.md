@@ -154,6 +154,34 @@ let body: String = handle.render();
 Enable with `cargo build --features metrics-prometheus` (or list `metrics`/`metrics-prometheus`
 in your dependency's `features`).
 
+## Read-only mirror (`ReconcileMirror`)
+
+For fleets with many *passive read replicas*, the per-value `Hlc` timestamp a dated `ReconcileStore`
+keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
+only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
+stores only the value (`ValueOnly<V>`, ~24 bytes lighter per entry for a small payload) and still
+converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
+
+It stays issue-#109-safe: rather than replacing the timestamped reconciliation hash everywhere (which
+would break tombstone causal stability and block GC forever), each dated node maintains an *additional
+value-only projection* of its data and answers a mirror's value-only diff against that projection. A
+mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is never counted as a
+causal-stability member, so it cannot hold back a dated node's garbage collection.
+
+```rust
+use reconcile::{reconcile_store::Config, ReconcileMirror};
+
+// Mirrors a dated cluster reachable at `dated_addr` on the same port.
+let mirror = ReconcileMirror::<String, String>::new(Config::default())
+    .await
+    .with_seed(dated_addr);
+tokio::spawn(mirror.clone().run());
+// `mirror.get(&key)` reflects the cluster's current values; deletions appear as `None`.
+```
+
+A mirror **always integrates** inbound updates and **never sends authoritative values** — it is a
+sink, not a source. The dated↔dated path (and its wire format) is byte-for-byte unchanged.
+
 ## HRTree
 
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
