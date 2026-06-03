@@ -11,7 +11,7 @@
 >   architecture migration (one sub-issue per phase).
 
 - **Last updated:** 2026-06-03
-- **Baseline:** `master` @ `0307379`
+- **Baseline:** `master` @ `b7daa7f`
 - **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
 
 ---
@@ -109,6 +109,14 @@ bound bundles & encapsulation → dissolve diff traits → `Clock` port → `Ent
 `Transport`/`Codec` ports → workspace split. None of these change runtime behaviour except the
 `Entry`/`State` step (wire/on-disk format), and all preserve the invariants below.
 
+Refinements adopted after a `file:line` review of the sequence (see issue
+[#138](https://github.com/Akvize/reconcile-rs/issues/138)): the `Clock` port pins `Timestamp` to
+`Hlc` (no generic associated type); the `Entry`/`State` step also dissolves `Projectable`/`ValueOnly`
+into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a decode cap and the
+`BincodeCodec` adapter sets `with_limit` (partially closing
+[#151](https://github.com/Akvize/reconcile-rs/issues/151)); the `Transport`/`Codec` ports live in
+`reconcile-net` (the `Clock`/`Persistence` ports in `reconcile-core`).
+
 ---
 
 ## 5. Load-bearing invariants
@@ -122,6 +130,9 @@ Any change must preserve these (they encode the fixes above):
 5. Authenticate-before-deserialize (MAC on raw bytes before decoding).
 6. Causal-stability tombstone gate before GC.
 7. `version_hash` determinism.
+8. Value-only projection hash is timestamp-less — the dated cell keeps a timestamp-**inclusive**
+   `Hash` (used by `version_hash`), while its value-only projection (the dateless mirror channel)
+   hashes the value alone, so a dated store and a dateless mirror agree on per-element fingerprints.
 
 ---
 

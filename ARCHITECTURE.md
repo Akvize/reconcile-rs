@@ -156,10 +156,14 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 ```rust
 // Clock — abstracts the time source (replaces the direct chrono::Utc read).
 // The HLC algorithm stays in the domain; only physical time crosses the boundary.
+// Timestamp is pinned to Hlc rather than a generic associated type: Hlc is the only
+// stamp in use, alternate causality schemes (vector clocks / CRDT) are out of scope
+// (see hlc.rs), and the tombstone wheel, version_hash and the serde format are already
+// Hlc-coupled — a generic Timestamp would leak its shape while adding a type parameter
+// to the engine, store and Config. Only the physical-time read crosses the boundary.
 pub trait Clock: Send + Sync + 'static {
-    type Timestamp: Copy + Ord + Hash + Serialize + DeserializeOwned + Send + Sync + 'static;
-    fn now(&self) -> Self::Timestamp;           // mint a strictly-monotonic local stamp
-    fn observe(&self, remote: Self::Timestamp);  // advance past a peer's stamp (causality)
+    fn now(&self) -> Hlc;           // mint a strictly-monotonic local stamp
+    fn observe(&self, remote: Hlc);  // advance past a peer's stamp (causality)
 }
 
 // Transport — abstracts datagram I/O (replaces tokio::net::UdpSocket).
@@ -172,10 +176,18 @@ pub trait Transport: Send + Sync + 'static {
 }
 
 // Codec — abstracts wire encoding (replaces bincode). Authentication wraps it externally.
+// decode_stream carries a max_items cap so a single datagram cannot be expanded into an
+// unbounded number of messages, and the BincodeCodec adapter is built with `.with_limit`
+// so a crafted length prefix cannot pre-allocate a huge buffer (closes the allocation-bomb
+// hazard, issue #151).
 pub trait Codec: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
     fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> Result<(), Self::Error>;
-    fn decode_stream<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<Vec<T>, Self::Error>;
+    fn decode_stream<T: DeserializeOwned>(
+        &self,
+        bytes: &[u8],
+        max_items: usize,
+    ) -> Result<Vec<T>, Self::Error>;
 }
 
 // Persistence — durability boundary (already present, the model the others follow).
@@ -228,6 +240,17 @@ resolution is **domain policy**, not an infrastructure port: last-write-wins is 
 default. A pluggable `Resolve` seam is warranted only if a second policy (e.g. a CRDT) becomes a
 real requirement.
 
+The same step also absorbs the **value-only projection** that powers the dateless `ReconcileMirror`.
+Today the engine keeps a second tree `HRTree<K, V::Projected>` fed through the `Projectable` trait
+into a `ValueOnly<V>(Option<V>)` cell whose `Hash` is timestamp-less by construction. `State<V>` is
+isomorphic to that cell (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), so the projection becomes
+`Entry::project(&self) -> State<V>` (= `self.state.clone()`) and the projection tree becomes
+`HRTree<K, State<V>>`; the `Projectable` trait and `ValueOnly` type are dissolved. The two hashes
+must stay distinct — the dated `Entry` hashes **with** its stamp (for `version_hash`), the projected
+`State<V>` hashes the value **alone** — which is invariant 8 in §5. Because a `ValueOnly(Some(v))`
+and a `State::Present(v)` do not encode to the same bytes, this step also breaks the value-only wire
+format, alongside the dated wire and on-disk formats (acceptable while the formats are unstable).
+
 ### 3.7 Internal mechanism
 
 The anti-entropy mechanism is not a port. `HashRangeQueryable` and `Diffable` are removed as traits:
@@ -256,16 +279,24 @@ The layers are separated into a workspace so that the inward dependency directio
 compiler:
 
 ```
-reconcile-core   // DOMAIN + PORTS: Clock, Transport, Codec, Persistence (traits);
+reconcile-core   // DOMAIN + PORTS: Clock, Persistence (traits);
                  //   Entry / State, Hlc, Fingerprint, HRTree, the diff algorithm, LWW.
-                 //   deps: serde, blake3.  (no tokio, bincode, chrono-IO, ipnet, runtime rand)
-reconcile-net    // ADAPTERS: UdpTransport, BincodeCodec, Authenticator, peer discovery.
+                 //   no infrastructure deps (no tokio, bincode, chrono-IO, ipnet, runtime rand);
+                 //   serde + blake3, plus the dependency-light tracing / metrics facades.
+reconcile-net    // ADAPTERS + I/O PORTS: Transport, Codec (traits); UdpTransport, BincodeCodec,
+                 //   Authenticator, peer discovery (gen_ip / ipnet / rand).
 reconcile-store  // ADAPTERS: FileSnapshot / InMemory persistence.
-reconcile        // WIRING + driving API: the Store facade, configuration.
+reconcile        // WIRING + driving API: the Store facade, configuration, the HlcClock adapter
+                 //   (which holds the chrono read), the tombstone wheel.
 ```
 
-Ports are defined in `reconcile-core`; adapters depend on `reconcile-core`. Infrastructure cannot be
-imported into the core without a compile error — the guarantee a single crate cannot provide.
+The `Clock` and `Persistence` ports are defined in `reconcile-core` (the domain-adjacent logic
+injects them). The **`Transport` and `Codec` ports are defined in `reconcile-net`**, not the core:
+they are consumed by the UDP driver, which lives in `reconcile-net`, and the diff/merge domain does
+no I/O — this also keeps `async_trait` out of the core. The chrono-reading `HlcClock` adapter lives
+in `reconcile` (the `Hlc` *type* and the pure HLC advance stay in the core, so the core carries no
+`chrono`). Adapters depend on `reconcile-core`; infrastructure cannot be imported into the core
+without a compile error — the guarantee a single crate cannot provide.
 
 ---
 
@@ -276,6 +307,7 @@ imported into the core without a compile error — the guarantee a single crate 
 | `(Hlc, Option<V>)` tuple | `Entry<Hlc, V>` + `State<V>` domain type |
 | `MaybeTombstone`, `Timestamped` | inherent `Entry` methods / field access |
 | `Reconcilable` (LWW over tuple) | `Entry::merge` (LWW), optional `Resolve` policy seam |
+| `Projectable` / `ValueOnly<V>` (dateless mirror) | `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `HRTree` methods + `pub(crate)` diff functions |
 | `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
 | `chrono::Utc` read in `hlc.rs` | `Clock` port; `HlcClock` adapter holds the time read |
@@ -295,7 +327,7 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶; the
    golden vectors in `fingerprint.rs` hold.
 2. **HLC total order** `(wall_ms, counter, node_id)` (`hlc.rs:44-54`) — the derived ordering *is* the
-   conflict order; `Clock::Timestamp = Hlc` preserves it, and merge uses strict `>`.
+   conflict order; the `Clock` port mints `Hlc` directly, preserving it, and merge uses strict `>`.
 3. **Size-not-hash emptiness/equality** in `diff_round` (`diff.rs:135-141`).
 4. **Malformed-bound / inverted-range hardening** in `diff_round` (`diff.rs:100-134`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs; the
@@ -303,6 +335,10 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 6. **Causal-stability tombstone gate** — a tombstone is garbage-collected only after every monotonic
    cluster member has acknowledged the exact version hash.
 7. **`version_hash` determinism** (`reconcile_engine.rs:55`) — preserved as `Entry` derives `Hash`.
+8. **Value-only projection hash is timestamp-less** — the dated `Entry` hashes with its `stamp`
+   (feeding `version_hash`), while its `State<V>` projection hashes the value alone, so a dated
+   store and a dateless `ReconcileMirror` compute identical per-element fingerprints. Guarded by
+   `mirror.rs::value_fingerprint_is_timestamp_independent`.
 
 ---
 
