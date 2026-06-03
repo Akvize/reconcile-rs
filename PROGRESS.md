@@ -3,8 +3,8 @@
 > **Living document.** This is the real-time view of the project's correctness, security, and
 > maturity. It is kept current as work lands. It complements, and does not duplicate:
 >
-> - [`REVIEW.md`](./REVIEW.md) — the dated, in-depth peer review and SOTA/competitor analysis
->   (audit of commit `64f1ebf`). Reference material; not updated as the code evolves.
+> - [`SOTA.md`](./SOTA.md) — state-of-the-art positioning, competitor audit, glossary and
+>   bibliography. Durable reference material; not updated as the code evolves.
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the target architecture (hexagonal ports & adapters)
 >   and the migration plan.
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
@@ -29,7 +29,8 @@ known correctness hazard is open.
 
 ## 2. Correctness & security findings
 
-Status of every finding from [`REVIEW.md`](./REVIEW.md) §4. ✅ resolved · ◐ partial · ◯ open.
+Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
+✅ resolved · ◐ partial · ◯ open.
 
 | # | Severity | Finding | Status | Resolution / note |
 |---|----------|---------|--------|-------------------|
@@ -42,16 +43,16 @@ Status of every finding from [`REVIEW.md`](./REVIEW.md) §4. ✅ resolved · ◐
 | F7 | High | crafted `HashSegment` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 — wire fingerprint is BLAKE3 (`version_hash` still fixed-key `DefaultHasher`) |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
-| F10 | High | IP-scan discovery, O(N²) membership | ◯ | unchanged — see §4 |
+| F10 | High | IP-scan discovery, O(N²) membership | ◯ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — bounded-fan-out membership (SWIM/HyParView) |
 | F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_hrtree.rs`, `tests/fuzz_packets.rs` |
 | F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
-| F13 | Medium | panic-only API (no `Result`) | ◯ | `new`/`run` still return `Self`/`()`; `unwrap` on bind/send |
-| F14 | Medium | `pre_insert` hook under the write-lock (net path) | ◯ | not yet reworked |
+| F13 | Medium | panic-only API (no `Result`) | ◯ | [#148](https://github.com/Akvize/reconcile-rs/issues/148) — `new`/`run` still return `Self`/`()`; `unwrap` on bind/send |
+| F14 | Medium | `pre_insert` hook under the write-lock (net path) | ◯ | [#149](https://github.com/Akvize/reconcile-rs/issues/149) — hook runs under the lock on the network path |
 | F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
 | F16 | Medium | loopback benches + README inconsistency | ◐ | README updated; benches still loopback-only |
 | F17 | Medium/Low | maturity signals | ◐ | clippy fixed; see §3 checklist |
-| F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ◯ | unbounded `peers`; no bincode allocation limit |
-| F19 | Low | dependency hygiene | ◯ | `overflow-checks` off; bincode `with_limit` missing |
+| F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ◯ | [#150](https://github.com/Akvize/reconcile-rs/issues/150) — unbounded `peers`; no bincode allocation limit |
+| F19 | Low | dependency hygiene | ◯ | [#151](https://github.com/Akvize/reconcile-rs/issues/151) — `overflow-checks` off; bincode `with_limit`; `cargo audit` |
 
 **Score:** 11 resolved · 3 partial (F9, F16, F17) · 5 open (F10, F13, F14, F18, F19). All Critical
 resolved; all but one High resolved or mitigated.
@@ -69,10 +70,10 @@ resolved; all but one High resolved or mitigated.
 - [ ] Declared MSRV (`rust-version`)
 - [ ] `CHANGELOG.md`
 - [ ] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97))
-- [ ] `cargo audit` / `cargo deny` in CI
+- [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
 - [ ] miri job for the `unsafe` iterators
-- [ ] `overflow-checks = true` in the release profile
-- [ ] bincode decode limit (`with_limit`) against allocation bombs
+- [ ] `overflow-checks = true` in the release profile ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
+- [ ] bincode decode limit (`with_limit`) against allocation bombs ([#150](https://github.com/Akvize/reconcile-rs/issues/150), [#151](https://github.com/Akvize/reconcile-rs/issues/151))
 
 ---
 
@@ -85,16 +86,19 @@ resolved; all but one High resolved or mitigated.
 - ◯ Key rotation / management — [#137](https://github.com/Akvize/reconcile-rs/issues/137).
 
 ### Scaling & robustness
-- ◯ Membership / discovery: replace random IP-scan with SWIM/HyParView, bounded fan-out (F10).
-- ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit (F18, F19).
+- ◯ Membership / discovery: replace random IP-scan with SWIM/HyParView, bounded fan-out
+  (F10 — [#147](https://github.com/Akvize/reconcile-rs/issues/147)).
+- ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
+  (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).
 - ◯ Larger-than-datagram payloads — [#2](https://github.com/Akvize/reconcile-rs/issues/2).
 - ◯ Observability: `tracing` spans + metrics — [#94](https://github.com/Akvize/reconcile-rs/issues/94).
 
-### Remaining gaps to SOTA (from [`REVIEW.md`](./REVIEW.md) §6)
+### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
 - Reconciliation latency: RBSR uses O(log n) sequential RTTs; a Rateless-IBLT pass to drain
   divergent leaves in one shot would cut WAN latency. Design choice, not a defect.
-- API ergonomics: `Result`-returning `new`/`run` (F13); post-insert hooks
-  ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
+- API ergonomics: `Result`-returning `new`/`run` (F13 — [#148](https://github.com/Akvize/reconcile-rs/issues/148));
+  `pre_insert` under the write-lock on the net path (F14 — [#149](https://github.com/Akvize/reconcile-rs/issues/149));
+  post-insert hooks ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
 
 ### Architecture refactor
 Tracked in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and issue
@@ -123,5 +127,5 @@ Any change must preserve these (they encode the fixes above):
 
 Update on any change that moves a finding's status, ticks a maturity box, or closes a roadmap item:
 bump **Last updated** and **Baseline**, flip the status cell (and add the PR/issue), and keep the
-headline honest. Deep analysis and rationale stay in [`REVIEW.md`](./REVIEW.md); target design stays
+headline honest. SOTA positioning and rationale stay in [`SOTA.md`](./SOTA.md); target design stays
 in [`ARCHITECTURE.md`](./ARCHITECTURE.md).

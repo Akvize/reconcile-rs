@@ -4,9 +4,9 @@
 
 `reconcile-rs` is a reconciliation service that keeps a key-value map synchronised across several
 instances. This document describes the **current architecture** and the **target architecture**
-(hexagonal — ports & adapters). Correctness and security properties are specified in
-[`REVIEW.md`](./REVIEW.md) and are assumed here as the baseline; their current status is tracked in
-[`PROGRESS.md`](./PROGRESS.md).
+(hexagonal — ports & adapters). Correctness and security properties are tracked in
+[`PROGRESS.md`](./PROGRESS.md) and are assumed here as the baseline; the state-of-the-art
+positioning is in [`SOTA.md`](./SOTA.md).
 
 The crate is unpublished (`0.0.0-git`); the public API and the on-wire / on-disk formats are not yet
 stable and may change. Code locations are given as `file:line` against the current tree.
@@ -290,8 +290,7 @@ imported into the core without a compile error — the guarantee a single crate 
 ## 5. Invariants
 
 The following load-bearing properties are preserved across any restructuring; they encode the
-correctness and security guarantees established in [`REVIEW.md`](./REVIEW.md) (live status in
-[`PROGRESS.md`](./PROGRESS.md)).
+correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶; the
    golden vectors in `fingerprint.rs` hold.

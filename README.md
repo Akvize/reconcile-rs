@@ -53,8 +53,8 @@ tokio::spawn(store.clone().run());
   vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
   ports & adapters) the codebase is being refactored toward.
-- [`REVIEW.md`](REVIEW.md) — the in-depth peer review and SOTA/competitor analysis (a dated audit
-  of an earlier commit; see `PROGRESS.md` for the current status of each finding).
+- [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
+  Durable background; carries no status — see `PROGRESS.md` for the current state of each finding.
 
 ## Security model
 
