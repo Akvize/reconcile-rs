@@ -140,6 +140,68 @@ tokio::spawn(store.clone().run()); // periodically snapshots in the background
 The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
 S3, or any other medium.
 
+## Observability
+
+The crate is instrumented with [`tracing`](https://docs.rs/tracing): the network engine, the
+reconciliation rounds, and the message send/receive paths emit spans and events. As with any
+library, `reconcile-rs` does **not** install a subscriber itself — your application does, e.g.
+`tracing_subscriber::fmt().init()` (see `examples/demo.rs`).
+
+Runtime metrics (throughput, latency, and failure counts) are emitted through the
+[`metrics`](https://docs.rs/metrics) facade, gated behind opt-in features so the default build
+stays lean:
+
+- `metrics` — emit counters and histograms (`reconcile_inserts_total`,
+  `reconcile_updates_received_total`, `reconcile_bytes_sent_total`, `reconcile_send_failures_total`,
+  `reconcile_datagrams_dropped_total`, `reconcile_round_duration_seconds`, …). When this feature is
+  off, every metric call site compiles to a no-op.
+- `metrics-prometheus` — additionally provides `reconcile::prometheus` to install a Prometheus
+  recorder and either serve a `/metrics` endpoint or render the exposition text yourself:
+
+```rust,no_run
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+// Serve a /metrics HTTP endpoint (requires a Tokio runtime):
+reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
+
+// ...or install the recorder and render the text yourself through your own HTTP server:
+let handle = reconcile::prometheus::install_recorder()?;
+let body: String = handle.render();
+# let _ = body;
+# Ok(())
+# }
+```
+
+Enable with `cargo build --features metrics-prometheus` (or list `metrics`/`metrics-prometheus`
+in your dependency's `features`).
+
+## Read-only mirror (`ReconcileMirror`)
+
+For fleets with many *passive read replicas*, the per-value `Hlc` timestamp a dated `ReconcileStore`
+keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
+only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
+stores only the value (`ValueOnly<V>`, ~24 bytes lighter per entry for a small payload) and still
+converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
+
+It stays issue-#109-safe: rather than replacing the timestamped reconciliation hash everywhere (which
+would break tombstone causal stability and block GC forever), each dated node maintains an *additional
+value-only projection* of its data and answers a mirror's value-only diff against that projection. A
+mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is never counted as a
+causal-stability member, so it cannot hold back a dated node's garbage collection.
+
+```rust
+use reconcile::{reconcile_store::Config, ReconcileMirror};
+
+// Mirrors a dated cluster reachable at `dated_addr` on the same port.
+let mirror = ReconcileMirror::<String, String>::new(Config::default())
+    .await
+    .with_seed(dated_addr);
+tokio::spawn(mirror.clone().run());
+// `mirror.get(&key)` reflects the cluster's current values; deletions appear as `None`.
+```
+
+A mirror **always integrates** inbound updates and **never sends authoritative values** — it is a
+sink, not a source. The dated↔dated path (and its wire format) is byte-for-byte unchanged.
+
 ## HRTree
 
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
