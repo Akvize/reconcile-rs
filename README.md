@@ -47,6 +47,15 @@ tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
 
+## Documentation
+
+- [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
+  vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
+  ports & adapters) the codebase is being refactored toward.
+- [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
+  Durable background; carries no status — see `PROGRESS.md` for the current state of each finding.
+
 ## Security model
 
 > **By default, the UDP reconciliation protocol is _unauthenticated_.** Any host that can send a
