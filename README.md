@@ -204,38 +204,39 @@ sink, not a source. The dated↔dated path (and its wire format) is byte-for-byt
 
 ## Multiple geographical locations
 
-A single cluster can span several geographical regions (issue #53). A **region is just an address
-range (CIDR)** that groups co-located nodes — size it to your topology: a whole cloud region, an
-availability zone, or a single subnet. The model is intentionally flat: there is no finer level
-(no rack/host) and no hierarchy, because the CIDR mask already lets you pick the granularity. Each
-node declares **its own** region with `with_local_region` and **every other** region with
-`with_remote_region`:
+A single cluster can span several geographical locations (issue #53). Each location is **just an
+address range** — a network (CIDR) that groups co-located nodes. Size it to your topology: a whole
+cloud region, an availability zone, or a single subnet. The model is intentionally flat (one CIDR
+per location, no rack/host level and no hierarchy), because the CIDR mask already lets you pick the
+granularity. Declare every network with `with_net` — **including this node's own**:
 
 ```rust
 use reconcile::{reconcile_store::Config, ReconcileStore};
 
 let config = Config::default()
     .with_listen_addr("10.1.0.7".parse().unwrap())
-    .with_local_region("10.1.0.0/16".parse().unwrap())  // this node's region
-    .with_remote_region("10.2.0.0/16".parse().unwrap()) // a remote region
-    .with_remote_region("10.3.0.0/16".parse().unwrap()); // another remote region
+    .with_net("10.1.0.0/16".parse().unwrap())  // this node's network (contains listen_addr)
+    .with_net("10.2.0.0/16".parse().unwrap())  // another location
+    .with_net("10.3.0.0/16".parse().unwrap()); // and another
 let store = ReconcileStore::<String, String>::new(config).await;
 ```
 
-The gossip is **geography-aware and decentralized** — there are no relay/gateway nodes to configure
-or fail over:
+This node's **local** network is whichever declared net contains its `listen_addr`; all others are
+**remote**. (If none contains it, the node logs a loud warning and treats only itself as local, so
+every peer is remote.) The gossip is **geography-aware and decentralized** — there are no
+relay/gateway nodes to configure or fail over:
 
-- **Discovery** probes one random address in *every* region each round, so peers in all locations
+- **Discovery** probes one random address in *every* network each round, so peers in all locations
   are auto-discovered (not just within a single flat CIDR).
-- **Anti-entropy** sends the full range-diff comparison to *local-region* peers every round (fast
-  intra-region convergence, as before) but to *remote-region* peers only every
-  `cross_region_interval` rounds and to at most `cross_region_fanout` peers per region — bounding WAN
-  traffic. Tune both with `with_cross_region_interval` / `with_cross_region_fanout`.
+- **Anti-entropy** sends the full range-diff comparison to *local-network* peers every round (fast
+  intra-network convergence, as before) but to *remote-network* peers only every `remote_interval`
+  rounds and to at most `remote_fanout` peers per network — bounding WAN traffic. Tune both with
+  `with_remote_interval` / `with_remote_fanout`.
 
-A peer's region is derived purely from its IP address (`IpNet::contains`), so **the wire format is
-unchanged** and a single-region cluster (no `with_remote_region`) behaves exactly as before. Live writes
+A peer's network is derived purely from its IP address (`IpNet::contains`), so **the wire format is
+unchanged** and a single-network cluster (no extra `with_net`) behaves exactly as before. Live writes
 still propagate immediately to all known peers; only the periodic anti-entropy is throttled across
-regions. Cross-region tombstone GC is correspondingly slower but remains strictly correct (it never
+networks. Cross-network tombstone GC is correspondingly slower but remains strictly correct (it never
 collects a tombstone before *every* member has acknowledged it).
 
 ## HRTree

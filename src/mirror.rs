@@ -65,7 +65,7 @@ use tracing::{debug, trace, warn};
 use crate::auth;
 use crate::diff::{Diffable, HashRangeQueryable};
 use crate::fingerprint::Fingerprint;
-use crate::gen_ip::gen_ip;
+use crate::gen_ip::{gen_ip, net_of};
 use crate::hlc::Hlc;
 use crate::reconcilable::ValueOnly;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
@@ -93,7 +93,10 @@ pub struct ReconcileMirror<K, V> {
     tree: Arc<RwLock<HRTree<K, ValueOnly<V>>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    local_region: IpNet,
+    /// The single network this read-only mirror probes for discovery (issue #53). A mirror is a
+    /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
+    /// containing its listen address, else the first declared network, else the loopback default.
+    net: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     authenticator: auth::Authenticator,
@@ -107,7 +110,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
             tree: self.tree.clone(),
             port: self.port,
             socket: self.socket.clone(),
-            local_region: self.local_region,
+            net: self.net,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             authenticator: self.authenticator.clone(),
@@ -142,11 +145,17 @@ impl<
                  datagrams. Set Config::with_cluster_key to match the dated cluster."
             );
         }
+        // A mirror tracks a single network: the one containing its listen address, else the first
+        // declared network, else the historical loopback default.
+        let nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
+        let net = net_of(&nets, config.listen_addr)
+            .or_else(|| nets.first().copied())
+            .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
         ReconcileMirror {
             tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
-            local_region: config.local_region,
+            net,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
@@ -233,7 +242,7 @@ impl<
         let mut peers = self.get_peers();
         // A random address out of the peer network, for discovery — like the dated store, we do not
         // add it to the known peers; a real peer there will answer and be recorded then.
-        let addr = gen_ip(&mut *self.rng.write(), self.local_region);
+        let addr = gen_ip(&mut *self.rng.write(), self.net);
         peers.push(addr);
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
@@ -357,20 +366,11 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reconcile_store::{Config, MAX_REGIONS};
+    use crate::reconcile_store::Config;
 
     fn ephemeral_config() -> Config {
-        Config {
-            port: 0,
-            listen_addr: "127.0.0.1".parse().unwrap(),
-            local_region: "127.0.0.1/8".parse().unwrap(),
-            remote_regions: [None; MAX_REGIONS],
-            cross_region_interval: 6,
-            cross_region_fanout: 2,
-            cluster_key: None,
-            node_id: None,
-            encrypt: false,
-        }
+        // Port 0 (ephemeral) on the loopback default network.
+        Config::default()
     }
 
     /// `get` returns the live value, and absent keys are `None`.

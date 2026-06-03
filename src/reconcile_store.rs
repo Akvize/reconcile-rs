@@ -385,37 +385,38 @@ impl<
     }
 }
 
-/// Maximum number of **additional** (remote) geographical regions a [`Config`] can declare,
-/// beyond the local [`local_region`](Config::local_region). A fixed-size array keeps [`Config`] `Copy`;
-/// eight regions is generous for real geographical deployments.
-pub const MAX_REGIONS: usize = 8;
+/// Maximum number of geographical networks (CIDRs) a [`Config`] can declare. A fixed-size array
+/// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
+pub const MAX_NETS: usize = 8;
 
 #[derive(Clone, Copy)]
 pub struct Config {
     pub port: u16,
     pub listen_addr: IpAddr,
-    /// CIDR of the **local** geographical region: the subnet this node reconciles with
-    /// aggressively (every round) and probes for auto-discovery. With a single region this is the
-    /// whole cluster network (the historical behaviour).
-    pub local_region: IpNet,
-    /// Additional **remote** geographical regions, each a CIDR (issue #53). Empty slots are `None`.
+    /// The geographical networks the cluster spans, each a CIDR (issue #53). Empty slots are `None`.
     ///
-    /// Set through [`with_remote_region`](Config::with_remote_region) / [`with_remote_regions`](Config::with_remote_regions).
-    /// A node auto-discovers peers in every region (one random probe per region per round) but
-    /// only gossips the full anti-entropy comparison to remote-region peers on a slower cadence
-    /// and to a bounded random subset, so cross-region (WAN) traffic stays bounded. A peer's
-    /// region is derived purely from its IP address (`IpNet::contains`), so the wire format is
-    /// unchanged. With no remote region declared, behaviour is identical to a flat single-CIDR
-    /// cluster.
-    pub remote_regions: [Option<IpNet>; MAX_REGIONS],
-    /// Send the full anti-entropy comparison to remote-region peers every `cross_region_interval`
-    /// reconciliation rounds (default `6`). Local-region peers are always contacted every round.
-    /// Lowering this speeds cross-region convergence (and tombstone GC) at the cost of WAN traffic.
-    pub cross_region_interval: u32,
-    /// Maximum number of peers contacted per remote region on each cross-region round (default
+    /// Declare every network with [`with_net`](Config::with_net); a *network* is just an address
+    /// range, sized to your topology (a whole cloud region, an availability zone, or a single
+    /// subnet). This node's **local** network is whichever declared net contains
+    /// [`listen_addr`](Self::listen_addr); all others are **remote**. (If none contains it, the node
+    /// logs a loud warning and treats only itself as local — see [`ReconcileStore::new`].)
+    ///
+    /// A node auto-discovers peers in every network (one random probe per network per round) but
+    /// gossips the full anti-entropy comparison to local-network peers every round and to
+    /// remote-network peers only every [`remote_interval`](Self::remote_interval) rounds, to a
+    /// bounded [`remote_fanout`](Self::remote_fanout) subset — so cross-network (WAN) traffic stays
+    /// bounded. A peer's network is derived purely from its IP (`IpNet::contains`), so the wire
+    /// format is unchanged. With no network declared, the node uses the loopback default and behaves
+    /// like a flat single-CIDR cluster (the historical behaviour).
+    pub nets: [Option<IpNet>; MAX_NETS],
+    /// Send the full anti-entropy comparison to remote-network peers every `remote_interval`
+    /// reconciliation rounds (default `6`). Local-network peers are always contacted every round.
+    /// Lowering this speeds cross-network convergence (and tombstone GC) at the cost of WAN traffic.
+    pub remote_interval: u32,
+    /// Maximum number of peers contacted per remote network on each cross-network round (default
     /// `2`). Bounds WAN fan-out without designating any node as a relay/gateway. Raising it speeds
-    /// cross-region convergence (and tombstone GC) at the cost of WAN traffic.
-    pub cross_region_fanout: usize,
+    /// cross-network convergence (and tombstone GC) at the cost of WAN traffic.
+    pub remote_fanout: usize,
     /// Optional shared cluster secret enabling per-datagram MAC authentication.
     ///
     /// When `None` (the default), the protocol is **unauthenticated**: any host able to send a
@@ -445,10 +446,9 @@ impl Default for Config {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            local_region: "127.0.0.1/8".parse().unwrap(),
-            remote_regions: [None; MAX_REGIONS],
-            cross_region_interval: 6,
-            cross_region_fanout: 2,
+            nets: [None; MAX_NETS],
+            remote_interval: 6,
+            remote_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
@@ -464,52 +464,49 @@ impl Config {
         self.listen_addr = listen_addr;
         self
     }
-    pub fn with_local_region(mut self, local_region: IpNet) -> Self {
-        self.local_region = local_region;
-        self
-    }
-
-    /// Declare an additional remote geographical region by its CIDR (issue #53).
+    /// Declare a geographical network the cluster spans, by its CIDR (issue #53).
     ///
-    /// The node auto-discovers peers in this region and reconciles with them over WAN-bounded,
-    /// geography-aware gossip (see [`remote_regions`](Config::remote_regions)). Chainable to add several regions.
+    /// Call once per network — **including this node's own**. The node's local network is whichever
+    /// declared net contains [`listen_addr`](Config::listen_addr); the rest are remote and gossiped
+    /// to over WAN-bounded, geography-aware anti-entropy (see [`nets`](Config::nets)). With none
+    /// declared, the node uses the loopback default (a flat single-CIDR cluster).
     ///
     /// # Panics
     ///
-    /// Panics if more than [`MAX_REGIONS`] additional regions are declared.
-    pub fn with_remote_region(mut self, net: IpNet) -> Self {
+    /// Panics if more than [`MAX_NETS`] networks are declared.
+    pub fn with_net(mut self, net: IpNet) -> Self {
         let slot = self
-            .remote_regions
+            .nets
             .iter_mut()
             .find(|slot| slot.is_none())
-            .unwrap_or_else(|| panic!("at most {MAX_REGIONS} additional regions are supported"));
+            .unwrap_or_else(|| panic!("at most {MAX_NETS} networks are supported"));
         *slot = Some(net);
         self
     }
 
-    /// Declare several additional remote regions at once (see [`with_remote_region`](Config::with_remote_region)).
+    /// Declare several networks at once (see [`with_net`](Config::with_net)).
     ///
     /// # Panics
     ///
-    /// Panics if the total number of additional regions exceeds [`MAX_REGIONS`].
-    pub fn with_remote_regions(mut self, nets: &[IpNet]) -> Self {
+    /// Panics if the total number of networks exceeds [`MAX_NETS`].
+    pub fn with_nets(mut self, nets: &[IpNet]) -> Self {
         for &net in nets {
-            self = self.with_remote_region(net);
+            self = self.with_net(net);
         }
         self
     }
 
     /// Set how often (in reconciliation rounds) the full anti-entropy comparison is sent to
-    /// remote-region peers (default `6`). See [`cross_region_interval`](Config::cross_region_interval).
-    pub fn with_cross_region_interval(mut self, interval: u32) -> Self {
-        self.cross_region_interval = interval;
+    /// remote-network peers (default `6`). See [`remote_interval`](Config::remote_interval).
+    pub fn with_remote_interval(mut self, interval: u32) -> Self {
+        self.remote_interval = interval;
         self
     }
 
-    /// Set the maximum number of peers contacted per remote region on each cross-region round
-    /// (default `2`). See [`cross_region_fanout`](Config::cross_region_fanout).
-    pub fn with_cross_region_fanout(mut self, fanout: usize) -> Self {
-        self.cross_region_fanout = fanout;
+    /// Set the maximum number of peers contacted per remote network on each cross-network round
+    /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
+    pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
+        self.remote_fanout = fanout;
         self
     }
 
@@ -567,7 +564,7 @@ mod reconcile_store_tests {
 
     use crate::reconcile_engine::version_hash;
     use crate::{
-        reconcile_store::{Config, MAX_REGIONS},
+        reconcile_store::{Config, MAX_NETS},
         FileSnapshot, ReconcileStore,
     };
 
@@ -577,10 +574,9 @@ mod reconcile_store_tests {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            local_region: "127.0.0.1/8".parse().unwrap(),
-            remote_regions: [None; MAX_REGIONS],
-            cross_region_interval: 6,
-            cross_region_fanout: 2,
+            nets: [None; MAX_NETS],
+            remote_interval: 6,
+            remote_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
@@ -589,21 +585,13 @@ mod reconcile_store_tests {
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        let config = Config {
-            // A dedicated port (and a singleton peer net) isolates this test from the
-            // integration tests: peer discovery probes random addresses in the peer net on
-            // this port, so an overlapping port lets a concurrently-running test's node inject
-            // updates here.
-            port: 8090,
-            listen_addr: "127.0.0.45".parse().unwrap(),
-            local_region: "127.0.0.45/32".parse().unwrap(),
-            remote_regions: [None; MAX_REGIONS],
-            cross_region_interval: 6,
-            cross_region_fanout: 2,
-            cluster_key: None,
-            node_id: None,
-            encrypt: false,
-        };
+        // A dedicated port (and a singleton /32 net) isolates this test from the integration
+        // tests: peer discovery probes random addresses in the net on this port, so an overlapping
+        // port lets a concurrently-running test's node inject updates here.
+        let config = Config::default()
+            .with_port(8090)
+            .with_listen_addr("127.0.0.45".parse().unwrap())
+            .with_net("127.0.0.45/32".parse().unwrap());
         let store = ReconcileStore::<i32, i32>::new(config)
             .await
             .with_tombstone_timeout(Duration::from_millis(1));

@@ -57,30 +57,33 @@ pub fn gen_ipv6<R: Rng>(rng: &mut R, network: Ipv6Net) -> Ipv6Addr {
     network.network().bitor(random.bitand(network.hostmask()))
 }
 
-/// One random probe address per region CIDR.
+/// One random probe address per network CIDR.
 ///
-/// Used for multi-region peer auto-discovery (issue #53): a node probes one random address inside
-/// each configured geographical region every reconciliation round, so discovery spans every region
-/// rather than a single flat CIDR.
-pub fn probe_targets<R: Rng>(rng: &mut R, regions: &[IpNet]) -> Vec<IpAddr> {
-    regions.iter().map(|&net| gen_ip(rng, net)).collect()
+/// Used for multi-network peer auto-discovery (issue #53): a node probes one random address inside
+/// each configured geographical network every reconciliation round, so discovery spans every
+/// network rather than a single flat CIDR.
+pub fn probe_targets<R: Rng>(rng: &mut R, nets: &[IpNet]) -> Vec<IpAddr> {
+    nets.iter().map(|&net| gen_ip(rng, net)).collect()
 }
 
-/// Return the first region in `regions` whose CIDR contains `addr`, if any.
+/// Return the first network in `nets` whose CIDR contains `addr`, if any.
 ///
-/// A peer's geographical region is derived purely from its IP address, so the wire format carries
-/// no region tag (issue #53).
-pub fn region_of(regions: &[IpNet], addr: IpAddr) -> Option<IpNet> {
-    regions.iter().copied().find(|net| net.contains(&addr))
+/// A peer's geographical network is derived purely from its IP address, so the wire format carries
+/// no network tag (issue #53).
+pub fn net_of(nets: &[IpNet], addr: IpAddr) -> Option<IpNet> {
+    nets.iter().copied().find(|net| net.contains(&addr))
 }
 
-/// The region a node belongs to, given the address it listens on.
+/// The host route (`/32` for IPv4, `/128` for IPv6) of a single address.
 ///
-/// It is the first configured region whose CIDR contains `listen_addr`; if none does (a
-/// misconfiguration), it falls back to the first region. `regions` must be non-empty (the local
-/// region is always its first element).
-pub fn local_region(regions: &[IpNet], listen_addr: IpAddr) -> IpNet {
-    region_of(regions, listen_addr).unwrap_or(regions[0])
+/// Used as the local network of last resort: when no configured network contains a node's listen
+/// address (a misconfiguration), the node treats only itself as local (issue #53).
+pub fn host_net(addr: IpAddr) -> IpNet {
+    let prefix_len = match addr {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    IpNet::new(addr, prefix_len).expect("host prefix length is always valid")
 }
 
 #[cfg(test)]
@@ -116,47 +119,39 @@ mod tests {
     }
 
     #[test]
-    fn probe_targets_one_per_region() {
+    fn probe_targets_one_per_net() {
         use super::probe_targets;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let regions = [
+        let nets = [
             "127.0.0.0/30".parse().unwrap(),
             "127.0.1.0/30".parse().unwrap(),
             "10.0.0.0/8".parse().unwrap(),
         ];
-        let targets = probe_targets(&mut rng, &regions);
-        assert_eq!(targets.len(), regions.len());
-        for (target, region) in targets.iter().zip(regions.iter()) {
-            assert!(region.contains(target), "{region} should contain {target}");
+        let targets = probe_targets(&mut rng, &nets);
+        assert_eq!(targets.len(), nets.len());
+        for (target, net) in targets.iter().zip(nets.iter()) {
+            assert!(net.contains(target), "{net} should contain {target}");
         }
     }
 
     #[test]
-    fn region_classification() {
-        use super::{local_region, region_of};
-        let regions: Vec<_> = ["127.0.0.0/30", "127.0.1.0/30"]
+    fn net_classification() {
+        use super::{host_net, net_of};
+        let nets: Vec<_> = ["127.0.0.0/30", "127.0.1.0/30"]
             .iter()
             .map(|s| s.parse().unwrap())
             .collect();
-        assert_eq!(
-            region_of(&regions, "127.0.0.1".parse().unwrap()),
-            Some(regions[0])
-        );
-        assert_eq!(
-            region_of(&regions, "127.0.1.1".parse().unwrap()),
-            Some(regions[1])
-        );
-        assert_eq!(region_of(&regions, "10.0.0.1".parse().unwrap()), None);
+        // A peer is qualified by the first network whose CIDR contains it.
+        assert_eq!(net_of(&nets, "127.0.0.1".parse().unwrap()), Some(nets[0]));
+        assert_eq!(net_of(&nets, "127.0.1.1".parse().unwrap()), Some(nets[1]));
+        // An address in no declared network is unqualified.
+        assert_eq!(net_of(&nets, "10.0.0.1".parse().unwrap()), None);
 
-        // The local region is the one containing the listen address.
+        // The local-net-of-last-resort is the address' own host route.
         assert_eq!(
-            local_region(&regions, "127.0.1.2".parse().unwrap()),
-            regions[1]
+            host_net("10.0.0.1".parse().unwrap()),
+            "10.0.0.1/32".parse().unwrap()
         );
-        // Fallback to the first region when no region contains the listen address.
-        assert_eq!(
-            local_region(&regions, "10.0.0.1".parse().unwrap()),
-            regions[0]
-        );
+        assert_eq!(host_net("::1".parse().unwrap()), "::1/128".parse().unwrap());
     }
 }
