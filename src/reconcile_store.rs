@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::warn;
+use tracing::{info, instrument, warn};
 
 use crate::fingerprint::Fingerprint;
 use crate::hlc::Hlc;
@@ -348,7 +348,9 @@ impl<
         }
     }
 
+    #[instrument(name = "reconcile.store", skip_all)]
     pub async fn run(self) {
+        info!("reconcile store starting");
         let tombstones = self.clone();
         let snapshots = self.clone();
         tokio::join!(

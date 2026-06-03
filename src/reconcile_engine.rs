@@ -26,7 +26,7 @@ use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
 use crate::diff::HashRangeQueryable;
@@ -34,6 +34,7 @@ use crate::diff::{Diffable, HashSegment};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::gen_ip;
 use crate::hlc::{Hlc, HlcClock, Timestamped};
+use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::Config;
 use crate::HRTree;
@@ -164,7 +165,7 @@ impl<
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
-        debug!("Listening on: {}", socket.local_addr().unwrap());
+        info!("Listening on: {}", socket.local_addr().unwrap());
         let authenticator = auth::Authenticator::new(config.cluster_key);
         if authenticator.is_enabled() {
             debug!("per-datagram MAC authentication ENABLED");
@@ -237,6 +238,14 @@ impl<
         // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
 
+        // A tombstone value is a removal; a live value is an insertion. Counting here (rather
+        // than in `ReconcileStore`) keeps every local mutation path covered.
+        if value.is_tombstone() {
+            observability::record_remove();
+        } else {
+            observability::record_insert();
+        }
+
         // 2) Now acquire write lock and insert (mirroring the value-only projection)
         let mut guard = self.map.write();
         self.map_insert(&mut guard, key, value)
@@ -271,6 +280,11 @@ impl<
         // 1) First run all pre-insert hooks outside the map lock
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
+            if value.is_tombstone() {
+                observability::record_remove();
+            } else {
+                observability::record_insert();
+            }
         }
         // 2) Then acquire the write lock once and insert them (mirroring the projection)
         let mut guard = self.map.write();
@@ -305,6 +319,7 @@ impl<
         });
     }
 
+    #[instrument(name = "reconcile.run", skip_all, fields(port = self.port))]
     pub async fn run(self) {
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
@@ -323,9 +338,11 @@ impl<
                 Ok(Err(err)) => {
                     // network error
                     warn!("network error in recv_from: {err}");
+                    observability::record_datagram_dropped("recv_error");
                 }
                 Ok(Ok((size, peer))) => {
                     // received datagram
+                    observability::record_bytes_received(size);
                     if peer.port() != self.port {
                         warn!(
                             "received message from {peer}, but protocol port is {}",
@@ -334,6 +351,7 @@ impl<
                     }
                     if size == recv_buf.len() {
                         warn!("Buffer too small for message, discarded");
+                        observability::record_datagram_dropped("too_large");
                     } else {
                         // Authenticate the datagram *before* any deserialization. Only a cleared
                         // `Payload` can reach `handle_messages`; a missing or invalid tag is
@@ -360,7 +378,10 @@ impl<
                                     self.members.write().insert(addr);
                                 }
                             }
-                            None => trace!("dropped datagram from {peer}: missing or invalid MAC"),
+                            None => {
+                                trace!("dropped datagram from {peer}: missing or invalid MAC");
+                                observability::record_datagram_dropped("bad_mac");
+                            }
                         }
                     }
                 }
@@ -368,7 +389,10 @@ impl<
         }
     }
 
+    #[instrument(name = "reconcile.round", skip_all)]
     pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
+        let timer = observability::timer();
+        observability::record_reconcile_round();
         let segments = {
             let guard = self.map.read();
             guard.start_diff()
@@ -399,6 +423,7 @@ impl<
             .await
             .unwrap();
         }
+        observability::record_round_duration(timer);
     }
 
     /// Handle the messages contained in an already-authenticated [`Payload`].
@@ -410,12 +435,14 @@ impl<
     /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
     /// the sender in the #109 membership set: a sender that spoke only the value-only channel is a
     /// read-only mirror and must not gate tombstone GC.
+    #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
         &self,
         payload: auth::Payload<'_>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) -> bool {
+        let timer = observability::timer();
         let payload = payload.as_bytes();
         trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
@@ -437,6 +464,7 @@ impl<
                     // DoS). Drop the rest of the datagram and keep the loop alive, just like
                     // the oversized-datagram case above.
                     warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
+                    observability::record_datagram_dropped("malformed");
                     break;
                 }
                 Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
@@ -526,6 +554,7 @@ impl<
         }
         if !updates.is_empty() {
             debug!("received {} updates", updates.len());
+            observability::record_updates_received(updates.len());
             // Tombstones we now hold as a result of these updates, to be acknowledged back to
             // the peer so it can eventually garbage-collect them once causally stable.
             let mut acks_to_send = Vec::new();
@@ -609,6 +638,7 @@ impl<
                 .await;
             }
         }
+        observability::record_handle_duration(timer);
         spoke_dated
     }
 
@@ -666,9 +696,17 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
+    match &res {
+        Ok(sent) => observability::record_bytes_sent(*sent),
+        Err(err) => {
+            error!("send_to failed after {MAX_SENDTO_RETRIES} retries: {err}");
+            observability::record_send_failure();
+        }
+    }
     res
 }
 
+#[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
 pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
     messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,

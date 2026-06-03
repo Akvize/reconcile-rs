@@ -120,6 +120,40 @@ tokio::spawn(store.clone().run()); // periodically snapshots in the background
 The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
 S3, or any other medium.
 
+## Observability
+
+The crate is instrumented with [`tracing`](https://docs.rs/tracing): the network engine, the
+reconciliation rounds, and the message send/receive paths emit spans and events. As with any
+library, `reconcile-rs` does **not** install a subscriber itself — your application does, e.g.
+`tracing_subscriber::fmt().init()` (see `examples/demo.rs`).
+
+Runtime metrics (throughput, latency, and failure counts) are emitted through the
+[`metrics`](https://docs.rs/metrics) facade, gated behind opt-in features so the default build
+stays lean:
+
+- `metrics` — emit counters and histograms (`reconcile_inserts_total`,
+  `reconcile_updates_received_total`, `reconcile_bytes_sent_total`, `reconcile_send_failures_total`,
+  `reconcile_datagrams_dropped_total`, `reconcile_round_duration_seconds`, …). When this feature is
+  off, every metric call site compiles to a no-op.
+- `metrics-prometheus` — additionally provides `reconcile::prometheus` to install a Prometheus
+  recorder and either serve a `/metrics` endpoint or render the exposition text yourself:
+
+```rust,no_run
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+// Serve a /metrics HTTP endpoint (requires a Tokio runtime):
+reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
+
+// ...or install the recorder and render the text yourself through your own HTTP server:
+let handle = reconcile::prometheus::install_recorder()?;
+let body: String = handle.render();
+# let _ = body;
+# Ok(())
+# }
+```
+
+Enable with `cargo build --features metrics-prometheus` (or list `metrics`/`metrics-prometheus`
+in your dependency's `features`).
+
 ## Read-only mirror (`ReconcileMirror`)
 
 For fleets with many *passive read replicas*, the per-value `Hlc` timestamp a dated `ReconcileStore`
