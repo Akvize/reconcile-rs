@@ -15,12 +15,12 @@ pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = Dif
     let mut remote_segments = Vec::new();
     while !local_segments.is_empty() {
         remote.diff_round(
-            local_segments.drain(..).collect(),
+            std::mem::take(&mut local_segments),
             &mut remote_segments,
             &mut remote_diff_ranges,
         );
         local.diff_round(
-            remote_segments.drain(..).collect(),
+            std::mem::take(&mut remote_segments),
             &mut local_segments,
             &mut local_diff_ranges,
         );
