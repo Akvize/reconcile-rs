@@ -572,8 +572,10 @@ async fn cross_region_reconciliation() {
 }
 
 /// Issue #53: a node auto-discovers a peer in another region purely from the region's CIDR, with no
-/// seed. Discovery probes one random address per region each round; over a /30 (4 addresses) this
-/// converges quickly.
+/// seed. Discovery probes one random address per region each round. To keep the test deterministic
+/// (rather than relying on a random probe landing on the peer within a subnet), each node declares
+/// the *other node's exact address* as a remote region (a /32), so the per-region discovery probe
+/// reliably targets the peer. The local region stays a /30 so local-region probing is unaffected.
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_region_discovery_without_seed() {
     let port = 8086;
@@ -581,18 +583,21 @@ async fn cross_region_discovery_without_seed() {
     let region_b = "127.0.3.0/30".parse().unwrap();
     let addr1 = "127.0.2.1".parse().unwrap();
     let addr2 = "127.0.3.1".parse().unwrap();
+    // Each node's remote region is the peer's exact address, so its discovery probe always hits it.
+    let remote_of_1 = "127.0.3.1/32".parse().unwrap();
+    let remote_of_2 = "127.0.2.1/32".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
         .with_peer_net(region_a)
-        .with_region(region_b)
+        .with_region(remote_of_1)
         .with_cross_region_interval(1)
         .with_remote_fanout(1);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_peer_net(region_b)
-        .with_region(region_a)
+        .with_region(remote_of_2)
         .with_cross_region_interval(1)
         .with_remote_fanout(1);
 
