@@ -523,3 +523,90 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
     task2.abort();
     task1.abort();
 }
+
+/// Issue #53: two nodes in distinct geographical regions converge over cross-region anti-entropy.
+///
+/// Regions are simulated by two disjoint /30 subnets inside the loopback range, each node living in
+/// one of them and declaring the other as a remote region. A dedicated port isolates the test.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_region_reconciliation() {
+    let port = 8085;
+    let region_a = "127.0.0.0/30".parse().unwrap();
+    let region_b = "127.0.1.0/30".parse().unwrap();
+    let addr1 = "127.0.0.1".parse().unwrap();
+    let addr2 = "127.0.1.1".parse().unwrap();
+    // Each node is local to its own region and declares the other as a remote region. A short
+    // cross-region cadence keeps the test fast.
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(region_a)
+        .with_region(region_b)
+        .with_cross_region_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(region_b)
+        .with_region(region_a)
+        .with_cross_region_interval(1)
+        .with_remote_fanout(1);
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert("key".to_string(), "value".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+    assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // The remote-region peer eventually receives the value over cross-region anti-entropy.
+    assert_until!(store2.get(&"key".to_string()).as_deref() == Some(&"value".to_string()));
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// Issue #53: a node auto-discovers a peer in another region purely from the region's CIDR, with no
+/// seed. Discovery probes one random address per region each round; over a /30 (4 addresses) this
+/// converges quickly.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_region_discovery_without_seed() {
+    let port = 8086;
+    let region_a = "127.0.2.0/30".parse().unwrap();
+    let region_b = "127.0.3.0/30".parse().unwrap();
+    let addr1 = "127.0.2.1".parse().unwrap();
+    let addr2 = "127.0.3.1".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_peer_net(region_a)
+        .with_region(region_b)
+        .with_cross_region_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_peer_net(region_b)
+        .with_region(region_a)
+        .with_cross_region_interval(1)
+        .with_remote_fanout(1);
+
+    // No `with_seed`: the two nodes must find each other purely through per-region discovery probes.
+    let store1 = ReconcileStore::new(cfg1).await;
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}

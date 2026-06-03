@@ -357,13 +357,16 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reconcile_store::Config;
+    use crate::reconcile_store::{Config, MAX_REGIONS};
 
     fn ephemeral_config() -> Config {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
             peer_net: "127.0.0.1/8".parse().unwrap(),
+            regions: [None; MAX_REGIONS],
+            cross_region_interval: 6,
+            remote_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,

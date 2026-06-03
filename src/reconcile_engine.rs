@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,7 @@ use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::net::{ToSocketAddrs, UdpSocket};
@@ -32,7 +34,7 @@ use crate::auth;
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::fingerprint::Fingerprint;
-use crate::gen_ip::gen_ip;
+use crate::gen_ip::{local_region, probe_targets};
 use crate::hlc::{Hlc, HlcClock, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
@@ -83,7 +85,19 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    peer_net: IpNet,
+    /// Geographical regions, each a CIDR (issue #53). `regions[0]` is the local `peer_net`,
+    /// followed by every additional remote region. One random address is probed per region each
+    /// round for auto-discovery, and a peer's region is derived from its IP via `IpNet::contains`.
+    regions: Vec<IpNet>,
+    /// The region containing this node's listen address — the one it reconciles with aggressively.
+    local_region: IpNet,
+    /// Send the full anti-entropy comparison to remote-region peers every `cross_region_interval`
+    /// rounds (the [`round`](Self::round) counter); local-region peers are contacted every round.
+    cross_region_interval: u32,
+    /// Max peers contacted per remote region on each cross-region round (bounds WAN fan-out).
+    remote_fanout: usize,
+    /// Monotonic reconciliation-round counter, shared across clones, gating the cross-region cadence.
+    round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
@@ -96,6 +110,12 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// it can be garbage-collected. This is what gates tombstone GC on *causal stability* and
     /// prevents a peer that is partitioned for longer than the peer-expiration window from
     /// resurrecting a deleted value on its return.
+    ///
+    /// Multi-region note (issue #53): remote-region members are gossiped to on a slower cadence, so
+    /// their tombstone acknowledgments arrive later and cross-region GC is correspondingly slower —
+    /// but still strictly correct, since GC never proceeds before *every* member has acked. Lowering
+    /// [`Config::cross_region_interval`] or raising [`Config::remote_fanout`] speeds it up at the
+    /// cost of WAN traffic.
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
@@ -188,13 +208,21 @@ impl<
         let map = HRTree::<K, V>::new();
         let projection = HRTree::<K, V::Projected>::new();
         let node_id = config.node_id.unwrap_or_else(rand::random);
+        // The local `peer_net` is region 0, followed by every additional configured region.
+        let mut regions = vec![config.peer_net];
+        regions.extend(config.regions.iter().flatten().copied());
+        let local_region = local_region(&regions, config.listen_addr);
         ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
                 socket: Arc::new(socket),
-                peer_net: config.peer_net,
+                regions,
+                local_region,
+                cross_region_interval: config.cross_region_interval,
+                remote_fanout: config.remote_fanout,
+                round: Arc::new(AtomicU32::new(0)),
                 rng: Arc::new(RwLock::new(StdRng::from_entropy())),
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
@@ -236,6 +264,11 @@ impl<
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
     pub fn clock_now(&self) -> Hlc {
         self.clock.now()
+    }
+
+    /// Whether `addr` belongs to this node's local geographical region (issue #53).
+    fn is_local(&self, addr: IpAddr) -> bool {
+        self.local_region.contains(&addr)
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -403,16 +436,48 @@ impl<
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
-        let mut peers = self.get_peers();
-        // select a random address out of the peer network
-        // NOTE: the random address might not correspond to a real peer, so we do not add it to the
-        // list of known peers, just to our local copies of the addresses; if a peer exists at this
-        // address, they will eventually send us a message in return, and we will add them to the
-        // list of known peer
-        let addr = gen_ip(&mut *self.rng.write(), self.peer_net);
-        peers.push(addr);
-        // initiate the reconciliation protocol with all the known peers, and a random one
-        for peer in peers {
+        // Geography-aware target selection (issue #53). With a single region this reduces to the
+        // historical behaviour: every known peer is local, so all of them are contacted each round,
+        // plus a single random discovery probe.
+        let round = self.round.fetch_add(1, Ordering::Relaxed);
+        // Treat an interval of 0 as "every round" to avoid a modulo-by-zero.
+        let do_cross_region = round.is_multiple_of(self.cross_region_interval.max(1));
+        let known = self.get_peers();
+
+        // De-duplicate so a discovery probe that happens to hit a known peer is not sent twice.
+        let mut targets: HashSet<IpAddr> = HashSet::new();
+
+        // Discovery: one random probe per region. The probed address might not correspond to a real
+        // peer, so we do NOT add it to the known-peer list; if a peer exists there, it will reply
+        // and be registered then.
+        {
+            let mut rng = self.rng.write();
+            targets.extend(probe_targets(&mut *rng, &self.regions));
+        }
+
+        // Local region: contact every known peer, every round (fast intra-region convergence).
+        for &addr in &known {
+            if self.is_local(addr) {
+                targets.insert(addr);
+            }
+        }
+
+        // Remote regions: only on cross-region rounds, and only a bounded random subset per region,
+        // to keep WAN fan-out bounded without designating any node as a relay/gateway.
+        if do_cross_region {
+            for region in self.regions.iter().filter(|&&r| r != self.local_region) {
+                let mut remote: Vec<IpAddr> = known
+                    .iter()
+                    .copied()
+                    .filter(|addr| region.contains(addr))
+                    .collect();
+                remote.shuffle(&mut *self.rng.write());
+                targets.extend(remote.into_iter().take(self.remote_fanout));
+            }
+        }
+
+        // initiate the reconciliation protocol with the selected peers and discovery probes
+        for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             send_to_retry(
                 &self.socket,

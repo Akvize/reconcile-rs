@@ -87,6 +87,8 @@ resolved; all but one High resolved or mitigated.
 - ◯ Key rotation / management — [#137](https://github.com/Akvize/reconcile-rs/issues/137).
 
 ### Scaling & robustness
+- ✅ Multi-region reconciliation: per-region discovery probes + geography-aware gossip with
+  bounded cross-region fan-out (decentralized, no gateway nodes) — [#53](https://github.com/Akvize/reconcile-rs/issues/53).
 - ◯ Membership / discovery: replace random IP-scan with SWIM/HyParView, bounded fan-out
   (F10 — [#147](https://github.com/Akvize/reconcile-rs/issues/147)).
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
