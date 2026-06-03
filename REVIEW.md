@@ -62,6 +62,9 @@ subtree size. This enables a **cumulative-hash range query in [O(log n)](#g95)**
 of Meyer (arXiv:2212.13567, 2023). Conflict resolution is **[Last-Write-Wins (LWW)](#g93) by
 physical clock `DateTime<Utc>`**; deletions are *[tombstones](#g91)* purged after 60 s; transport is
 **[UDP](#g94) + [bincode](#g96)**; peer discovery is done by **random IP sampling within a CIDR**.
+*(This paragraph describes the audited commit. On current `master` the fingerprint is a 256-bit
+additive BLAKE3, conflict resolution is keyed on a Hybrid Logical Clock, and tombstone GC is gated
+on causal stability — see the Resolution status table above.)*
 
 **Overall verdict.** The **algorithmic core is real, correct and SOTA-aligned**: the HRTree is, in
 the terminology of the 2026 literature, a *[Range-Summarizable Order-Statistics Store](#g92)* (RSOS,
@@ -70,7 +73,8 @@ implemented (O(log n) verified). However, the **engineering shell and the distri
 choices are pre-alpha** and contain **several critical defects**: silent permanent divergence (the
 `hash==0` sentinel), a trivial remote denial of service (panic on a single malformed UDP packet),
 resurrection of deleted data (wall-clock tombstone GC), a LWW that is non-commutative on equal
-timestamps, and the total absence of authentication/encryption.
+timestamps, and the total absence of authentication/encryption. *(These were the defects at audit
+time; all five have since been resolved on `master` — see the Resolution status table above.)*
 
 Panel convergence: the **two independent reviewers of each theme identified the same critical
 findings** — a high-confidence signal, not a phrasing artifact.
@@ -183,6 +187,12 @@ for with history-independence, **without paying for it** — and thereby escapes
 ---
 
 ## 3. Architecture and algorithms
+
+> **Note:** this section describes the **audited commit** (`64f1ebf`). Several design points below —
+> the 64-bit XOR fingerprint, physical-clock LWW, the 60 s time-based tombstone GC, and the
+> unauthenticated transport — have since been changed on `master` (256-bit additive BLAKE3, Hybrid
+> Logical Clock, causal-stability GC, optional per-datagram MAC). See the Resolution status table
+> near the top.
 
 ### 3.1 Modules
 
