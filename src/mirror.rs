@@ -93,7 +93,7 @@ pub struct ReconcileMirror<K, V> {
     tree: Arc<RwLock<HRTree<K, ValueOnly<V>>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    peer_net: IpNet,
+    local_region: IpNet,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     authenticator: auth::Authenticator,
@@ -107,7 +107,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
             tree: self.tree.clone(),
             port: self.port,
             socket: self.socket.clone(),
-            peer_net: self.peer_net,
+            local_region: self.local_region,
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             authenticator: self.authenticator.clone(),
@@ -146,7 +146,7 @@ impl<
             tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
-            peer_net: config.peer_net,
+            local_region: config.local_region,
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
@@ -233,7 +233,7 @@ impl<
         let mut peers = self.get_peers();
         // A random address out of the peer network, for discovery — like the dated store, we do not
         // add it to the known peers; a real peer there will answer and be recorded then.
-        let addr = gen_ip(&mut *self.rng.write(), self.peer_net);
+        let addr = gen_ip(&mut *self.rng.write(), self.local_region);
         peers.push(addr);
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
@@ -363,10 +363,10 @@ mod tests {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
-            regions: [None; MAX_REGIONS],
+            local_region: "127.0.0.1/8".parse().unwrap(),
+            remote_regions: [None; MAX_REGIONS],
             cross_region_interval: 6,
-            remote_fanout: 2,
+            cross_region_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,

@@ -78,7 +78,7 @@ pub fn region_of(regions: &[IpNet], addr: IpAddr) -> Option<IpNet> {
 ///
 /// It is the first configured region whose CIDR contains `listen_addr`; if none does (a
 /// misconfiguration), it falls back to the first region. `regions` must be non-empty (the local
-/// `peer_net` is always its first element).
+/// region is always its first element).
 pub fn local_region(regions: &[IpNet], listen_addr: IpAddr) -> IpNet {
     region_of(regions, listen_addr).unwrap_or(regions[0])
 }

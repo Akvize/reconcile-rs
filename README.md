@@ -204,17 +204,21 @@ sink, not a source. The dated↔dated path (and its wire format) is byte-for-byt
 
 ## Multiple geographical locations
 
-A single cluster can span several geographical regions, each a separate subnet (issue #53). Declare
-the local region as `peer_net` and every other region with `with_region`:
+A single cluster can span several geographical regions (issue #53). A **region is just an address
+range (CIDR)** that groups co-located nodes — size it to your topology: a whole cloud region, an
+availability zone, or a single subnet. The model is intentionally flat: there is no finer level
+(no rack/host) and no hierarchy, because the CIDR mask already lets you pick the granularity. Each
+node declares **its own** region with `with_local_region` and **every other** region with
+`with_remote_region`:
 
 ```rust
 use reconcile::{reconcile_store::Config, ReconcileStore};
 
 let config = Config::default()
     .with_listen_addr("10.1.0.7".parse().unwrap())
-    .with_peer_net("10.1.0.0/16".parse().unwrap()) // local region
-    .with_region("10.2.0.0/16".parse().unwrap())   // a remote region
-    .with_region("10.3.0.0/16".parse().unwrap());  // another remote region
+    .with_local_region("10.1.0.0/16".parse().unwrap())  // this node's region
+    .with_remote_region("10.2.0.0/16".parse().unwrap()) // a remote region
+    .with_remote_region("10.3.0.0/16".parse().unwrap()); // another remote region
 let store = ReconcileStore::<String, String>::new(config).await;
 ```
 
@@ -225,11 +229,11 @@ or fail over:
   are auto-discovered (not just within a single flat CIDR).
 - **Anti-entropy** sends the full range-diff comparison to *local-region* peers every round (fast
   intra-region convergence, as before) but to *remote-region* peers only every
-  `cross_region_interval` rounds and to at most `remote_fanout` peers per region — bounding WAN
-  traffic. Tune both with `with_cross_region_interval` / `with_remote_fanout`.
+  `cross_region_interval` rounds and to at most `cross_region_fanout` peers per region — bounding WAN
+  traffic. Tune both with `with_cross_region_interval` / `with_cross_region_fanout`.
 
 A peer's region is derived purely from its IP address (`IpNet::contains`), so **the wire format is
-unchanged** and a single-region cluster (no `with_region`) behaves exactly as before. Live writes
+unchanged** and a single-region cluster (no `with_remote_region`) behaves exactly as before. Live writes
 still propagate immediately to all known peers; only the periodic anti-entropy is throttled across
 regions. Cross-region tombstone GC is correspondingly slower but remains strictly correct (it never
 collects a tombstone before *every* member has acknowledged it).

@@ -30,17 +30,17 @@ macro_rules! assert_until {
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -152,19 +152,19 @@ async fn test() {
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_nodes_converge() {
     let port = 8081;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.46".parse().unwrap();
     let addr2 = "127.0.0.47".parse().unwrap();
     let key = [0x42u8; 32];
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key(key);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key(key);
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -206,19 +206,19 @@ async fn authenticated_nodes_converge() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_writes_converge() {
     let port = 8083;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.80".parse().unwrap();
     let addr2 = "127.0.0.81".parse().unwrap();
     // Fixed, distinct node ids give a deterministic conflict winner (the higher id).
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_node_id(1);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_node_id(2);
 
     let store1 = ReconcileStore::<String, String>::new(cfg1)
@@ -262,17 +262,17 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     // address in 127.0.0.0/8 on this port, so sharing a port lets concurrently-running tests
     // cross-talk and pollute each other's stores.
     let port = 8084;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.72".parse().unwrap();
     let addr2 = "127.0.0.73".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
 
     // Aggressive wall-clock expiry so that, without causal-stability gating, the tombstone
     // would be GC'd almost immediately.
@@ -329,17 +329,17 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
 async fn deleted_value_is_not_resurrected_by_returning_peer() {
     // Dedicated port for test isolation (see `tombstone_is_retained_until_peer_acknowledges`).
     let port = 8085;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.70".parse().unwrap();
     let addr2 = "127.0.0.71".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
 
     let store1 = ReconcileStore::<i32, i32>::new(cfg1)
         .await
@@ -398,17 +398,17 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_malformed_datagram_does_not_crash() {
     let port = 8082;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.46".parse().unwrap();
     let addr2 = "127.0.0.47".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
 
     let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
     let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
@@ -437,20 +437,20 @@ async fn test_malformed_datagram_does_not_crash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_nodes_converge() {
     let port = 8083;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.48".parse().unwrap();
     let addr2 = "127.0.0.49".parse().unwrap();
     let key = [0x42u8; 32];
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key(key)
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key(key)
         .with_encryption();
 
@@ -488,19 +488,19 @@ async fn encrypted_nodes_converge() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_node_with_wrong_key_is_rejected() {
     let port = 8084;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let local_region = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.50".parse().unwrap();
     let addr2 = "127.0.0.51".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key([0x42u8; 32])
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_local_region(local_region)
         .with_cluster_key([0x99u8; 32]) // different key
         .with_encryption();
 
@@ -540,17 +540,17 @@ async fn cross_region_reconciliation() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(region_a)
-        .with_region(region_b)
+        .with_local_region(region_a)
+        .with_remote_region(region_b)
         .with_cross_region_interval(1)
-        .with_remote_fanout(1);
+        .with_cross_region_fanout(1);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(region_b)
-        .with_region(region_a)
+        .with_local_region(region_b)
+        .with_remote_region(region_a)
         .with_cross_region_interval(1)
-        .with_remote_fanout(1);
+        .with_cross_region_fanout(1);
 
     let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
     store1.insert("key".to_string(), "value".to_string());
@@ -589,17 +589,17 @@ async fn cross_region_discovery_without_seed() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(region_a)
-        .with_region(remote_of_1)
+        .with_local_region(region_a)
+        .with_remote_region(remote_of_1)
         .with_cross_region_interval(1)
-        .with_remote_fanout(1);
+        .with_cross_region_fanout(1);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(region_b)
-        .with_region(remote_of_2)
+        .with_local_region(region_b)
+        .with_remote_region(remote_of_2)
         .with_cross_region_interval(1)
-        .with_remote_fanout(1);
+        .with_cross_region_fanout(1);
 
     // No `with_seed`: the two nodes must find each other purely through per-region discovery probes.
     let store1 = ReconcileStore::new(cfg1).await;

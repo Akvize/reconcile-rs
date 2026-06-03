@@ -14,7 +14,7 @@ use reconcile::{reconcile_store::Config, ReconcileStore};
 struct Args {
     port: u16,
     listen_addr: IpAddr,
-    peer_net: IpNet,
+    local_region: IpNet,
     elements: usize,
     #[arg(short, long)]
     seed: Vec<IpAddr>,
@@ -27,7 +27,7 @@ async fn main() {
     let Args {
         port,
         listen_addr,
-        peer_net,
+        local_region,
         seed,
         elements,
         log_level,
@@ -35,7 +35,7 @@ async fn main() {
     let config = Config::default()
         .with_port(port)
         .with_listen_addr(listen_addr)
-        .with_peer_net(peer_net);
+        .with_local_region(local_region);
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
     // build collection

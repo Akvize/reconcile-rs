@@ -85,8 +85,8 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    /// Geographical regions, each a CIDR (issue #53). `regions[0]` is the local `peer_net`,
-    /// followed by every additional remote region. One random address is probed per region each
+    /// Geographical regions, each a CIDR (issue #53). `regions[0]` is the local region
+    /// (`Config::local_region`), followed by every additional remote region. One random address is probed per region each
     /// round for auto-discovery, and a peer's region is derived from its IP via `IpNet::contains`.
     regions: Vec<IpNet>,
     /// The region containing this node's listen address — the one it reconciles with aggressively.
@@ -95,7 +95,7 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// rounds (the [`round`](Self::round) counter); local-region peers are contacted every round.
     cross_region_interval: u32,
     /// Max peers contacted per remote region on each cross-region round (bounds WAN fan-out).
-    remote_fanout: usize,
+    cross_region_fanout: usize,
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-region cadence.
     round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
@@ -114,7 +114,7 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Multi-region note (issue #53): remote-region members are gossiped to on a slower cadence, so
     /// their tombstone acknowledgments arrive later and cross-region GC is correspondingly slower —
     /// but still strictly correct, since GC never proceeds before *every* member has acked. Lowering
-    /// [`Config::cross_region_interval`] or raising [`Config::remote_fanout`] speeds it up at the
+    /// [`Config::cross_region_interval`] or raising [`Config::cross_region_fanout`] speeds it up at the
     /// cost of WAN traffic.
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
@@ -208,9 +208,9 @@ impl<
         let map = HRTree::<K, V>::new();
         let projection = HRTree::<K, V::Projected>::new();
         let node_id = config.node_id.unwrap_or_else(rand::random);
-        // The local `peer_net` is region 0, followed by every additional configured region.
-        let mut regions = vec![config.peer_net];
-        regions.extend(config.regions.iter().flatten().copied());
+        // The local region is region 0, followed by every additional configured remote region.
+        let mut regions = vec![config.local_region];
+        regions.extend(config.remote_regions.iter().flatten().copied());
         let local_region = local_region(&regions, config.listen_addr);
         ReconcileEngine {
             inner: Arc::new(Inner {
@@ -221,7 +221,7 @@ impl<
                 regions,
                 local_region,
                 cross_region_interval: config.cross_region_interval,
-                remote_fanout: config.remote_fanout,
+                cross_region_fanout: config.cross_region_fanout,
                 round: Arc::new(AtomicU32::new(0)),
                 rng: Arc::new(RwLock::new(StdRng::from_entropy())),
                 peers: Arc::new(RwLock::new(HashMap::new())),
@@ -472,7 +472,7 @@ impl<
                     .filter(|addr| region.contains(addr))
                     .collect();
                 remote.shuffle(&mut *self.rng.write());
-                targets.extend(remote.into_iter().take(self.remote_fanout));
+                targets.extend(remote.into_iter().take(self.cross_region_fanout));
             }
         }
 

@@ -386,7 +386,7 @@ impl<
 }
 
 /// Maximum number of **additional** (remote) geographical regions a [`Config`] can declare,
-/// beyond the local [`peer_net`](Config::peer_net). A fixed-size array keeps [`Config`] `Copy`;
+/// beyond the local [`local_region`](Config::local_region). A fixed-size array keeps [`Config`] `Copy`;
 /// eight regions is generous for real geographical deployments.
 pub const MAX_REGIONS: usize = 8;
 
@@ -397,17 +397,17 @@ pub struct Config {
     /// CIDR of the **local** geographical region: the subnet this node reconciles with
     /// aggressively (every round) and probes for auto-discovery. With a single region this is the
     /// whole cluster network (the historical behaviour).
-    pub peer_net: IpNet,
+    pub local_region: IpNet,
     /// Additional **remote** geographical regions, each a CIDR (issue #53). Empty slots are `None`.
     ///
-    /// Set through [`with_region`](Config::with_region) / [`with_regions`](Config::with_regions).
+    /// Set through [`with_remote_region`](Config::with_remote_region) / [`with_remote_regions`](Config::with_remote_regions).
     /// A node auto-discovers peers in every region (one random probe per region per round) but
     /// only gossips the full anti-entropy comparison to remote-region peers on a slower cadence
     /// and to a bounded random subset, so cross-region (WAN) traffic stays bounded. A peer's
     /// region is derived purely from its IP address (`IpNet::contains`), so the wire format is
     /// unchanged. With no remote region declared, behaviour is identical to a flat single-CIDR
     /// cluster.
-    pub regions: [Option<IpNet>; MAX_REGIONS],
+    pub remote_regions: [Option<IpNet>; MAX_REGIONS],
     /// Send the full anti-entropy comparison to remote-region peers every `cross_region_interval`
     /// reconciliation rounds (default `6`). Local-region peers are always contacted every round.
     /// Lowering this speeds cross-region convergence (and tombstone GC) at the cost of WAN traffic.
@@ -415,7 +415,7 @@ pub struct Config {
     /// Maximum number of peers contacted per remote region on each cross-region round (default
     /// `2`). Bounds WAN fan-out without designating any node as a relay/gateway. Raising it speeds
     /// cross-region convergence (and tombstone GC) at the cost of WAN traffic.
-    pub remote_fanout: usize,
+    pub cross_region_fanout: usize,
     /// Optional shared cluster secret enabling per-datagram MAC authentication.
     ///
     /// When `None` (the default), the protocol is **unauthenticated**: any host able to send a
@@ -445,10 +445,10 @@ impl Default for Config {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
-            regions: [None; MAX_REGIONS],
+            local_region: "127.0.0.1/8".parse().unwrap(),
+            remote_regions: [None; MAX_REGIONS],
             cross_region_interval: 6,
-            remote_fanout: 2,
+            cross_region_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
@@ -464,22 +464,22 @@ impl Config {
         self.listen_addr = listen_addr;
         self
     }
-    pub fn with_peer_net(mut self, peer_net: IpNet) -> Self {
-        self.peer_net = peer_net;
+    pub fn with_local_region(mut self, local_region: IpNet) -> Self {
+        self.local_region = local_region;
         self
     }
 
     /// Declare an additional remote geographical region by its CIDR (issue #53).
     ///
     /// The node auto-discovers peers in this region and reconciles with them over WAN-bounded,
-    /// geography-aware gossip (see [`regions`](Config::regions)). Chainable to add several regions.
+    /// geography-aware gossip (see [`remote_regions`](Config::remote_regions)). Chainable to add several regions.
     ///
     /// # Panics
     ///
     /// Panics if more than [`MAX_REGIONS`] additional regions are declared.
-    pub fn with_region(mut self, net: IpNet) -> Self {
+    pub fn with_remote_region(mut self, net: IpNet) -> Self {
         let slot = self
-            .regions
+            .remote_regions
             .iter_mut()
             .find(|slot| slot.is_none())
             .unwrap_or_else(|| panic!("at most {MAX_REGIONS} additional regions are supported"));
@@ -487,14 +487,14 @@ impl Config {
         self
     }
 
-    /// Declare several additional remote regions at once (see [`with_region`](Config::with_region)).
+    /// Declare several additional remote regions at once (see [`with_remote_region`](Config::with_remote_region)).
     ///
     /// # Panics
     ///
     /// Panics if the total number of additional regions exceeds [`MAX_REGIONS`].
-    pub fn with_regions(mut self, nets: &[IpNet]) -> Self {
+    pub fn with_remote_regions(mut self, nets: &[IpNet]) -> Self {
         for &net in nets {
-            self = self.with_region(net);
+            self = self.with_remote_region(net);
         }
         self
     }
@@ -507,9 +507,9 @@ impl Config {
     }
 
     /// Set the maximum number of peers contacted per remote region on each cross-region round
-    /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
-    pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
-        self.remote_fanout = fanout;
+    /// (default `2`). See [`cross_region_fanout`](Config::cross_region_fanout).
+    pub fn with_cross_region_fanout(mut self, fanout: usize) -> Self {
+        self.cross_region_fanout = fanout;
         self
     }
 
@@ -577,10 +577,10 @@ mod reconcile_store_tests {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
-            regions: [None; MAX_REGIONS],
+            local_region: "127.0.0.1/8".parse().unwrap(),
+            remote_regions: [None; MAX_REGIONS],
             cross_region_interval: 6,
-            remote_fanout: 2,
+            cross_region_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
@@ -596,10 +596,10 @@ mod reconcile_store_tests {
             // updates here.
             port: 8090,
             listen_addr: "127.0.0.45".parse().unwrap(),
-            peer_net: "127.0.0.45/32".parse().unwrap(),
-            regions: [None; MAX_REGIONS],
+            local_region: "127.0.0.45/32".parse().unwrap(),
+            remote_regions: [None; MAX_REGIONS],
             cross_region_interval: 6,
-            remote_fanout: 2,
+            cross_region_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
