@@ -39,6 +39,8 @@ jobs:
       run: cargo test --all --verbose
     - name: Run tests with observability features
       run: cargo test --all --features metrics-prometheus --verbose
+    - name: Run doc-tests
+      run: cargo test --doc --all --verbose
     - name: Check that the benchmarks can still compile
       run: cargo bench --no-run
     - name: Generate the documentation
@@ -47,3 +49,26 @@ jobs:
       run: cargo doc --all --features metrics-prometheus --verbose
     - name: Check that the crate is publishable
       run: cargo publish --allow-dirty --dry-run
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install llvm-tools-preview
+      run: rustup component add llvm-tools-preview
+    - uses: taiki-e/install-action@cargo-llvm-cov
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Generate code coverage
+      run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: lcov.info
+        fail_ci_if_error: false

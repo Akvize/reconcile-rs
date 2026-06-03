@@ -4,6 +4,7 @@
 [![MIT licensed][mit-badge]][mit-url]
 [![Apache licensed][apache-badge]][apache-url]
 [![Build Status][actions-badge]][actions-url]
+[![Coverage Status][codecov-badge]][codecov-url]
 [![Docs Status][docs-badge]][docs-url]
 
 [crates-badge]: https://img.shields.io/crates/v/reconcile.svg
@@ -14,8 +15,8 @@
 [apache-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-APACHE
 [actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
 [actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
-[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
-[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
+[codecov-badge]: https://codecov.io/gh/Akvize/reconcile-rs/branch/master/graph/badge.svg
+[codecov-url]: https://codecov.io/gh/Akvize/reconcile-rs
 [docs-badge]: https://docs.rs/reconcile/badge.svg
 [docs-url]: https://docs.rs/reconcile/latest/reconcile/
 
@@ -46,6 +47,15 @@ let mut store = ReconcileStore::new(Config::default()).await;
 tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
+
+## Documentation
+
+- [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
+  vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
+  ports & adapters) the codebase is being refactored toward.
+- [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
+  Durable background; carries no status — see `PROGRESS.md` for the current state of each finding.
 
 ## Security model
 
@@ -269,3 +279,27 @@ changes from 10 to 1,000,000 elements.
 
 **Note:** These benchmarks are performed locally on the loop-back network
 interface. On a real network, transmission delays will make the values larger.
+
+## Testing and coverage
+
+The crate is covered by unit, integration, property-based and documentation
+tests. Run the whole suite with:
+
+```sh
+cargo test --all          # unit + integration + doc tests
+cargo test --doc          # documentation examples only
+```
+
+Code coverage is measured on every CI run with
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and reported to
+[Codecov](https://codecov.io/gh/Akvize/reconcile-rs) (see the coverage badge at
+the top). To reproduce the coverage report locally:
+
+```sh
+cargo install cargo-llvm-cov
+cargo llvm-cov --workspace            # text summary in the terminal
+cargo llvm-cov --workspace --html     # browsable HTML report under target/llvm-cov/html
+```
+
+Coverage is collected with the crate's default features. The `mac-blake3` and
+`mac-hmac` backends are mutually exclusive, so do **not** pass `--all-features`.
