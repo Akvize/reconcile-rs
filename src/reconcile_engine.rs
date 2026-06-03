@@ -34,7 +34,7 @@ use crate::diff::{Diffable, HashSegment};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::gen_ip;
 use crate::hlc::{Hlc, HlcClock, Timestamped};
-use crate::reconcilable::{MaybeTombstone, Reconcilable};
+use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::Config;
 use crate::HRTree;
 
@@ -61,8 +61,15 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
 /// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
-pub(crate) struct ReconcileEngine<K, V> {
+pub(crate) struct ReconcileEngine<K, V: Projectable> {
     pub(crate) map: Arc<RwLock<HRTree<K, V>>>,
+    /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
+    ///
+    /// Its range fingerprints are timestamp-less by construction (see
+    /// [`ValueOnly`](crate::reconcilable::ValueOnly)), which is what lets a dateless mirror
+    /// converge with this dated store over the existing range-diff protocol. It is read-only state
+    /// for the dated↔dated path and never touches the #109 causal-stability bookkeeping.
+    pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
     port: u16,
     socket: Arc<UdpSocket>,
     peer_net: IpNet,
@@ -86,10 +93,11 @@ pub(crate) struct ReconcileEngine<K, V> {
     clock: Arc<HlcClock>,
 }
 
-impl<K, V> Clone for ReconcileEngine<K, V> {
+impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
     fn clone(&self) -> Self {
         ReconcileEngine {
             map: self.map.clone(),
+            projection: self.projection.clone(),
             port: self.port,
             socket: self.socket.clone(),
             peer_net: self.peer_net,
@@ -105,8 +113,18 @@ impl<K, V> Clone for ReconcileEngine<K, V> {
 }
 
 /// Represent an atomic message for the reconciliation protocol.
+///
+/// The three original variants form the **dated** channel (`ComparisonItem` / `Update` / `Ack`),
+/// exchanged between full dated stores exactly as before — their bincode tags (0, 1, 2) and wire
+/// bytes are unchanged. The two trailing variants form the additive **value-only** channel used by
+/// lightweight dateless mirrors (issue #128): they are tagged 3 and 4, so a node that does not
+/// understand them simply fails to deserialize and drops the datagram (the receive loop is hardened
+/// against that), keeping the protocol backward compatible on a single port.
+///
+/// `V` is the dated value carried by `Update`; `P` is its timestamp-less
+/// [`Projected`](crate::reconcilable::Projectable::Projected) form carried by `ValueUpdate`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-enum Message<K: Serialize, V: Serialize> {
+pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// Provides information about a set of keys that allows checking
     /// whether there are differences between the two instances over this set
     ComparisonItem(HashSegment<K>),
@@ -117,6 +135,13 @@ enum Message<K: Serialize, V: Serialize> {
     /// given version token (see [`version_hash`]). Enables causal-stability-gated
     /// tombstone garbage collection on the receiver.
     Ack((K, u64)),
+    /// Like [`ComparisonItem`](Message::ComparisonItem) but on the **value-only basis**: the
+    /// fingerprints were computed over timestamp-less values. A dated store answers these by
+    /// diffing against its value-only *projection* tree, never its dated map.
+    ValueComparisonItem(HashSegment<K>),
+    /// An individual timestamp-less update sent to a dateless mirror once the value-only diff has
+    /// identified a difference. Carries the projected payload only (no [`Hlc`]).
+    ValueUpdate((K, P)),
 }
 
 impl<
@@ -126,6 +151,7 @@ impl<
             + Hash
             + MaybeTombstone
             + PartialEq
+            + Projectable
             + Reconcilable
             + Send
             + Serialize
@@ -151,9 +177,11 @@ impl<
             );
         }
         let map = HRTree::<K, V>::new();
+        let projection = HRTree::<K, V::Projected>::new();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         ReconcileEngine {
             map: Arc::new(RwLock::new(map)),
+            projection: Arc::new(RwLock::new(projection)),
             port: config.port,
             socket: Arc::new(socket),
             peer_net: config.peer_net,
@@ -171,6 +199,29 @@ impl<
         self.map.read().hash(&range)
     }
 
+    /// Fingerprint of the value-only [`projection`](Self::projection) over a range.
+    ///
+    /// This is the timestamp-less counterpart of [`fingerprint`](Self::fingerprint); a dateless
+    /// mirror that has converged with this store computes the same value over the same range.
+    pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
+        self.projection.read().hash(&range)
+    }
+
+    /// Insert into the dated `map` **and** mirror the value-only projection, under a consistent
+    /// lock order (`map` then `projection`) shared by every mutation path so the two trees never
+    /// deadlock against each other. The caller already holds the `map` write guard.
+    fn map_insert(&self, guard: &mut HRTree<K, V>, key: K, value: V) -> Option<V> {
+        self.projection.write().insert(key.clone(), value.project());
+        guard.insert(key, value)
+    }
+
+    /// Remove a key from the dated `map` and its value-only projection (the GC removal path).
+    pub(crate) fn gc_remove(&self, key: &K) -> Option<V> {
+        let mut guard = self.map.write();
+        self.projection.write().remove(key);
+        guard.remove(key)
+    }
+
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
     pub fn clock_now(&self) -> Hlc {
         self.clock.now()
@@ -186,9 +237,9 @@ impl<
         // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
 
-        // 2) Now acquire write lock and insert
+        // 2) Now acquire write lock and insert (mirroring the value-only projection)
         let mut guard = self.map.write();
-        guard.insert(key.clone(), value.clone())
+        self.map_insert(&mut guard, key, value)
     }
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
@@ -198,7 +249,7 @@ impl<
         let socket = Arc::clone(&self.socket);
         let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
-            let message = Message::Update::<K, V>((key, value));
+            let message = Message::Update::<K, V, V::Projected>((key, value));
             let messages = vec![message];
             let mut send_buf = Vec::new();
             for addr in peers {
@@ -221,10 +272,10 @@ impl<
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
         }
-        // 2) Then acquire the write lock once and insert them
+        // 2) Then acquire the write lock once and insert them (mirroring the projection)
         let mut guard = self.map.write();
         for (key, value) in key_values {
-            guard.insert(key.clone(), value.clone());
+            self.map_insert(&mut guard, key.clone(), value.clone());
         }
     }
 
@@ -233,7 +284,7 @@ impl<
         let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
-            .map(|kv| Message::Update::<K, V>(kv.clone()))
+            .map(|kv| Message::Update::<K, V, V::Projected>(kv.clone()))
             .collect();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
@@ -289,16 +340,25 @@ impl<
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                self.handle_messages(payload, peer, &mut send_buf).await;
+                                let spoke_dated =
+                                    self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Only record senders whose datagram was accepted. With
                                 // authentication enabled this stops a spoofed/unauthenticated host
                                 // from being registered as a peer (and receiving DB dumps) or as a
                                 // permanent member (which would block tombstone GC forever, since
                                 // causal stability requires an ack from every member). In
                                 // unauthenticated mode `open` always succeeds, so this is unchanged.
-                                let addr = peer.ip();
-                                self.peers.write().insert(addr, Instant::now());
-                                self.members.write().insert(addr);
+                                //
+                                // Crucially, a sender that spoke *only* the value-only channel is a
+                                // dateless read-only mirror: it never acknowledges tombstones, so it
+                                // must NOT join the #109 membership set or it would block GC
+                                // forever (the very regression #128 must avoid). Such a mirror is
+                                // served reactively off `peer` and is not tracked as a peer/member.
+                                if spoke_dated {
+                                    let addr = peer.ip();
+                                    self.peers.write().insert(addr, Instant::now());
+                                    self.members.write().insert(addr);
+                                }
                             }
                             None => trace!("dropped datagram from {peer}: missing or invalid MAC"),
                         }
@@ -315,7 +375,7 @@ impl<
         };
         send_buf.clear();
         for segment in segments {
-            Message::ComparisonItem::<K, V>(segment)
+            Message::ComparisonItem::<K, V, V::Projected>(segment)
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
@@ -345,21 +405,27 @@ impl<
     ///
     /// Taking a [`auth::Payload`] rather than raw bytes makes it structurally impossible to
     /// process a datagram that has not cleared the authentication gate.
+    ///
+    /// Returns `true` if the datagram contained at least one **dated** protocol message
+    /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
+    /// the sender in the #109 membership set: a sender that spoke only the value-only channel is a
+    /// read-only mirror and must not gate tombstone GC.
     async fn handle_messages(
         &self,
         payload: auth::Payload<'_>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
-    ) {
+    ) -> bool {
         let payload = payload.as_bytes();
         trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
         let mut updates: Vec<(K, V)> = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
+        let mut value_in_comparison = Vec::new();
         let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
         // read messages in buffer
         loop {
-            match Message::deserialize(&mut deserializer) {
+            match Message::<K, V, V::Projected>::deserialize(&mut deserializer) {
                 Err(ref kind) => {
                     if let bincode::ErrorKind::Io(err) = kind.as_ref() {
                         if err.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -376,8 +442,13 @@ impl<
                 Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
                 Ok(Message::Update(update)) => updates.push(update),
                 Ok(Message::Ack(ack)) => acks.push(ack),
+                Ok(Message::ValueComparisonItem(segment)) => value_in_comparison.push(segment),
+                // A dated store is authoritative and never integrates a value-only update; mirrors
+                // are the only consumers of `ValueUpdate`. Ignore it defensively.
+                Ok(Message::ValueUpdate(_)) => {}
             }
         }
+        let spoke_dated = !in_comparison.is_empty() || !updates.is_empty() || !acks.is_empty();
         // record tombstone acknowledgments received from the peer
         if !acks.is_empty() {
             let peer_ip = peer.ip();
@@ -398,7 +469,8 @@ impl<
                             .get(&key)
                             .is_some_and(|v| v.is_tombstone() && version_hash(v) == version);
                         if holds_same_tombstone {
-                            reciprocal_acks.push(Message::Ack::<K, V>((key, version)));
+                            reciprocal_acks
+                                .push(Message::Ack::<K, V, V::Projected>((key, version)));
                         }
                     }
                 }
@@ -428,7 +500,7 @@ impl<
                 debug!("returning {} segments", out_comparison.len());
                 trace!("segments: {out_comparison:?}");
                 for segment in out_comparison {
-                    messages.push(Message::ComparisonItem::<K, V>(segment))
+                    messages.push(Message::ComparisonItem::<K, V, V::Projected>(segment))
                 }
             }
             if !differences.is_empty() {
@@ -471,7 +543,7 @@ impl<
                                 (self.pre_insert.read())(&k, &merged_v);
                                 let version =
                                     merged_v.is_tombstone().then(|| version_hash(&merged_v));
-                                guard.insert(k.clone(), merged_v);
+                                self.map_insert(&mut guard, k.clone(), merged_v);
                                 version
                             } else {
                                 // We already hold an equal-or-newer value; still acknowledge it
@@ -482,12 +554,12 @@ impl<
                         None => {
                             (self.pre_insert.read())(&k, &remote_v);
                             let version = remote_v.is_tombstone().then(|| version_hash(&remote_v));
-                            guard.insert(k.clone(), remote_v);
+                            self.map_insert(&mut guard, k.clone(), remote_v);
                             version
                         }
                     };
                     if let Some(version) = tombstone_version {
-                        acks_to_send.push(Message::Ack::<K, V>((k, version)));
+                        acks_to_send.push(Message::Ack::<K, V, V::Projected>((k, version)));
                     }
                 }
             }
@@ -502,6 +574,42 @@ impl<
                 .await;
             }
         }
+        // Value-only channel: answer a dateless mirror by diffing against the value-only
+        // *projection* tree (never the dated map) and replying with `ValueUpdate`s carrying only
+        // the projected payload. This path is entirely independent of the dated channel and of the
+        // #109 causal-stability state — no acks, no membership, no GC interaction.
+        if !value_in_comparison.is_empty() {
+            debug!("received {} value-only segments", value_in_comparison.len());
+            let mut differences = Vec::new();
+            let mut out_comparison = Vec::new();
+            {
+                let guard = self.projection.read();
+                guard.diff_round(value_in_comparison, &mut out_comparison, &mut differences);
+            }
+            let mut messages = Vec::new();
+            for segment in out_comparison {
+                messages.push(Message::ValueComparisonItem::<K, V, V::Projected>(segment));
+            }
+            if !differences.is_empty() {
+                let guard = self.projection.read();
+                for range in differences {
+                    for (k, p) in guard.get_range(&range) {
+                        messages.push(Message::ValueUpdate((k.clone(), p.clone())));
+                    }
+                }
+            }
+            if !messages.is_empty() {
+                send_messages_to(
+                    &messages,
+                    Arc::clone(&self.socket),
+                    &self.authenticator,
+                    &peer,
+                    send_buf,
+                )
+                .await;
+            }
+        }
+        spoke_dated
     }
 
     /// Returns `true` if the tombstone for `key` with the given version token has been
@@ -540,7 +648,7 @@ impl<
     }
 }
 
-async fn send_to_retry<A: ToSocketAddrs>(
+pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
     socket: &UdpSocket,
     authenticator: &auth::Authenticator,
     buf: &[u8],
@@ -561,8 +669,8 @@ async fn send_to_retry<A: ToSocketAddrs>(
     res
 }
 
-async fn send_messages_to<K: Serialize, V: Serialize>(
-    messages: &[Message<K, V>],
+pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
+    messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,
     authenticator: &auth::Authenticator,
     peer: &SocketAddr,
@@ -652,10 +760,10 @@ mod auth_attack {
     /// would win against every legitimate write forever.
     fn forged_update() -> Vec<u8> {
         let far_future = Hlc::new(u64::MAX, 0, 0);
-        let message = Message::Update::<i32, (Hlc, Option<String>)>((
-            0,
-            (far_future, Some("evil".to_string())),
-        ));
+        let message =
+            Message::Update::<i32, (Hlc, Option<String>), crate::reconcilable::ValueOnly<String>>(
+                (0, (far_future, Some("evil".to_string()))),
+            );
         let mut buf = Vec::new();
         message
             .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))

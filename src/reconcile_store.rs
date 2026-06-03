@@ -25,6 +25,7 @@ use tracing::warn;
 use crate::fingerprint::Fingerprint;
 use crate::hlc::Hlc;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
+use crate::reconcilable::Projectable;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
 
@@ -47,6 +48,7 @@ const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 pub struct ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
+    (Hlc, Option<V>): Projectable,
 {
     /// Internal map and hooks container.
     engine: ReconcileEngine<K, (Hlc, Option<V>)>,
@@ -60,6 +62,7 @@ where
 impl<K, V> Clone for ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
+    (Hlc, Option<V>): Projectable,
 {
     /// Allows cloning of the `ReconcileStore` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
@@ -194,6 +197,15 @@ impl<
         self.engine.fingerprint(range)
     }
 
+    /// Fingerprint of the **value-only projection** over a range — the timestamp-less counterpart of
+    /// [`fingerprint`](Self::fingerprint).
+    ///
+    /// A [`ReconcileMirror`](crate::mirror::ReconcileMirror) that has converged with this
+    /// store computes the same value over the same range, even though it never stores timestamps.
+    pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
+        self.engine.value_fingerprint(range)
+    }
+
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.engine.map.read();
         RwLockReadGuard::try_map(guard, |map| {
@@ -326,7 +338,8 @@ impl<
                 };
                 if self.engine.is_tombstone_stable(&key, version) {
                     self.tombstones.remove(&key);
-                    self.engine.map.write().remove(&key);
+                    // Remove from the dated map *and* the value-only projection together.
+                    self.engine.gc_remove(&key);
                     self.engine.forget_tombstone(&key);
                 }
                 // Otherwise keep the tombstone and re-check on a later iteration.
@@ -352,6 +365,7 @@ impl<
     > ReconcileStore<K, V>
 {
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
+        use crate::reconcilable::Projectable;
         let mut guard = self.engine.map.write();
         guard.with_mut(k, |maybe_tv| {
             if let Some((_, v)) = maybe_tv {
@@ -360,6 +374,12 @@ impl<
                 callback(None);
             }
         });
+        // The in-place mutation bypassed `insert`, so refresh the value-only projection for this
+        // key directly (lock order map → projection, as everywhere else) to keep it in sync.
+        if let Some(tv) = guard.get(k) {
+            let projected = tv.project();
+            self.engine.projection.write().insert(k.clone(), projected);
+        }
     }
 }
 

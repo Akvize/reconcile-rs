@@ -8,6 +8,11 @@
 
 //! Provides the [`Reconcilable`] trait.
 
+use std::hash::Hash;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
 use crate::hlc::Hlc;
 
 /// Values stored in a map to be synced by the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
@@ -48,6 +53,59 @@ pub trait MaybeTombstone {
 impl<V> MaybeTombstone for (Hlc, Option<V>) {
     fn is_tombstone(&self) -> bool {
         self.1.is_none()
+    }
+}
+
+/// A timestamp-less projection of a value, used by lightweight read-only mirrors
+/// ([`ReconcileMirror`](crate::mirror::ReconcileMirror)) and by the value-only
+/// *projection* tree a dated store maintains to answer them.
+///
+/// Its [`Hash`] is **value-only by construction**: it wraps just the [`Option<V>`] payload, with no
+/// [`Hlc`] timestamp, so two replicas that agree on the logical value compute the *same* per-element
+/// fingerprint regardless of when (or on which node) each last wrote it. A live value is
+/// `ValueOnly(Some(v))`; a tombstone is `ValueOnly(None)`.
+///
+/// This is deliberately a *separate* type from the dated `(Hlc, Option<V>)`: the dated value keeps
+/// its timestamp-inclusive `Hash` (required by the engine's `version_hash` for the #109
+/// causal-stability acks), so a single value-only hash never replaces it. See issue #128.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ValueOnly<V>(pub Option<V>);
+
+impl<V> ValueOnly<V> {
+    /// Borrow the live value, or `None` if this is a tombstone.
+    pub fn as_value(&self) -> Option<&V> {
+        self.0.as_ref()
+    }
+
+    /// Returns `true` if this projection is a deletion marker (tombstone).
+    pub fn is_tombstone(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+/// A dated value that can be projected to its timestamp-less [`ValueOnly`] form.
+///
+/// The dated store maintains a parallel value-only *projection* tree so it can reconcile with
+/// dateless mirrors over the existing range-diff protocol without exposing timestamps. The
+/// projection is kept in sync wherever the dated map mutates (insert, reconcile, GC removal).
+///
+/// The associated [`Projected`](Projectable::Projected) type carries exactly the bounds the
+/// projection tree and the value-only wire channel need, so the reconciliation engine only has to
+/// add a single `Projectable` bound. Note it deliberately does **not** require `PartialEq`: the
+/// value-only path decides equality on fingerprints, never on the projected values themselves.
+pub trait Projectable {
+    /// The value-only projection. Its `Hash` must ignore any timestamp (see [`ValueOnly`]).
+    type Projected: Clone + Hash + Send + Sync + Serialize + DeserializeOwned + 'static;
+    /// Project this dated value to its timestamp-less form.
+    fn project(&self) -> Self::Projected;
+}
+
+impl<V: Clone + Hash + Send + Sync + Serialize + DeserializeOwned + 'static> Projectable
+    for (Hlc, Option<V>)
+{
+    type Projected = ValueOnly<V>;
+    fn project(&self) -> ValueOnly<V> {
+        ValueOnly(self.1.clone())
     }
 }
 
