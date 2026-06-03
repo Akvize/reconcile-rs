@@ -49,12 +49,12 @@ tokio::spawn(store.clone().run());
 
 ## Documentation
 
-- [`REVIEW.md`](REVIEW.md) — a peer review of the crate. The original audit's critical findings
-  (silent divergence, remote DoS, unauthenticated poisoning, tombstone resurrection, weak
-  fingerprint) have since been fixed on `master`; the document's *Resolution status* section tracks
-  each finding.
+- [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
+  vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
   ports & adapters) the codebase is being refactored toward.
+- [`REVIEW.md`](REVIEW.md) — the in-depth peer review and SOTA/competitor analysis (a dated audit
+  of an earlier commit; see `PROGRESS.md` for the current status of each finding).
 
 ## Security model
 

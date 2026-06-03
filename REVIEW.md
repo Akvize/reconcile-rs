@@ -11,41 +11,9 @@
 >   `README.md`, `.github/workflows/` + SOTA literature review. No source file was modified.
 > - **Navigation:** a [glossary (§9)](#9-glossary) defines ~120 terms and an
 >   [alphabetical index (§11)](#11-alphabetical-index) lists them; first uses in the text link to it.
-
----
-
-## Resolution status (update — 2026-06-03, branch `master`)
-
-> This review audited commit `64f1ebf`. The findings below are preserved verbatim as the
-> historical record; **this section tracks their status on current `master`.** All five Critical
-> findings and most High findings have since been resolved through issues #106–#113 and #122. Each
-> finding in [§4](#4-implementation-review-detailed-findings) also carries an inline
-> **Status (master)** note.
-
-| # | Severity | Status | Resolution on `master` |
-|---|----------|--------|------------------------|
-| F1 | Critical | ✅ Resolved | #106 — range emptiness/equality decided on the exact `size` field, never on `hash==0` |
-| F2 | Critical | ✅ Resolved | #107 — malformed datagrams dropped (`warn!` + `return`); no network input can panic the loop |
-| F3 | Critical | ✅ Resolved (auth) | #108 — per-datagram keyed MAC, verified before deserialization; opt-in cluster key. Out of scope: confidentiality (#96), peer allow-list |
-| F4 | Critical | ✅ Resolved | #109 — tombstone GC gated on causal stability instead of a 60 s wall-clock timer |
-| F5 | High | ✅ Resolved | #110 — Hybrid Logical Clock + total order `(wall_ms, counter, node_id)`; commutative merge |
-| F6 | High | ✅ Resolved | #111 — 256-bit per-element BLAKE3 fingerprint, combined by addition mod 2²⁵⁶ |
-| F7 | High | ✅ Resolved | #112 — `diff_round` validates incoming bounds and uses `checked_sub` |
-| F8 | High | ✅ Resolved (wire token) | #111 — the on-wire fingerprint is now BLAKE3 (toolchain-stable). `version_hash` still uses a fixed-key `DefaultHasher` |
-| F9 | High | ◐ Mitigated | #108 (authenticated peers only) + #106 (no `hash==0` dump trigger); rate-limiting / path validation still future work |
-| F10 | High | ◯ Open | IP-scan discovery / O(N²) membership unchanged |
-| F11 | High | ✅ Resolved | #113 — property tests (`tests/proptest_hrtree.rs`) + `tests/fuzz_packets.rs` |
-| F12 | Medium | ✅ Resolved | #113 — stray `println!` removed from the hot path |
-| F13 | Medium | ◯ Open | `new`/`run` still return no `Result`; `unwrap` on bind/send remains |
-| F14 | Medium | ◯ Open | `pre_insert` lock-ordering on the network path not yet reworked |
-| F15 | Medium | ✅ Resolved | #122 — pluggable `Persistence` (`InMemoryPersistence`, `FileSnapshot`) reloading tombstones + bookkeeping |
-| F16 | Medium | ◐ Partial | README gained Security/Persistence sections; benches still loopback-only |
-| F17 | Medium/Low | ◐ Partial | clippy lifetime warning fixed; still `0.0.0-git`, no MSRV/CHANGELOG |
-| F18 | Medium | ◯ Open | `peers` map bound / bincode allocation limit not added |
-| F19 | Low | ◯ Open | `overflow-checks`, bincode `with_limit`, dependency floors unchanged |
-
-For the forward-looking restructuring of the (now-corrected) codebase into a hexagonal
-ports-&-adapters design, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> - **Live status:** this is a dated audit of commit `64f1ebf`; the findings below are reported *as
+>   audited*. For their current resolution status on `master` — most Critical/High findings are now
+>   fixed — see [`PROGRESS.md`](./PROGRESS.md).
 
 ---
 
@@ -62,9 +30,6 @@ subtree size. This enables a **cumulative-hash range query in [O(log n)](#g95)**
 of Meyer (arXiv:2212.13567, 2023). Conflict resolution is **[Last-Write-Wins (LWW)](#g93) by
 physical clock `DateTime<Utc>`**; deletions are *[tombstones](#g91)* purged after 60 s; transport is
 **[UDP](#g94) + [bincode](#g96)**; peer discovery is done by **random IP sampling within a CIDR**.
-*(This paragraph describes the audited commit. On current `master` the fingerprint is a 256-bit
-additive BLAKE3, conflict resolution is keyed on a Hybrid Logical Clock, and tombstone GC is gated
-on causal stability — see the Resolution status table above.)*
 
 **Overall verdict.** The **algorithmic core is real, correct and SOTA-aligned**: the HRTree is, in
 the terminology of the 2026 literature, a *[Range-Summarizable Order-Statistics Store](#g92)* (RSOS,
@@ -73,8 +38,7 @@ implemented (O(log n) verified). However, the **engineering shell and the distri
 choices are pre-alpha** and contain **several critical defects**: silent permanent divergence (the
 `hash==0` sentinel), a trivial remote denial of service (panic on a single malformed UDP packet),
 resurrection of deleted data (wall-clock tombstone GC), a LWW that is non-commutative on equal
-timestamps, and the total absence of authentication/encryption. *(These were the defects at audit
-time; all five have since been resolved on `master` — see the Resolution status table above.)*
+timestamps, and the total absence of authentication/encryption.
 
 Panel convergence: the **two independent reviewers of each theme identified the same critical
 findings** — a high-confidence signal, not a phrasing artifact.
@@ -188,12 +152,6 @@ for with history-independence, **without paying for it** — and thereby escapes
 
 ## 3. Architecture and algorithms
 
-> **Note:** this section describes the **audited commit** (`64f1ebf`). Several design points below —
-> the 64-bit XOR fingerprint, physical-clock LWW, the 60 s time-based tombstone GC, and the
-> unauthenticated transport — have since been changed on `master` (256-bit additive BLAKE3, Hybrid
-> Logical Clock, causal-stability GC, optional per-datagram MAC). See the Resolution status table
-> near the top.
-
 ### 3.1 Modules
 
 | File | Role |
@@ -268,9 +226,6 @@ panic or log. Triggerable by an attacker who chooses the data.
 in `HashSegment` and is exact), never on `hash==0`. A one-line fix, to block before release. *This
 is the most serious finding in the repository.*
 
-> **Status (master): ✅ Resolved (#106).** Range emptiness and equality are now decided on the
-> exact `size` field, never on `hash==0`; the sentinel that aliased a real value is gone.
-
 ### F2 — [CRITICAL] `panic!` on malformed UDP packet → remote DoS **[2/2]**
 
 `reconcile_engine.rs:267`: any datagram that is not a clean EOF truncation triggers `panic!`. A
@@ -283,9 +238,6 @@ across an entire subnet.
 
 **Recommendation:** replace `panic!` with `warn!` + `return` (exactly the pattern already present
 for the too-small buffer, `:250-253`). Never panic on network input.
-
-> **Status (master): ✅ Resolved (#107).** Malformed datagrams are dropped with `warn!` + `return`
-> (the pattern this finding recommended); no network input can panic the run-loop.
 
 ### F3 — [CRITICAL] No auth/encryption + attacker-controlled LWW timestamp **[2/2]**
 
@@ -323,10 +275,6 @@ is the classic hazard (Dynamo/Cassandra `gc_grace_seconds`), but at 60 s vs 10 d
 complete repair within the window; or versioned tombstones (HLC/VV) as first-class state. *Severity:
 Critical (T3-A) / High (T3-B) → retained as Critical.*
 
-> **Status (master): ✅ Resolved (#109).** Tombstone GC is now gated on causal stability — every
-> monotonic cluster member must have acknowledged the exact version — instead of a 60 s wall-clock
-> timer, closing the resurrection window.
-
 ### F5 — [HIGH] Physical-clock LWW: loss under skew + non-commutative on equality **[2/2]**
 
 `reconcilable.rs:19-27`: `if other.0 > self.0 { other } else { self }`. (a) **Skew**: a causally
@@ -337,10 +285,6 @@ includes the timestamp so the segments never converge). The merge is therefore *
 violates SEC.
 
 **Recommendation:** HLC + a deterministic total-order tie-break `(timestamp, node_id)`.
-
-> **Status (master): ✅ Resolved (#110).** Physical-clock LWW is replaced by a Hybrid Logical Clock
-> with the deterministic total order `(wall_ms, counter, node_id)`; on receiving a peer's stamp a
-> node advances its clock, so the merge is commutative/associative/idempotent (SEC).
 
 ### F6 — [HIGH] Weak 64-bit XOR fingerprint **[2/2 + 2 SOTA panels]**
 
@@ -355,10 +299,6 @@ Negentropy (inspired by Meyer) abandoned the naive combiner for an incremental c
 **Recommendation:** wide (≥256-bit) and non-GF(2)-linear fingerprint (hash-then-add mod 2²⁵⁶,
 MSet-Mu-Hash/LtHash) or keyed; incorporate `size` into the equality decision (also fixes F1).
 
-> **Status (master): ✅ Resolved (#111).** The 64-bit XOR is replaced by a 256-bit fingerprint:
-> per-element BLAKE3 combined by addition mod 2²⁵⁶ — non-GF(2)-linear, collision-resistant, and a
-> stable cross-version wire token.
-
 ### F7 — [HIGH] `unimplemented!()` / underflow reachable from the network **[T1 + T2]**
 
 `diff.rs:112,116`: `diff_round` assumes bounds `(Included|Unbounded, Excluded|Unbounded)`; but
@@ -370,10 +310,6 @@ in debug, wrap to a huge `usize` in release → OOB index in `key_at`).
 **Recommendation:** validate/normalize incoming bounds; handle all 4 combinations or drop the
 segment without panicking; `overflow-checks = true`.
 
-> **Status (master): ✅ Resolved (#112).** `diff_round` validates incoming `HashSegment` bounds and
-> uses `checked_sub`, so crafted or inverted ranges are dropped rather than triggering
-> `unimplemented!()` or an index underflow.
-
 ### F8 — [HIGH] `DefaultHasher` unstable cross-version **[T1 + T4]**
 
 `hrtree.rs:36`: `DefaultHasher` is **not stable** across Rust versions/platforms (std docs). Since
@@ -384,10 +320,6 @@ perpetually differ and **never converge** (or re-exchange everything in a loop).
 **Recommendation:** fixed, versioned hasher (constant-key SipHash, xxHash, BLAKE3); treat the hash
 algorithm as part of the wire protocol + golden-vector test.
 
-> **Status (master): ✅ Resolved for the wire fingerprint (#111).** The on-wire reconciliation token
-> is now a fixed BLAKE3, identical across toolchains and platforms. (`version_hash`, the internal
-> tombstone-acknowledgment token, still uses a fixed-key `DefaultHasher`.)
-
 ### F9 — [HIGH] UDP amplification / reflection **[2/2]**
 
 `reconcile_engine.rs:290-301` replies to the *source* address (spoofable). A tiny `ComparisonItem`
@@ -397,10 +329,6 @@ its entire DB** as `Update`s to the spoofed victim. Amplification factor ≈ DB 
 
 **Recommendation:** do not reply to unauthenticated/unconfirmed peers; rate-limiting; a path-
 validation cookie before any bulk send. Auth (F3) closes most of it.
-
-> **Status (master): ◐ Mitigated.** With a cluster key set (#108) only authenticated peers are
-> answered, and #106 removes the `hash==0` "dump the whole DB" trigger. Dedicated rate-limiting and
-> path-validation cookies remain future work.
 
 ### F10 — [HIGH] Non-scalable IP-scan discovery + leakage **[T2 + T3]**
 
@@ -415,8 +343,6 @@ hosts.
 discovery) and bounded fan-out (random subset); probe with pings, not diffs; refuse/warn on routable
 CIDR.
 
-> **Status (master): ◯ Open.** Peer discovery and membership are unchanged.
-
 ### F11 — [HIGH] No property-testing / fuzzing **[2/2]**
 
 19 tests, **0** `proptest`/`quickcheck`/`fuzz` (verified). The central property — *any two stores
@@ -429,9 +355,6 @@ proptest would find edge cases.
 assertions + "returned ranges = true symmetric difference"; test against a `BTreeMap` oracle;
 malformed-packet test (also covers the F2/F7 blind spot).
 
-> **Status (master): ✅ Resolved (#113).** Convergence is now exercised by property tests
-> (`tests/proptest_hrtree.rs`), and `tests/fuzz_packets.rs` drives the malformed-packet path.
-
 ### F12 — [MEDIUM] Debug `println!` in the hot path **[T1 + T4]**
 
 `hrtree.rs:315`: `println!("{diff_hash}")` executed on **every** `with_mut`/`get_mut` mutation.
@@ -439,18 +362,12 @@ stdout pollution + syscall+lock per mutation, outside the `tracing` infrastructu
 Critical (T4-B) / High (T4-A) / Low (T1) → retained as Medium, but a trivial and priority fix.*
 **Recommendation:** delete the line (or `trace!`).
 
-> **Status (master): ✅ Resolved (#113).** The stray `println!` in the `with_mut` hot path was
-> removed.
-
 ### F13 — [MEDIUM] Panic-only API **[2/2]**
 
 No public method returns `Result`. `new()` does `bind(...).unwrap()` (`reconcile_engine.rs:99`);
 `send_to_retry(...).unwrap()` (`:240,354,359,365`) panics the run-loop on a persistent send failure.
 Impossible to handle "port in use" or "peer unreachable" cleanly.
 **Recommendation:** `new()/run() -> io::Result<…>`; log-and-continue on send errors.
-
-> **Status (master): ◯ Open.** `new`/`run` still return `Self`/`()`; `unwrap` on bind and on
-> `send_to_retry` remains.
 
 ### F14 — [MEDIUM] `pre_insert` hook under the write-lock on the network path **[2/2]**
 
@@ -462,9 +379,6 @@ hook that re-inserts from the network path re-enters the write-lock → deadlock
 **Recommendation:** collect merged values under the lock, release it, run hooks, then re-acquire to
 apply; align with the direct path.
 
-> **Status (master): ◯ Open.** The network-path lock ordering around `pre_insert` has not yet been
-> reworked.
-
 ### F15 — [MEDIUM] No persistence **[2/2]**
 
 `reconcile_engine.rs:101-110`: HRTree in memory only. Restart = total loss + **resurrection trigger**
@@ -473,10 +387,6 @@ confirmed by both reviewers:** an empty node only **pulls** (`diff.rs:99-106`) a
 peers' data — absence is never interpreted as a deletion.
 **Recommendation:** optional persistent snapshot/WAL **including the tombstones**; pull-then-quiesce
 at startup.
-
-> **Status (master): ✅ Resolved (#122).** A mandatory, pluggable `Persistence` trait now exists with
-> `InMemoryPersistence` (default) and `FileSnapshot`; on restart the live values, tombstones, and
-> issue-#109 causal-stability bookkeeping are reloaded before the node rejoins gossip.
 
 ### F16 — [MEDIUM] Loopback benchmarks + self-contradictory README **[2/2]**
 
@@ -488,9 +398,6 @@ the throughput" (`:71`) = 2-3× slower. Typos "700 s"/"800 s" for ns.
 **Recommendation:** present RTT count / CPU cost as the headline metric; harness with injected
 RTT/loss (netem); fix the text.
 
-> **Status (master): ◐ Partial.** The README now documents the security model and persistence;
-> benchmarks are still loopback-only.
-
 ### F17 — [MEDIUM/LOW] Maturity signals **[2/2]**
 
 `Cargo.toml:3` `version = "0.0.0-git"` (misleading crates.io/docs.rs badges; CI's `publish
@@ -499,9 +406,6 @@ RTT/loss (netem); fix the text.
 on a recent toolchain → the project is no longer green against current stable; single-OS CI, no miri
 (despite the `unsafe` iterators), no MSRV, no `cargo audit`.
 **Recommendation:** real version + MSRV + CHANGELOG; `cargo clippy --fix`; miri/MSRV/audit jobs.
-
-> **Status (master): ◐ Partial.** The clippy `mismatched_lifetime_syntaxes` warning is fixed (CI is
-> green under `-Dwarnings`); the version is still `0.0.0-git` with no MSRV or CHANGELOG.
 
 ### F18 — [MEDIUM] Resource exhaustion **[2/2]**
 
@@ -512,9 +416,6 @@ pre-allocation (allocation-bomb) if `K`/`V` contains `Vec`/`String`.
 **Recommendation:** bound the `peers` map size (LRU/handshake); `bincode::…with_limit()`; bound the
 number of messages/segments per datagram.
 
-> **Status (master): ◯ Open.** The `peers` map is still unbounded and bincode has no allocation
-> limit.
-
 ### F19 — [LOW] Dependency hygiene **[T2]**
 
 `bincode = "1.3.3"` (1.x in maintenance, no default allocation limit); old `tokio` floor (1.33);
@@ -523,9 +424,6 @@ number of messages/segments per datagram.
 **Recommendation:** `cargo audit`/`cargo deny` in CI; raise the floors; `overflow-checks=true`.
 
 ---
-
-> **Status (master): ◯ Open.** `overflow-checks` is still off in the release profile, bincode has no
-> `with_limit`, and the dependency floors are unchanged.
 
 ## 5. Pros / cons and trade-offs (synthesis)
 
@@ -747,10 +645,6 @@ belongs to the surrounding system.
 ---
 
 ## 8. Prioritized recommendations
-
-> **Update (master):** many of the recommendations below are now implemented — see the
-> **Resolution status** section near the top of this document. The list is kept as written at audit
-> time (commit `64f1ebf`).
 
 **P0 — Blocking (silent correctness & security):**
 1. **F1**: branch empty detection on `size==0`, never `hash==0` (one-line fix).
