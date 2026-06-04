@@ -309,9 +309,7 @@ impl<K, V> HRTree<K, V> {
     /// assert_eq!(pairs, vec![(&"a"), (&"b")]);
     /// ```
     pub fn values(&self) -> Values<'_, K, V> {
-        Values {
-            inner: self.iter(),
-        }
+        Values { inner: self.iter() }
     }
 }
 
@@ -415,9 +413,7 @@ impl<K, V> HRTree<K, V> {
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
     pub fn keys(&self) -> Keys<'_, K, V> {
-        Keys {
-            inner: self.iter(),
-        }
+        Keys { inner: self.iter() }
     }
 }
 
