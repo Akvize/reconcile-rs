@@ -42,6 +42,13 @@ const MAX_CAPACITY: usize = 2 * B - 1;
 
 type InsertionTuple<K, V> = Option<(K, V, Fingerprint, Box<Node<K, V>>)>;
 
+/// Which sibling a [`Node::steal`] rotates a separator from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Node<K, V> {
     pub(crate) keys: ArrayVec<K, MAX_CAPACITY>,
@@ -142,12 +149,13 @@ impl<K, V> Node<K, V> {
     /// Rotate one separator (and its adjacent child) from an over-full sibling into the
     /// underflowing child at `index`, restoring the minimum-occupancy invariant.
     ///
-    /// `from_left == true` steals the *last* separator of the left sibling (`index - 1`) and
-    /// rotates right; `from_left == false` steals the *first* separator of the right sibling
+    /// [`Side::Left`] steals the *last* separator of the left sibling (`index - 1`) and
+    /// rotates right; [`Side::Right`] steals the *first* separator of the right sibling
     /// (`index + 1`) and rotates left. The two cases are exact mirror images, so they share this
     /// body and differ only by which end of the sibling is popped, which parent separator is
     /// exchanged, and which end of the current node receives the rotated entry.
-    fn steal(&mut self, index: usize, from_left: bool) {
+    fn steal(&mut self, index: usize, side: Side) {
+        let from_left = side == Side::Left;
         let children = self.children.as_mut().unwrap();
         let (sibling_index, sep_index) = if from_left {
             (index - 1, index - 1)
@@ -221,10 +229,10 @@ impl<K, V> Node<K, V> {
         // need to restore minimum node size invariant
         if index > 0 && children[index - 1].keys.len() > MIN_CAPACITY {
             // steal left, rotate right
-            self.steal(index, true);
+            self.steal(index, Side::Left);
         } else if index + 1 < children.len() && children[index + 1].keys.len() > MIN_CAPACITY {
             // steal right, rotate left
-            self.steal(index, false);
+            self.steal(index, Side::Right);
         } else {
             let merge_into = if index > 0 {
                 index - 1
