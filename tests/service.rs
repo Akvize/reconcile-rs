@@ -616,3 +616,165 @@ async fn cross_net_discovery_without_seed() {
     task1.abort();
     task2.abort();
 }
+
+/// Runtime topology injection: a network declared **while the loop is running** must take effect
+/// without recreating the node. Two nodes start declaring only their own network and with no seed,
+/// so discovery never probes the peer and they cannot converge. Injecting the peer's network with
+/// [`add_net`](ReconcileStore::add_net) makes per-network discovery reach the peer and they converge,
+/// proving the running reconciliation loop observes the mutation.
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_add_net_enables_discovery_and_convergence() {
+    let port = 8087;
+    let net_a = "127.0.4.0/30".parse().unwrap();
+    let net_b = "127.0.5.0/30".parse().unwrap();
+    let addr1 = "127.0.4.1".parse().unwrap();
+    let addr2 = "127.0.5.1".parse().unwrap();
+    // The peer's exact address as a /32, so the per-network discovery probe reliably hits it.
+    let peer2_host = "127.0.5.1/32".parse().unwrap();
+    let peer1_host = "127.0.4.1/32".parse().unwrap();
+    // Each node initially declares ONLY its own network. Fast cadence to converge quickly.
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(net_a)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(net_b)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    // No seed: the nodes can only meet through per-network discovery probes.
+    let store1 = ReconcileStore::new(cfg1).await;
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // Without the peer's network declared, discovery never reaches it, so no convergence.
+    assert!(
+        !wait_until(|| store2.fingerprint(..) == start_hash).await,
+        "nodes converged before the peer network was declared"
+    );
+
+    // Inject the peer network at runtime on both nodes — discovery now probes the peer.
+    store1.add_net(peer2_host);
+    store2.add_net(peer1_host);
+
+    // The running loops pick up the new network and converge.
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// Repair is decoupled from net membership: a peer learned by contact (here, seeded) is reconciled
+/// even when its address is in **none** of the declared networks (the `unclassified` bucket). Both
+/// nodes declare a single network that contains *neither* node's address, so each node's local net
+/// falls back to its own host route and the peer is unclassified — yet they still converge. This is
+/// the guarantee that makes runtime topology changes unable to cause silent divergence.
+#[tokio::test(flavor = "multi_thread")]
+async fn unclassified_peer_is_still_reconciled() {
+    let port = 8088;
+    // A declared network that contains neither node.
+    let foreign_net = "127.0.7.0/30".parse().unwrap();
+    let addr1 = "127.0.6.1".parse().unwrap();
+    let addr2 = "127.0.6.2".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(foreign_net)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(foreign_net)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    // Seeded so each knows the other, even though neither address is in any declared network.
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+
+    // Local net of last resort is each node's own host route (peer is not local).
+    assert_eq!(store1.local_net(), "127.0.6.1/32".parse().unwrap());
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // Converges purely through the unclassified-peer repair bucket.
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// The runtime topology API mutates shared state and re-derives the local network consistently, and
+/// the scalar knob setters do not panic. Pure API-level checks (no run loop needed).
+#[tokio::test]
+async fn runtime_config_setters() {
+    let addr = "127.0.8.1".parse().unwrap();
+    let net_c = "127.0.8.0/30".parse().unwrap(); // contains addr
+    let net_d = "127.0.9.0/30".parse().unwrap(); // does not contain addr
+    let host_route = "127.0.8.1/32".parse().unwrap();
+
+    // Port 0 = ephemeral, so this never collides with the networked tests above.
+    let store = ReconcileStore::<i32, i32>::new(
+        Config::default()
+            .with_port(0)
+            .with_listen_addr(addr)
+            .with_net(net_c),
+    )
+    .await;
+    assert_eq!(store.nets(), vec![net_c]);
+    assert_eq!(store.local_net(), net_c);
+
+    // add_net: appends, leaves local net unchanged, and is idempotent.
+    assert!(store.add_net(net_d));
+    assert_eq!(store.local_net(), net_c);
+    assert_eq!(store.nets(), vec![net_c, net_d]);
+    assert!(store.add_net(net_d));
+    assert_eq!(store.nets().len(), 2, "add_net must be idempotent");
+
+    // remove_net: removing the local net re-derives it to the host route fallback.
+    assert!(store.remove_net(net_c));
+    assert_eq!(store.nets(), vec![net_d]);
+    assert_eq!(store.local_net(), host_route);
+    assert!(
+        !store.remove_net(net_c),
+        "removing an absent net returns false"
+    );
+
+    // set_nets: wholesale replacement re-derives the local net.
+    store.set_nets(&[net_c]);
+    assert_eq!(store.nets(), vec![net_c]);
+    assert_eq!(store.local_net(), net_c);
+
+    // add_net enforces the MAX_NETS cap (no-op + false beyond it).
+    for i in 0..(reconcile::reconcile_store::MAX_NETS - 1) {
+        let n = format!("127.1.{i}.0/30").parse().unwrap();
+        assert!(store.add_net(n));
+    }
+    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+    let overflow = "127.2.0.0/30".parse().unwrap();
+    assert!(
+        !store.add_net(overflow),
+        "add_net past MAX_NETS must return false"
+    );
+    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+
+    // Scalar knob setters: smoke (no getters, must not panic).
+    store.set_remote_interval(3);
+    store.set_remote_fanout(5);
+    store.set_reconcile_interval(Duration::from_millis(200));
+    store.set_tombstone_timeout(Duration::from_millis(500));
+}

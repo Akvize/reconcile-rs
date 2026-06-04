@@ -317,6 +317,67 @@ impl<
         self.engine.decommission_peer(peer);
     }
 
+    /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
+    /// recreating the node**. The local network is re-derived automatically (whichever new net
+    /// contains the listen address). See [`Config::nets`].
+    ///
+    /// Topology is per-node and coordination-free (the wire format carries no network tag), and is
+    /// safe to change live: anti-entropy *repair* of already-known peers is **not** gated on net
+    /// membership, so reshaping the topology never orphans a real peer from repair — it only changes
+    /// which addresses are probed for discovery and the local/remote throttle split. Worst case is
+    /// suboptimal WAN traffic, never silent divergence.
+    pub fn set_nets(&self, nets: &[IpNet]) {
+        self.engine.set_nets(nets);
+    }
+
+    /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns
+    /// `false` (and logs) if the [`MAX_NETS`] cap is already reached. The local network is re-derived.
+    pub fn add_net(&self, net: IpNet) -> bool {
+        self.engine.add_net(net)
+    }
+
+    /// (runtime) Stop declaring a network (e.g. decommissioning a region). Returns whether it was
+    /// present. Known peers keep being repaired regardless (see [`set_nets`](Self::set_nets)); to
+    /// also reclaim a region quickly elsewhere, prefer adding the new net **before** removing the old
+    /// so discovery keeps the cluster well-connected throughout the migration.
+    pub fn remove_net(&self, net: IpNet) -> bool {
+        self.engine.remove_net(net)
+    }
+
+    /// The currently declared networks.
+    pub fn nets(&self) -> Vec<IpNet> {
+        self.engine.nets()
+    }
+
+    /// The current local network (the declared net containing the listen address, else the host
+    /// route — see [`Config::nets`]).
+    pub fn local_net(&self) -> IpNet {
+        self.engine.local_net()
+    }
+
+    /// (runtime) Retune how often (in rounds) remote-network peers are reconciled. See
+    /// [`Config::remote_interval`].
+    pub fn set_remote_interval(&self, interval: u32) {
+        self.engine.set_remote_interval(interval);
+    }
+
+    /// (runtime) Retune the bounded number of peers contacted per remote network each cross-network
+    /// round. See [`Config::remote_fanout`].
+    pub fn set_remote_fanout(&self, fanout: usize) {
+        self.engine.set_remote_fanout(fanout);
+    }
+
+    /// (runtime) Retune the tombstone expiry timeout in place, visible to all clones. The runtime
+    /// counterpart of the [`with_tombstone_timeout`](Self::with_tombstone_timeout) builder.
+    pub fn set_tombstone_timeout(&self, timeout: Duration) {
+        self.tombstones.set_timeout(timeout);
+    }
+
+    /// (runtime) Retune the reconciliation cadence in place. See [`Config::reconcile_interval`].
+    pub fn set_reconcile_interval(&self, interval: Duration) {
+        self.engine.set_reconcile_interval(interval);
+    }
+
     /// Garbage-collect tombstones, **gated on causal stability**.
     ///
     /// A tombstone is removed from the map only once it is both older than the configured
@@ -439,6 +500,11 @@ pub struct Config {
     /// default), a set cluster key authenticates plaintext datagrams with a MAC; when `true`, the
     /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
     pub encrypt: bool,
+    /// How long the reconciliation loop waits for inbound activity before initiating a round — the
+    /// effective gossip cadence (default 1 s). A shorter interval converges faster at the cost of
+    /// more traffic. Retunable at runtime via
+    /// [`set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    pub reconcile_interval: Duration,
     // may include other options in the future: tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -452,6 +518,7 @@ impl Default for Config {
             cluster_key: None,
             node_id: None,
             encrypt: false,
+            reconcile_interval: Duration::from_secs(1),
         }
     }
 }
@@ -507,6 +574,15 @@ impl Config {
     /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
     pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
         self.remote_fanout = fanout;
+        self
+    }
+
+    /// Set the reconciliation cadence: how long the loop waits for inbound activity before
+    /// initiating a round (default 1 s). See [`reconcile_interval`](Config::reconcile_interval).
+    /// Retunable at runtime via
+    /// [`ReconcileStore::set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    pub fn with_reconcile_interval(mut self, interval: Duration) -> Self {
+        self.reconcile_interval = interval;
         self
     }
 
@@ -580,6 +656,7 @@ mod reconcile_store_tests {
             cluster_key: None,
             node_id: None,
             encrypt: false,
+            reconcile_interval: Duration::from_secs(1),
         }
     }
 

@@ -96,7 +96,8 @@ pub struct ReconcileMirror<K, V> {
     /// The single network this read-only mirror probes for discovery (issue #53). A mirror is a
     /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
     /// containing its listen address, else the first declared network, else the loopback default.
-    net: IpNet,
+    /// Shared so it can be retuned at runtime (see [`set_net`](Self::set_net)).
+    net: Arc<RwLock<IpNet>>,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     authenticator: auth::Authenticator,
@@ -110,7 +111,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
             tree: self.tree.clone(),
             port: self.port,
             socket: self.socket.clone(),
-            net: self.net,
+            net: self.net.clone(),
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             authenticator: self.authenticator.clone(),
@@ -155,7 +156,7 @@ impl<
             tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
-            net,
+            net: Arc::new(RwLock::new(net)),
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
@@ -167,6 +168,16 @@ impl<
     pub fn with_seed(self, peer: IpAddr) -> Self {
         self.peers.write().insert(peer, Instant::now());
         self
+    }
+
+    /// (runtime) Retune the network this mirror probes for discovery, visible to all clones.
+    pub fn set_net(&self, net: IpNet) {
+        *self.net.write() = net;
+    }
+
+    /// The network this mirror currently probes for discovery.
+    pub fn net(&self) -> IpNet {
+        *self.net.read()
     }
 
     /// Register a hook invoked (outside the map lock) just before each inbound value is integrated.
@@ -242,7 +253,8 @@ impl<
         let mut peers = self.get_peers();
         // A random address out of the peer network, for discovery — like the dated store, we do not
         // add it to the known peers; a real peer there will answer and be recorded then.
-        let addr = gen_ip(&mut *self.rng.write(), self.net);
+        let net = *self.net.read();
+        let addr = gen_ip(&mut *self.rng.write(), net);
         peers.push(addr);
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());

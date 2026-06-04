@@ -229,15 +229,46 @@ relay/gateway nodes to configure or fail over:
 - **Discovery** probes one random address in *every* network each round, so peers in all locations
   are auto-discovered (not just within a single flat CIDR).
 - **Anti-entropy** sends the full range-diff comparison to *local-network* peers every round (fast
-  intra-network convergence, as before) but to *remote-network* peers only every `remote_interval`
-  rounds and to at most `remote_fanout` peers per network — bounding WAN traffic. Tune both with
-  `with_remote_interval` / `with_remote_fanout`.
+  intra-network convergence, as before) but to *remote* peers only every `remote_interval` rounds and
+  to at most `remote_fanout` peers per network — bounding WAN traffic. Tune both with
+  `with_remote_interval` / `with_remote_fanout`. Crucially, **repair is decoupled from net
+  membership**: a peer learned by actual contact is always reconciled — peers matching no declared
+  network fall into an `unclassified` bucket that is repaired on the same throttled cadence — so the
+  declared topology only steers *discovery* and the local/remote split, never a peer's eligibility for
+  repair.
 
 A peer's network is derived purely from its IP address (`IpNet::contains`), so **the wire format is
 unchanged** and a single-network cluster (no extra `with_net`) behaves exactly as before. Live writes
 still propagate immediately to all known peers; only the periodic anti-entropy is throttled across
 networks. Cross-network tombstone GC is correspondingly slower but remains strictly correct (it never
 collects a tombstone before *every* member has acknowledged it).
+
+### Runtime reconfiguration
+
+The topology and gossip knobs can be retuned **live**, without recreating the node (which would
+re-bind the socket and lose its identity) — useful for elastic deployments: opening a new region,
+decommissioning one, or retuning WAN traffic on the fly. These `&self` methods on `ReconcileStore`
+take effect on the running `run()` loop:
+
+```rust
+store.add_net("10.4.0.0/16".parse().unwrap()); // start gossiping with a new location
+store.remove_net("10.3.0.0/16".parse().unwrap()); // stop probing a retired one
+store.set_nets(&nets);                          // replace the whole topology at once
+store.set_remote_interval(3);                   // retune cross-network cadence
+store.set_remote_fanout(4);                     //   and fan-out
+store.set_reconcile_interval(Duration::from_millis(500)); // retune the gossip cadence
+store.set_tombstone_timeout(Duration::from_secs(120));    // retune tombstone expiry
+```
+
+The **local network is re-derived automatically** from the declared nets and the listen address on
+every change, so it can never drift out of sync. Topology is per-node and **coordination-free** (no
+cluster-wide agreement, no wire tag), and changing it is **safe by construction**: because repair is
+decoupled from net membership (above), reshaping the topology can never orphan a known peer from
+anti-entropy — the worst case is suboptimal WAN traffic, never silent divergence. Note that nets are
+*not* a security boundary (authentication is the cluster key); a declared net only tells the node
+which address range to send discovery probes into, so **only declare ranges you operate**. When
+migrating a region, prefer `add_net(new)` *before* `remove_net(old)` so discovery keeps the cluster
+well-connected throughout. `ReconcileMirror` exposes the analogous `set_net`.
 
 ## HRTree
 

@@ -89,6 +89,9 @@ resolved; all but one High resolved or mitigated.
 ### Scaling & robustness
 - ✅ Multi-location reconciliation: per-network discovery probes + geography-aware gossip with
   bounded cross-network fan-out (decentralized, no gateway nodes) — [#53](https://github.com/Akvize/reconcile-rs/issues/53).
+- ✅ Runtime reconfiguration: live `set_nets`/`add_net`/`remove_net`, `set_remote_interval`/
+  `set_remote_fanout`, `set_reconcile_interval`, `set_tombstone_timeout` (auto-derived local net;
+  anti-entropy repair decoupled from net membership, so topology changes cannot cause divergence).
 - ◯ Membership / discovery: replace random IP-scan with SWIM/HyParView, bounded fan-out
   (F10 — [#147](https://github.com/Akvize/reconcile-rs/issues/147)).
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
