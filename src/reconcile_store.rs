@@ -22,6 +22,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{info, instrument, warn};
 
+use crate::bounds::{Key, Value};
 use crate::fingerprint::Fingerprint;
 use crate::hlc::Hlc;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
@@ -74,11 +75,7 @@ where
     }
 }
 
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + PartialEq + Send + Serialize + Sync + 'static,
-    > ReconcileStore<K, V>
-{
+impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Create a new `ReconcileStore`, set up network and tombstones.
     pub async fn new(config: Config) -> Self {
         let svc = ReconcileStore {
@@ -361,10 +358,12 @@ impl<
     }
 }
 
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
-    > ReconcileStore<K, V>
+// NOTE: this block intentionally does NOT use the `Value` bundle for `V`: `get_mut` does not
+// require `V: PartialEq` (unlike the main impl above), and `Value` includes `PartialEq`. Spelling
+// the data bounds out here keeps the required bound set identical (no tightening). `K` matches the
+// `Key` bundle exactly, so it is bundled.
+impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Sync + 'static>
+    ReconcileStore<K, V>
 {
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         use crate::reconcilable::Projectable;

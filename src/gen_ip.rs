@@ -14,7 +14,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use rand::Rng;
 
 /// Select a random IP address from the given network
-/// ```
+///
+/// `gen_ip` is a crate-internal helper (`pub(crate)`), so this example is illustrative only and is
+/// not compiled as a doctest (it cannot name the private path from an external crate).
+/// ```ignore
 /// # use rand::SeedableRng;
 /// # use reconcile::gen_ip::gen_ip;
 /// #
@@ -30,7 +33,9 @@ pub fn gen_ip<R: Rng>(rng: &mut R, network: IpNet) -> IpAddr {
 }
 
 /// Select a random IPv4 address from the given network
-/// ```
+///
+/// Crate-internal helper; example illustrative only (not compiled as a doctest).
+/// ```ignore
 /// # use rand::SeedableRng;
 /// # use reconcile::gen_ip::gen_ipv4;
 /// #
@@ -44,7 +49,9 @@ pub fn gen_ipv4<R: Rng>(rng: &mut R, network: Ipv4Net) -> Ipv4Addr {
 }
 
 /// Select a random IPv6 address from the given network
-/// ```
+///
+/// Crate-internal helper; example illustrative only (not compiled as a doctest).
+/// ```ignore
 /// # use rand::SeedableRng;
 /// # use reconcile::gen_ip::gen_ipv6;
 /// #

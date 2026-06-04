@@ -63,6 +63,7 @@ use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use crate::auth;
+use crate::bounds::Key;
 use crate::diff::{Diffable, HashRangeQueryable};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::gen_ip;
@@ -116,10 +117,11 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
     }
 }
 
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone + DeserializeOwned + Hash + Send + Serialize + Sync + 'static,
-    > ReconcileMirror<K, V>
+// NOTE: `V` here is NOT the `Value` bundle: a mirror only ever handles the value-only projection,
+// so it does not require `V: PartialEq` (which `Value` includes). The data bounds are spelled out
+// to keep the required bound set identical (no tightening). `K` matches `Key` exactly.
+impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Sync + 'static>
+    ReconcileMirror<K, V>
 {
     /// Create a new mirror bound to the configured UDP socket.
     ///

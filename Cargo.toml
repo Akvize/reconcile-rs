@@ -41,6 +41,10 @@ metrics = ["dep:metrics"]
 # `src/prometheus.rs`). Pulls the exporter's HTTP listener stack; opt-in only. Implies
 # `metrics`, which feeds the same facade.
 metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
+# Exposes the `crate::testing` seam (re-exports of `pub(crate)` reconciliation internals) so the
+# external integration-test oracles (`tests/diff.rs`, `tests/proptest_hrtree.rs`) can reach them.
+# No deps; not part of the supported public API.
+internal-testing = []
 
 [dependencies]
 arrayvec = "0.7.4"
