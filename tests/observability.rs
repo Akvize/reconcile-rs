@@ -29,6 +29,26 @@ fn local_config() -> Config {
         .with_peer_net("127.0.0.1/8".parse().unwrap())
 }
 
+/// Keep every `tracing` callsite "hot" for the whole test binary.
+///
+/// `tracing` caches per-callsite interest **globally**, but these tests install
+/// **thread-local** subscribers (`set_default`). If a store is ever constructed while the
+/// current default is the no-op `NoSubscriber` — e.g. the metrics test below, or a parallel
+/// test caught between guard transitions — the `info!("Listening on")` callsite is registered
+/// as `Interest::never` and then silently vanishes for every other test, regardless of their
+/// thread-local subscriber. Installing a permanently-interested **global** default once keeps
+/// all callsites enabled; the per-test thread-local capturing subscribers still receive the
+/// events (a thread-local default overrides the global one for dispatch).
+fn keep_callsites_hot() {
+    use std::sync::Once;
+    use tracing_subscriber::filter::LevelFilter;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ =
+            tracing::subscriber::set_global_default(Registry::default().with(LevelFilter::TRACE));
+    });
+}
+
 /// A minimal `tracing` layer that records `(level, message)` for every event into a shared Vec.
 #[derive(Clone, Default)]
 struct CapturingLayer(Arc<Mutex<Vec<(Level, String)>>>);
@@ -56,6 +76,7 @@ impl<S: Subscriber> Layer<S> for CapturingLayer {
 
 #[tokio::test(flavor = "current_thread")]
 async fn startup_emits_info_and_security_warning_without_cluster_key() {
+    keep_callsites_hot();
     let layer = CapturingLayer::default();
     let events = layer.0.clone();
     let subscriber = Registry::default().with(layer);
@@ -81,6 +102,7 @@ async fn startup_emits_info_and_security_warning_without_cluster_key() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn cluster_key_suppresses_the_security_warning() {
+    keep_callsites_hot();
     let layer = CapturingLayer::default();
     let events = layer.0.clone();
     let subscriber = Registry::default().with(layer);
@@ -113,6 +135,10 @@ async fn local_mutations_increment_metric_counters() {
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 
     // `new` binds a socket but emits no metrics, so build the store outside the recorder scope.
+    // This store is built without a tracing subscriber; `keep_callsites_hot` prevents its
+    // `info!("Listening on")` emission from poisoning the shared callsite cache for the other
+    // tests (see that helper).
+    keep_callsites_hot();
     let store = ReconcileStore::<i32, i32>::new(local_config()).await;
 
     let recorder = DebuggingRecorder::new();

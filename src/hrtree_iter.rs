@@ -249,43 +249,17 @@ impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     }
 }
 
-enum IntoValuesLayer<K, V> {
-    Node(Box<Node<K, V>>),
-    Element(V),
-}
-
 /// An in-order mutable iterator over a `HRTree`.
 ///
 /// Consumes the tree and yields its values in ascending key order.
 pub struct IntoValues<K, V> {
-    stack: Vec<IntoValuesLayer<K, V>>,
+    inner: IntoIter<K, V>,
 }
 
 impl<K, V> Iterator for IntoValues<K, V> {
     type Item = V;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.stack.pop() {
-            Some(IntoValuesLayer::Node(mut node)) => {
-                if let Some(mut children) = node.children {
-                    self.stack
-                        .push(IntoValuesLayer::Node(children.pop().unwrap()));
-                    while !node.values.is_empty() {
-                        let v = node.values.pop().unwrap();
-                        self.stack.push(IntoValuesLayer::Element(v));
-                        let c = children.pop().unwrap();
-                        self.stack.push(IntoValuesLayer::Node(c));
-                    }
-                } else {
-                    while !node.values.is_empty() {
-                        let v = node.values.pop().unwrap();
-                        self.stack.push(IntoValuesLayer::Element(v));
-                    }
-                }
-                self.next()
-            }
-            Some(IntoValuesLayer::Element(v)) => Some(v),
-            None => None,
-        }
+        self.inner.next().map(|(_, v)| v)
     }
 }
 
@@ -302,7 +276,7 @@ impl<K, V> HRTree<K, V> {
     /// ```
     pub fn into_values(self) -> IntoValues<K, V> {
         IntoValues {
-            stack: vec![IntoValuesLayer::Node(self.root)],
+            inner: self.into_iter(),
         }
     }
 }
@@ -313,27 +287,13 @@ impl<K, V> HRTree<K, V> {
 ///
 /// Does not consume the `HRTree`.
 pub struct Values<'a, K, V> {
-    stack: Vec<(&'a Node<K, V>, usize)>,
+    inner: Iter<'a, K, V>,
 }
 
 impl<'a, K, V> Iterator for Values<'a, K, V> {
     type Item = &'a V;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((node, children_passed)) = self.stack.pop() {
-            if children_passed < node.keys.len() {
-                self.stack.push((node, children_passed + 1));
-            }
-            if let Some(children) = node.children.as_ref() {
-                self.stack.push((&children[children_passed], 0));
-            }
-            if children_passed > 0 {
-                Some(&node.values[children_passed - 1])
-            } else {
-                self.next()
-            }
-        } else {
-            None
-        }
+        self.inner.next().map(|(_, v)| v)
     }
 }
 
@@ -349,9 +309,7 @@ impl<K, V> HRTree<K, V> {
     /// assert_eq!(pairs, vec![(&"a"), (&"b")]);
     /// ```
     pub fn values(&self) -> Values<'_, K, V> {
-        Values {
-            stack: vec![(&self.root, 0)],
-        }
+        Values { inner: self.iter() }
     }
 }
 
@@ -361,8 +319,7 @@ impl<K, V> HRTree<K, V> {
 ///
 /// Useful when only the values need to be updated or inspected in sequence.
 pub struct ValuesMut<'a, K, V> {
-    stack: Vec<(*mut Node<K, V>, usize)>,
-    _marker: PhantomData<&'a mut V>,
+    inner: IterMut<'a, K, V>,
 }
 
 impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
@@ -384,84 +341,31 @@ impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// assert_eq!(tree.values().copied().collect::<Vec<_>>(), vec![11, 21]);
     /// ```
     pub fn values_mut(&'a mut self) -> ValuesMut<'a, K, V> {
-        let mut stack = Vec::new();
-        let mut cur_ptr: *mut Node<K, V> = &mut *self.root;
-        unsafe {
-            while let Some(children) = (*cur_ptr).children.as_mut() {
-                stack.push((cur_ptr, 0));
-                cur_ptr = &mut *children[0];
-            }
-            stack.push((cur_ptr, 0));
-        }
         ValuesMut {
-            stack,
-            _marker: PhantomData,
+            inner: self.iter_mut(),
         }
     }
 }
 
-impl<'a, K: Hash + Ord, V: Hash> Iterator for ValuesMut<'a, K, V> {
+impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for ValuesMut<'a, K, V> {
     type Item = &'a mut V;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((node_ptr, idx)) = self.stack.pop() {
-            unsafe {
-                let node = &mut *node_ptr;
-                if idx < node.keys.len() {
-                    self.stack.push((node_ptr, idx + 1));
-                    if let Some(children) = node.children.as_mut() {
-                        let mut child_ptr: *mut Node<K, V> = &mut *children[idx + 1] as *mut _;
-                        while let Some(gc) = (*child_ptr).children.as_mut() {
-                            self.stack.push((child_ptr, 0));
-                            child_ptr = &mut *gc[0];
-                        }
-                        self.stack.push((child_ptr, 0));
-                    }
-                    return Some(&mut node.values[idx]);
-                }
-            }
-        }
-        None
+        self.inner.next().map(|(_, v)| v)
     }
-}
-
-enum IntoKeysLayer<K, V> {
-    Node(Box<Node<K, V>>),
-    Element(K),
 }
 
 /// An iterator that consumes the tree and yields its keys in ascending key order.
 ///
 /// Useful when keys only need to be inspected in sequence.
 pub struct IntoKeys<K, V> {
-    stack: Vec<IntoKeysLayer<K, V>>,
+    inner: IntoIter<K, V>,
 }
 
 impl<K, V> Iterator for IntoKeys<K, V> {
     type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.stack.pop() {
-            Some(IntoKeysLayer::Node(mut node)) => {
-                if let Some(mut children) = node.children {
-                    self.stack
-                        .push(IntoKeysLayer::Node(children.pop().unwrap()));
-                    while !node.keys.is_empty() {
-                        let k = node.keys.pop().unwrap();
-                        self.stack.push(IntoKeysLayer::Element(k));
-                        let c = children.pop().unwrap();
-                        self.stack.push(IntoKeysLayer::Node(c));
-                    }
-                } else {
-                    while !node.keys.is_empty() {
-                        let k = node.keys.pop().unwrap();
-                        self.stack.push(IntoKeysLayer::Element(k));
-                    }
-                }
-                self.next()
-            }
-            Some(IntoKeysLayer::Element(k)) => Some(k),
-            None => None,
-        }
+        self.inner.next().map(|(k, _)| k)
     }
 }
 
@@ -478,7 +382,7 @@ impl<K, V> HRTree<K, V> {
     /// ```
     pub fn into_keys(self) -> IntoKeys<K, V> {
         IntoKeys {
-            stack: vec![IntoKeysLayer::Node(self.root)],
+            inner: self.into_iter(),
         }
     }
 }
@@ -487,27 +391,13 @@ impl<K, V> HRTree<K, V> {
 ///
 /// Does not consume the `HRTree`.
 pub struct Keys<'a, K, V> {
-    stack: Vec<(&'a Node<K, V>, usize)>,
+    inner: Iter<'a, K, V>,
 }
 
 impl<'a, K, V> Iterator for Keys<'a, K, V> {
     type Item = &'a K;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((node, children_passed)) = self.stack.pop() {
-            if children_passed < node.keys.len() {
-                self.stack.push((node, children_passed + 1));
-            }
-            if let Some(children) = node.children.as_ref() {
-                self.stack.push((&children[children_passed], 0));
-            }
-            if children_passed > 0 {
-                Some(&node.keys[children_passed - 1])
-            } else {
-                self.next()
-            }
-        } else {
-            None
-        }
+        self.inner.next().map(|(k, _)| k)
     }
 }
 
@@ -523,9 +413,7 @@ impl<K, V> HRTree<K, V> {
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
     pub fn keys(&self) -> Keys<'_, K, V> {
-        Keys {
-            stack: vec![(&self.root, 0)],
-        }
+        Keys { inner: self.iter() }
     }
 }
 

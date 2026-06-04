@@ -42,6 +42,13 @@ const MAX_CAPACITY: usize = 2 * B - 1;
 
 type InsertionTuple<K, V> = Option<(K, V, Fingerprint, Box<Node<K, V>>)>;
 
+/// Which sibling a [`Node::steal`] rotates a separator from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Node<K, V> {
     pub(crate) keys: ArrayVec<K, MAX_CAPACITY>,
@@ -139,6 +146,80 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// Rotate one separator (and its adjacent child) from an over-full sibling into the
+    /// underflowing child at `index`, restoring the minimum-occupancy invariant.
+    ///
+    /// [`Side::Left`] steals the *last* separator of the left sibling (`index - 1`) and
+    /// rotates right; [`Side::Right`] steals the *first* separator of the right sibling
+    /// (`index + 1`) and rotates left. The two cases are exact mirror images, so they share this
+    /// body and differ only by which end of the sibling is popped, which parent separator is
+    /// exchanged, and which end of the current node receives the rotated entry.
+    fn steal(&mut self, index: usize, side: Side) {
+        let from_left = side == Side::Left;
+        let children = self.children.as_mut().unwrap();
+        let (sibling_index, sep_index) = if from_left {
+            (index - 1, index - 1)
+        } else {
+            (index + 1, index)
+        };
+        // take the boundary separator (k, v, h) from the sibling
+        let sibling = children[sibling_index].as_mut();
+        let (k, v, h) = if from_left {
+            (
+                sibling.keys.pop().unwrap(),
+                sibling.values.pop().unwrap(),
+                sibling.hashes.pop().unwrap(),
+            )
+        } else {
+            (
+                sibling.keys.remove(0),
+                sibling.values.remove(0),
+                sibling.hashes.remove(0),
+            )
+        };
+        sibling.tree_size -= 1;
+        sibling.tree_hash -= h;
+        // take the boundary child from the sibling if any
+        let c = sibling.children.as_mut().map(|children| {
+            let c = if from_left {
+                children.pop().unwrap()
+            } else {
+                children.remove(0)
+            };
+            sibling.tree_size -= c.tree_size;
+            sibling.tree_hash -= c.tree_hash;
+            c
+        });
+        // exchange the sibling's separator with the parent's separator
+        let k = std::mem::replace(&mut self.keys[sep_index], k);
+        let v = std::mem::replace(&mut self.values[sep_index], v);
+        let h = std::mem::replace(&mut self.hashes[sep_index], h);
+        // move the separator into the current (underflowing) node, at the end facing the sibling
+        let current = self.children.as_mut().unwrap()[index].as_mut();
+        if from_left {
+            current.keys.insert(0, k);
+            current.values.insert(0, v);
+            current.hashes.insert(0, h);
+        } else {
+            current.keys.push(k);
+            current.values.push(v);
+            current.hashes.push(h);
+        }
+        current.tree_size += 1;
+        current.tree_hash += h;
+        // move the rotated child into the current node if any
+        if let Some(c) = c {
+            current.tree_size += c.tree_size;
+            current.tree_hash += c.tree_hash;
+            let current_children = current.children.as_mut().unwrap();
+            if from_left {
+                current_children.insert(0, c);
+            } else {
+                current_children.push(c);
+            }
+        }
+    }
+
     fn rebalance_after_deletion(&mut self, index: usize) {
         let children = self.children.as_mut().unwrap();
         if children[index].keys.len() >= MIN_CAPACITY {
@@ -148,74 +229,10 @@ impl<K, V> Node<K, V> {
         // need to restore minimum node size invariant
         if index > 0 && children[index - 1].keys.len() > MIN_CAPACITY {
             // steal left, rotate right
-            // take last separator (k, v, h) from left sibling
-            let left_sibling = children[index - 1].as_mut();
-            let k = left_sibling.keys.pop().unwrap();
-            let v = left_sibling.values.pop().unwrap();
-            let h = left_sibling.hashes.pop().unwrap();
-            left_sibling.tree_size -= 1;
-            left_sibling.tree_hash -= h;
-            // take last child from left sibling if any
-            let c = left_sibling.children.as_mut().map(|children| {
-                let c = children.pop().unwrap();
-                left_sibling.tree_size -= c.tree_size;
-                left_sibling.tree_hash -= c.tree_hash;
-                c
-            });
-            // NOTE: separator (k, v, h) is left of child c
-            // exchange sibling's separator with parent's separator
-            let k = std::mem::replace(&mut self.keys[index - 1], k);
-            let v = std::mem::replace(&mut self.values[index - 1], v);
-            let h = std::mem::replace(&mut self.hashes[index - 1], h);
-            // NOTE: separator (k, v, h) is now right of child c
-            // move separator (k, v, h) in current node
-            let current = children[index].as_mut();
-            current.keys.insert(0, k);
-            current.values.insert(0, v);
-            current.hashes.insert(0, h);
-            current.tree_size += 1;
-            current.tree_hash += h;
-            // move child c in current node if any
-            if let Some(c) = c {
-                current.tree_size += c.tree_size;
-                current.tree_hash += c.tree_hash;
-                current.children.as_mut().unwrap().insert(0, c);
-            }
+            self.steal(index, Side::Left);
         } else if index + 1 < children.len() && children[index + 1].keys.len() > MIN_CAPACITY {
             // steal right, rotate left
-            // take first separator (k, v, h) from right sibling
-            let right_sibling = children[index + 1].as_mut();
-            let k = right_sibling.keys.remove(0);
-            let v = right_sibling.values.remove(0);
-            let h = right_sibling.hashes.remove(0);
-            right_sibling.tree_size -= 1;
-            right_sibling.tree_hash -= h;
-            // take first child from right sibling if any
-            let c = right_sibling.children.as_mut().map(|children| {
-                let c = children.remove(0);
-                right_sibling.tree_size -= c.tree_size;
-                right_sibling.tree_hash -= c.tree_hash;
-                c
-            });
-            // NOTE: separator (k, v, h) is right of child c
-            // exchange (k, v, h) with separator
-            let k = std::mem::replace(&mut self.keys[index], k);
-            let v = std::mem::replace(&mut self.values[index], v);
-            let h = std::mem::replace(&mut self.hashes[index], h);
-            // NOTE: separator (k, v, h) is now left of child c
-            // move separator (k, v, h) in current node
-            let current = children[index].as_mut();
-            current.keys.push(k);
-            current.values.push(v);
-            current.hashes.push(h);
-            current.tree_size += 1;
-            current.tree_hash += h;
-            // move child c in current node if any
-            if let Some(c) = c {
-                current.tree_size += c.tree_size;
-                current.tree_hash += c.tree_hash;
-                current.children.as_mut().unwrap().push(c);
-            }
+            self.steal(index, Side::Right);
         } else {
             let merge_into = if index > 0 {
                 index - 1
@@ -887,7 +904,7 @@ mod tests {
             R: RangeBounds<u64>,
             SI: std::slice::SliceIndex<[(u64, u64)], Output = [(u64, u64)]>,
         >(
-            key_values: &Vec<(u64, u64)>,
+            key_values: &[(u64, u64)],
             tree: &HRTree<u64, u64>,
             range: R,
             slice_index: SI,
@@ -922,12 +939,12 @@ mod tests {
         let mut segments2 = Vec::new();
         while !segments1.is_empty() {
             tree2.diff_round(
-                segments1.drain(..).collect(),
+                std::mem::take(&mut segments1),
                 &mut segments2,
                 &mut diff_ranges2,
             );
             tree1.diff_round(
-                segments2.drain(..).collect(),
+                std::mem::take(&mut segments2),
                 &mut segments1,
                 &mut diff_ranges1,
             );

@@ -11,8 +11,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The heavy devcontainer build/smoke only validates the dev *image*, so it is
+  # pointless on the vast majority of changes that don't touch it. We still let the
+  # workflow trigger on every PR/push (so the required check always reports), but gate
+  # the expensive job behind a fast paths check: when nothing devcontainer-related
+  # changed, `devcontainer-ci` is skipped — and a skipped job counts as a passing
+  # required check, whereas filtering the whole workflow via `on.*.paths` would leave
+  # the check stuck "pending" and block merges.
+  changes:
+    name: Detect devcontainer changes
+    runs-on: ubuntu-latest
+    outputs:
+      devcontainer: ${{ steps.filter.outputs.devcontainer }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            devcontainer:
+              - '.devcontainer/**'
+              - '.github/workflows/devcontainer.yml'
+
   devcontainer-ci:
     name: Build & Test in Devcontainer
+    needs: changes
+    if: needs.changes.outputs.devcontainer == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -61,14 +85,15 @@ jobs:
             --log-level info \
             --cache-from type=local,src=/tmp/.devcontainer-cache
 
-      - name: Run checks inside devcontainer
+      # The point of this job is to verify the devcontainer image itself builds and
+      # works, not to re-run the full suite — fmt, clippy and the complete test matrix
+      # already run (faster) in the `master` workflow's lint-and-test job. So we only
+      # smoke the dev image: compile every target and run the fast lib unit tests.
+      - name: Smoke-build inside devcontainer
         run: |
           devcontainer exec --workspace-folder . -- bash -lc "\
             export CARGO_HOME=\$HOME/.cargo && \
             mkdir -p \$CARGO_HOME && \
-            cargo fmt -- --check && \
-            cargo clippy --all -- -D warnings && \
-            cargo clippy --all --all-features -- -D warnings && \
-            cargo test --all --verbose && \
-            cargo test --all --all-features --verbose \
+            cargo build --all-targets --all-features && \
+            cargo test --lib --all-features \
           "

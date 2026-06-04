@@ -63,6 +63,16 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
 pub(crate) struct ReconcileEngine<K, V: Projectable> {
+    /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
+    /// shares the same maps, peers, clock, …) is a single refcount bump. Cloning is therefore
+    /// cheap and bound-free, and the previously hand-written `Clone` impl reduces to a derive.
+    /// Fields are reached transparently through the [`Deref`] impl below, so every existing
+    /// `self.field` / `engine.field` access keeps working unchanged.
+    inner: Arc<Inner<K, V>>,
+}
+
+/// Shared, refcounted state of a [`ReconcileEngine`]; see that struct for the rationale.
+pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) map: Arc<RwLock<HRTree<K, V>>>,
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
     ///
@@ -97,19 +107,15 @@ pub(crate) struct ReconcileEngine<K, V: Projectable> {
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
     fn clone(&self) -> Self {
         ReconcileEngine {
-            map: self.map.clone(),
-            projection: self.projection.clone(),
-            port: self.port,
-            socket: self.socket.clone(),
-            peer_net: self.peer_net,
-            rng: self.rng.clone(),
-            peers: self.peers.clone(),
-            pre_insert: self.pre_insert.clone(),
-            authenticator: self.authenticator.clone(),
-            members: self.members.clone(),
-            tombstone_acks: self.tombstone_acks.clone(),
-            clock: self.clock.clone(),
+            inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+impl<K, V: Projectable> std::ops::Deref for ReconcileEngine<K, V> {
+    type Target = Inner<K, V>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -183,18 +189,20 @@ impl<
         let projection = HRTree::<K, V::Projected>::new();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         ReconcileEngine {
-            map: Arc::new(RwLock::new(map)),
-            projection: Arc::new(RwLock::new(projection)),
-            port: config.port,
-            socket: Arc::new(socket),
-            peer_net: config.peer_net,
-            rng: Arc::new(RwLock::new(StdRng::from_entropy())),
-            peers: Arc::new(RwLock::new(HashMap::new())),
-            pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
-            authenticator,
-            members: Arc::new(RwLock::new(HashSet::new())),
-            tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
-            clock: Arc::new(HlcClock::new(node_id)),
+            inner: Arc::new(Inner {
+                map: Arc::new(RwLock::new(map)),
+                projection: Arc::new(RwLock::new(projection)),
+                port: config.port,
+                socket: Arc::new(socket),
+                peer_net: config.peer_net,
+                rng: Arc::new(RwLock::new(StdRng::from_entropy())),
+                peers: Arc::new(RwLock::new(HashMap::new())),
+                pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+                authenticator,
+                members: Arc::new(RwLock::new(HashSet::new())),
+                tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
+                clock: Arc::new(HlcClock::new(node_id)),
+            }),
         }
     }
 
@@ -253,15 +261,17 @@ impl<
         self.map_insert(&mut guard, key, value)
     }
 
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
-        let ret = self.just_insert(key.clone(), value.clone());
+    /// Broadcast a batch of protocol messages to every currently-known peer.
+    ///
+    /// Spawns a detached task so the calling write path does not block on the network. Shared by
+    /// every local-mutation broadcast path (`insert` / `insert_bulk`) so the spawn/loop/send
+    /// boilerplate lives in exactly one place.
+    fn broadcast(&self, messages: Vec<Message<K, V, V::Projected>>) {
         let peers = self.get_peers();
         let port = self.port;
         let socket = Arc::clone(&self.socket);
         let authenticator = self.authenticator.clone();
         tokio::spawn(async move {
-            let message = Message::Update::<K, V, V::Projected>((key, value));
-            let messages = vec![message];
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
@@ -275,6 +285,11 @@ impl<
                 .await;
             }
         });
+    }
+
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let ret = self.just_insert(key.clone(), value.clone());
+        self.broadcast(vec![Message::Update::<K, V, V::Projected>((key, value))]);
         ret
     }
 
@@ -297,28 +312,11 @@ impl<
 
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         self.just_insert_bulk(key_values);
-        let peers = self.get_peers();
         let messages: Vec<_> = key_values
             .iter()
             .map(|kv| Message::Update::<K, V, V::Projected>(kv.clone()))
             .collect();
-        let port = self.port;
-        let socket = Arc::clone(&self.socket);
-        let authenticator = self.authenticator.clone();
-        tokio::spawn(async move {
-            let mut send_buf = Vec::new();
-            for addr in peers {
-                let peer = SocketAddr::new(addr, port);
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&socket),
-                    &authenticator,
-                    &peer,
-                    &mut send_buf,
-                )
-                .await;
-            }
-        });
+        self.broadcast(messages);
     }
 
     #[instrument(name = "reconcile.run", skip_all, fields(port = self.port))]
@@ -403,7 +401,7 @@ impl<
         for segment in segments {
             Message::ComparisonItem::<K, V, V::Projected>(segment)
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                .unwrap();
+                .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
         let mut peers = self.get_peers();
         // select a random address out of the peer network
@@ -724,7 +722,7 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
         let last_size = send_buf.len();
         message
             .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-            .unwrap();
+            .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
             send_to_retry(&socket, authenticator, &send_buf[..last_size], &peer)
@@ -757,7 +755,7 @@ mod deadlock_regressions {
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
         let svc = ReconcileStore::new(config).await;
-        svc.insert_bulk(&vec![(1, 10_u8)]);
+        svc.insert_bulk(&[(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = flag.clone();

@@ -13,10 +13,8 @@ use reconcile::{reconcile_store::Config, HRTree, Hlc, ReconcileStore, ValueOnly}
 
 fn hrtree_new(c: &mut Criterion) {
     let mut group = c.benchmark_group("HRTree::new");
-    group.bench_function("BTreeMap::new()", |b| {
-        b.iter(|| BTreeMap::<u32, u32>::new())
-    });
-    group.bench_function("HRTree::new()", |b| b.iter(|| HRTree::<u32, u32>::new()));
+    group.bench_function("BTreeMap::new()", |b| b.iter(BTreeMap::<u32, u32>::new));
+    group.bench_function("HRTree::new()", |b| b.iter(HRTree::<u32, u32>::new));
 }
 
 /// Measure the time to insert N elements in the tree
