@@ -22,8 +22,8 @@
 //! published on Arxiv in February 2023:
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
-//! [`HRTree`] implements the [`Diffable`](crate::diff::Diffable)
-//! and [`HashRangeQueryable`] traits.
+//! [`HRTree`] implements the crate-internal `Diffable` and `HashRangeQueryable`
+//! traits (see the `diff` module) that drive range reconciliation.
 
 use std::cmp::Ordering;
 use std::hash::Hash;

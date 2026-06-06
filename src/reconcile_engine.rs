@@ -23,12 +23,13 @@ use ipnet::IpNet;
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
+use crate::bounds::{Key, Value};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::fingerprint::Fingerprint;
@@ -151,21 +152,8 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
-impl<
-        K: Clone + Debug + DeserializeOwned + Hash + Ord + Send + Serialize + Sync + 'static,
-        V: Clone
-            + DeserializeOwned
-            + Hash
-            + MaybeTombstone
-            + PartialEq
-            + Projectable
-            + Reconcilable
-            + Send
-            + Serialize
-            + Sync
-            + Timestamped
-            + 'static,
-    > ReconcileEngine<K, V>
+impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestamped>
+    ReconcileEngine<K, V>
 {
     pub async fn new(config: Config) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))

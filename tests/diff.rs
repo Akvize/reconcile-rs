@@ -1,9 +1,11 @@
+#![cfg(feature = "internal-testing")]
+
 use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
-use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
 use reconcile::fingerprint::Fingerprint;
 use reconcile::hrtree::HRTree;
+use reconcile::testing::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
 
 pub fn diff<K, D: Diffable<ComparisonItem = HashSegment<K>, DifferenceItem = DiffRange<K>>>(
     local: &D,
