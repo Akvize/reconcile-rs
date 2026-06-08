@@ -11,8 +11,8 @@
 >   architecture migration (one sub-issue per phase).
 
 - **Last updated:** 2026-06-09
-- **Baseline:** `master` @ `054057d` (step 1 via #155, `Hlc`→`Timestamp` rename via #159); step 3 on
-  `claude/issue-142-clock-port`
+- **Baseline:** `master` @ `6462970` (steps 1+3, `Hlc`→`Timestamp` + `hlc`→`clock` renames); step 2 on
+  `claude/repo-cleanup-status-bcyjez`
 - **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
 
 ---
@@ -127,13 +127,19 @@ into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a 
 
 Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
-- ◐ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156, in review).
-- ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142)): `pub trait Clock`
+- ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
+  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `HRTree`
+  (`hash` / `insertion_position` / `key_at` `pub(crate)`, `len` / `is_empty` public) and
+  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&HRTree`,
+  with `HashSegment` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
+  preserved byte-for-byte.
+- ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142), PR #158): `pub trait Clock`
   (`now`/`observe`, returning the concrete `Timestamp`) is the domain's time seam; `HlcClock` is the
   default adapter owning the single `chrono` read; the engine holds it as `Arc<dyn Clock>` (object-safe,
   no clock type parameter on the engine/store/`Config`) and mints/observes only through it. A
   deterministic `ManualClock` test adapter makes HLC behaviour reproducible without wall-clock time.
   Iso-functional; invariant 2 (HLC total order) preserved.
+- ✅ Naming cleanup alongside the port: type `Hlc`→`Timestamp` (#159) and module `hlc`→`clock` (#163).
 - ◯ Steps 4–6 — `Entry`/`State` → `Transport`/`Codec` → workspace split.
 
 ---

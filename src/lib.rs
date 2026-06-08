@@ -45,10 +45,10 @@ pub(crate) mod auth;
 // Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
 // implementation details, not part of the supported public surface. The few internals the
 // integration-test oracles need are re-exported through the gated [`testing`] module below.
-pub(crate) mod diff;
 pub(crate) mod gen_ip;
 pub(crate) mod hrtree_iter;
 pub(crate) mod observability;
+pub(crate) mod proto;
 pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
@@ -78,6 +78,18 @@ pub use reconcile_store::ReconcileStore;
 #[doc(hidden)]
 #[cfg(any(test, feature = "internal-testing"))]
 pub mod testing {
-    pub use crate::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
     pub use crate::fingerprint::hash;
+    pub use crate::proto::{diff_round, start_diff, DiffRange, HashSegment};
+
+    /// Range fingerprint of an [`HRTree`](crate::HRTree), exposed for the integration-test
+    /// oracles. The inherent `HRTree::hash` is `pub(crate)` (reconciliation mechanism), so the
+    /// external test crates reach it through this gated seam rather than the public surface.
+    pub fn range_hash<K, V, R>(tree: &crate::HRTree<K, V>, range: &R) -> crate::Fingerprint
+    where
+        K: std::hash::Hash + Ord,
+        V: std::hash::Hash,
+        R: std::ops::RangeBounds<K>,
+    {
+        tree.hash(range)
+    }
 }

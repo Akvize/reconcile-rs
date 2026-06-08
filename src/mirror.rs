@@ -65,9 +65,9 @@ use tracing::{debug, trace, warn};
 use crate::auth;
 use crate::bounds::Key;
 use crate::clock::Timestamp;
-use crate::diff::{Diffable, HashRangeQueryable};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
+use crate::proto;
 use crate::reconcilable::ValueOnly;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
@@ -245,7 +245,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
     /// kicking off / continuing a value-only reconciliation round.
     pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
-        let segments = self.tree.read().start_diff();
+        let segments = proto::start_diff(&self.tree.read());
         send_buf.clear();
         for segment in segments {
             Message::ValueComparisonItem::<K, WireDated<V>, ValueOnly<V>>(segment)
@@ -315,7 +315,12 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             let mut differences = Vec::new();
             {
                 let guard = self.tree.read();
-                guard.diff_round(value_in_comparison, &mut out_comparison, &mut differences);
+                proto::diff_round(
+                    &guard,
+                    value_in_comparison,
+                    &mut out_comparison,
+                    &mut differences,
+                );
             }
             // `differences` are ranges this mirror would owe the peer. A read-only mirror never
             // sends authoritative values, so we deliberately drop them and only bounce back the
