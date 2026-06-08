@@ -28,6 +28,7 @@
 //! threat model and scope.
 
 pub mod diff;
+pub mod discovery;
 pub mod fingerprint;
 pub mod gen_ip;
 pub mod hlc;
@@ -47,6 +48,7 @@ pub(crate) mod observability;
 pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
+pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery};
 pub use fingerprint::Fingerprint;
 pub use hlc::Hlc;
 pub use hrtree::HRTree;

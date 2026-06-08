@@ -270,6 +270,47 @@ which address range to send discovery probes into, so **only declare ranges you 
 migrating a region, prefer `add_net(new)` *before* `remove_net(old)` so discovery keeps the cluster
 well-connected throughout. `ReconcileMirror` exposes the analogous `set_net`.
 
+## Kubernetes (DNS-based discovery)
+
+The default discovery — probing random addresses in the declared networks — does not fit
+Kubernetes, where pod IPs are ephemeral and drawn from a large cluster CIDR, so a random probe
+almost never lands on a live pod. Instead, point the store at a **headless `Service`**
+(`clusterIP: None`): its DNS name resolves to one address record per ready pod, giving every peer in
+a single lookup — the canonical StatefulSet pattern, with **no Kubernetes API access and no RBAC**.
+
+```rust
+use reconcile::{reconcile_store::Config, ReconcileStore};
+
+let config = Config::default()
+    .with_listen_addr(pod_ip)         // bind to the pod IP (downward API: status.podIP)
+    .with_node_id(node_id);           // stable id derived from the pod name
+// Note: no `with_net` — discovery is purely DNS-driven in Kubernetes.
+let store = ReconcileStore::<String, String>::new(config)
+    .await
+    .with_dns_discovery("reconcile-headless.default.svc.cluster.local", 8080);
+store.run().await;
+```
+
+While `run()`ning, a background task resolves the name every `with_discovery_interval` (default
+5 s) and seeds every returned address as a known peer. A peer's *membership* (which gates tombstone
+garbage collection) is **never** granted by DNS — it is still earned through a genuine authenticated
+datagram — so an unverified or spoofable address can never block GC. When a pod is deleted it
+disappears from DNS; after `with_discovery_miss_threshold` consecutive successful rounds with the
+peer absent (default 3, i.e. ~15 s), it is **decommissioned** so its tombstones stop gating GC. A
+transient DNS failure is skipped entirely and never counts as a miss, so a resolver blip cannot
+decommission a healthy peer. This works alongside the geography-aware gossip above: declared
+networks (if any) still steer the engine's own probing and the local/remote throttle, while DNS
+feeds exact peer IPs into the always-reconciled set.
+
+This discovery feeds peers regardless of declared topology, so a discovered peer is always
+reconciled even with no `with_net`.
+
+Set the cluster key (`Config::with_cluster_key`, from a Kubernetes `Secret`) on every pod: without
+it the cluster runs **unauthenticated** (see the Security model above). A ready-to-adapt example
+node (`examples/k8s_node.rs`, env-driven) and manifests (headless `Service`, `StatefulSet`,
+`ConfigMap`, example `Secret`) live in [`deploy/k8s/`](deploy/k8s/); build the production image from
+the repository `Dockerfile`.
+
 ## HRTree
 
 The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which

@@ -855,6 +855,29 @@ impl<
             key_acks.remove(&peer);
         }
     }
+
+    /// Register (or refresh) a known peer at runtime, the `&self` counterpart of the
+    /// [`with_seed`](crate::ReconcileStore::with_seed) builder.
+    ///
+    /// Inserting into [`peers`](Self::peers) (re)arms the `PEER_EXPIRATION` window and makes the
+    /// address a gossip target on the next round. This is what a dynamic discovery source (e.g.
+    /// DNS-based Kubernetes discovery) calls each round for every resolved peer. It deliberately
+    /// does **not** touch [`members`](Self::members): membership — which gates tombstone GC — must
+    /// still be *earned* by a genuine authenticated, dated datagram, so an unverified discovered
+    /// address can never block garbage collection.
+    pub(crate) fn seed_peer(&self, peer: IpAddr) {
+        self.peers.write().insert(peer, Instant::now());
+    }
+
+    /// A snapshot of the monotonic membership set (peers that gate tombstone GC).
+    pub(crate) fn members_snapshot(&self) -> HashSet<IpAddr> {
+        self.members.read().clone()
+    }
+
+    /// This node's configured listen address, used by discovery to never decommission itself.
+    pub(crate) fn listen_addr(&self) -> IpAddr {
+        self.listen_addr
+    }
 }
 
 pub(crate) async fn send_to_retry<A: ToSocketAddrs>(

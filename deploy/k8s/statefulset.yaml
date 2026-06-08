@@ -1,0 +1,71 @@
+# A StatefulSet gives each pod a stable name (reconcile-0, reconcile-1, …) and stable DNS, from
+# which `k8s_node` derives a stable node id for the HLC tie-break. Peers are discovered purely via
+# the headless Service DNS — no Kubernetes API access or RBAC is required.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: reconcile
+  labels:
+    app: reconcile
+spec:
+  serviceName: reconcile-headless # must match the headless Service for stable pod DNS
+  replicas: 3
+  selector:
+    matchLabels:
+      app: reconcile
+  template:
+    metadata:
+      labels:
+        app: reconcile
+    spec:
+      # Give pods a moment to deregister from the Service DNS on shutdown.
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: reconcile
+          # Replace with your built image (see Dockerfile).
+          image: ghcr.io/akvize/reconcile:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: reconcile-config
+          env:
+            # Downward API: bind to the pod IP and derive identity from the pod name.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Shared cluster key from the Secret (see secret.example.yaml).
+            - name: RECONCILE_CLUSTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: reconcile-secret
+                  key: cluster-key
+          ports:
+            - name: gossip
+              containerPort: 8080
+              protocol: UDP
+            - name: metrics
+              containerPort: 9000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
