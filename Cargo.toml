@@ -5,9 +5,17 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
+# Keep the published crate to the library proper. Everything below is repository-only material —
+# turnkey Kubernetes example/deployment scaffolding and long-form design docs — that bloats the
+# package without serving consumers of the crate. (Relative links to these from README still
+# resolve, because crates.io rewrites them to the repository.)
 exclude = [
     "pre-commit",
     "CONTRIBUTING.md",
+    "examples/k8s/",
+    "ARCHITECTURE.md",
+    "SOTA.md",
+    "PROGRESS.md",
 ]
 
 [profile.release]
@@ -50,9 +58,13 @@ dns-hickory = []
 # No deps; not part of the supported public API.
 internal-testing = []
 
+# The turnkey Kubernetes example. It is a multi-file example (`examples/k8s/main.rs`), so its
+# target is named after the directory: `cargo run --example k8s`. The metrics/readiness endpoint
+# (the Kubernetes probes target `/metrics`) is built in via the feature below. The rest of
+# `examples/k8s/` (manifests, kind playground, Dockerfile) is deployment scaffolding.
 [[example]]
-name = "k8s_node"
-# Builds the metrics/readiness endpoint into the binary; the Kubernetes probes target `/metrics`.
+name = "k8s"
+path = "examples/k8s/main.rs"
 required-features = ["metrics-prometheus"]
 
 [dependencies]

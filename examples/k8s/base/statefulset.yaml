@@ -22,7 +22,7 @@ spec:
       terminationGracePeriodSeconds: 15
       containers:
         - name: reconcile
-          # Replace with your built image (see Dockerfile).
+          # Replace with your built image (see ../Dockerfile).
           image: ghcr.io/akvize/reconcile:latest
           imagePullPolicy: IfNotPresent
           envFrom:
