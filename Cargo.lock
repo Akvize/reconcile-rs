@@ -1300,6 +1300,7 @@ dependencies = [
  "range-cmp",
  "serde",
  "sha2",
+ "socket2",
  "tempfile",
  "tokio",
  "tracing",
