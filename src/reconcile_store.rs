@@ -997,7 +997,7 @@ mod reconcile_store_tests {
             Box::pin(async move {
                 match resp {
                     FakeResp::Present(addrs) => Ok(addrs),
-                    FakeResp::Blip => Err(std::io::Error::new(std::io::ErrorKind::Other, "blip")),
+                    FakeResp::Blip => Err(std::io::Error::other("blip")),
                 }
             })
         }
