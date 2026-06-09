@@ -20,6 +20,8 @@
 //!    key sets, and convergence survives reordered, duplicated and dropped
 //!    messages — modelling the lossy UDP transport.
 
+#![cfg(feature = "internal-testing")]
+
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
@@ -28,9 +30,9 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use reconcile::diff::{DiffRange, Diffable, HashRangeQueryable, HashSegment};
-use reconcile::fingerprint::{hash, Fingerprint};
+use reconcile::fingerprint::Fingerprint;
 use reconcile::hrtree::HRTree;
+use reconcile::testing::{hash, DiffRange, Diffable, HashRangeQueryable, HashSegment};
 
 // ---------------------------------------------------------------------------
 // Property 1: HRTree is observationally equivalent to a BTreeMap oracle, and

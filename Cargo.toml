@@ -45,6 +45,10 @@ metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
 # TTL/ndots control, robust resolution in static/musl images). Not implemented yet: the default
 # `DnsDiscovery` uses the system resolver via `tokio::net::lookup_host` and needs no extra crate.
 dns-hickory = []
+# Exposes the `crate::testing` seam (re-exports of `pub(crate)` reconciliation internals) so the
+# external integration-test oracles (`tests/diff.rs`, `tests/proptest_hrtree.rs`) can reach them.
+# No deps; not part of the supported public API.
+internal-testing = []
 
 [[example]]
 name = "k8s_node"
