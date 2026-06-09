@@ -196,13 +196,17 @@ pub trait Persistence<K, V>: Send + Sync + 'static {
     fn save(&self, state: &PersistedState<K, V>) -> io::Result<()>;
 }
 
-// Discovery — an optional source of peer addresses (replaces, for cloud-native deployments, the
-// random per-network IP probing). It is *additive*: the store seeds whatever it returns into the
-// known-peer set; it never grants causal-stability membership (which a peer must earn via an
-// authenticated dated datagram), so it cannot affect tombstone GC correctness. Boxed-future rather
-// than async_trait to keep the dependency footprint unchanged (it is always behind Arc<dyn ..>).
+// Discovery — the single source of peer addresses. The default `RandomProbe` adapter (speculative,
+// one random address per declared network each round) and the `DnsDiscovery` adapter (authoritative,
+// k8s headless-Service DNS) both implement it. `is_authoritative` distinguishes the two: a speculative
+// result only steers the current round's targets, an authoritative one is the current truth (seeded
+// into the known-peer set, an absence decommissions after a grace period). Either way it never grants
+// causal-stability membership (which a peer must earn via an authenticated dated datagram), so it
+// cannot affect tombstone GC correctness. Boxed-future rather than async_trait to keep the dependency
+// footprint unchanged (it is always behind Arc<dyn ..>).
 pub trait Discovery: Send + Sync + 'static {
-    fn discover(&self) -> DiscoverFuture<'_>;  // io::Result<Vec<IpAddr>>
+    fn discover(&self) -> DiscoverFuture<'_>;       // io::Result<Vec<IpAddr>>
+    fn is_authoritative(&self) -> bool { true }     // RandomProbe overrides to false
 }
 ```
 
@@ -214,7 +218,7 @@ pub trait Discovery: Send + Sync + 'static {
 | `Transport` | `UdpTransport(Arc<UdpSocket>)` | tokio / UDP |
 | `Codec` | `BincodeCodec(DefaultOptions)` | bincode |
 | `Persistence` | `FileSnapshot`, `InMemory` | file / memory |
-| `Discovery` | `DnsDiscovery` (headless-Service DNS); engine random per-net probing otherwise | `tokio::net::lookup_host` |
+| `Discovery` | `RandomProbe` (default, speculative per-net probing); `DnsDiscovery` (authoritative, headless-Service DNS) | `gen_ip` / `tokio::net::lookup_host` |
 
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
 raw bytes before any decoding occurs. It is never folded into the `Codec`.
@@ -324,7 +328,7 @@ without a compile error — the guarantee a single crate cannot provide.
 | `UdpSocket` in `reconcile_engine.rs` | `Transport` port; `UdpTransport` adapter |
 | `bincode` in `reconcile_engine.rs` | `Codec` port; `BincodeCodec` adapter |
 | `Persistence` | unchanged (the model port) |
-| `gen_ip` random IP-scan (only discovery) | `Discovery` port; `DnsDiscovery` adapter (k8s-native), probing kept as the no-port default |
+| `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
 | Single crate | `reconcile-core` / `-net` / `-store` / `reconcile` workspace |
 

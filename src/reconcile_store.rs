@@ -186,8 +186,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.seed_peer(peer);
     }
 
-    /// Attach a dynamic peer-discovery source, replacing the engine's random per-network probing as
-    /// the way peers are found.
+    /// Attach an **authoritative** peer-discovery source (e.g. [`DnsDiscovery`]) that maintains the
+    /// known-peer set, on top of the engine's default speculative [`RandomProbe`](crate::RandomProbe).
     ///
     /// While the store is [`run`](Self::run)ning, a background task calls
     /// [`Discovery::discover`] every
@@ -197,7 +197,16 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// rounds — decommissions it (see [`forget_peer`](Self::forget_peer)) so its tombstones stop
     /// gating garbage collection. See [`with_dns_discovery`](Self::with_dns_discovery) for the
     /// Kubernetes-native default.
+    ///
+    /// The source must be [authoritative](crate::Discovery::is_authoritative): an absence is read as
+    /// a vanished peer and drives decommissioning. A speculative source like
+    /// [`RandomProbe`](crate::RandomProbe) belongs in the engine's per-round probe, not here.
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
+        debug_assert!(
+            discovery.is_authoritative(),
+            "with_discovery expects an authoritative source; a speculative prober would be seeded \
+             as permanent known peers and its absences would wrongly decommission members"
+        );
         self.discovery = Some(discovery);
         self
     }

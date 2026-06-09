@@ -34,8 +34,9 @@ use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
+use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
-use crate::gen_ip::{host_net, net_of, probe_targets};
+use crate::gen_ip::{host_net, net_of};
 use crate::hlc::{Hlc, HlcClock, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
@@ -133,6 +134,11 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
     round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
+    /// Speculative peer discovery, behind the [`Discovery`] port. Defaults to [`RandomProbe`] (one
+    /// random address per declared network each round); consulted once per reconciliation round and
+    /// shares this engine's live `nets` and `rng`. Its results are one-shot targets, never seeded as
+    /// known peers — see [`start_reconciliation`](Self::start_reconciliation).
+    probe: Arc<dyn Discovery>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
     /// Per-datagram authentication policy; carries the cluster key when enabled.
@@ -238,20 +244,27 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Qualify the local network from the declared nets (warns + host-route fallback on
         // misconfiguration). Re-derived identically on every runtime mutation of `nets`.
         let local_net = derive_local_net(&nets, config.listen_addr);
+        // `nets` and `rng` are shared with the default speculative `RandomProbe` discovery, so a
+        // runtime topology change is immediately reflected in what it probes.
+        let nets = Arc::new(RwLock::new(nets));
+        let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
+        let probe: Arc<dyn Discovery> =
+            Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
         ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
                 socket: Arc::new(socket),
-                nets: Arc::new(RwLock::new(nets)),
+                nets,
                 local_net: Arc::new(RwLock::new(local_net)),
                 listen_addr: config.listen_addr,
                 remote_interval: Arc::new(AtomicU32::new(config.remote_interval)),
                 remote_fanout: Arc::new(AtomicUsize::new(config.remote_fanout)),
                 reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
                 round: Arc::new(AtomicU32::new(0)),
-                rng: Arc::new(RwLock::new(StdRng::from_entropy())),
+                rng,
+                probe,
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
                 authenticator,
@@ -539,13 +552,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // De-duplicate so a discovery probe that happens to hit a known peer is not sent twice.
         let mut targets: HashSet<IpAddr> = HashSet::new();
 
-        // Discovery: one random probe per network. The probed address might not correspond to a real
-        // peer, so we do NOT add it to the known-peer list; if a peer exists there, it will reply
-        // and be registered then.
-        {
-            let mut rng = self.rng.write();
-            targets.extend(probe_targets(&mut *rng, &nets));
-        }
+        // Speculative discovery through the `Discovery` port (default: one random probe per network,
+        // see `RandomProbe`). The probed address might not correspond to a real peer, so we do NOT
+        // add it to the known-peer list; if a peer exists there, it will reply and be registered
+        // then. An authoritative source (e.g. DNS) instead drives the store's seed/decommission loop
+        // and is not consulted here. A transient failure simply yields no extra targets this round.
+        targets.extend(self.probe.discover().await.unwrap_or_default());
 
         // Local network: contact every known peer, every round (fast intra-network convergence).
         for &addr in &known {

@@ -53,7 +53,7 @@ pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
-pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery};
+pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hlc::Hlc;
 pub use hrtree::HRTree;
