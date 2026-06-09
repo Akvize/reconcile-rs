@@ -27,9 +27,9 @@ kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 echo "==> Building the node image ($IMAGE) from the repo Dockerfile"
 echo "    (first build compiles the Rust release binary — this can take a few minutes)"
-# Build the k8s_kv example: same node as production, plus a demo HTTP key/value API on port 8081
-# so you can write to one pod and watch the value reconcile to the others.
-docker build --build-arg EXAMPLE=k8s_kv -t "$IMAGE" "$REPO_ROOT"
+# Build the k8s_heartbeat example: same node as production, plus a per-pod heartbeat write and a
+# hook that logs reconciled keys, so convergence is visible in `kubectl logs`.
+docker build --build-arg EXAMPLE=k8s_heartbeat -t "$IMAGE" "$REPO_ROOT"
 
 echo "==> Loading the image into kind (its nodes can't see your local Docker daemon)"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
@@ -51,8 +51,6 @@ kubectl rollout status statefulset/reconcile --timeout=180s
 
 echo
 echo "Done. Try:"
-echo "  kubectl get pods -o wide                     # the 5 pods, spread across nodes"
-echo "  kubectl logs reconcile-0 -f                  # watch a node discover its peers over DNS"
-echo "  kubectl port-forward pod/reconcile-0 8081 &  # then: curl -X PUT -d hi localhost:8081/kv/x"
-echo "  kubectl port-forward pod/reconcile-4 8082:8081 &  # then: curl localhost:8082/kv/x  (replicated!)"
-echo "  ./deploy/kind/down.sh                        # tear the whole cluster down"
+echo "  kubectl get pods -o wide       # the 5 pods, spread across nodes"
+echo "  kubectl logs reconcile-0 -f    # watch this pod learn every OTHER pod's heartbeat via gossip"
+echo "  ./deploy/kind/down.sh          # tear the whole cluster down"

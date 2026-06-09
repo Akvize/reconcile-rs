@@ -56,9 +56,9 @@ name = "k8s_node"
 required-features = ["metrics-prometheus"]
 
 [[example]]
-name = "k8s_kv"
-# Same as `k8s_node`, plus a tiny HTTP key/value API so you can write to one pod and watch the
-# value reconcile to the others. Used by the local `deploy/kind/` playground.
+name = "k8s_heartbeat"
+# Same as `k8s_node`, plus a periodic per-pod heartbeat write and a hook that logs each key as it
+# arrives, so reconciliation between pods is visible in `kubectl logs`. Used by `deploy/kind/`.
 required-features = ["metrics-prometheus"]
 
 [dependencies]
@@ -88,5 +88,5 @@ metrics-util = { version = "0.19", default-features = false, features = ["debugg
 proptest = "1.11.0"
 rand = "0.8.5"
 tempfile = "3"
-tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"

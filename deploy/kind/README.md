@@ -6,15 +6,16 @@ using reconcile-rs as a realistic, stateful, peer-to-peer workload.
 
 It does **not** introduce a separate deployment: it's a thin
 [kustomize](https://kustomize.io/) overlay on top of the production manifests in
-[`../k8s/`](../k8s/). The overlay only patches what differs locally (the image, the replica count,
-and the demo HTTP port); everything else — the StatefulSet, the headless Service, the ConfigMap —
-is reused as-is. That's the idiomatic Kubernetes way to keep one set of manifests for both prod and
-local.
+[`../k8s/`](../k8s/). The overlay only patches what differs locally (the image and the replica
+count); everything else — the StatefulSet, the headless Service, the ConfigMap — is reused as-is.
+That's the idiomatic Kubernetes way to keep one set of manifests for both prod and local.
 
-The image built here is the **`k8s_kv`** example (`examples/k8s_kv.rs`): the same node as
-production, plus a tiny **HTTP key/value API on port 8081**, so you can write to one pod and watch
-the value reconcile to the others. The production manifests in `../k8s/` still build the plain
-`k8s_node` (no write API).
+The image built here is the **`k8s_heartbeat`** example (`examples/k8s_heartbeat.rs`): the same node
+as production, plus two tiny additions that make reconciliation visible in the logs — each pod
+periodically writes a `heartbeat/<pod-name>` key, and a hook logs every key the first time it
+appears locally. Since the hook fires for peer-originated updates too, you watch each pod learn the
+*other* pods' heartbeats as gossip converges. The production manifests in `../k8s/` still build the
+plain `k8s_node` (no heartbeat, no demo behaviour).
 
 ## What you'll need
 
@@ -45,9 +46,9 @@ Each step maps to a Kubernetes concept worth understanding:
 
 1. **`kind create cluster`** — creates a 3-node cluster (1 control-plane + 2 workers) from
    [`kind-config.yaml`](kind-config.yaml). Each node is just a Docker container on your laptop.
-2. **`docker build --build-arg EXAMPLE=k8s_kv`** — compiles `examples/k8s_kv.rs` into the image,
-   using the repo [`Dockerfile`](../../Dockerfile). (The `EXAMPLE` arg defaults to `k8s_node`; the
-   playground overrides it to get the demo HTTP API.)
+2. **`docker build --build-arg EXAMPLE=k8s_heartbeat`** — compiles `examples/k8s_heartbeat.rs` into
+   the image, using the repo [`Dockerfile`](../../Dockerfile). (The `EXAMPLE` arg defaults to
+   `k8s_node`; the playground overrides it to get the heartbeat/logging behaviour.)
 3. **`kind load docker-image`** — copies the image *into* the cluster's nodes. This is the classic
    kind gotcha: the cluster nodes can't see your local Docker daemon, so an image you just built is
    invisible to them until you load it. (The overlay sets `imagePullPolicy: Never` so a forgotten
@@ -70,34 +71,30 @@ Each step maps to a Kubernetes concept worth understanding:
   `DnsDiscovery` re-resolves that name every few seconds to find its peers — no Kubernetes API
   access, no RBAC.
 - Pods then **gossip over UDP** (port 8080) and reconcile their `ReconcileStore<String, String>`
-  contents. Port 9000 serves `/metrics` (the readiness/liveness probe), and port 8081 serves the
-  demo HTTP key/value API.
+  contents. Port 9000 serves `/metrics`, which doubles as the readiness/liveness probe.
 
 ## See reconciliation happen
 
-This is the payoff: write a key to **one** pod and read it back from **another**.
+This is the payoff: each pod only ever writes *its own* heartbeat key, so any **other** pod's
+heartbeat that shows up in a node's log can only have arrived through gossip reconciliation.
 
 ```sh
-# Forward the HTTP API of two different pods to two local ports.
-kubectl port-forward pod/reconcile-0 8081:8081 &
-kubectl port-forward pod/reconcile-4 8082:8081 &
-
-# Write a key to pod 0.
-curl -X PUT -d 'bonjour' localhost:8081/kv/greeting
-
-# Read it back from pod 4 — it arrived there purely via gossip reconciliation.
-sleep 2
-curl localhost:8082/kv/greeting        # -> bonjour
-curl localhost:8082/kv                 # list every key this replica knows (incl. reconciled ones)
-
-# Deletes propagate too (as tombstones).
-curl -X DELETE localhost:8081/kv/greeting
-sleep 2
-curl -i localhost:8082/kv/greeting     # -> 404
+# Follow one pod's log. As the cluster converges you'll see it announce keys it didn't write
+# itself — heartbeat/reconcile-1, heartbeat/reconcile-2, … — i.e. peers' data reconciled in.
+kubectl logs reconcile-0 -f | grep "store now holds"
 ```
 
-The HTTP API (`PUT`/`GET`/`DELETE /kv/<key>`, `GET /kv`) is an unauthenticated demo surface — the
-gossip protocol between pods is still authenticated by the shared cluster key.
+Expected, after a few seconds (order varies):
+
+```
+INFO ... key=heartbeat/reconcile-0  store now holds this key (local write or reconciled from a peer)
+INFO ... key=heartbeat/reconcile-3  store now holds this key (local write or reconciled from a peer)
+INFO ... key=heartbeat/reconcile-1  store now holds this key (local write or reconciled from a peer)
+...
+```
+
+Every replica converges to the same five `heartbeat/*` keys. The data crosses pods purely over the
+gossip protocol, which is authenticated by the shared cluster key.
 
 ## Other things to try
 
@@ -105,7 +102,7 @@ gossip protocol between pods is still authenticated by the shared cluster key.
 # See the 5 pods and which node each landed on.
 kubectl get pods -o wide
 
-# Watch a node discover its peers over DNS as the cluster forms.
+# Watch a node discover its peers over DNS and reconcile their heartbeats.
 kubectl logs reconcile-0 -f
 
 # Scale up and watch the new pods get discovered; scale down and watch them drop out.

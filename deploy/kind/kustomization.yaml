@@ -41,11 +41,3 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Never
-      # Expose the k8s_kv demo HTTP API so `kubectl port-forward pod/... 8081` works and the port is
-      # documented on the pod. (Pod-to-pod traffic is already open in kind regardless.)
-      - op: add
-        path: /spec/template/spec/containers/0/ports/-
-        value:
-          name: http
-          containerPort: 8081
-          protocol: TCP
