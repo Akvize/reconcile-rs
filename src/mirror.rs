@@ -11,7 +11,7 @@
 //!
 //! # What it is for
 //!
-//! A dated store keeps a [`Hlc`] timestamp next to every value so it can resolve conflicts
+//! A dated store keeps a [`Timestamp`] next to every value so it can resolve conflicts
 //! (last-write-wins) and run the #109 tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
 //! bytes per entry that the replica never needs. A `ReconcileMirror` stores only
@@ -67,7 +67,7 @@ use crate::bounds::Key;
 use crate::diff::{Diffable, HashRangeQueryable};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
-use crate::hlc::Hlc;
+use crate::hlc::Timestamp;
 use crate::reconcilable::ValueOnly;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
@@ -83,7 +83,7 @@ type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &ValueOnly<V>)>;
 /// it only needs the type so the shared [`Message`] enum has a concrete `Update` payload (which it
 /// ignores) and so the value-only [`Projected`](crate::reconcilable::Projectable::Projected) type
 /// resolves to [`ValueOnly<V>`].
-type WireDated<V> = (Hlc, Option<V>);
+type WireDated<V> = (Timestamp, Option<V>);
 
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
@@ -445,10 +445,10 @@ mod tests {
     }
 
     /// A live value and its `ValueOnly` projection hash identically only via the value-only basis:
-    /// per-entry, the dateless mirror saves the whole `Hlc` (the point of #128).
+    /// per-entry, the dateless mirror saves the whole `Timestamp` (the point of #128).
     #[test]
     fn value_only_is_smaller_per_entry() {
-        let dated = std::mem::size_of::<(Hlc, Option<u64>)>();
+        let dated = std::mem::size_of::<(Timestamp, Option<u64>)>();
         let light = std::mem::size_of::<ValueOnly<u64>>();
         assert!(
             light < dated,

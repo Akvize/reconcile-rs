@@ -55,7 +55,7 @@ pub(crate) mod timeout_wheel;
 pub use bounds::{Key, Value};
 pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
-pub use hlc::Hlc;
+pub use hlc::Timestamp;
 pub use hrtree::HRTree;
 // The `hrtree_iter` module is `pub(crate)`, but these iterator types appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a

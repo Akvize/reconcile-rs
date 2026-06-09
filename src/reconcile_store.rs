@@ -26,7 +26,7 @@ use tracing::{debug, info, instrument, warn};
 use crate::bounds::{Key, Value};
 use crate::discovery::{Discovery, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
-use crate::hlc::Hlc;
+use crate::hlc::Timestamp;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcilable::Projectable;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
@@ -58,10 +58,10 @@ const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 pub struct ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
-    (Hlc, Option<V>): Projectable,
+    (Timestamp, Option<V>): Projectable,
 {
     /// Internal map and hooks container.
-    engine: ReconcileEngine<K, (Hlc, Option<V>)>,
+    engine: ReconcileEngine<K, (Timestamp, Option<V>)>,
     /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<K>,
     /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
@@ -80,7 +80,7 @@ where
 impl<K, V> Clone for ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
-    (Hlc, Option<V>): Projectable,
+    (Timestamp, Option<V>): Projectable,
 {
     /// Allows cloning of the `ReconcileStore` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
@@ -99,7 +99,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Create a new `ReconcileStore`, set up network and tombstones.
     pub async fn new(config: Config) -> Self {
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, (Hlc, Option<V>)>::new(config).await,
+            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
@@ -252,12 +252,12 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// Hooks are executed outside of the map’s write lock, so calling back into any insert
     /// method from within a hook will not block or deadlock.
-    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(Hlc, Option<V>)) + 'static>(
+    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(Timestamp, Option<V>)) + 'static>(
         &self,
         pre_insert: F,
     ) {
         let tombstones = self.tombstones.clone();
-        let wrapped_pre_insert = move |k: &K, v: &(Hlc, Option<V>)| {
+        let wrapped_pre_insert = move |k: &K, v: &(Timestamp, Option<V>)| {
             pre_insert(k, v);
             if v.1.is_some() {
                 tombstones.remove(k);

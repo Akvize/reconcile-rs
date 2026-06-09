@@ -23,7 +23,7 @@ converge. The design rests on five mechanisms:
 - **Anti-entropy protocol** — two peers compare fingerprints over shrinking key ranges (`diff`) and
   exchange only the divergent entries. Equality and emptiness are decided by interval **size**, not
   by hash, to stay collision-safe.
-- **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock (`Hlc`);
+- **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock timestamp (`Timestamp`);
   conflicts resolve by **last-write-wins** over the HLC total order `(wall_ms, counter, node_id)`.
 - **Deletion** — removals are **tombstones**; they are garbage-collected only once causally stable
   (every monotonic cluster member has acknowledged the exact version), which prevents resurrection.
@@ -90,12 +90,12 @@ Seven traits exist. They fall into three groups:
   protocol mechanism on the crate's public surface.
 - **Value-shape helpers (4).** `MaybeTombstone` (`reconcilable.rs:43`), `Reconcilable`
   (`reconcilable.rs:27`) and `Timestamped` (`hlc.rs:171`) each carry a single implementation over a
-  tuple — the stored cell is represented as `(Hlc, Option<V>)`. `Mac` (`auth.rs:92`) selects a MAC
+  tuple — the stored cell is represented as `(Timestamp, Option<V>)`. `Mac` (`auth.rs:92`) selects a MAC
   backend chosen at compile time.
 
 Two consequences of the value-shape representation:
 
-- The internal tuple `(Hlc, Option<V>)` leaks onto the public surface — into the
+- The internal tuple `(Timestamp, Option<V>)` leaks onto the public surface — into the
   `add_pre_insert` hook (`reconcile_store.rs:171`) and into `PersistedState` (`persistence.rs:51`).
 - The generic constraints are spelled out in full at every implementation site (a nine-bound key
   constraint and an eleven-bound value constraint, e.g. `reconcile_engine.rs:122-135`,
@@ -135,7 +135,7 @@ Two rules follow:
         ▲                       │                    DOMAIN  (hexagon interior)              │
         │  driving port         │  anti-entropy algorithm · conflict policy (LWW)            │
         └───────────────────────│  tombstone lifecycle · HRTree + Fingerprint (mechanism)    │
-                                │  Hlc · Entry / State (value types)  —  no tokio / bincode  │
+                                │  Timestamp · Entry / State (value types)  —  no tokio / bincode  │
                                 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -147,7 +147,7 @@ The interior contains, with no infrastructure dependency:
 - the conflict-resolution policy (last-write-wins over the HLC order),
 - the tombstone lifecycle and the causal-stability garbage-collection rule,
 - the `HRTree` and `Fingerprint` (the storage and range-hash mechanism),
-- the value types `Hlc`, `Entry`, `State`.
+- the value types `Timestamp`, `Entry`, `State`.
 
 ### 3.4 Ports
 
@@ -156,14 +156,14 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 ```rust
 // Clock — abstracts the time source (replaces the direct chrono::Utc read).
 // The HLC algorithm stays in the domain; only physical time crosses the boundary.
-// Timestamp is pinned to Hlc rather than a generic associated type: Hlc is the only
-// stamp in use, alternate causality schemes (vector clocks / CRDT) are out of scope
+// The port returns the concrete `Timestamp` rather than a generic associated type: it is the
+// only stamp in use, alternate causality schemes (vector clocks / CRDT) are out of scope
 // (see hlc.rs), and the tombstone wheel, version_hash and the serde format are already
-// Hlc-coupled — a generic Timestamp would leak its shape while adding a type parameter
-// to the engine, store and Config. Only the physical-time read crosses the boundary.
+// coupled to its shape — a generic timestamp would leak that shape while adding a type
+// parameter to the engine, store and Config. Only the physical-time read crosses the boundary.
 pub trait Clock: Send + Sync + 'static {
-    fn now(&self) -> Hlc;           // mint a strictly-monotonic local stamp
-    fn observe(&self, remote: Hlc);  // advance past a peer's stamp (causality)
+    fn now(&self) -> Timestamp;           // mint a strictly-monotonic local stamp
+    fn observe(&self, remote: Timestamp);  // advance past a peer's stamp (causality)
 }
 
 // Transport — abstracts datagram I/O (replaces tokio::net::UdpSocket).
@@ -229,7 +229,7 @@ sockets or wall-clock time.
 
 ### 3.6 Domain types and conflict policy
 
-A single, intention-revealing type represents a stored cell, replacing the `(Hlc, Option<V>)` tuple
+A single, intention-revealing type represents a stored cell, replacing the `(Timestamp, Option<V>)` tuple
 and the three value-shape helper traits:
 
 ```rust
@@ -294,7 +294,7 @@ compiler:
 
 ```
 reconcile-core   // DOMAIN + PORTS: Clock, Persistence (traits);
-                 //   Entry / State, Hlc, Fingerprint, HRTree, the diff algorithm, LWW.
+                 //   Entry / State, Timestamp, Fingerprint, HRTree, the diff algorithm, LWW.
                  //   no infrastructure deps (no tokio, bincode, chrono-IO, ipnet, runtime rand);
                  //   serde + blake3, plus the dependency-light tracing / metrics facades.
 reconcile-net    // ADAPTERS + I/O PORTS: Transport, Codec (traits); UdpTransport, BincodeCodec,
@@ -308,7 +308,7 @@ The `Clock` and `Persistence` ports are defined in `reconcile-core` (the domain-
 injects them). The **`Transport` and `Codec` ports are defined in `reconcile-net`**, not the core:
 they are consumed by the UDP driver, which lives in `reconcile-net`, and the diff/merge domain does
 no I/O — this also keeps `async_trait` out of the core. The chrono-reading `HlcClock` adapter lives
-in `reconcile` (the `Hlc` *type* and the pure HLC advance stay in the core, so the core carries no
+in `reconcile` (the `Timestamp` *type* and the pure HLC advance stay in the core, so the core carries no
 `chrono`). Adapters depend on `reconcile-core`; infrastructure cannot be imported into the core
 without a compile error — the guarantee a single crate cannot provide.
 
@@ -318,7 +318,7 @@ without a compile error — the guarantee a single crate cannot provide.
 
 | Current | Target |
 |---|---|
-| `(Hlc, Option<V>)` tuple | `Entry<Hlc, V>` + `State<V>` domain type |
+| `(Timestamp, Option<V>)` tuple | `Entry<Timestamp, V>` + `State<V>` domain type |
 | `MaybeTombstone`, `Timestamped` | inherent `Entry` methods / field access |
 | `Reconcilable` (LWW over tuple) | `Entry::merge` (LWW), optional `Resolve` policy seam |
 | `Projectable` / `ValueOnly<V>` (dateless mirror) | `Entry::project` → `State<V>` (the projection cell *is* `State`) |
@@ -342,7 +342,7 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶; the
    golden vectors in `fingerprint.rs` hold.
 2. **HLC total order** `(wall_ms, counter, node_id)` (`hlc.rs:44-54`) — the derived ordering *is* the
-   conflict order; the `Clock` port mints `Hlc` directly, preserving it, and merge uses strict `>`.
+   conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and merge uses strict `>`.
 3. **Size-not-hash emptiness/equality** in `diff_round` (`diff.rs:135-141`).
 4. **Malformed-bound / inverted-range hardening** in `diff_round` (`diff.rs:100-134`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs; the
@@ -373,7 +373,7 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    `diff_round` verbatim to `pub(crate)` functions over `HRTree`.
 3. **`Clock` port** — extract `Clock`; `HlcClock` becomes its adapter and holds the physical-time
    read; the domain becomes time-source-free.
-4. **`Entry` / `State` domain type** — replace `(Hlc, Option<V>)`; dissolve `MaybeTombstone` /
+4. **`Entry` / `State` domain type** — replace `(Timestamp, Option<V>)`; dissolve `MaybeTombstone` /
    `Timestamped`; fold `Reconcilable` into `Entry::merge`; update the public hook and
    `PersistedState`. *Changes the wire and on-disk formats.*
 5. **`Transport` & `Codec` ports** — extract both; `UdpTransport` / `BincodeCodec` adapters; the

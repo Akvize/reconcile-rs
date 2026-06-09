@@ -18,7 +18,7 @@
 //!   their fingerprints never match and the protocol re-exchanges the pair eternally
 //!   (permanent divergence + livelock).
 //!
-//! A [`Hlc`] fixes both. It is a 64-bit-ish hybrid timestamp (Kulkarni et al., 2014) that:
+//! A [`Timestamp`] fixes both. It is a 64-bit-ish hybrid timestamp (Kulkarni et al., 2014) that:
 //!
 //! * stays close to physical time, yet is **locally monotonic** and **respects causality**:
 //!   on receiving a remote timestamp a node advances its own clock past it (the engine's
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]
-pub struct Hlc {
+pub struct Timestamp {
     /// Physical component: milliseconds since the Unix epoch, as last observed by the clock.
     wall_ms: u64,
     /// Logical component: disambiguates events sharing the same `wall_ms`.
@@ -53,13 +53,13 @@ pub struct Hlc {
     node_id: u64,
 }
 
-impl Hlc {
-    /// Build an `Hlc` from its raw components.
+impl Timestamp {
+    /// Build a `Timestamp` from its raw components.
     ///
     /// Mostly useful in tests and when reconstructing a timestamp from external storage;
     /// normal code obtains timestamps from the store's internal clock.
-    pub fn new(wall_ms: u64, counter: u32, node_id: u64) -> Hlc {
-        Hlc {
+    pub fn new(wall_ms: u64, counter: u32, node_id: u64) -> Timestamp {
+        Timestamp {
             wall_ms,
             counter,
             node_id,
@@ -89,7 +89,7 @@ fn phys_now_ms() -> u64 {
 
 /// A per-node Hybrid Logical Clock.
 ///
-/// Generates locally-monotonic [`Hlc`] timestamps with [`now`](HlcClock::now) and advances
+/// Generates locally-monotonic [`Timestamp`]s with [`now`](HlcClock::now) and advances
 /// past timestamps received from peers with [`observe`](HlcClock::observe). The clock is
 /// internally synchronized, so a single instance is shared (cloned) across all tasks of a
 /// node.
@@ -98,7 +98,7 @@ pub(crate) struct HlcClock {
     node_id: u64,
     /// Last timestamp produced or observed; the wall/counter pair is updated atomically
     /// under the mutex so that [`now`](HlcClock::now) stays strictly monotonic.
-    last: Mutex<Hlc>,
+    last: Mutex<Timestamp>,
 }
 
 impl HlcClock {
@@ -106,7 +106,7 @@ impl HlcClock {
     pub fn new(node_id: u64) -> HlcClock {
         HlcClock {
             node_id,
-            last: Mutex::new(Hlc {
+            last: Mutex::new(Timestamp {
                 wall_ms: 0,
                 counter: 0,
                 node_id,
@@ -118,17 +118,17 @@ impl HlcClock {
     ///
     /// The returned timestamp is strictly greater than every timestamp previously produced
     /// or observed by this clock, ensuring local monotonicity.
-    pub fn now(&self) -> Hlc {
+    pub fn now(&self) -> Timestamp {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
         let next = if pt > last.wall_ms {
-            Hlc {
+            Timestamp {
                 wall_ms: pt,
                 counter: 0,
                 node_id: self.node_id,
             }
         } else {
-            Hlc {
+            Timestamp {
                 wall_ms: last.wall_ms,
                 counter: last.counter + 1,
                 node_id: self.node_id,
@@ -143,7 +143,7 @@ impl HlcClock {
     /// After observing `remote`, a subsequent [`now`](HlcClock::now) is guaranteed to be
     /// greater than `remote`, so a local write following the receipt of a remote value is
     /// ordered after it. This is what prevents lost updates under clock skew.
-    pub fn observe(&self, remote: Hlc) {
+    pub fn observe(&self, remote: Timestamp) {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
         let max_wall = pt.max(last.wall_ms).max(remote.wall_ms);
@@ -156,7 +156,7 @@ impl HlcClock {
         } else {
             0
         };
-        *last = Hlc {
+        *last = Timestamp {
             wall_ms: max_wall,
             counter,
             node_id: self.node_id,
@@ -164,17 +164,17 @@ impl HlcClock {
     }
 }
 
-/// A value that carries an [`Hlc`] timestamp.
+/// A value that carries a [`Timestamp`].
 ///
 /// Lets the reconciliation engine read the timestamp of a stored value (to advance its
 /// clock on receipt) without knowing the concrete value type.
 pub trait Timestamped {
     /// The Hybrid Logical Clock timestamp attached to this value.
-    fn timestamp(&self) -> Hlc;
+    fn timestamp(&self) -> Timestamp;
 }
 
-impl<V> Timestamped for (Hlc, V) {
-    fn timestamp(&self) -> Hlc {
+impl<V> Timestamped for (Timestamp, V) {
+    fn timestamp(&self) -> Timestamp {
         self.0
     }
 }
@@ -199,7 +199,7 @@ mod tests {
         let clock = HlcClock::new(1);
         // Force the clock far into the future so physical time cannot advance past it for
         // the duration of the test: every `now()` must then bump the counter.
-        clock.observe(Hlc::new(u64::MAX - 100, 0, 9));
+        clock.observe(Timestamp::new(u64::MAX - 100, 0, 9));
         let a = clock.now();
         let b = clock.now();
         assert_eq!(a.wall_ms(), b.wall_ms());
@@ -211,7 +211,7 @@ mod tests {
         // Reproduces defect (a): a peer with a clock running ahead. After observing its
         // timestamp, our next local write must be ordered *after* it, not lost.
         let clock = HlcClock::new(1);
-        let future = Hlc::new(phys_now_ms() + 10_000_000, 5, 2);
+        let future = Timestamp::new(phys_now_ms() + 10_000_000, 5, 2);
         clock.observe(future);
         let local = clock.now();
         assert!(
@@ -224,12 +224,12 @@ mod tests {
     fn total_order_breaks_ties_on_node_id() {
         // Equal wall and counter: the node_id decides, deterministically and identically on
         // every replica.
-        let a = Hlc::new(100, 0, 1);
-        let b = Hlc::new(100, 0, 2);
+        let a = Timestamp::new(100, 0, 1);
+        let b = Timestamp::new(100, 0, 2);
         assert!(a < b);
         assert!(b > a);
         // And it is consistent with the field priority: wall dominates counter dominates id.
-        assert!(Hlc::new(100, 1, 1) > Hlc::new(100, 0, 2));
-        assert!(Hlc::new(101, 0, 1) > Hlc::new(100, 9, 9));
+        assert!(Timestamp::new(100, 1, 1) > Timestamp::new(100, 0, 2));
+        assert!(Timestamp::new(101, 0, 1) > Timestamp::new(100, 9, 9));
     }
 }
