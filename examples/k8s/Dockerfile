@@ -7,13 +7,13 @@
 #
 # The build context is the repository root (where src/ and examples/ live), so build from there
 # with an explicit -f:
-#   docker build -f kubernetes/Dockerfile -t reconcile:latest .
-# The container reads its configuration from the environment — see kubernetes/base/.
+#   docker build -f examples/k8s/Dockerfile -t reconcile:latest .
+# The container reads its configuration from the environment — see examples/k8s/base/.
 #
 # Which example to compile is selectable via the EXAMPLE build arg (default `k8s_node`, the
 # production node). The local kind playground builds `k8s_heartbeat`, which additionally writes a
 # per-pod heartbeat key and logs reconciled keys so convergence is visible in the logs:
-#   docker build -f kubernetes/Dockerfile --build-arg EXAMPLE=k8s_heartbeat -t reconcile:kind .
+#   docker build -f examples/k8s/Dockerfile --build-arg EXAMPLE=k8s_heartbeat -t reconcile:kind .
 
 # Selectable at build time; redeclared inside each stage that uses it (Docker ARG scoping).
 ARG EXAMPLE=k8s_node
@@ -38,7 +38,7 @@ RUN cargo build --release --example "${EXAMPLE}" --features metrics-prometheus \
 FROM gcr.io/distroless/cc-debian12 AS runtime
 COPY --from=builder /usr/local/bin/reconcile-node /usr/local/bin/reconcile-node
 
-# Gossip (UDP) and metrics/probes (TCP). Match kubernetes/base/ (and kubernetes/kind/) and the env.
+# Gossip (UDP) and metrics/probes (TCP). Match examples/k8s/base/ (and .../kind/) and the env.
 EXPOSE 8080/udp
 EXPOSE 9000/tcp
 

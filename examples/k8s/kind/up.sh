@@ -11,7 +11,7 @@ CLUSTER=reconcile
 IMAGE=reconcile:kind
 # Resolve paths relative to this script so it works from any working directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required but not installed" >&2; exit 1; }; }
 need docker; need kind; need kubectl; need openssl
@@ -25,12 +25,12 @@ fi
 # Point kubectl at this cluster.
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 
-echo "==> Building the node image ($IMAGE) from kubernetes/Dockerfile"
+echo "==> Building the node image ($IMAGE) from examples/k8s/Dockerfile"
 echo "    (first build compiles the Rust release binary — this can take a few minutes)"
 # Build the k8s_heartbeat example: same node as production, plus a per-pod heartbeat write and a
 # hook that logs reconciled keys, so convergence is visible in `kubectl logs`. The build context is
-# the repo root (where src/, examples/ live); the Dockerfile lives under kubernetes/.
-docker build --build-arg EXAMPLE=k8s_heartbeat -f "$REPO_ROOT/kubernetes/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
+# the repo root (where src/, examples/ live); the Dockerfile lives under examples/k8s/.
+docker build --build-arg EXAMPLE=k8s_heartbeat -f "$REPO_ROOT/examples/k8s/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
 
 echo "==> Loading the image into kind (its nodes can't see your local Docker daemon)"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
@@ -54,4 +54,4 @@ echo
 echo "Done. Try:"
 echo "  kubectl get pods -o wide       # the 5 pods, spread across nodes"
 echo "  kubectl logs reconcile-0 -f    # watch this pod learn every OTHER pod's heartbeat via gossip"
-echo "  ./kubernetes/kind/down.sh      # tear the whole cluster down"
+echo "  ./examples/k8s/kind/down.sh    # tear the whole cluster down"

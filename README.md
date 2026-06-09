@@ -309,7 +309,7 @@ Set the cluster key (`Config::with_cluster_key`, from a Kubernetes `Secret`) on 
 it the cluster runs **unauthenticated** (see the Security model above). A complete, turnkey
 Kubernetes example — the env-driven node (`examples/k8s_node.rs`), the manifests (headless
 `Service`, `StatefulSet`, `ConfigMap`, example `Secret`), the `Dockerfile`, and a local
-[kind](https://kind.sigs.k8s.io/) playground — lives under [`kubernetes/`](kubernetes/). It is
+[kind](https://kind.sigs.k8s.io/) playground — lives under [`examples/k8s/`](examples/k8s/). It is
 example/deployment scaffolding only and is excluded from the published crate.
 
 ## HRTree

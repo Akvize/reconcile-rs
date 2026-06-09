@@ -5,7 +5,7 @@
 #   1. the image — swap the registry image for the one we build and `kind load` locally;
 #   2. the replica count — 5 pods, to make peer discovery and propagation more visible.
 #
-# Apply it with:  kubectl apply -k kubernetes/kind   (or just run ./up.sh, which does everything).
+# Apply it with:  kubectl apply -k examples/k8s/kind   (or just run ./up.sh, which does everything).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

@@ -11,7 +11,7 @@
 //! It binds to its pod IP, derives a stable node identity from the pod name, discovers its peers by
 //! resolving a headless `Service` over DNS, and exposes a `/metrics` endpoint for the kubelet
 //! probes. Everything is taken from the environment (the Kubernetes downward API + a ConfigMap /
-//! Secret), so the same image works for every replica. See `kubernetes/base/` for the manifests.
+//! Secret), so the same image works for every replica. See `examples/k8s/base/` for the manifests.
 //!
 //! Run it with the metrics endpoint built in:
 //!

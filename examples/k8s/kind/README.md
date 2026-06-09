@@ -33,9 +33,9 @@ Install these on your machine (not provided by this repo):
 From the repository root:
 
 ```sh
-./kubernetes/kind/up.sh      # build + load image, create cluster, deploy 5 pods, wait for readiness
+./examples/k8s/kind/up.sh    # build + load image, create cluster, deploy 5 pods, wait for readiness
 # ... experiment ...
-./kubernetes/kind/down.sh    # delete the whole cluster
+./examples/k8s/kind/down.sh  # delete the whole cluster
 ```
 
 `up.sh` is idempotent — re-run it after changing the code to rebuild and roll out.
@@ -57,7 +57,7 @@ Each step maps to a Kubernetes concept worth understanding:
    Kubernetes [Secret](https://kubernetes.io/docs/concepts/configuration/secret/). Every pod reads
    the same key (via `secretKeyRef`) and uses it to authenticate gossip datagrams. A real key never
    touches a committed file.
-5. **`kubectl apply -k kubernetes/kind`** — applies the overlay: the headless Service, the
+5. **`kubectl apply -k examples/k8s/kind`** — applies the overlay: the headless Service, the
    ConfigMap, and the StatefulSet scaled to 5 replicas.
 6. **`kubectl rollout status`** — waits until all pods pass their readiness probe (`GET /metrics`).
 
@@ -121,7 +121,7 @@ curl -s localhost:9000/metrics | grep '^reconcile_'   # messages_sent/received, 
 ## Cleaning up
 
 ```sh
-./kubernetes/kind/down.sh
+./examples/k8s/kind/down.sh
 ```
 
 This deletes the kind cluster entirely; nothing persists outside it.
