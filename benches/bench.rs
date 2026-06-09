@@ -1,6 +1,6 @@
-// The benchmark drives the internal range-fingerprint via `HashRangeQueryable::hash`, which lives
-// in the now-`pub(crate)` `diff` module. Like the integration-test oracles it reaches that internal
-// through the gated `reconcile::testing` seam, so the real bench body only compiles with the
+// The benchmark drives the internal range-fingerprint via `HRTree::hash`, which is `pub(crate)`.
+// Like the integration-test oracles it reaches that internal through the gated
+// `reconcile::testing` seam (the `range_hash` shim), so the real bench body only compiles with the
 // `internal-testing` feature. Without it we fall back to an empty `main` so the target still links.
 #[cfg(not(feature = "internal-testing"))]
 fn main() {}
@@ -20,7 +20,7 @@ mod imp {
         Throughput,
     };
 
-    use reconcile::testing::HashRangeQueryable;
+    use reconcile::testing::range_hash;
     use reconcile::{reconcile_store::Config, HRTree, ReconcileStore, Timestamp, ValueOnly};
 
     fn hrtree_new(c: &mut Criterion) {
@@ -225,7 +225,7 @@ mod imp {
                     let k1: u32 = rng.gen();
                     let k2: u32 = rng.gen();
                     let range = if k1 < k2 { k1..k2 } else { k2..k1 };
-                    tree.hash(&range);
+                    range_hash(&tree, &range);
                 })
             });
             size *= 10;

@@ -33,12 +33,11 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::{Clock, HlcClock, Timestamp, Timestamped};
-use crate::diff::HashRangeQueryable;
-use crate::diff::{Diffable, HashSegment};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
 use crate::observability;
+use crate::proto::{self, HashSegment};
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::HRTree;
@@ -542,7 +541,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         observability::record_reconcile_round();
         let segments = {
             let guard = self.map.read();
-            guard.start_diff()
+            proto::start_diff(&guard)
         };
         send_buf.clear();
         for segment in segments {
@@ -716,7 +715,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             let mut out_comparison = Vec::new();
             {
                 let guard = self.map.read();
-                guard.diff_round(in_comparison, &mut out_comparison, &mut differences);
+                proto::diff_round(&guard, in_comparison, &mut out_comparison, &mut differences);
             }
             let mut messages = Vec::new();
             if !out_comparison.is_empty() {
@@ -808,7 +807,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             let mut out_comparison = Vec::new();
             {
                 let guard = self.projection.read();
-                guard.diff_round(value_in_comparison, &mut out_comparison, &mut differences);
+                proto::diff_round(
+                    &guard,
+                    value_in_comparison,
+                    &mut out_comparison,
+                    &mut differences,
+                );
             }
             let mut messages = Vec::new();
             for segment in out_comparison {

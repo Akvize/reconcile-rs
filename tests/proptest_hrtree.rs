@@ -32,7 +32,7 @@ use rand::{Rng, SeedableRng};
 
 use reconcile::fingerprint::Fingerprint;
 use reconcile::hrtree::HRTree;
-use reconcile::testing::{hash, DiffRange, Diffable, HashRangeQueryable, HashSegment};
+use reconcile::testing::{diff_round, hash, range_hash, start_diff, DiffRange, HashSegment};
 
 // ---------------------------------------------------------------------------
 // Property 1: HRTree is observationally equivalent to a BTreeMap oracle, and
@@ -93,7 +93,7 @@ proptest! {
         let expected_hash = oracle
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
-        prop_assert_eq!(tree.hash(&..), expected_hash);
+        prop_assert_eq!(range_hash(&tree, &..), expected_hash);
     }
 
     #[test]
@@ -119,7 +119,7 @@ proptest! {
         let expected = want
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
-        prop_assert_eq!(tree.hash(&range), expected);
+        prop_assert_eq!(range_hash(&tree, &range), expected);
     }
 }
 
@@ -147,15 +147,15 @@ fn run_diff(
 ) -> (Vec<DiffRange<u64>>, Vec<DiffRange<u64>>) {
     let mut a_diffs = Vec::new();
     let mut b_diffs = Vec::new();
-    let mut a_seg = a.start_diff();
+    let mut a_seg = start_diff(a);
     let mut b_seg = Vec::new();
 
     let mut guard = 0;
     while !a_seg.is_empty() {
         perturb(&mut a_seg);
-        b.diff_round(std::mem::take(&mut a_seg), &mut b_seg, &mut b_diffs);
+        diff_round(b, std::mem::take(&mut a_seg), &mut b_seg, &mut b_diffs);
         perturb(&mut b_seg);
-        a.diff_round(std::mem::take(&mut b_seg), &mut a_seg, &mut a_diffs);
+        diff_round(a, std::mem::take(&mut b_seg), &mut a_seg, &mut a_diffs);
 
         guard += 1;
         // Bounded number of refinement rounds: the protocol fans out by 16 per

@@ -22,8 +22,9 @@
 //! published on Arxiv in February 2023:
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
-//! [`HRTree`] implements the crate-internal `Diffable` and `HashRangeQueryable`
-//! traits (see the `diff` module) that drive range reconciliation.
+//! [`HRTree`] exposes the inherent range-hash queries (`hash`, `insertion_position`,
+//! `key_at`, `len`) that the crate-internal anti-entropy protocol (see the `proto` module)
+//! uses to drive range reconciliation.
 
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -33,7 +34,6 @@ use arrayvec::ArrayVec;
 use range_cmp::{RangeComparable, RangeOrdering};
 use tracing::trace;
 
-use crate::diff::HashRangeQueryable;
 use crate::fingerprint::{hash, Fingerprint};
 
 const B: usize = 6;
@@ -589,9 +589,13 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HRTree<K, V> {
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
-    type Key = K;
-    fn hash<R: RangeBounds<K>>(&self, range: &R) -> Fingerprint {
+impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
+    /// Cumulated [`Fingerprint`] over a range of keys: the 256-bit additive combination
+    /// (see [`crate::fingerprint`]) of the per-element hashes of every element in the range,
+    /// answered in `O(log n)` from the per-subtree cached hashes. Drives the anti-entropy
+    /// protocol (the `proto` module); `pub(crate)` — it is reconciliation mechanism, not part
+    /// of the public surface.
+    pub(crate) fn hash<R: RangeBounds<K>>(&self, range: &R) -> Fingerprint {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
             range: &R,
@@ -648,7 +652,9 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
         aux(&self.root, range, None, None)
     }
 
-    fn insertion_position(&self, key: &K) -> usize {
+    /// Position of `key` in the in-order sequence if present, or the position it would occupy
+    /// after insertion otherwise. Reconciliation mechanism (`proto`); `pub(crate)`.
+    pub(crate) fn insertion_position(&self, key: &K) -> usize {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
@@ -678,7 +684,9 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
         aux(&self.root, key)
     }
 
-    fn key_at(&self, index: usize) -> &K {
+    /// Reference to the key at the given in-order position. Panics if out of bounds.
+    /// Reconciliation mechanism (`proto`); `pub(crate)`.
+    pub(crate) fn key_at(&self, index: usize) -> &K {
         fn aux<K: Ord, V>(node: &Node<K, V>, mut index: usize) -> &K {
             if let Some(children) = node.children.as_ref() {
                 for i in 0..node.keys.len() {
@@ -703,8 +711,14 @@ impl<K: Hash + Ord, V: Hash> HashRangeQueryable for HRTree<K, V> {
         aux(&self.root, index)
     }
 
-    fn len(&self) -> usize {
+    /// Number of elements in the tree.
+    pub fn len(&self) -> usize {
         self.root.tree_size
+    }
+
+    /// Whether the tree holds no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -789,8 +803,8 @@ mod tests {
 
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
-    use crate::diff::{Diffable, HashRangeQueryable};
     use crate::fingerprint::Fingerprint;
+    use crate::proto::{diff_round, start_diff};
 
     use super::HRTree;
 
@@ -935,15 +949,17 @@ mod tests {
         assert!(old.is_none());
         let mut diff_ranges1 = Vec::new();
         let mut diff_ranges2 = Vec::new();
-        let mut segments1 = tree1.start_diff();
+        let mut segments1 = start_diff(&tree1);
         let mut segments2 = Vec::new();
         while !segments1.is_empty() {
-            tree2.diff_round(
+            diff_round(
+                &tree2,
                 std::mem::take(&mut segments1),
                 &mut segments2,
                 &mut diff_ranges2,
             );
-            tree1.diff_round(
+            diff_round(
+                &tree1,
                 std::mem::take(&mut segments2),
                 &mut segments1,
                 &mut diff_ranges1,
