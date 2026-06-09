@@ -13,7 +13,7 @@ use std::hash::Hash;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::hlc::Timestamp;
+use crate::clock::Timestamp;
 
 /// Values stored in a map to be synced by the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
@@ -28,7 +28,7 @@ pub trait Reconcilable {
 /// converges to the same value (Strong Eventual Consistency). Two *distinct* writes can
 /// never share an `Timestamp` (the same node bumps the counter, different nodes differ on
 /// `node_id`), so the equal-timestamp branch only fires for identical values. See the
-/// [`hlc`](crate::hlc) module for why the previous physical-clock scheme was unsafe.
+/// [`clock`](crate::clock) module for why the previous physical-clock scheme was unsafe.
 impl<V: Clone> Reconcilable for (Timestamp, V) {
     fn reconcile(&self, other: &Self) -> Self {
         if other.0 > self.0 {

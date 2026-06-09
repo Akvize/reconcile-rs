@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The fields are compared in declaration order, so the derived [`Ord`] is exactly the
 /// total order `(wall_ms, counter, node_id)` used to resolve conflicts. See the
-/// [module documentation](crate::hlc) for the rationale.
+/// [module documentation](crate::clock) for the rationale.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]

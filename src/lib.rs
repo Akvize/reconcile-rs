@@ -28,9 +28,9 @@
 //! threat model and scope.
 
 pub mod bounds;
+pub mod clock;
 pub mod discovery;
 pub mod fingerprint;
-pub mod hlc;
 pub mod hrtree;
 pub mod mirror;
 pub mod persistence;
@@ -53,9 +53,9 @@ pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
+pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
-pub use hlc::Timestamp;
 pub use hrtree::HRTree;
 // The `hrtree_iter` module is `pub(crate)`, but these iterator types appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a
