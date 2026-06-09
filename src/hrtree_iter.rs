@@ -23,13 +23,15 @@
 //! Each call to `next()` then executes a constant amount of work plus at most one further descent (amortized **O(1)** per element).
 //! Memory overhead is **O(h)** for the internal stack of node pointers.
 //!
-//! # Safety (for mutable iterators)
+//! # Mutable iterators (fully safe)
 //!
-//! `IterMut` and `ValuesMut` use raw pointers (`*mut Node<K,V>`) internally to allow multiple mutable borrows during traversal.
-//! Safety is guaranteed by:
-//! 1. Never aliasing a pointer twice: stack-driven control ensures each node is borrowed at most once at a time.
-//! 2. Lifetimes tied to `&'a mut self`, so no pointers outlive the tree borrow.
-//! 3. Strict in-order precedence: pointers are only created when descending children, and popped before reuse.
+//! `IterMut` and `ValuesMut` are implemented in safe Rust, with **no raw pointers and no `unsafe`**.
+//! The traversal keeps a stack of per-node frames, each holding the node's remaining `(key, value)`
+//! pairs and its remaining children as standard slice iterators (`slice::Iter` / `slice::IterMut`).
+//! This works because `slice::IterMut::next` hands out a `&'a mut V` whose lifetime is decoupled from
+//! the borrow of the iterator itself, so distinct values can be yielded across many `next()` calls
+//! without ever aliasing — which is exactly what the previous raw-pointer implementation emulated by
+//! hand. The whole crate is `#![forbid(unsafe_code)]`.
 //!
 //! # Future Work: Lazy Iterators
 //!
@@ -37,7 +39,7 @@
 //! To match `BTreeMap` semantics more closely, we can remove even that pre-computation and make both forward and reverse traversal fully lazy,
 //! support `DoubleEndedIterator`, and implement precise lower/upper-bound seeks.
 
-use std::{hash::Hash, marker::PhantomData};
+use std::hash::Hash;
 
 use crate::hrtree::{HRTree, Node};
 
@@ -179,48 +181,84 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+/// A per-node frame of the [`IterMut`] traversal stack.
+///
+/// Holds the node's not-yet-yielded `(key, value)` pairs and its not-yet-visited children as
+/// standard slice iterators. Yielding `&'a mut V` from `kv` is sound because `slice::IterMut`
+/// decouples the lifetime of each returned reference from the borrow of the iterator itself.
+struct Frame<'a, K, V> {
+    kv: std::iter::Zip<std::slice::Iter<'a, K>, std::slice::IterMut<'a, V>>,
+    children: Option<std::slice::IterMut<'a, Box<Node<K, V>>>>,
+}
+
 /// An in-order mutable iterator over a `HRTree`.
 ///
 /// Yields each key and a mutable reference to its associated value in ascending key order.
 pub struct IterMut<'a, K, V> {
-    stack: Vec<(*mut Node<K, V>, usize)>,
-    _marker: PhantomData<&'a mut V>,
+    stack: Vec<Frame<'a, K, V>>,
+}
+
+impl<'a, K, V> IterMut<'a, K, V> {
+    /// Pushes `node` and the leftmost path beneath it onto `stack`, so that the top frame is
+    /// positioned to yield the in-order-first `(key, value)` of that subtree.
+    fn push_left_path(stack: &mut Vec<Frame<'a, K, V>>, mut node: &'a mut Node<K, V>) {
+        loop {
+            // Destructuring `&mut Node` with a struct pattern splits the borrow across the
+            // disjoint fields, so each binding is an independent `&mut` (match ergonomics).
+            let Node {
+                keys,
+                values,
+                children,
+                ..
+            } = node;
+            let kv = keys.iter().zip(values.iter_mut());
+            match children {
+                Some(ch) => {
+                    let mut child_iter = ch.iter_mut();
+                    let first = child_iter.next().expect("internal node has >= 1 child");
+                    stack.push(Frame {
+                        kv,
+                        children: Some(child_iter),
+                    });
+                    node = &mut **first; // descend into leftmost child
+                }
+                None => {
+                    stack.push(Frame { kv, children: None });
+                    return;
+                }
+            }
+        }
+    }
 }
 
 impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
     type Item = (&'a K, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((node_ptr, idx)) = self.stack.pop() {
-            unsafe {
-                let node = &mut *node_ptr;
-                if idx < node.keys.len() {
-                    // Prepare next
-                    self.stack.push((node_ptr, idx + 1));
-                    // Traverse right subtree
-                    if let Some(children) = node.children.as_mut() {
-                        let mut child_ptr: *mut Node<K, V> = &mut *children[idx + 1];
-                        while let Some(gc) = (*child_ptr).children.as_mut() {
-                            self.stack.push((child_ptr, 0));
-                            child_ptr = &mut *gc[0];
-                        }
-                        self.stack.push((child_ptr, 0));
-                    }
-                    return Some((&node.keys[idx], &mut node.values[idx]));
+        loop {
+            let frame = self.stack.last_mut()?;
+            if let Some((k, v)) = frame.kv.next() {
+                // Descend the child to the right of this kv (the next node in-order).
+                // Typed `&'a mut Node`, so the `frame` borrow can end before we re-borrow
+                // `self.stack` to push.
+                let next_child: Option<&'a mut Node<K, V>> = frame
+                    .children
+                    .as_mut()
+                    .and_then(|c| c.next())
+                    .map(|b| &mut **b);
+                if let Some(child) = next_child {
+                    Self::push_left_path(&mut self.stack, child);
                 }
+                return Some((k, v));
             }
+            // This frame's kvs are exhausted (its trailing child was already descended).
+            self.stack.pop();
         }
-        None
     }
 }
 
 impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// Returns an in-order iterator over `(&K, &mut V)` pairs.
-    ///
-    /// # Safety
-    ///
-    /// Uses raw pointers internally to allow multiple mutable borrows,
-    /// but ensures safety by strictly controlling traversal and lifetime.
     ///
     /// # Examples
     ///
@@ -232,20 +270,8 @@ impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// ```
     pub fn iter_mut(&'a mut self) -> IterMut<'a, K, V> {
         let mut stack = Vec::new();
-        // Unsafe pointer to root
-        let mut cur_ptr: *mut Node<K, V> = &mut *self.root;
-        unsafe {
-            // Descend to leftmost leaf
-            while let Some(children) = (*cur_ptr).children.as_mut() {
-                stack.push((cur_ptr, 0));
-                cur_ptr = &mut *children[0];
-            }
-            stack.push((cur_ptr, 0));
-        }
-        IterMut {
-            stack,
-            _marker: PhantomData,
-        }
+        IterMut::push_left_path(&mut stack, &mut self.root);
+        IterMut { stack }
     }
 }
 
@@ -324,11 +350,6 @@ pub struct ValuesMut<'a, K, V> {
 
 impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// Returns an in-order iterator over `&mut V` values.
-    ///
-    /// # Safety
-    ///
-    /// Uses raw pointers internally to allow multiple mutable borrows,
-    /// but ensures safety by strictly controlling traversal and lifetime.
     ///
     /// # Examples
     ///

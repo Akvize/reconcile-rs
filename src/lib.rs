@@ -27,6 +27,10 @@
 //! unauthenticated or forged datagrams. See the README "Security model" section for the full
 //! threat model and scope.
 
+// The entire crate is implemented in safe Rust; this turns any `unsafe` block into a hard
+// compile error (see issue #165).
+#![forbid(unsafe_code)]
+
 pub mod bounds;
 pub mod clock;
 pub mod discovery;
