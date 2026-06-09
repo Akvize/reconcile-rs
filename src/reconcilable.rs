@@ -13,7 +13,7 @@ use std::hash::Hash;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::hlc::Hlc;
+use crate::hlc::Timestamp;
 
 /// Values stored in a map to be synced by the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
 /// have to be [`Reconcilable`] to ensure safe conflict handling.
@@ -21,15 +21,15 @@ pub trait Reconcilable {
     fn reconcile(&self, other: &Self) -> Self;
 }
 
-/// Last-write-wins keyed on a [`Hlc`] timestamp.
+/// Last-write-wins keyed on a [`Timestamp`].
 ///
-/// Because [`Hlc`] is a **total order** `(wall_ms, counter, node_id)`, `reconcile` is `max`
+/// Because [`Timestamp`] is a **total order** `(wall_ms, counter, node_id)`, `reconcile` is `max`
 /// over that order: it is commutative, associative and idempotent, so every replica
 /// converges to the same value (Strong Eventual Consistency). Two *distinct* writes can
-/// never share an `Hlc` (the same node bumps the counter, different nodes differ on
+/// never share an `Timestamp` (the same node bumps the counter, different nodes differ on
 /// `node_id`), so the equal-timestamp branch only fires for identical values. See the
 /// [`hlc`](crate::hlc) module for why the previous physical-clock scheme was unsafe.
-impl<V: Clone> Reconcilable for (Hlc, V) {
+impl<V: Clone> Reconcilable for (Timestamp, V) {
     fn reconcile(&self, other: &Self) -> Self {
         if other.0 > self.0 {
             other.clone()
@@ -50,7 +50,7 @@ pub trait MaybeTombstone {
     fn is_tombstone(&self) -> bool;
 }
 
-impl<V> MaybeTombstone for (Hlc, Option<V>) {
+impl<V> MaybeTombstone for (Timestamp, Option<V>) {
     fn is_tombstone(&self) -> bool {
         self.1.is_none()
     }
@@ -61,11 +61,11 @@ impl<V> MaybeTombstone for (Hlc, Option<V>) {
 /// *projection* tree a dated store maintains to answer them.
 ///
 /// Its [`Hash`] is **value-only by construction**: it wraps just the [`Option<V>`] payload, with no
-/// [`Hlc`] timestamp, so two replicas that agree on the logical value compute the *same* per-element
+/// [`Timestamp`], so two replicas that agree on the logical value compute the *same* per-element
 /// fingerprint regardless of when (or on which node) each last wrote it. A live value is
 /// `ValueOnly(Some(v))`; a tombstone is `ValueOnly(None)`.
 ///
-/// This is deliberately a *separate* type from the dated `(Hlc, Option<V>)`: the dated value keeps
+/// This is deliberately a *separate* type from the dated `(Timestamp, Option<V>)`: the dated value keeps
 /// its timestamp-inclusive `Hash` (required by the engine's `version_hash` for the #109
 /// causal-stability acks), so a single value-only hash never replaces it. See issue #128.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -101,7 +101,7 @@ pub trait Projectable {
 }
 
 impl<V: Clone + Hash + Send + Sync + Serialize + DeserializeOwned + 'static> Projectable
-    for (Hlc, Option<V>)
+    for (Timestamp, Option<V>)
 {
     type Projected = ValueOnly<V>;
     fn project(&self) -> ValueOnly<V> {
@@ -118,8 +118,8 @@ mod tests {
         // Distinct node_ids with the same wall+counter: the old physical-clock tie-break
         // kept the local value, so the two replicas diverged forever (defect (b)). The
         // total order makes the survivor deterministic regardless of argument order.
-        let a = (Hlc::new(100, 0, 1), "a");
-        let b = (Hlc::new(100, 0, 2), "b");
+        let a = (Timestamp::new(100, 0, 1), "a");
+        let b = (Timestamp::new(100, 0, 2), "b");
         assert_eq!(a.reconcile(&b), b.reconcile(&a));
         // The higher node_id wins consistently.
         assert_eq!(a.reconcile(&b).1, "b");
@@ -127,14 +127,14 @@ mod tests {
 
     #[test]
     fn reconcile_is_idempotent() {
-        let a = (Hlc::new(7, 3, 42), "x");
+        let a = (Timestamp::new(7, 3, 42), "x");
         assert_eq!(a.reconcile(&a), a);
     }
 
     #[test]
     fn reconcile_picks_the_greater_timestamp() {
-        let older = (Hlc::new(10, 0, 5), "old");
-        let newer = (Hlc::new(11, 0, 1), "new");
+        let older = (Timestamp::new(10, 0, 5), "old");
+        let newer = (Timestamp::new(11, 0, 1), "new");
         assert_eq!(older.reconcile(&newer).1, "new");
         assert_eq!(newer.reconcile(&older).1, "new");
     }

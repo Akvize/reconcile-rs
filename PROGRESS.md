@@ -110,8 +110,8 @@ bound bundles & encapsulation → dissolve diff traits → `Clock` port → `Ent
 `Entry`/`State` step (wire/on-disk format), and all preserve the invariants below.
 
 Refinements adopted after a `file:line` review of the sequence (see issue
-[#138](https://github.com/Akvize/reconcile-rs/issues/138)): the `Clock` port pins `Timestamp` to
-`Hlc` (no generic associated type); the `Entry`/`State` step also dissolves `Projectable`/`ValueOnly`
+[#138](https://github.com/Akvize/reconcile-rs/issues/138)): the `Clock` port returns the concrete
+`Timestamp` (no generic associated type); the `Entry`/`State` step also dissolves `Projectable`/`ValueOnly`
 into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a decode cap and the
 `BincodeCodec` adapter sets `with_limit` (partially closing
 [#151](https://github.com/Akvize/reconcile-rs/issues/151)); the `Transport`/`Codec` ports live in
