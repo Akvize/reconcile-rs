@@ -752,36 +752,56 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             // Tombstones we now hold as a result of these updates, to be acknowledged back to
             // the peer so it can eventually garbage-collect them once causally stable.
             let mut acks_to_send = Vec::new();
+            // 1) Under a read lock, decide which merged values would actually change state. We must
+            //    NOT run the pre-insert hook here: hooks are contractually executed *outside* the
+            //    map's write lock (matching `just_insert`), so a hook that re-inserts cannot
+            //    re-enter the lock and deadlock (issue #149).
+            let mut to_apply: Vec<(K, V)> = Vec::new();
             {
-                let mut guard = self.map.write();
+                let guard = self.map.read();
                 for (k, remote_v) in updates {
                     // Advance our clock past the timestamp carried by the remote value, so a
                     // later local write is ordered after everything we have seen. This is
                     // what prevents lost updates under clock skew (issue #110).
                     self.clock.observe(remote_v.timestamp());
-                    let tombstone_version = match guard.get(&k) {
+                    match guard.get(&k) {
                         Some(local_v) => {
                             let merged_v = local_v.reconcile(&remote_v);
                             if merged_v != *local_v {
-                                (self.pre_insert.read())(&k, &merged_v);
-                                let version =
-                                    merged_v.is_tombstone().then(|| version_hash(&merged_v));
-                                self.map_insert(&mut guard, k.clone(), merged_v);
-                                version
-                            } else {
+                                to_apply.push((k, merged_v));
+                            } else if local_v.is_tombstone() {
                                 // We already hold an equal-or-newer value; still acknowledge it
                                 // if it is the same tombstone, so the peer learns we have it.
-                                local_v.is_tombstone().then(|| version_hash(local_v))
+                                acks_to_send.push(Message::Ack::<K, V, V::Projected>((
+                                    k,
+                                    version_hash(local_v),
+                                )));
                             }
                         }
-                        None => {
-                            (self.pre_insert.read())(&k, &remote_v);
-                            let version = remote_v.is_tombstone().then(|| version_hash(&remote_v));
-                            self.map_insert(&mut guard, k.clone(), remote_v);
-                            version
-                        }
+                        None => to_apply.push((k, remote_v)),
+                    }
+                }
+            }
+            // 2) Run the pre-insert hooks with no lock held, exactly as `just_insert` does.
+            for (k, v) in &to_apply {
+                (self.pre_insert.read())(k, v);
+            }
+            // 3) Re-acquire the write lock and apply. We re-reconcile against the now-current local
+            //    value because the lock was released between steps 1 and 3: a concurrent write (for
+            //    instance one performed by the hook itself) may have installed a newer value, which
+            //    LWW must not clobber. `reconcile` is idempotent `max` over the timestamp total
+            //    order, so re-applying a value that became stale meanwhile is a no-op — the stale
+            //    case is handled identically to the direct path.
+            if !to_apply.is_empty() {
+                let mut guard = self.map.write();
+                for (k, v) in to_apply {
+                    let merged_v = match guard.get(&k) {
+                        Some(local_v) => local_v.reconcile(&v),
+                        None => v,
                     };
-                    if let Some(version) = tombstone_version {
+                    let version = merged_v.is_tombstone().then(|| version_hash(&merged_v));
+                    self.map_insert(&mut guard, k.clone(), merged_v);
+                    if let Some(version) = version {
                         acks_to_send.push(Message::Ack::<K, V, V::Projected>((k, version)));
                     }
                 }
@@ -964,11 +984,21 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
 #[cfg(test)]
 mod deadlock_regressions {
 
+    use crate::auth;
+    use crate::clock::Timestamp;
+    use crate::reconcilable::ValueOnly;
+    use crate::reconcile_engine::ReconcileEngine;
     use crate::{reconcile_store::Config, ReconcileStore};
+    use bincode::{DefaultOptions, Serializer};
+    use serde::Serialize;
+    use std::net::SocketAddr;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc, Arc,
     };
+    use std::time::Duration;
+
+    use super::Message;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
@@ -1001,6 +1031,94 @@ mod deadlock_regressions {
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
         );
+    }
+
+    /// Serialize an `Update` so it can be fed straight into the engine's network ingest path
+    /// (`handle_messages`), exactly as a peer's datagram would arrive once the (disabled)
+    /// authentication gate has been cleared.
+    fn update_message_bytes(key: i32, value: (Timestamp, Option<u8>)) -> Vec<u8> {
+        let message = Message::Update::<i32, (Timestamp, Option<u8>), ValueOnly<u8>>((key, value));
+        let mut buf = Vec::new();
+        message
+            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .unwrap();
+        buf
+    }
+
+    /// Network-path counterpart of [`pre_insert_hook_can_call_insert_again_without_deadlock`]
+    /// (issue #149): a value arriving over the wire is integrated by [`handle_messages`], which must
+    /// run the pre-insert hook *outside* the map's write lock, just like the direct `just_insert`
+    /// path. Otherwise a hook that re-inserts re-enters the (non-reentrant) write lock and deadlocks
+    /// the receive loop.
+    ///
+    /// Unlike the direct-path test above (which can assert synchronously), the regression here is a
+    /// deadlock that would *hang* the task processing the datagram and, with it, runtime teardown.
+    /// So the whole scenario runs on a dedicated thread owning a current-thread runtime, reporting
+    /// over a channel; the test body waits with `recv_timeout`, failing fast (and merely leaking the
+    /// wedged thread) instead of hanging the runner if the fix ever regresses.
+    #[test]
+    fn pre_insert_hook_can_call_insert_again_from_network_path_without_deadlock() {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let reinserted = rt.block_on(async {
+                let config = Config::default()
+                    .with_port(8083)
+                    .with_listen_addr("127.0.0.50".parse().unwrap());
+                let engine = ReconcileEngine::<i32, (Timestamp, Option<u8>)>::new(config).await;
+
+                // The same re-entrant hook as the direct-path test, registered on the engine whose
+                // map `handle_messages` writes to: it calls back into `just_insert` on that engine.
+                // Were `handle_messages` still running the hook under `map.write()`, this inner
+                // insert would re-enter the write lock and deadlock.
+                let hook_engine = engine.clone();
+                let once = Arc::new(AtomicBool::new(false));
+                let guard = once.clone();
+                *engine.pre_insert.write() =
+                    Box::new(move |&k: &i32, v: &(Timestamp, Option<u8>)| {
+                        if !guard.swap(true, Ordering::SeqCst) {
+                            let inner = (
+                                Timestamp::new(u64::MAX, 1, 0),
+                                Some(v.1.unwrap_or_default() + 100),
+                            );
+                            let _ = hook_engine.just_insert(k + 100, inner);
+                        }
+                    });
+
+                // Feed an `Update` (future timestamp, so it is integrated) through the real network
+                // ingest path. No cluster key, so `open` clears the bytes unchanged into a `Payload`.
+                let bytes = update_message_bytes(42, (Timestamp::new(u64::MAX, 0, 0), Some(99)));
+                let payload = auth::Authenticator::new(None, false)
+                    .open(&bytes)
+                    .expect("unauthenticated mode clears any datagram");
+                let peer: SocketAddr = "127.0.0.51:8083".parse().unwrap();
+                let mut send_buf = Vec::new();
+                engine.handle_messages(payload, peer, &mut send_buf).await;
+
+                // Read back the value the re-entrant hook inserted from the network path. The read
+                // guard is dropped explicitly so it does not outlive `engine` at the block's end.
+                let map_guard = engine.map.read();
+                let reinserted = map_guard.get(&142).and_then(|(_, v)| *v);
+                drop(map_guard);
+                reinserted
+            });
+            let _ = tx.send(reinserted);
+        });
+
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(reinserted) => assert_eq!(
+                reinserted,
+                Some(199),
+                "the re-entrant insert from the network-path hook did not take effect"
+            ),
+            Err(_) => panic!(
+                "the network-path pre-insert hook deadlocked (it ran under the map write lock, so \
+                 its re-entrant insert could not re-acquire the lock)"
+            ),
+        }
     }
 }
 
