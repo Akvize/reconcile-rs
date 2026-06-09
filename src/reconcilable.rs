@@ -26,7 +26,7 @@ pub trait Reconcilable {
 /// Because [`Timestamp`] is a **total order** `(wall_ms, counter, node_id)`, `reconcile` is `max`
 /// over that order: it is commutative, associative and idempotent, so every replica
 /// converges to the same value (Strong Eventual Consistency). Two *distinct* writes can
-/// never share an `Timestamp` (the same node bumps the counter, different nodes differ on
+/// never share a `Timestamp` (the same node bumps the counter, different nodes differ on
 /// `node_id`), so the equal-timestamp branch only fires for identical values. See the
 /// [`hlc`](crate::hlc) module for why the previous physical-clock scheme was unsafe.
 impl<V: Clone> Reconcilable for (Timestamp, V) {
