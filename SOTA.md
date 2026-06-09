@@ -275,50 +275,20 @@ surrounding system.
 
 ## 3. Glossary
 
-> Lists **(a)** the identifiers and constants introduced by the repository, **(b)** the competing
-> structures and algorithms cited, **(c)** the acronyms and concepts of distributed systems,
-> cryptography, networking and complexity, **(d)** the Rust tooling. `Fxx` references denote the original audit findings (status tracked in
-> [`PROGRESS.md`](./PROGRESS.md)); `file:line` references point to the code.
+> Lists **(a)** the competing structures and algorithms cited, **(b)** the acronyms and concepts of
+> distributed systems, cryptography, networking and complexity, and **(c)** the Rust tooling — all
+> **implementation-agnostic**. The repository's own identifiers, types and constants are intentionally
+> not catalogued here (see [§3.1](#g91)). `Fxx` references denote the original audit findings, whose
+> current status lives in [`PROGRESS.md`](./PROGRESS.md).
 
 <a id="g91"></a>
-### 3.1 — Repository-specific terms and identifiers
+### 3.1 — Repository identifiers
 
-| Term | Definition |
-|---|---|
-| **HRTree** (*Hash-Range Tree*) | The central structure (`hrtree.rs`): a hand-written B-tree where each node caches `tree_hash` (XOR of the subtree hashes) and `tree_size`. Enables a cumulative-hash range query in O(log n). It is an RSOS (§3.2). |
-| **`tree_hash`** | Node field: cumulative XOR of the `hash(key,value)` of all subtree elements. The composable summary that drives the diff. Maintained incrementally (`tree_hash ^= diff_hash`). |
-| **`tree_size`** | Node field: number of subtree elements (order statistic). Gives `len()` in O(1) and rank/select navigation. |
-| **`hash(key, value)`** | Function (`hrtree.rs:35-40`) computing the 64-bit hash of a pair via `DefaultHasher`. The fingerprint building block (F6, F8). |
-| **`B` / `MIN_CAPACITY` / `MAX_CAPACITY`** | B-tree parameters: `B = 6`, node capacity 5 to 11 keys (`hrtree.rs:42-44`). |
-| **`refresh_hash_size`** | Recomputes a node's `tree_hash` and `tree_size` from its elements and children (`hrtree.rs:70-84`). |
-| **`check_invariants`** | Test function (`hrtree.rs:495-560`) that re-verifies ordering, min node size, height balance, and the correctness of the `tree_hash`/`tree_size` caches. An excellent tool, but only run on fixed sequences (F11). |
-| **`insertion_position` / `key_at` / `position`** | Order-statistic navigation: insertion index of a key, key at a given index, index of a key. O(log n). |
-| **`get_range`** | Lazy iterator over a key range (O(log n + k)). Materialized with clones in the network handler (F16/perf). |
-| **`with_mut` / `get_mut`** | In-place mutation of a value with restoration of the hash invariant. Contains the stray `println!` (F12, `hrtree.rs:315`). |
-| **`rebalance_after_deletion`** | B-tree rebalancing after deletion (steal-left/steal-right/merge). Has a `TODO` (`hrtree.rs:97`) on a degenerate split case. |
-| **`HashRangeQueryable`** | Trait (`diff.rs`) exposing the cumulative-hash range query; implemented by HRTree. |
-| **`Diffable`** | Trait (`diff.rs`) carrying `start_diff` and `diff_round`: the RBSR machinery. |
-| **`start_diff`** | Emits the root segment `{(−∞,+∞), global hash, size}` that bootstraps a reconciliation. O(1). |
-| **`diff_round`** | Protocol core (`diff.rs:85-169`): compares a received segment to the local one, then either concludes or subdivides the range into ~16 sub-segments. Contains the `hash==0` sentinel (F1) and the `unimplemented!()` (F7). |
-| **`HashSegment`** | Serialized comparison message: `{ range: (Bound,Bound), hash: u64, size: usize }`. Deserialized from the network without validation (F7). |
-| **`DiffRange`** | A range identified as divergent, to be reconciled by element exchange. |
-| **`Message`** | Wire-protocol enum: `ComparisonItem(HashSegment)` or `Update((K,V))`. Serialized via bincode. |
-| **`ComparisonItem` / `Update`** | The two `Message` variants: a hash segment to compare, vs a key-value pair to apply. |
-| **`fingerprint`** | (1) Generally: the range summary used for the diff (here 64-bit XOR). (2) The public method `ReconcileStore::fingerprint(range)`. |
-| **`Reconcilable` / `reconcile()`** | Conflict-merge trait (`reconcilable.rs`). The only impl provided: LWW over `(DateTime<Utc>, V)` (F5). |
-| **`ReconcileStore`** | The store's public API (`reconcile_store.rs`): wraps the `HRTree`, manages timestamps and tombstones. Its `clone()` is cheap (shares an `Arc`). |
-| **`ReconcileEngine`** | Transport/reconciliation layer (`reconcile_engine.rs`): UDP socket, locks, `run()` loop, peer discovery. |
-| **`Config`** | Configuration: `port`, `listen_addr`, `peer_net` (`reconcile_store.rs:240-269`). Loopback-safe default but `port=0` unusable as-is. |
-| **`with_seed` / `with_port` / `with_listen_addr` / `with_peer_net` / `with_tombstone_timeout`** | Configuration builders. `with_seed` provides a known peer (mitigates scan discovery, F10). |
-| **`insert` / `just_insert` / `*_bulk`** | `insert` = local insertion **+** UDP broadcast; `just_insert` = local only (naming footgun, F-API). `_bulk` variants clone the entire input (F16/perf). |
-| **`remove` / `just_remove` / `remove_bulk`** | Deletions; write a tombstone `(now, None)`. |
-| **`pre_insert` / `add_pre_insert`** | User hook called before insertion. Supposed to run outside the write-lock, but executed **under** the lock on the network path (F14, contradicts `reconcile_store.rs:98-101`). |
-| **`tombstone`** | Deletion marker `(timestamp, None)` kept in the tree to propagate the deletion, then purged (F4). |
-| **`TimeoutWheel`** | Tombstone-expiry structure (`timeout_wheel.rs`), BTreeMap + HashMap, `std::sync::RwLock` (inconsistent with `parking_lot` elsewhere). |
-| **`pop_expired` / `clear_expired_tombstones`** | Purge of wall-clock-expired tombstones (`reconcile_store.rs:208-215`) → resurrection (F4). |
-| **`gen_ip`** | Draws a random IP within a CIDR (`gen_ip.rs`) for peer discovery (F10). |
-| **`peers` / `peer_net`** | Map of known peers (key = `IpAddr`, 60 s expiry); probed CIDR. Unbounded growth under spoofed IPs (F18). |
-| **Timing constants** | `DEFAULT_TIMEOUT` = 60 s (tombstones), `TOMBSTONE_CLEARING` = 1 s, `PEER_EXPIRATION` = 60 s, `ACTIVITY_TIMEOUT` = 1 s (triggers the periodic diff), `BUFFER_SIZE` = 65507 (max UDP datagram), `MAX_SENDTO_RETRIES` (send retries). |
+> **Implementation-agnostic by design.** This positioning document does not catalogue the
+> repository's own types, methods and constants. For the code surface, see the crate's API
+> documentation (`cargo doc`); for the module map and the target design, see
+> [`ARCHITECTURE.md`](./ARCHITECTURE.md) (§2.1); for the audit findings and their current status,
+> see [`PROGRESS.md`](./PROGRESS.md). The subsections below define the **field-agnostic** concepts.
 
 <a id="g92"></a>
 ### 3.2 — Competing data structures and algorithms
@@ -399,7 +369,7 @@ surrounding system.
 | **TLS / DTLS / Noise / QUIC** | Secure transport layers (DTLS = TLS over datagrams; Noise = a handshake framework; QUIC = encrypted transport over UDP). Options for F3; cf. issue #96. |
 | **spoofing / amplification / reflection / DRDoS** | Forging the source IP (trivial in UDP); a response larger than the request toward a victim; distributed reflection denial of service. The F9 surface. |
 | **bincode allocation bomb** | Deserialization where an attacker-controlled length prefix forces a massive pre-allocation (F18). |
-| **UDP / datagram / MTU** | Connectionless, unreliable protocol with a spoofable source; bounded datagram (here 65507 bytes); *Maximum Transmission Unit*. |
+| **UDP / datagram / MTU** | Connectionless, unreliable protocol with a spoofable source; bounded datagram; *Maximum Transmission Unit*. |
 
 <a id="g95"></a>
 ### 3.5 — Complexity, theory and notation
@@ -409,7 +379,7 @@ surrounding system.
 | **B-tree / B+-tree** | A balanced multi-way search tree. B+-tree: values only in the leaves. |
 | **order statistics (rank / select)** | "Rank of a key" / "key at rank i" operations in O(log n) thanks to subtree counters (`tree_size`). |
 | **monoid** | A set with an associative operation and an identity element; the ideal structure of a generic composable summary (P1 of §2.4). |
-| **fan-out** | Number of sub-ranges per recursion round (here ~16, `diff.rs:141`); trades RTT vs message size. |
+| **fan-out** | Number of sub-ranges per recursion round; trades RTT vs message size. |
 | **n / d / U / b** | SOTA notation: set size *n*, symmetric-difference size *d*, key universe *U*, element bit-width *b*. |
 | **O(log n) / O(d log n)** | Target costs: hash-range query and per-mutation operations in O(log n); diff message volume in O(d log n). |
 
@@ -467,54 +437,52 @@ surrounding system.
 ## 5. Alphabetical index
 
 > Index of the [glossary (§3)](#3-glossary) terms. Each entry links to the subsection where the term
-> is defined: [3.1 repo](#g91) · [3.2 structures/algos](#g92) · [3.3 distributed](#g93) ·
+> is defined: [3.1 repo → code](#g91) · [3.2 structures/algos](#g92) · [3.3 distributed](#g93) ·
 > [3.4 crypto/network](#g94) · [3.5 complexity](#g95) · [3.6 Rust](#g96).
 
-**A** — AEAD [3.4](#g94) · AELMDB [3.2](#g92) · `ACTIVITY_TIMEOUT` [3.1](#g91) · `add_pre_insert` [3.1](#g91) · amplification [3.4](#g94) · anti-entropy [3.3](#g93) · `Arc` [3.6](#g96) · `ArrayVec` [3.6](#g96) · associative [3.3](#g93)
+**A** — AEAD [3.4](#g94) · AELMDB [3.2](#g92) · amplification [3.4](#g94) · anti-entropy [3.3](#g93) · `Arc` [3.6](#g96) · `ArrayVec` [3.6](#g96) · associative [3.3](#g93)
 
-**B** — B-tree / B+-tree [3.5](#g95) · `B` (constant) [3.1](#g91) · BCH codes [3.2](#g92) · Berlekamp-Massey [3.2](#g92) · bincode [3.6](#g96) · bincode allocation bomb [3.4](#g94) · BIP 330 [3.2](#g92) · birthday bound [3.4](#g94) · BLAKE3 [3.4](#g94) · Bloom filter [3.2](#g92) · `BUFFER_SIZE` [3.1](#g91)
+**B** — B-tree / B+-tree [3.5](#g95) · BCH codes [3.2](#g92) · Berlekamp-Massey [3.2](#g92) · bincode [3.6](#g96) · bincode allocation bomb [3.4](#g94) · BIP 330 [3.2](#g92) · birthday bound [3.4](#g94) · BLAKE3 [3.4](#g94) · Bloom filter [3.2](#g92)
 
-**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · `check_invariants` [3.1](#g91) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · `ComparisonItem` [3.1](#g91) · `Config` [3.1](#g91) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
+**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
 
-**D** — datagram [3.4](#g94) · `DateTime<Utc>` [3.6](#g96) · `DEFAULT_TIMEOUT` [3.1](#g91) · `DefaultHasher` [3.4](#g94) · `Diffable` [3.1](#g91) · `diff_round` [3.1](#g91) · `DiffRange` [3.1](#g91) · Dolt / DoltHub [3.2](#g92) · `DoubleEndedIterator` [3.6](#g96) · DRDoS [3.4](#g94) · DTLS [3.4](#g94) · DVV (Dotted Version Vector) [3.3](#g93) · Dynamo [3.2](#g92)
+**D** — datagram [3.4](#g94) · `DateTime<Utc>` [3.6](#g96) · `DefaultHasher` [3.4](#g94) · Dolt / DoltHub [3.2](#g92) · `DoubleEndedIterator` [3.6](#g96) · DRDoS [3.4](#g94) · DTLS [3.4](#g94) · DVV (Dotted Version Vector) [3.3](#g93) · Dynamo [3.2](#g92)
 
 **E** — Earthstar [3.2](#g92) · epidemic [3.3](#g93) · Erlay [3.2](#g92) · eventual consistency [3.3](#g93) · `ExactSizeIterator` [3.6](#g96)
 
-**F** — fan-out [3.5](#g95) · fingerprint [3.1](#g91) · `FusedIterator` [3.6](#g96) · fuzzing [3.6](#g96)
+**F** — fan-out [3.5](#g95) · `FusedIterator` [3.6](#g96) · fuzzing [3.6](#g96)
 
-**G** — `gc_grace_seconds` [3.3](#g93) · `gen_ip` [3.1](#g91) · `get_mut` [3.1](#g91) · `get_range` [3.1](#g91) · GF(2)-linear [3.4](#g94) · gossip [3.3](#g93) · Graphene [3.2](#g92)
+**G** — `gc_grace_seconds` [3.3](#g93) · GF(2)-linear [3.4](#g94) · gossip [3.3](#g93) · Graphene [3.2](#g92)
 
-**H** — `hash(key,value)` [3.1](#g91) · `HashRangeQueryable` [3.1](#g91) · `HashSegment` [3.1](#g91) · happens-before [3.3](#g93) · Hazelcast [§2/product](#g92) · hinted handoff [3.3](#g93) · history-independence [3.2](#g92) · HLC (Hybrid Logical Clock) [3.3](#g93) · HMAC [3.4](#g94) · homomorphic hash [3.4](#g94) · HRTree [3.1](#g91) · HyParView [3.3](#g93)
+**H** — happens-before [3.3](#g93) · Hazelcast [§2/product](#g92) · hinted handoff [3.3](#g93) · history-independence [3.2](#g92) · HLC (Hybrid Logical Clock) [3.3](#g93) · HMAC [3.4](#g94) · homomorphic hash [3.4](#g94) · HyParView [3.3](#g93)
 
-**I** — IBLT [3.2](#g92) · idempotent [3.3](#g93) · incremental hash [3.4](#g94) · `insert` / `insert_bulk` [3.1](#g91) · `insertion_position` [3.1](#g91) · ipnet [3.6](#g96) · iroh / iroh-docs [3.2](#g92)
+**I** — IBLT [3.2](#g92) · idempotent [3.3](#g93) · incremental hash [3.4](#g94) · ipnet [3.6](#g96) · iroh / iroh-docs [3.2](#g92)
 
-**J** — join-semilattice [3.3](#g93) · `just_insert` / `just_remove` [3.1](#g91)
-
-**K** — `key_at` [3.1](#g91)
+**J** — join-semilattice [3.3](#g93)
 
 **L** — Lamport clock [3.3](#g93) · leading-zeros (attack) [3.2](#g92) · LtHash [3.4](#g94) · LWW (Last-Write-Wins) [3.3](#g93) · LWW-Register [3.3](#g93)
 
-**M** — MAC [3.4](#g94) · `MAX_CAPACITY` / `MIN_CAPACITY` [3.1](#g91) · `MAX_SENDTO_RETRIES` [3.1](#g91) · memberlist [3.3](#g93) · Merkle-CRDT [3.2](#g92) · Merkle-DAG [3.2](#g92) · Merkle radix / Patricia [3.2](#g92) · Merkle tree / root [3.2](#g92) · `Message` [3.1](#g91) · minisketch [3.2](#g92) · miri [3.6](#g96) · monoid [3.5](#g95) · monotone [3.3](#g93) · MSet-Mu-Hash / MSet-XOR-Hash [3.4](#g94) · MSRV [3.6](#g96) · MST (Merkle Search Tree) [3.2](#g92) · MTU [3.4](#g94) · MV-Register [3.3](#g93)
+**M** — MAC [3.4](#g94) · memberlist [3.3](#g93) · Merkle-CRDT [3.2](#g92) · Merkle-DAG [3.2](#g92) · Merkle radix / Patricia [3.2](#g92) · Merkle tree / root [3.2](#g92) · minisketch [3.2](#g92) · miri [3.6](#g96) · monoid [3.5](#g95) · monotone [3.3](#g93) · MSet-Mu-Hash / MSet-XOR-Hash [3.4](#g94) · MSRV [3.6](#g96) · MST (Merkle Search Tree) [3.2](#g92) · MTU [3.4](#g94) · MV-Register [3.3](#g93)
 
 **N** — *n / d / U / b* (notation) [3.5](#g95) · Negentropy [3.2](#g92) · Noise [3.4](#g94) · Noms [3.2](#g92) · NTP [3.3](#g93)
 
 **O** — O(log n) / O(d log n) [3.5](#g95) · once_cell [3.6](#g96) · order statistics (rank/select) [3.5](#g95) · OR-Set [3.3](#g93) · over-streaming [3.2](#g92)
 
-**P** — PACELC [3.3](#g93) · `panic=abort` [3.6](#g96) · parking_lot [3.6](#g96) · partition [3.3](#g93) · Patricia trie [3.2](#g92) · `peer_net` / `peers` [3.1](#g91) · `PEER_EXPIRATION` [3.1](#g91) · Pekko Distributed Data [§2/product](#g92) · PinSketch [3.2](#g92) · `pop_expired` [3.1](#g91) · `position` [3.1](#g91) · `pre_insert` [3.1](#g91) · prolly tree [3.2](#g92) · proptest [3.6](#g96) · PTP [3.3](#g93) · push / pull [3.3](#g93)
+**P** — PACELC [3.3](#g93) · `panic=abort` [3.6](#g96) · parking_lot [3.6](#g96) · partition [3.3](#g93) · Patricia trie [3.2](#g92) · Pekko Distributed Data [§2/product](#g92) · PinSketch [3.2](#g92) · prolly tree [3.2](#g92) · proptest [3.6](#g96) · PTP [3.3](#g93) · push / pull [3.3](#g93)
 
 **Q** — QUIC [3.4](#g94) · quickcheck [3.6](#g96) · quorum [3.3](#g93)
 
-**R** — rand [3.6](#g96) · range-cmp / `RangeOrdering` [3.6](#g96) · rank / select [3.5](#g95) · Rateless IBLT (RIBLT) [3.2](#g92) · RBSR [3.2](#g92) · read repair [3.3](#g93) · `rebalance_after_deletion` [3.1](#g91) · `Reconcilable` / `reconcile()` [3.1](#g91) · `ReconcileEngine` [3.1](#g91) · `ReconcileStore` [3.1](#g91) · `refresh_hash_size` [3.1](#g91) · `remove` / `remove_bulk` [3.1](#g91) · resurrection / zombie [3.3](#g93) · Riak [3.2](#g92) · rolling hash [3.2](#g92) · rumor mongering [3.3](#g93) · `RwLock` [3.6](#g96) · RSOS [3.2](#g92)
+**R** — rand [3.6](#g96) · range-cmp / `RangeOrdering` [3.6](#g96) · rank / select [3.5](#g95) · Rateless IBLT (RIBLT) [3.2](#g92) · RBSR [3.2](#g92) · read repair [3.3](#g93) · resurrection / zombie [3.3](#g93) · Riak [3.2](#g92) · rolling hash [3.2](#g92) · rumor mongering [3.3](#g93) · `RwLock` [3.6](#g96) · RSOS [3.2](#g92)
 
-**S** — ScyllaDB [3.2](#g92) · second-preimage [3.4](#g94) · SEC (Strong Eventual Consistency) [3.3](#g93) · serde [3.6](#g96) · session guarantees [3.3](#g93) · SipHash [3.4](#g94) · SMT (Sparse Merkle Tree) [3.2](#g92) · spoofing [3.4](#g94) · split-brain [3.3](#g93) · `start_diff` [3.1](#g91) · Strata Estimator [3.2](#g92) · structural sharing [3.2](#g92) · SWIM [3.3](#g93)
+**S** — ScyllaDB [3.2](#g92) · second-preimage [3.4](#g94) · SEC (Strong Eventual Consistency) [3.3](#g93) · serde [3.6](#g96) · session guarantees [3.3](#g93) · SipHash [3.4](#g94) · SMT (Sparse Merkle Tree) [3.2](#g92) · spoofing [3.4](#g94) · split-brain [3.3](#g93) · Strata Estimator [3.2](#g92) · structural sharing [3.2](#g92) · SWIM [3.3](#g93)
 
-**T** — Thomas write rule [3.3](#g93) · `TimeoutWheel` [3.1](#g91) · TLS [3.4](#g94) · tokio [3.6](#g96) · tombstone [3.1](#g91) · `TOMBSTONE_CLEARING` [3.1](#g91) · tracing [3.6](#g96) · transitive group [3.4](#g94) · `tree_hash` [3.1](#g91) · `tree_size` [3.1](#g91) · TrueTime [3.3](#g93)
+**T** — Thomas write rule [3.3](#g93) · TLS [3.4](#g94) · tokio [3.6](#g96) · tracing [3.6](#g96) · transitive group [3.4](#g94) · TrueTime [3.3](#g93)
 
-**U** — UDP [3.4](#g94) · `unwrap` [3.6](#g96) · `Update` [3.1](#g91) · `overflow-checks` [3.6](#g96)
+**U** — UDP [3.4](#g94) · `unwrap` [3.6](#g96) · `overflow-checks` [3.6](#g96)
 
 **V** — vector clock / version vector [3.3](#g93) · Vivaldi [3.3](#g93) · Voldemort [3.2](#g92)
 
-**W** — Willow [3.2](#g92) · `with_mut` [3.1](#g91) · `with_seed` / `with_port` / `with_peer_net` / `with_tombstone_timeout` [3.1](#g91) · Writes-Follow-Reads [3.3](#g93)
+**W** — Willow [3.2](#g92) · Writes-Follow-Reads [3.3](#g93)
 
 **X** — XOR [3.4](#g94) · xxHash [3.4](#g94)
 
