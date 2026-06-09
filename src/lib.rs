@@ -17,6 +17,28 @@
 //! number of round-trips. It should also work well to populate an instance from
 //! scratch from other instances.
 
+//! # When to use this
+//!
+//! `reconcile-rs` is an **embedded, in-memory, eventually-consistent replicated map** — in
+//! data-grid terms, the masterless / AP / gossip corner of an in-memory data grid (the niche of
+//! Hazelcast's *Replicated Map* or Pekko *Distributed Data*, with no mature Rust equivalent). Every
+//! instance keeps the **whole dataset in memory** and serves reads locally with no network hop;
+//! writes propagate asynchronously and merge last-write-wins.
+//!
+//! Good fit:
+//! - reads dominate and must be fast and local (no per-read round-trip to Redis/etcd);
+//! - the working set fits in RAM on every node (full replication gives redundancy, not sharding);
+//! - eventual consistency and last-write-wins are acceptable, and same-key conflicts are rare;
+//! - you want no separate datastore to operate, and want to keep serving across partitions.
+//!
+//! Wrong tool for: counters/quotas (LWW overwrites, it does not sum), ledgers or anything needing
+//! strong consistency or transactions, datasets larger than one node's RAM (it is fully replicated,
+//! not partitioned), and collaborative text (use a sequence CRDT).
+//!
+//! Because every replica holds everything, memory use and write fan-out grow with the dataset and
+//! the node count; see the open performance issues (cold-sync throughput, per-entry memory
+//! overhead, point-read latency) for current limitations and their status.
+
 //! # Security model
 //!
 //! By default the UDP reconciliation protocol is **unauthenticated**: any host able to send a

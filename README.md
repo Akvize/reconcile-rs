@@ -48,6 +48,30 @@ tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
 
+## When to use this
+
+`reconcile-rs` is an **embedded, in-memory, eventually-consistent replicated map** — in data-grid
+terms, the masterless / AP / gossip corner of an in-memory data grid (the niche of Hazelcast's
+*Replicated Map* or Pekko *Distributed Data*, with no mature Rust equivalent). Every instance keeps
+the whole dataset in memory and serves reads locally (no network hop); writes propagate
+asynchronously and merge last-write-wins.
+
+**Good fit**
+- read-heavy access that must be fast and local — no per-read round-trip to Redis/etcd;
+- a working set that fits in RAM on every node (full replication = redundancy, not sharding);
+- eventual consistency / last-write-wins is acceptable, and same-key write conflicts are rare;
+- no separate datastore to operate, and the cluster must keep serving across network partitions.
+
+**Wrong tool for**
+- counters, quotas or rate-limits — LWW overwrites, it does not sum;
+- ledgers or anything needing strong consistency or transactions;
+- datasets larger than a single node's RAM — it is fully replicated, not partitioned;
+- collaborative text editing — use a sequence CRDT (Yjs/Automerge-style) instead.
+
+Because every replica holds everything, memory use and write fan-out grow with the dataset and the
+node count; see [`SOTA.md`](SOTA.md) for the detailed positioning and the issue tracker for current
+performance limitations.
+
 ## Documentation
 
 - [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
