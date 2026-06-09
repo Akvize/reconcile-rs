@@ -24,9 +24,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
+use crate::clock::Timestamp;
 use crate::discovery::{Discovery, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
-use crate::hlc::Timestamp;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcilable::Projectable;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};

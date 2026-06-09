@@ -44,7 +44,7 @@ use std::sync::Mutex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::hlc::Timestamp;
+use crate::clock::Timestamp;
 
 /// The store's keyed entries in their internal dated, tombstone-aware form: each key maps to a
 /// `(timestamp, Option<V>)`, where a `None` payload is a tombstone.

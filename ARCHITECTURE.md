@@ -42,7 +42,7 @@ converge. The design rests on five mechanisms:
 | `fingerprint.rs` | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
 | `diff.rs` | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types. |
 | `reconcilable.rs` | Value/tombstone semantics and the conflict-resolution policy. |
-| `hlc.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
+| `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
 | `auth.rs` | Per-datagram message authentication (MAC). |
 | `persistence.rs` | Durability boundary: load/save a snapshot of the dated map. |
 | `reconcile_engine.rs` | Network orchestration: UDP socket, (de)serialisation, peer discovery, gossip. |
@@ -66,7 +66,7 @@ The infrastructure dependencies are concentrated in two places:
 
 | Module | Infrastructure imported directly | `file:line` |
 |---|---|---|
-| `hlc.rs` | `chrono::Utc` — physical time read inside the domain | `hlc.rs:35` |
+| `clock.rs` | `chrono::Utc` — physical time read inside the domain | `clock.rs:35` |
 | `reconcile_engine.rs` | `tokio::net::UdpSocket`, `tokio::time`, `bincode`, `rand::StdRng`, `ipnet` | `reconcile_engine.rs:21-28,67` |
 | `reconcile_store.rs` | `chrono`, `ipnet` | `reconcile_store.rs:19-20` |
 
@@ -89,7 +89,7 @@ Seven traits exist. They fall into three groups:
   real implementation (`HRTree`). They are exposed through `pub mod diff` (`lib.rs:30`), placing the
   protocol mechanism on the crate's public surface.
 - **Value-shape helpers (4).** `MaybeTombstone` (`reconcilable.rs:43`), `Reconcilable`
-  (`reconcilable.rs:27`) and `Timestamped` (`hlc.rs:171`) each carry a single implementation over a
+  (`reconcilable.rs:27`) and `Timestamped` (`clock.rs:171`) each carry a single implementation over a
   tuple — the stored cell is represented as `(Timestamp, Option<V>)`. `Mac` (`auth.rs:92`) selects a MAC
   backend chosen at compile time.
 
@@ -158,7 +158,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 // The HLC algorithm stays in the domain; only physical time crosses the boundary.
 // The port returns the concrete `Timestamp` rather than a generic associated type: it is the
 // only stamp in use, alternate causality schemes (vector clocks / CRDT) are out of scope
-// (see hlc.rs), and the tombstone wheel, version_hash and the serde format are already
+// (see clock.rs), and the tombstone wheel, version_hash and the serde format are already
 // coupled to its shape — a generic timestamp would leak that shape while adding a type
 // parameter to the engine, store and Config. Only the physical-time read crosses the boundary.
 pub trait Clock: Send + Sync + 'static {
@@ -214,7 +214,7 @@ pub trait Discovery: Send + Sync + 'static {
 
 | Port | Default adapter | Backed by |
 |---|---|---|
-| `Clock` | `HlcClock` (its `now`/`observe`, `hlc.rs:121,146`, already match the port) | system time |
+| `Clock` | `HlcClock` (its `now`/`observe`, `clock.rs:121,146`, already match the port) | system time |
 | `Transport` | `UdpTransport(Arc<UdpSocket>)` | tokio / UDP |
 | `Codec` | `BincodeCodec(DefaultOptions)` | bincode |
 | `Persistence` | `FileSnapshot`, `InMemory` | file / memory |
@@ -324,7 +324,7 @@ without a compile error — the guarantee a single crate cannot provide.
 | `Projectable` / `ValueOnly<V>` (dateless mirror) | `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `HRTree` methods + `pub(crate)` diff functions |
 | `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
-| `chrono::Utc` read in `hlc.rs` | `Clock` port; `HlcClock` adapter holds the time read |
+| `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
 | `UdpSocket` in `reconcile_engine.rs` | `Transport` port; `UdpTransport` adapter |
 | `bincode` in `reconcile_engine.rs` | `Codec` port; `BincodeCodec` adapter |
 | `Persistence` | unchanged (the model port) |
@@ -341,7 +341,7 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶; the
    golden vectors in `fingerprint.rs` hold.
-2. **HLC total order** `(wall_ms, counter, node_id)` (`hlc.rs:44-54`) — the derived ordering *is* the
+2. **HLC total order** `(wall_ms, counter, node_id)` (`clock.rs:44-54`) — the derived ordering *is* the
    conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and merge uses strict `>`.
 3. **Size-not-hash emptiness/equality** in `diff_round` (`diff.rs:135-141`).
 4. **Malformed-bound / inverted-range hardening** in `diff_round` (`diff.rs:100-134`).

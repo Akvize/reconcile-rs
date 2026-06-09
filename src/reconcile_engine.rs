@@ -32,12 +32,12 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
 use crate::bounds::{Key, Value};
+use crate::clock::{Clock, HlcClock, Timestamp, Timestamped};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
-use crate::hlc::{Clock, HlcClock, Timestamp, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::{Config, MAX_NETS};
@@ -1009,7 +1009,7 @@ mod auth_attack {
     use tokio::net::UdpSocket;
 
     use super::Message;
-    use crate::hlc::Timestamp;
+    use crate::clock::Timestamp;
     use crate::{auth, reconcile_store::Config, ReconcileStore};
 
     /// Serialize the F3 attack payload: an `Update` with a far-future timestamp that, if merged,
@@ -1069,7 +1069,7 @@ mod auth_attack {
 mod causal_stability {
     use std::net::IpAddr;
 
-    use crate::hlc::Timestamp;
+    use crate::clock::Timestamp;
     use crate::reconcile_engine::{version_hash, ReconcileEngine};
     use crate::reconcile_store::Config;
 
@@ -1157,11 +1157,11 @@ mod causal_stability {
 mod clock_port {
     use std::sync::Arc;
 
-    use crate::hlc::{ManualClock, Timestamp};
+    use crate::clock::{ManualClock, Timestamp};
     use crate::reconcile_engine::ReconcileEngine;
     use crate::reconcile_store::Config;
 
-    /// The engine mints timestamps only through the injected [`Clock`](crate::hlc::Clock) port, so
+    /// The engine mints timestamps only through the injected [`Clock`](crate::clock::Clock) port, so
     /// a deterministic adapter makes `clock_now()` fully reproducible — no wall-clock time involved.
     /// This is the engine-level testability the port exists to provide.
     #[tokio::test]
