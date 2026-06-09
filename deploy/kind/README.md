@@ -6,10 +6,15 @@ using reconcile-rs as a realistic, stateful, peer-to-peer workload.
 
 It does **not** introduce a separate deployment: it's a thin
 [kustomize](https://kustomize.io/) overlay on top of the production manifests in
-[`../k8s/`](../k8s/). The overlay only patches the two things that differ locally (the image and
-the replica count); everything else — the StatefulSet, the headless Service, the ConfigMap — is
-reused as-is. That's the idiomatic Kubernetes way to keep one set of manifests for both prod and
+[`../k8s/`](../k8s/). The overlay only patches what differs locally (the image, the replica count,
+and the demo HTTP port); everything else — the StatefulSet, the headless Service, the ConfigMap —
+is reused as-is. That's the idiomatic Kubernetes way to keep one set of manifests for both prod and
 local.
+
+The image built here is the **`k8s_kv`** example (`examples/k8s_kv.rs`): the same node as
+production, plus a tiny **HTTP key/value API on port 8081**, so you can write to one pod and watch
+the value reconcile to the others. The production manifests in `../k8s/` still build the plain
+`k8s_node` (no write API).
 
 ## What you'll need
 
@@ -40,8 +45,9 @@ Each step maps to a Kubernetes concept worth understanding:
 
 1. **`kind create cluster`** — creates a 3-node cluster (1 control-plane + 2 workers) from
    [`kind-config.yaml`](kind-config.yaml). Each node is just a Docker container on your laptop.
-2. **`docker build`** — compiles `examples/k8s_node.rs` into the image, using the repo
-   [`Dockerfile`](../../Dockerfile).
+2. **`docker build --build-arg EXAMPLE=k8s_kv`** — compiles `examples/k8s_kv.rs` into the image,
+   using the repo [`Dockerfile`](../../Dockerfile). (The `EXAMPLE` arg defaults to `k8s_node`; the
+   playground overrides it to get the demo HTTP API.)
 3. **`kind load docker-image`** — copies the image *into* the cluster's nodes. This is the classic
    kind gotcha: the cluster nodes can't see your local Docker daemon, so an image you just built is
    invisible to them until you load it. (The overlay sets `imagePullPolicy: Never` so a forgotten
@@ -64,9 +70,36 @@ Each step maps to a Kubernetes concept worth understanding:
   `DnsDiscovery` re-resolves that name every few seconds to find its peers — no Kubernetes API
   access, no RBAC.
 - Pods then **gossip over UDP** (port 8080) and reconcile their `ReconcileStore<String, String>`
-  contents. Port 9000 serves `/metrics`, which doubles as the readiness/liveness probe.
+  contents. Port 9000 serves `/metrics` (the readiness/liveness probe), and port 8081 serves the
+  demo HTTP key/value API.
 
-## Things to try
+## See reconciliation happen
+
+This is the payoff: write a key to **one** pod and read it back from **another**.
+
+```sh
+# Forward the HTTP API of two different pods to two local ports.
+kubectl port-forward pod/reconcile-0 8081:8081 &
+kubectl port-forward pod/reconcile-4 8082:8081 &
+
+# Write a key to pod 0.
+curl -X PUT -d 'bonjour' localhost:8081/kv/greeting
+
+# Read it back from pod 4 — it arrived there purely via gossip reconciliation.
+sleep 2
+curl localhost:8082/kv/greeting        # -> bonjour
+curl localhost:8082/kv                 # list every key this replica knows (incl. reconciled ones)
+
+# Deletes propagate too (as tombstones).
+curl -X DELETE localhost:8081/kv/greeting
+sleep 2
+curl -i localhost:8082/kv/greeting     # -> 404
+```
+
+The HTTP API (`PUT`/`GET`/`DELETE /kv/<key>`, `GET /kv`) is an unauthenticated demo surface — the
+gossip protocol between pods is still authenticated by the shared cluster key.
+
+## Other things to try
 
 ```sh
 # See the 5 pods and which node each landed on.
@@ -79,20 +112,14 @@ kubectl logs reconcile-0 -f
 kubectl scale statefulset/reconcile --replicas=7
 kubectl scale statefulset/reconcile --replicas=3
 
-# Delete a pod and watch the StatefulSet recreate it with the SAME name and identity.
+# Delete a pod and watch the StatefulSet recreate it with the SAME name and identity
+# (and re-sync its state from peers on restart).
 kubectl delete pod reconcile-2
 
 # Inspect the gossip/reconciliation counters a node exposes.
-kubectl exec reconcile-0 -- /usr/local/bin/k8s_node --help 2>/dev/null || true
 kubectl port-forward pod/reconcile-0 9000:9000 &
 curl -s localhost:9000/metrics | grep '^reconcile_'   # messages_sent/received, rounds, etc.
 ```
-
-> Note: `k8s_node` runs an empty `String -> String` store with no external write API, so the data
-> all five nodes converge on is (correctly) empty. What you can observe here is the **cluster
-> behaviour** — discovery, gossip traffic, stable identity, scaling, probe-driven readiness. To see
-> keys actually replicate between nodes, look at the `demo` example (`examples/demo.rs`) or extend
-> `k8s_node` with an HTTP endpoint that calls `store.insert(...)`.
 
 ## Cleaning up
 

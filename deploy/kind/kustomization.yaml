@@ -30,14 +30,22 @@ replicas:
   - name: reconcile
     count: 5
 
-# Never try to pull from a registry: the image only exists inside kind because we loaded it there.
-# If you forget the `kind load` step you'll get a clear `ErrImageNeverPull`, which is a useful
-# thing to recognise while learning.
 patches:
   - target:
       kind: StatefulSet
       name: reconcile
     patch: |
+      # Never try to pull from a registry: the image only exists inside kind because we loaded it
+      # there. If you forget the `kind load` step you'll get a clear `ErrImageNeverPull`, which is a
+      # useful thing to recognise while learning.
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Never
+      # Expose the k8s_kv demo HTTP API so `kubectl port-forward pod/... 8081` works and the port is
+      # documented on the pod. (Pod-to-pod traffic is already open in kind regardless.)
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: http
+          containerPort: 8081
+          protocol: TCP
