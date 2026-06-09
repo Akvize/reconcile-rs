@@ -5,13 +5,15 @@
 # the headless Service through `getaddrinfo` (`tokio::net::lookup_host`), which is most reliable on
 # glibc. A static musl image would need the (reserved) `dns-hickory` feature instead.
 #
-# Build:  docker build -t reconcile:latest .
-# The container reads its configuration from the environment — see deploy/k8s/.
+# The build context is the repository root (where src/ and examples/ live), so build from there
+# with an explicit -f:
+#   docker build -f kubernetes/Dockerfile -t reconcile:latest .
+# The container reads its configuration from the environment — see kubernetes/base/.
 #
 # Which example to compile is selectable via the EXAMPLE build arg (default `k8s_node`, the
 # production node). The local kind playground builds `k8s_heartbeat`, which additionally writes a
 # per-pod heartbeat key and logs reconciled keys so convergence is visible in the logs:
-#   docker build --build-arg EXAMPLE=k8s_heartbeat -t reconcile:kind .
+#   docker build -f kubernetes/Dockerfile --build-arg EXAMPLE=k8s_heartbeat -t reconcile:kind .
 
 # Selectable at build time; redeclared inside each stage that uses it (Docker ARG scoping).
 ARG EXAMPLE=k8s_node
@@ -36,7 +38,7 @@ RUN cargo build --release --example "${EXAMPLE}" --features metrics-prometheus \
 FROM gcr.io/distroless/cc-debian12 AS runtime
 COPY --from=builder /usr/local/bin/reconcile-node /usr/local/bin/reconcile-node
 
-# Gossip (UDP) and metrics/probes (TCP). Match deploy/k8s/ (and deploy/kind/) and the container env.
+# Gossip (UDP) and metrics/probes (TCP). Match kubernetes/base/ (and kubernetes/kind/) and the env.
 EXPOSE 8080/udp
 EXPOSE 9000/tcp
 

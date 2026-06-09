@@ -5,9 +5,17 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
+# Keep the published crate to the library proper. Everything below is repository-only material —
+# turnkey Kubernetes example/deployment scaffolding and long-form design docs — that bloats the
+# package without serving consumers of the crate. (Relative links to these from README still
+# resolve, because crates.io rewrites them to the repository.)
 exclude = [
     "pre-commit",
     "CONTRIBUTING.md",
+    "kubernetes/",
+    "ARCHITECTURE.md",
+    "SOTA.md",
+    "PROGRESS.md",
 ]
 
 [profile.release]
@@ -58,7 +66,7 @@ required-features = ["metrics-prometheus"]
 [[example]]
 name = "k8s_heartbeat"
 # Same as `k8s_node`, plus a periodic per-pod heartbeat write and a hook that logs each key as it
-# arrives, so reconciliation between pods is visible in `kubectl logs`. Used by `deploy/kind/`.
+# arrives, so reconciliation between pods is visible in `kubectl logs`. Used by `kubernetes/kind/`.
 required-features = ["metrics-prometheus"]
 
 [dependencies]

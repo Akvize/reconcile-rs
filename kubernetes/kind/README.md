@@ -6,7 +6,7 @@ using reconcile-rs as a realistic, stateful, peer-to-peer workload.
 
 It does **not** introduce a separate deployment: it's a thin
 [kustomize](https://kustomize.io/) overlay on top of the production manifests in
-[`../k8s/`](../k8s/). The overlay only patches what differs locally (the image and the replica
+[`../base/`](../base/). The overlay only patches what differs locally (the image and the replica
 count); everything else — the StatefulSet, the headless Service, the ConfigMap — is reused as-is.
 That's the idiomatic Kubernetes way to keep one set of manifests for both prod and local.
 
@@ -14,7 +14,7 @@ The image built here is the **`k8s_heartbeat`** example (`examples/k8s_heartbeat
 as production, plus two tiny additions that make reconciliation visible in the logs — each pod
 periodically writes a `heartbeat/<pod-name>` key, and a hook logs every key the first time it
 appears locally. Since the hook fires for peer-originated updates too, you watch each pod learn the
-*other* pods' heartbeats as gossip converges. The production manifests in `../k8s/` still build the
+*other* pods' heartbeats as gossip converges. The production manifests in `../base/` still build the
 plain `k8s_node` (no heartbeat, no demo behaviour).
 
 ## What you'll need
@@ -33,9 +33,9 @@ Install these on your machine (not provided by this repo):
 From the repository root:
 
 ```sh
-./deploy/kind/up.sh      # build + load image, create cluster, deploy 5 pods, wait for readiness
+./kubernetes/kind/up.sh      # build + load image, create cluster, deploy 5 pods, wait for readiness
 # ... experiment ...
-./deploy/kind/down.sh    # delete the whole cluster
+./kubernetes/kind/down.sh    # delete the whole cluster
 ```
 
 `up.sh` is idempotent — re-run it after changing the code to rebuild and roll out.
@@ -47,8 +47,8 @@ Each step maps to a Kubernetes concept worth understanding:
 1. **`kind create cluster`** — creates a 3-node cluster (1 control-plane + 2 workers) from
    [`kind-config.yaml`](kind-config.yaml). Each node is just a Docker container on your laptop.
 2. **`docker build --build-arg EXAMPLE=k8s_heartbeat`** — compiles `examples/k8s_heartbeat.rs` into
-   the image, using the repo [`Dockerfile`](../../Dockerfile). (The `EXAMPLE` arg defaults to
-   `k8s_node`; the playground overrides it to get the heartbeat/logging behaviour.)
+   the image, using [`../Dockerfile`](../Dockerfile). (The `EXAMPLE` arg defaults to `k8s_node`; the
+   playground overrides it to get the heartbeat/logging behaviour.)
 3. **`kind load docker-image`** — copies the image *into* the cluster's nodes. This is the classic
    kind gotcha: the cluster nodes can't see your local Docker daemon, so an image you just built is
    invisible to them until you load it. (The overlay sets `imagePullPolicy: Never` so a forgotten
@@ -57,8 +57,8 @@ Each step maps to a Kubernetes concept worth understanding:
    Kubernetes [Secret](https://kubernetes.io/docs/concepts/configuration/secret/). Every pod reads
    the same key (via `secretKeyRef`) and uses it to authenticate gossip datagrams. A real key never
    touches a committed file.
-5. **`kubectl apply -k deploy/kind`** — applies the overlay: the headless Service, the ConfigMap,
-   and the StatefulSet scaled to 5 replicas.
+5. **`kubectl apply -k kubernetes/kind`** — applies the overlay: the headless Service, the
+   ConfigMap, and the StatefulSet scaled to 5 replicas.
 6. **`kubectl rollout status`** — waits until all pods pass their readiness probe (`GET /metrics`).
 
 ## How the pieces fit together
@@ -121,7 +121,7 @@ curl -s localhost:9000/metrics | grep '^reconcile_'   # messages_sent/received, 
 ## Cleaning up
 
 ```sh
-./deploy/kind/down.sh
+./kubernetes/kind/down.sh
 ```
 
 This deletes the kind cluster entirely; nothing persists outside it.

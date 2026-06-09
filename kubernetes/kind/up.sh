@@ -25,11 +25,12 @@ fi
 # Point kubectl at this cluster.
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 
-echo "==> Building the node image ($IMAGE) from the repo Dockerfile"
+echo "==> Building the node image ($IMAGE) from kubernetes/Dockerfile"
 echo "    (first build compiles the Rust release binary — this can take a few minutes)"
 # Build the k8s_heartbeat example: same node as production, plus a per-pod heartbeat write and a
-# hook that logs reconciled keys, so convergence is visible in `kubectl logs`.
-docker build --build-arg EXAMPLE=k8s_heartbeat -t "$IMAGE" "$REPO_ROOT"
+# hook that logs reconciled keys, so convergence is visible in `kubectl logs`. The build context is
+# the repo root (where src/, examples/ live); the Dockerfile lives under kubernetes/.
+docker build --build-arg EXAMPLE=k8s_heartbeat -f "$REPO_ROOT/kubernetes/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
 
 echo "==> Loading the image into kind (its nodes can't see your local Docker daemon)"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
@@ -53,4 +54,4 @@ echo
 echo "Done. Try:"
 echo "  kubectl get pods -o wide       # the 5 pods, spread across nodes"
 echo "  kubectl logs reconcile-0 -f    # watch this pod learn every OTHER pod's heartbeat via gossip"
-echo "  ./deploy/kind/down.sh          # tear the whole cluster down"
+echo "  ./kubernetes/kind/down.sh      # tear the whole cluster down"

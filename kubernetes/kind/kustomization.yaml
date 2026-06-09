@@ -1,11 +1,11 @@
 # kustomize overlay for running reconcile-rs locally in kind.
 #
-# It REUSES the production manifests in ../k8s/ unchanged (the "base") and only patches the two
-# things that differ for a local cluster:
+# It REUSES the production manifests in ../base/ unchanged and only patches the two things that
+# differ for a local cluster:
 #   1. the image — swap the registry image for the one we build and `kind load` locally;
 #   2. the replica count — 5 pods, to make peer discovery and propagation more visible.
 #
-# Apply it with:  kubectl apply -k deploy/kind   (or just run ./up.sh, which does everything).
+# Apply it with:  kubectl apply -k kubernetes/kind   (or just run ./up.sh, which does everything).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -13,9 +13,9 @@ kind: Kustomization
 # secret.example.yaml — the cluster key is generated and applied separately by up.sh, so a real
 # key never lands in a committed file.
 resources:
-  - ../k8s/service.yaml
-  - ../k8s/configmap.yaml
-  - ../k8s/statefulset.yaml
+  - ../base/service.yaml
+  - ../base/configmap.yaml
+  - ../base/statefulset.yaml
 
 # Point every reference to the production image at the locally-built, kind-loaded image instead.
 # kustomize matches on the name part (before the tag), so this rewrites
