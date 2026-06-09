@@ -1,0 +1,15 @@
+# A local Kubernetes cluster, made of Docker containers, for experimenting with reconcile-rs.
+#
+# Each "node" here is a Docker container running on your machine; kind ("Kubernetes IN Docker")
+# wires them into a real cluster. One control-plane plus two workers means the 5 ReconcileStore
+# pods get spread across three "machines", so you can watch peer discovery and gossip work
+# across nodes instead of all-on-one-host.
+#
+# Used by ./up.sh; you normally don't run this file directly.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: reconcile
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
