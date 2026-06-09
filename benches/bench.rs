@@ -21,7 +21,7 @@ mod imp {
     };
 
     use reconcile::testing::HashRangeQueryable;
-    use reconcile::{reconcile_store::Config, HRTree, Hlc, ReconcileStore, ValueOnly};
+    use reconcile::{reconcile_store::Config, HRTree, ReconcileStore, Timestamp, ValueOnly};
 
     fn hrtree_new(c: &mut Criterion) {
         let mut group = c.benchmark_group("HRTree::new");
@@ -232,7 +232,7 @@ mod imp {
         }
     }
 
-    /// Compare the in-memory cost of a **naive dated mirror** (`HRTree<K, (Hlc, Option<V>)>`, which
+    /// Compare the in-memory cost of a **naive dated mirror** (`HRTree<K, (Timestamp, Option<V>)>`, which
     /// drags along a timestamp it never uses) against the **lightweight value-only mirror**
     /// (`HRTree<K, ValueOnly<V>>`) that issue #128 introduces.
     ///
@@ -240,10 +240,10 @@ mod imp {
     /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
     /// entry — the whole point of the optimization for fleets with many passive read replicas.
     fn mirror_memory(c: &mut Criterion) {
-        let dated = std::mem::size_of::<(Hlc, Option<u32>)>();
+        let dated = std::mem::size_of::<(Timestamp, Option<u32>)>();
         let light = std::mem::size_of::<ValueOnly<u32>>();
         println!(
-            "[mirror memory] per-entry value size: dated (Hlc, Option<u32>) = {dated} B, \
+            "[mirror memory] per-entry value size: dated (Timestamp, Option<u32>) = {dated} B, \
          value-only ValueOnly<u32> = {light} B, saved = {} B/entry",
             dated - light
         );
@@ -264,13 +264,13 @@ mod imp {
             group.sample_size(10.max(1_000_000 / size).min(100));
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(
-                BenchmarkId::new("dated (Hlc, Option<u32>)", size),
+                BenchmarkId::new("dated (Timestamp, Option<u32>)", size),
                 &size,
                 |b, &size| {
                     b.iter(|| {
-                        let mut tree = HRTree::<u32, (Hlc, Option<u32>)>::new();
+                        let mut tree = HRTree::<u32, (Timestamp, Option<u32>)>::new();
                         for &k in keys[..size].iter() {
-                            tree.insert(k, (Hlc::new(k as u64, 0, 0), Some(k)));
+                            tree.insert(k, (Timestamp::new(k as u64, 0, 0), Some(k)));
                         }
                     })
                 },

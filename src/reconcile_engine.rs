@@ -34,7 +34,7 @@ use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::gen_ip;
-use crate::hlc::{Hlc, HlcClock, Timestamped};
+use crate::hlc::{HlcClock, Timestamp, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::Config;
@@ -148,7 +148,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// diffing against its value-only *projection* tree, never its dated map.
     ValueComparisonItem(HashSegment<K>),
     /// An individual timestamp-less update sent to a dateless mirror once the value-only diff has
-    /// identified a difference. Carries the projected payload only (no [`Hlc`]).
+    /// identified a difference. Carries the projected payload only (no [`Timestamp`]).
     ValueUpdate((K, P)),
 }
 
@@ -222,7 +222,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     }
 
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
-    pub fn clock_now(&self) -> Hlc {
+    pub fn clock_now(&self) -> Timestamp {
         self.clock.now()
     }
 
@@ -779,17 +779,18 @@ mod auth_attack {
     use tokio::net::UdpSocket;
 
     use super::Message;
-    use crate::hlc::Hlc;
+    use crate::hlc::Timestamp;
     use crate::{auth, reconcile_store::Config, ReconcileStore};
 
     /// Serialize the F3 attack payload: an `Update` with a far-future timestamp that, if merged,
     /// would win against every legitimate write forever.
     fn forged_update() -> Vec<u8> {
-        let far_future = Hlc::new(u64::MAX, 0, 0);
-        let message =
-            Message::Update::<i32, (Hlc, Option<String>), crate::reconcilable::ValueOnly<String>>(
-                (0, (far_future, Some("evil".to_string()))),
-            );
+        let far_future = Timestamp::new(u64::MAX, 0, 0);
+        let message = Message::Update::<
+            i32,
+            (Timestamp, Option<String>),
+            crate::reconcilable::ValueOnly<String>,
+        >((0, (far_future, Some("evil".to_string()))));
         let mut buf = Vec::new();
         message
             .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
@@ -838,11 +839,11 @@ mod auth_attack {
 mod causal_stability {
     use std::net::IpAddr;
 
-    use crate::hlc::Hlc;
+    use crate::hlc::Timestamp;
     use crate::reconcile_engine::{version_hash, ReconcileEngine};
     use crate::reconcile_store::Config;
 
-    type Tombstoned = (Hlc, Option<i32>);
+    type Tombstoned = (Timestamp, Option<i32>);
 
     async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
         let config = Config::default()
@@ -857,7 +858,7 @@ mod causal_stability {
         let peer_a: IpAddr = "127.0.0.61".parse().unwrap();
         let peer_b: IpAddr = "127.0.0.62".parse().unwrap();
         let key = 7;
-        let tombstone: Tombstoned = (Hlc::new(1, 0, 0), None);
+        let tombstone: Tombstoned = (Timestamp::new(1, 0, 0), None);
         let version = version_hash(&tombstone);
 
         // No member known yet: nothing could resurrect the value, so GC is allowed.
@@ -899,7 +900,7 @@ mod causal_stability {
         let live: IpAddr = "127.0.0.64".parse().unwrap();
         let gone: IpAddr = "127.0.0.65".parse().unwrap();
         let key = 9;
-        let tombstone: Tombstoned = (Hlc::new(1, 0, 0), None);
+        let tombstone: Tombstoned = (Timestamp::new(1, 0, 0), None);
         let version = version_hash(&tombstone);
 
         eng.members.write().insert(live);

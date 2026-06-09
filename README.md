@@ -176,7 +176,7 @@ in your dependency's `features`).
 
 ## Read-only mirror (`ReconcileMirror`)
 
-For fleets with many *passive read replicas*, the per-value `Hlc` timestamp a dated `ReconcileStore`
+For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReconcileStore`
 keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
 only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
 stores only the value (`ValueOnly<V>`, ~24 bytes lighter per entry for a small payload) and still
@@ -276,8 +276,8 @@ corresponding key-value pairs are exchanged and conflicts are resolved.
 ## Conflict resolution
 
 Conflicts are resolved with last-write-wins (LWW), but keyed on a **Hybrid Logical Clock**
-(`Hlc`, after Kulkarni et al. 2014) rather than a raw wall clock. Each value carries an
-`Hlc` timestamp, and the winner is the one with the greater timestamp under the **total
+(HLC, after Kulkarni et al. 2014) rather than a raw wall clock. Each value carries a `Timestamp`
+(the HLC stamp), and the winner is the one with the greater timestamp under the **total
 order** `(wall_ms, counter, node_id)`.
 
 This matters for correctness. A naive physical-clock LWW is unsafe on two counts:
