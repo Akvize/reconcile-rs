@@ -87,12 +87,27 @@ fn phys_now_ms() -> u64 {
     Utc::now().timestamp_millis().max(0) as u64
 }
 
-/// A per-node Hybrid Logical Clock.
+/// The domain's **clock port**: the seam through which the reconciliation engine reads time.
 ///
-/// Generates locally-monotonic [`Timestamp`]s with [`now`](HlcClock::now) and advances
-/// past timestamps received from peers with [`observe`](HlcClock::observe). The clock is
+/// The Hybrid Logical Clock algorithm stays in the domain; an adapter behind this port performs
+/// the single physical-time read (`HlcClock` is the default adapter, a test adapter can be a
+/// deterministic stub). Pinning the timestamp to [`Timestamp`] — rather than a generic associated type —
+/// keeps the port object-safe and avoids leaking a clock type parameter into the engine, store and
+/// `Config` (`ARCHITECTURE.md` §3.4); the engine therefore holds the port as `Arc<dyn Clock>`.
+pub trait Clock: Send + Sync + 'static {
+    /// Mint a strictly-monotonic local timestamp for a write or an outgoing message.
+    fn now(&self) -> Timestamp;
+    /// Advance the clock past a timestamp received from a peer, so that a subsequent
+    /// [`now`](Clock::now) is ordered after it (this is what prevents lost updates under skew).
+    fn observe(&self, remote: Timestamp);
+}
+
+/// A per-node Hybrid Logical Clock — the default [`Clock`] adapter.
+///
+/// Generates locally-monotonic [`Timestamp`]s with [`now`](Clock::now) and advances
+/// past timestamps received from peers with [`observe`](Clock::observe). The clock is
 /// internally synchronized, so a single instance is shared (cloned) across all tasks of a
-/// node.
+/// node. It owns the only physical-time read in the crate (`phys_now_ms`).
 #[derive(Debug)]
 pub(crate) struct HlcClock {
     node_id: u64,
@@ -113,12 +128,14 @@ impl HlcClock {
             }),
         }
     }
+}
 
+impl Clock for HlcClock {
     /// Mint a fresh timestamp for a local event (a write or an outgoing message).
     ///
     /// The returned timestamp is strictly greater than every timestamp previously produced
     /// or observed by this clock, ensuring local monotonicity.
-    pub fn now(&self) -> Timestamp {
+    fn now(&self) -> Timestamp {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
         let next = if pt > last.wall_ms {
@@ -140,10 +157,10 @@ impl HlcClock {
 
     /// Advance the clock to account for a timestamp received from a peer.
     ///
-    /// After observing `remote`, a subsequent [`now`](HlcClock::now) is guaranteed to be
+    /// After observing `remote`, a subsequent [`now`](Clock::now) is guaranteed to be
     /// greater than `remote`, so a local write following the receipt of a remote value is
     /// ordered after it. This is what prevents lost updates under clock skew.
-    pub fn observe(&self, remote: Timestamp) {
+    fn observe(&self, remote: Timestamp) {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
         let max_wall = pt.max(last.wall_ms).max(remote.wall_ms);
@@ -176,6 +193,47 @@ pub trait Timestamped {
 impl<V> Timestamped for (Timestamp, V) {
     fn timestamp(&self) -> Timestamp {
         self.0
+    }
+}
+
+/// Deterministic [`Clock`] adapter for tests: no physical-time read at all.
+///
+/// [`now`](Clock::now) bumps the logical counter; [`observe`](Clock::observe) jumps to a strictly
+/// greater stamp. Stamps are therefore fully reproducible, which is what lets engine/HLC tests be
+/// deterministic without real wall-clock time — the testability the [`Clock`] port exists to give.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct ManualClock {
+    node_id: u64,
+    last: Mutex<Timestamp>,
+}
+
+#[cfg(test)]
+impl ManualClock {
+    pub(crate) fn new(node_id: u64) -> ManualClock {
+        ManualClock {
+            node_id,
+            last: Mutex::new(Timestamp::new(0, 0, node_id)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Clock for ManualClock {
+    fn now(&self) -> Timestamp {
+        let mut last = self.last.lock();
+        let next = Timestamp::new(last.wall_ms(), last.counter() + 1, self.node_id);
+        *last = next;
+        next
+    }
+
+    fn observe(&self, remote: Timestamp) {
+        let mut last = self.last.lock();
+        if remote > *last {
+            // Adopt the remote wall/counter (under our own node_id) so the next `now` is ordered
+            // strictly after `remote`.
+            *last = Timestamp::new(remote.wall_ms(), remote.counter(), self.node_id);
+        }
     }
 }
 
@@ -231,5 +289,19 @@ mod tests {
         // And it is consistent with the field priority: wall dominates counter dominates id.
         assert!(Timestamp::new(100, 1, 1) > Timestamp::new(100, 0, 2));
         assert!(Timestamp::new(101, 0, 1) > Timestamp::new(100, 9, 9));
+    }
+
+    #[test]
+    fn manual_clock_is_deterministic() {
+        // The test adapter reads no wall clock, so the stamp sequence is fully reproducible.
+        let clock = ManualClock::new(7);
+        assert_eq!(clock.now(), Timestamp::new(0, 1, 7));
+        assert_eq!(clock.now(), Timestamp::new(0, 2, 7));
+        // Observing a future remote stamp jumps the clock; the next mint is ordered after it.
+        let remote = Timestamp::new(50, 4, 9);
+        clock.observe(remote);
+        let local = clock.now();
+        assert_eq!(local, Timestamp::new(50, 5, 7));
+        assert!(local > remote);
     }
 }

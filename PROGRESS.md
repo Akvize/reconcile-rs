@@ -10,8 +10,9 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-06-03
-- **Baseline:** `master` @ `b7daa7f`
+- **Last updated:** 2026-06-09
+- **Baseline:** `master` @ `054057d` (step 1 via #155, `Hlc`→`Timestamp` rename via #159); step 3 on
+  `claude/issue-142-clock-port`
 - **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
 
 ---
@@ -123,6 +124,17 @@ into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a 
 `BincodeCodec` adapter sets `with_limit` (partially closing
 [#151](https://github.com/Akvize/reconcile-rs/issues/151)); the `Transport`/`Codec` ports live in
 `reconcile-net` (the `Clock`/`Persistence` ports in `reconcile-core`).
+
+Progress:
+- ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
+- ◐ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156, in review).
+- ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142)): `pub trait Clock`
+  (`now`/`observe`, returning the concrete `Timestamp`) is the domain's time seam; `HlcClock` is the
+  default adapter owning the single `chrono` read; the engine holds it as `Arc<dyn Clock>` (object-safe,
+  no clock type parameter on the engine/store/`Config`) and mints/observes only through it. A
+  deterministic `ManualClock` test adapter makes HLC behaviour reproducible without wall-clock time.
+  Iso-functional; invariant 2 (HLC total order) preserved.
+- ◯ Steps 4–6 — `Entry`/`State` → `Transport`/`Codec` → workspace split.
 
 ---
 
