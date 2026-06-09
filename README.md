@@ -307,10 +307,11 @@ reconciled even with no `with_net`.
 
 Set the cluster key (`Config::with_cluster_key`, from a Kubernetes `Secret`) on every pod: without
 it the cluster runs **unauthenticated** (see the Security model above). A complete, turnkey
-Kubernetes example — the env-driven node (`examples/k8s_node.rs`), the manifests (headless
-`Service`, `StatefulSet`, `ConfigMap`, example `Secret`), the `Dockerfile`, and a local
-[kind](https://kind.sigs.k8s.io/) playground — lives under [`examples/k8s/`](examples/k8s/). It is
-example/deployment scaffolding only and is excluded from the published crate.
+Kubernetes example — the env-driven node (`examples/k8s/main.rs`, run with `cargo run --example
+k8s`), the manifests (headless `Service`, `StatefulSet`, `ConfigMap`, example `Secret`), the
+`Dockerfile`, and a local [kind](https://kind.sigs.k8s.io/) playground — lives under
+[`examples/k8s/`](examples/k8s/). It is example/deployment scaffolding only and is excluded from
+the published crate.
 
 ## HRTree
 

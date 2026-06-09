@@ -9,18 +9,9 @@
 # with an explicit -f:
 #   docker build -f examples/k8s/Dockerfile -t reconcile:latest .
 # The container reads its configuration from the environment — see examples/k8s/base/.
-#
-# Which example to compile is selectable via the EXAMPLE build arg (default `k8s_node`, the
-# production node). The local kind playground builds `k8s_heartbeat`, which additionally writes a
-# per-pod heartbeat key and logs reconciled keys so convergence is visible in the logs:
-#   docker build -f examples/k8s/Dockerfile --build-arg EXAMPLE=k8s_heartbeat -t reconcile:kind .
-
-# Selectable at build time; redeclared inside each stage that uses it (Docker ARG scoping).
-ARG EXAMPLE=k8s_node
 
 # ---- builder ----
 FROM rust:1-bookworm AS builder
-ARG EXAMPLE
 WORKDIR /src
 
 # Copy the manifest and sources. (Cargo.lock is copied if present; ignored otherwise.)
@@ -29,10 +20,10 @@ COPY src ./src
 COPY examples ./examples
 COPY benches ./benches
 
-# Build the selected example with the metrics/readiness endpoint compiled in, then move it to a
-# fixed path so the runtime stage and ENTRYPOINT don't depend on the example name.
-RUN cargo build --release --example "${EXAMPLE}" --features metrics-prometheus \
-    && cp "target/release/examples/${EXAMPLE}" /usr/local/bin/reconcile-node
+# Build the `k8s` example (examples/k8s/main.rs) with the metrics/readiness endpoint compiled in,
+# then move it to a fixed path for the runtime stage and ENTRYPOINT.
+RUN cargo build --release --example k8s --features metrics-prometheus \
+    && cp target/release/examples/k8s /usr/local/bin/reconcile-node
 
 # ---- runtime ----
 FROM gcr.io/distroless/cc-debian12 AS runtime

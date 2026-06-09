@@ -27,10 +27,9 @@ kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 echo "==> Building the node image ($IMAGE) from examples/k8s/Dockerfile"
 echo "    (first build compiles the Rust release binary — this can take a few minutes)"
-# Build the k8s_heartbeat example: same node as production, plus a per-pod heartbeat write and a
-# hook that logs reconciled keys, so convergence is visible in `kubectl logs`. The build context is
-# the repo root (where src/, examples/ live); the Dockerfile lives under examples/k8s/.
-docker build --build-arg EXAMPLE=k8s_heartbeat -f "$REPO_ROOT/examples/k8s/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
+# Build the `k8s` example node. The build context is the repo root (where src/, examples/ live);
+# the Dockerfile lives under examples/k8s/.
+docker build -f "$REPO_ROOT/examples/k8s/Dockerfile" -t "$IMAGE" "$REPO_ROOT"
 
 echo "==> Loading the image into kind (its nodes can't see your local Docker daemon)"
 kind load docker-image "$IMAGE" --name "$CLUSTER"

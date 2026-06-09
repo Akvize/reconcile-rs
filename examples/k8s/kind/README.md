@@ -10,12 +10,12 @@ It does **not** introduce a separate deployment: it's a thin
 count); everything else — the StatefulSet, the headless Service, the ConfigMap — is reused as-is.
 That's the idiomatic Kubernetes way to keep one set of manifests for both prod and local.
 
-The image built here is the **`k8s_heartbeat`** example (`examples/k8s_heartbeat.rs`): the same node
-as production, plus two tiny additions that make reconciliation visible in the logs — each pod
+The image built here is the **`k8s`** example ([`../main.rs`](../main.rs)). On top of running the
+node, it has a small demo behaviour that makes reconciliation visible in the logs — each pod
 periodically writes a `heartbeat/<pod-name>` key, and a hook logs every key the first time it
 appears locally. Since the hook fires for peer-originated updates too, you watch each pod learn the
-*other* pods' heartbeats as gossip converges. The production manifests in `../base/` still build the
-plain `k8s_node` (no heartbeat, no demo behaviour).
+*other* pods' heartbeats as gossip converges. (Those demo blocks are fenced in `main.rs`; delete
+them for a bare production node.)
 
 ## What you'll need
 
@@ -46,9 +46,8 @@ Each step maps to a Kubernetes concept worth understanding:
 
 1. **`kind create cluster`** — creates a 3-node cluster (1 control-plane + 2 workers) from
    [`kind-config.yaml`](kind-config.yaml). Each node is just a Docker container on your laptop.
-2. **`docker build --build-arg EXAMPLE=k8s_heartbeat`** — compiles `examples/k8s_heartbeat.rs` into
-   the image, using [`../Dockerfile`](../Dockerfile). (The `EXAMPLE` arg defaults to `k8s_node`; the
-   playground overrides it to get the heartbeat/logging behaviour.)
+2. **`docker build`** — compiles the `k8s` example ([`../main.rs`](../main.rs)) into the image,
+   using [`../Dockerfile`](../Dockerfile).
 3. **`kind load docker-image`** — copies the image *into* the cluster's nodes. This is the classic
    kind gotcha: the cluster nodes can't see your local Docker daemon, so an image you just built is
    invisible to them until you load it. (The overlay sets `imagePullPolicy: Never` so a forgotten
@@ -64,7 +63,7 @@ Each step maps to a Kubernetes concept worth understanding:
 ## How the pieces fit together
 
 - The **StatefulSet** gives each pod a stable name (`reconcile-0` … `reconcile-4`) and stable DNS.
-  `k8s_node` hashes the pod name into a stable node id, used for the clock tie-break — so a
+  the node hashes the pod name into a stable node id, used for the clock tie-break — so a
   restarted pod keeps its identity.
 - The **headless Service** (`clusterIP: None`) makes
   `reconcile-headless.default.svc.cluster.local` resolve to one IP **per ready pod**. The node's
