@@ -91,6 +91,34 @@ for with history-independence, **without paying for it** — and thereby escapes
   sufficient on its own (ScyllaDB makes this explicit with repair-based GC). The pre-fix **60 s**
   wall-clock purge could not honor that precondition; GC is now gated on causal stability (F4/#109).
 
+### 1.6 The embedded in-memory data grid (IMDG) use case
+
+Framed as a product rather than an algorithm, reconcile-rs is an **embedded in-memory data grid**:
+the state lives in-process, next to the application, fully replicated across a fleet of equal nodes.
+Its category is the **masterless / AP / gossip** corner of the IMDG space — adjacent to Hazelcast,
+Apache Ignite, Oracle Coherence and Infinispan (all JVM, all a separate cluster to operate), but as
+a single embeddable Rust library. The pitch is "replicated state without standing up Redis/etcd":
+
+- **Reads are local** — an in-process lookup, no network hop or (de)serialization. This is the one
+  place reconcile-rs is unambiguously faster than a networked store; it is a *read-latency* and
+  *operational-simplicity* play, not a write-path or consistency improvement.
+- **Redundancy, not sharding** — full replication means any surviving node holds the whole dataset,
+  so the grid tolerates losing nodes; the flip side is §1.2's memory / write-amplification ceiling.
+- **Partition tolerance with automatic convergence** — nodes keep serving while partitioned and
+  re-converge by anti-entropy on heal, with no manual conflict resolution (LWW).
+
+**When this is the right tool:** a read-heavy, RAM-resident working set on a fragile/commodity node
+grid where eliminating the store round-trip matters more than write throughput or strong
+consistency, and where losing a node or two must not lose data. **When it is not:** see §1.1–§1.2
+and the LWW caveats in §1.5 — counters, ledgers, strong consistency, datasets beyond one node's RAM,
+or high same-key write contention.
+
+**Path to best-of-breed.** Benchmarking against this use case surfaced concrete, tracked work: bulk
+cold-sync throughput and loss recovery (#168, #169), per-entry memory overhead (#170), point-read
+indexing (#171), snapshot cadence (#172), bulk-build throughput (#173), and a comparative benchmark
+suite (#174). Closing these is what moves reconcile-rs from the "real but narrow" niche of §1.2 to a
+credible Rust IMDG.
+
 ---
 
 ## 2. Competitor audit and differentiators
