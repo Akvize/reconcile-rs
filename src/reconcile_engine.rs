@@ -32,12 +32,12 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
 use crate::bounds::{Key, Value};
+use crate::clock::{Clock, HlcClock, Timestamp, Timestamped};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
-use crate::hlc::{HlcClock, Timestamp, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::{Config, MAX_NETS};
@@ -159,9 +159,11 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
-    /// This node's Hybrid Logical Clock, shared across all clones so that every write and
-    /// every received timestamp advances the same clock.
-    clock: Arc<HlcClock>,
+    /// This node's clock, reached only through the [`Clock`] port so the engine never reads
+    /// physical time itself ([`HlcClock`] is the default adapter; a test injects a deterministic
+    /// stub via [`new_with_clock`](ReconcileEngine::new_with_clock)). Shared across all clones so
+    /// that every write and every received timestamp advances the same clock.
+    clock: Arc<dyn Clock>,
 }
 
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
@@ -215,6 +217,21 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     ReconcileEngine<K, V>
 {
     pub async fn new(config: Config) -> Self {
+        // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
+        // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
+        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        Self::build(config, clock).await
+    }
+
+    /// Construct an engine over an explicit [`Clock`] adapter. Test-only seam: a deterministic
+    /// clock (`ManualClock`) makes HLC behaviour reproducible without real wall-clock time.
+    #[cfg(test)]
+    pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> Self {
+        Self::build(config, clock).await
+    }
+
+    async fn build(config: Config, clock: Arc<dyn Clock>) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
@@ -234,7 +251,6 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         }
         let map = HRTree::<K, V>::new();
         let projection = HRTree::<K, V::Projected>::new();
-        let node_id = config.node_id.unwrap_or_else(rand::random);
         // The geographical networks this cluster spans. With none declared, fall back to the
         // historical flat loopback cluster.
         let mut nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
@@ -270,7 +286,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 authenticator,
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
-                clock: Arc::new(HlcClock::new(node_id)),
+                clock,
             }),
         }
     }
@@ -993,7 +1009,7 @@ mod auth_attack {
     use tokio::net::UdpSocket;
 
     use super::Message;
-    use crate::hlc::Timestamp;
+    use crate::clock::Timestamp;
     use crate::{auth, reconcile_store::Config, ReconcileStore};
 
     /// Serialize the F3 attack payload: an `Update` with a far-future timestamp that, if merged,
@@ -1053,7 +1069,7 @@ mod auth_attack {
 mod causal_stability {
     use std::net::IpAddr;
 
-    use crate::hlc::Timestamp;
+    use crate::clock::Timestamp;
     use crate::reconcile_engine::{version_hash, ReconcileEngine};
     use crate::reconcile_store::Config;
 
@@ -1134,5 +1150,30 @@ mod causal_stability {
         // Forgetting the tombstone clears its bookkeeping.
         eng.forget_tombstone(&key);
         assert!(eng.tombstone_acks.read().get(&key).is_none());
+    }
+}
+
+#[cfg(test)]
+mod clock_port {
+    use std::sync::Arc;
+
+    use crate::clock::{ManualClock, Timestamp};
+    use crate::reconcile_engine::ReconcileEngine;
+    use crate::reconcile_store::Config;
+
+    /// The engine mints timestamps only through the injected [`Clock`](crate::clock::Clock) port, so
+    /// a deterministic adapter makes `clock_now()` fully reproducible — no wall-clock time involved.
+    /// This is the engine-level testability the port exists to provide.
+    #[tokio::test]
+    async fn engine_mints_through_the_injected_clock() {
+        let config = Config::default()
+            .with_port(8080)
+            .with_listen_addr("127.0.0.70".parse().unwrap());
+        let clock = Arc::new(ManualClock::new(42));
+        let eng: ReconcileEngine<i32, (Timestamp, Option<i32>)> =
+            ReconcileEngine::new_with_clock(config, clock).await;
+
+        assert_eq!(eng.clock_now(), Timestamp::new(0, 1, 42));
+        assert_eq!(eng.clock_now(), Timestamp::new(0, 2, 42));
     }
 }

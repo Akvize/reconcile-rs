@@ -64,10 +64,10 @@ use tracing::{debug, trace, warn};
 
 use crate::auth;
 use crate::bounds::Key;
+use crate::clock::Timestamp;
 use crate::diff::{Diffable, HashRangeQueryable};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
-use crate::hlc::Timestamp;
 use crate::reconcilable::ValueOnly;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
