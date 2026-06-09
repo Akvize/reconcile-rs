@@ -772,8 +772,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                             } else if local_v.is_tombstone() {
                                 // We already hold an equal-or-newer value; still acknowledge it
                                 // if it is the same tombstone, so the peer learns we have it.
-                                acks_to_send
-                                    .push(Message::Ack::<K, V, V::Projected>((k, version_hash(local_v))));
+                                acks_to_send.push(Message::Ack::<K, V, V::Projected>((
+                                    k,
+                                    version_hash(local_v),
+                                )));
                             }
                         }
                         None => to_apply.push((k, remote_v)),
@@ -1075,12 +1077,16 @@ mod deadlock_regressions {
                 let hook_engine = engine.clone();
                 let once = Arc::new(AtomicBool::new(false));
                 let guard = once.clone();
-                *engine.pre_insert.write() = Box::new(move |&k: &i32, v: &(Timestamp, Option<u8>)| {
-                    if !guard.swap(true, Ordering::SeqCst) {
-                        let inner = (Timestamp::new(u64::MAX, 1, 0), Some(v.1.unwrap_or_default() + 100));
-                        let _ = hook_engine.just_insert(k + 100, inner);
-                    }
-                });
+                *engine.pre_insert.write() =
+                    Box::new(move |&k: &i32, v: &(Timestamp, Option<u8>)| {
+                        if !guard.swap(true, Ordering::SeqCst) {
+                            let inner = (
+                                Timestamp::new(u64::MAX, 1, 0),
+                                Some(v.1.unwrap_or_default() + 100),
+                            );
+                            let _ = hook_engine.just_insert(k + 100, inner);
+                        }
+                    });
 
                 // Feed an `Update` (future timestamp, so it is integrated) through the real network
                 // ingest path. No cluster key, so `open` clears the bytes unchanged into a `Payload`.
