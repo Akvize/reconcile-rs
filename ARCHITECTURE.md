@@ -195,6 +195,19 @@ pub trait Persistence<K, V>: Send + Sync + 'static {
     fn load(&self) -> io::Result<Option<PersistedState<K, V>>>;
     fn save(&self, state: &PersistedState<K, V>) -> io::Result<()>;
 }
+
+// Discovery — the single source of peer addresses. The default `RandomProbe` adapter (speculative,
+// one random address per declared network each round) and the `DnsDiscovery` adapter (authoritative,
+// k8s headless-Service DNS) both implement it. `is_authoritative` distinguishes the two: a speculative
+// result only steers the current round's targets, an authoritative one is the current truth (seeded
+// into the known-peer set, an absence decommissions after a grace period). Either way it never grants
+// causal-stability membership (which a peer must earn via an authenticated dated datagram), so it
+// cannot affect tombstone GC correctness. Boxed-future rather than async_trait to keep the dependency
+// footprint unchanged (it is always behind Arc<dyn ..>).
+pub trait Discovery: Send + Sync + 'static {
+    fn discover(&self) -> DiscoverFuture<'_>;       // io::Result<Vec<IpAddr>>
+    fn is_authoritative(&self) -> bool { true }     // RandomProbe overrides to false
+}
 ```
 
 ### 3.5 Adapters
@@ -205,6 +218,7 @@ pub trait Persistence<K, V>: Send + Sync + 'static {
 | `Transport` | `UdpTransport(Arc<UdpSocket>)` | tokio / UDP |
 | `Codec` | `BincodeCodec(DefaultOptions)` | bincode |
 | `Persistence` | `FileSnapshot`, `InMemory` | file / memory |
+| `Discovery` | `RandomProbe` (default, speculative per-net probing); `DnsDiscovery` (authoritative, headless-Service DNS) | `gen_ip` / `tokio::net::lookup_host` |
 
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
 raw bytes before any decoding occurs. It is never folded into the `Codec`.
@@ -314,6 +328,7 @@ without a compile error — the guarantee a single crate cannot provide.
 | `UdpSocket` in `reconcile_engine.rs` | `Transport` port; `UdpTransport` adapter |
 | `bincode` in `reconcile_engine.rs` | `Codec` port; `BincodeCodec` adapter |
 | `Persistence` | unchanged (the model port) |
+| `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
 | Single crate | `reconcile-core` / `-net` / `-store` / `reconcile` workspace |
 
@@ -333,7 +348,11 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs; the
    `Codec` port never absorbs authentication.
 6. **Causal-stability tombstone gate** — a tombstone is garbage-collected only after every monotonic
-   cluster member has acknowledged the exact version hash.
+   cluster member has acknowledged the exact version hash. Dynamic discovery (e.g. `DnsDiscovery`)
+   only ever feeds the gossip-target `peers` set, **never** the `members` set: membership stays
+   earned by an authenticated dated datagram, so a discovered (unverified) address can neither block
+   GC nor be the subject of a GC release. Decommissioning a member that has vanished from discovery
+   uses the same `decommission_peer` escape hatch as `forget_peer`.
 7. **`version_hash` determinism** (`reconcile_engine.rs:55`) — preserved as `Entry` derives `Hash`.
 8. **Value-only projection hash is timestamp-less** — the dated `Entry` hashes with its `stamp`
    (feeding `version_hash`), while its `State<V>` projection hashes the value alone, so a dated

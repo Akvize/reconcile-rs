@@ -28,6 +28,7 @@
 //! threat model and scope.
 
 pub mod bounds;
+pub mod discovery;
 pub mod fingerprint;
 pub mod hlc;
 pub mod hrtree;
@@ -52,6 +53,7 @@ pub(crate) mod reconcile_engine;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
+pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hlc::Timestamp;
 pub use hrtree::HRTree;

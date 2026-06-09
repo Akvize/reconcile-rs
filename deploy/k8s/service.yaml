@@ -1,0 +1,24 @@
+# Headless Service: `clusterIP: None` makes the DNS name resolve to one A/AAAA record per ready
+# pod, which is exactly what `DnsDiscovery` consumes to find peers. It also gives the StatefulSet
+# its stable per-pod DNS names.
+apiVersion: v1
+kind: Service
+metadata:
+  name: reconcile-headless
+  labels:
+    app: reconcile
+spec:
+  clusterIP: None
+  # Only advertise ready pods, so a pod that is starting up or failing its probes is not gossiped to.
+  publishNotReadyAddresses: false
+  selector:
+    app: reconcile
+  ports:
+    - name: gossip
+      port: 8080
+      protocol: UDP
+      targetPort: gossip
+    - name: metrics
+      port: 9000
+      protocol: TCP
+      targetPort: metrics

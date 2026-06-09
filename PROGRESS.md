@@ -44,7 +44,7 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F7 | High | crafted `HashSegment` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 — wire fingerprint is BLAKE3 (`version_hash` still fixed-key `DefaultHasher`) |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
-| F10 | High | IP-scan discovery, O(N²) membership | ◯ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — bounded-fan-out membership (SWIM/HyParView) |
+| F10 | High | IP-scan discovery, O(N²) membership | ◐ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — `Discovery` port + `DnsDiscovery` (k8s headless-Service DNS, no IP-scan) lands a cloud-native discovery path; bounded-fan-out membership (SWIM/HyParView) still open |
 | F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_hrtree.rs`, `tests/fuzz_packets.rs` |
 | F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
 | F13 | Medium | panic-only API (no `Result`) | ◯ | [#148](https://github.com/Akvize/reconcile-rs/issues/148) — `new`/`run` still return `Self`/`()`; `unwrap` on bind/send |
@@ -55,7 +55,7 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ◯ | [#150](https://github.com/Akvize/reconcile-rs/issues/150) — unbounded `peers`; no bincode allocation limit |
 | F19 | Low | dependency hygiene | ◯ | [#151](https://github.com/Akvize/reconcile-rs/issues/151) — `overflow-checks` off; bincode `with_limit`; `cargo audit` |
 
-**Score:** 11 resolved · 3 partial (F9, F16, F17) · 5 open (F10, F13, F14, F18, F19). All Critical
+**Score:** 11 resolved · 4 partial (F9, F10, F16, F17) · 4 open (F13, F14, F18, F19). All Critical
 resolved; all but one High resolved or mitigated.
 
 ---
@@ -87,7 +87,14 @@ resolved; all but one High resolved or mitigated.
 - ◯ Key rotation / management — [#137](https://github.com/Akvize/reconcile-rs/issues/137).
 
 ### Scaling & robustness
-- ◯ Membership / discovery: replace random IP-scan with SWIM/HyParView, bounded fan-out
+- ✅ Multi-location reconciliation: per-network discovery probes + geography-aware gossip with
+  bounded cross-network fan-out (decentralized, no gateway nodes) — [#53](https://github.com/Akvize/reconcile-rs/issues/53).
+- ✅ Runtime reconfiguration: live `set_nets`/`add_net`/`remove_net`, `set_remote_interval`/
+  `set_remote_fanout`, `set_reconcile_interval`, `set_tombstone_timeout` (auto-derived local net;
+  anti-entropy repair decoupled from net membership, so topology changes cannot cause divergence).
+- ◐ Membership / discovery: `Discovery` port with a `DnsDiscovery` adapter gives a Kubernetes-native
+  path (headless-Service DNS + grace-period decommission of vanished pods) that sidesteps the random
+  IP-scan; bounded-fan-out membership (SWIM/HyParView) still open
   (F10 — [#147](https://github.com/Akvize/reconcile-rs/issues/147)).
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
   (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).

@@ -30,17 +30,17 @@ macro_rules! assert_until {
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.44".parse().unwrap();
     let addr2 = "127.0.0.45".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_net(net);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_net(net);
 
     // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -152,19 +152,19 @@ async fn test() {
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_nodes_converge() {
     let port = 8081;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.46".parse().unwrap();
     let addr2 = "127.0.0.47".parse().unwrap();
     let key = [0x42u8; 32];
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key(key);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key(key);
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -206,19 +206,19 @@ async fn authenticated_nodes_converge() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_writes_converge() {
     let port = 8083;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.80".parse().unwrap();
     let addr2 = "127.0.0.81".parse().unwrap();
     // Fixed, distinct node ids give a deterministic conflict winner (the higher id).
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_node_id(1);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_node_id(2);
 
     let store1 = ReconcileStore::<String, String>::new(cfg1)
@@ -262,17 +262,17 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     // address in 127.0.0.0/8 on this port, so sharing a port lets concurrently-running tests
     // cross-talk and pollute each other's stores.
     let port = 8084;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.72".parse().unwrap();
     let addr2 = "127.0.0.73".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_net(net);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_net(net);
 
     // Aggressive wall-clock expiry so that, without causal-stability gating, the tombstone
     // would be GC'd almost immediately.
@@ -329,17 +329,17 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
 async fn deleted_value_is_not_resurrected_by_returning_peer() {
     // Dedicated port for test isolation (see `tombstone_is_retained_until_peer_acknowledges`).
     let port = 8085;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.70".parse().unwrap();
     let addr2 = "127.0.0.71".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_net(net);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_net(net);
 
     let store1 = ReconcileStore::<i32, i32>::new(cfg1)
         .await
@@ -398,17 +398,17 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_malformed_datagram_does_not_crash() {
     let port = 8082;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.46".parse().unwrap();
     let addr2 = "127.0.0.47".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net);
+        .with_net(net);
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net);
+        .with_net(net);
 
     let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
     let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
@@ -437,20 +437,20 @@ async fn test_malformed_datagram_does_not_crash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_nodes_converge() {
     let port = 8083;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.48".parse().unwrap();
     let addr2 = "127.0.0.49".parse().unwrap();
     let key = [0x42u8; 32];
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key(key)
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key(key)
         .with_encryption();
 
@@ -488,19 +488,19 @@ async fn encrypted_nodes_converge() {
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_node_with_wrong_key_is_rejected() {
     let port = 8084;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let addr1 = "127.0.0.50".parse().unwrap();
     let addr2 = "127.0.0.51".parse().unwrap();
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key([0x42u8; 32])
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_peer_net(peer_net)
+        .with_net(net)
         .with_cluster_key([0x99u8; 32]) // different key
         .with_encryption();
 
@@ -522,4 +522,259 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
 
     task2.abort();
     task1.abort();
+}
+
+/// Issue #53: two nodes in distinct geographical networks converge over cross-network anti-entropy.
+///
+/// Networks are simulated by two disjoint /30 subnets inside the loopback range, each node living in
+/// one of them and declaring both. A dedicated port isolates the test.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_net_reconciliation() {
+    let port = 8085;
+    let net_a = "127.0.0.0/30".parse().unwrap();
+    let net_b = "127.0.1.0/30".parse().unwrap();
+    let addr1 = "127.0.0.1".parse().unwrap();
+    let addr2 = "127.0.1.1".parse().unwrap();
+    // Each node is local to its own network and declares the other as a remote one. A short
+    // cross-network cadence keeps the test fast.
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(net_a)
+        .with_net(net_b)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(net_b)
+        .with_net(net_a)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert("key".to_string(), "value".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+    assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // The remote-network peer eventually receives the value over cross-network anti-entropy.
+    assert_until!(store2.get(&"key".to_string()).as_deref() == Some(&"value".to_string()));
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// Issue #53: a node auto-discovers a peer in another network purely from the network's CIDR, with
+/// no seed. Discovery probes one random address per network each round. To keep the test
+/// deterministic (rather than relying on a random probe landing on the peer within a subnet), each
+/// node declares the *other node's exact address* as a network (a /32), so the per-network discovery
+/// probe reliably targets the peer. The local network stays a /30 so local-network probing is
+/// unaffected.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_net_discovery_without_seed() {
+    let port = 8086;
+    let net_a = "127.0.2.0/30".parse().unwrap();
+    let net_b = "127.0.3.0/30".parse().unwrap();
+    let addr1 = "127.0.2.1".parse().unwrap();
+    let addr2 = "127.0.3.1".parse().unwrap();
+    // Each node declares the peer's exact address as a network, so its discovery probe always hits it.
+    let peer2_host = "127.0.3.1/32".parse().unwrap();
+    let peer1_host = "127.0.2.1/32".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(net_a)
+        .with_net(peer2_host)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(net_b)
+        .with_net(peer1_host)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    // No `with_seed`: the two nodes must find each other purely through per-network discovery probes.
+    let store1 = ReconcileStore::new(cfg1).await;
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// Runtime topology injection: a network declared **while the loop is running** must take effect
+/// without recreating the node. Two nodes start declaring only their own network and with no seed,
+/// so discovery never probes the peer and they cannot converge. Injecting the peer's network with
+/// [`add_net`](ReconcileStore::add_net) makes per-network discovery reach the peer and they converge,
+/// proving the running reconciliation loop observes the mutation.
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_add_net_enables_discovery_and_convergence() {
+    let port = 8087;
+    let net_a = "127.0.4.0/30".parse().unwrap();
+    let net_b = "127.0.5.0/30".parse().unwrap();
+    let addr1 = "127.0.4.1".parse().unwrap();
+    let addr2 = "127.0.5.1".parse().unwrap();
+    // The peer's exact address as a /32, so the per-network discovery probe reliably hits it.
+    let peer2_host = "127.0.5.1/32".parse().unwrap();
+    let peer1_host = "127.0.4.1/32".parse().unwrap();
+    // Each node initially declares ONLY its own network. Fast cadence to converge quickly.
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(net_a)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(net_b)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    // No seed: the nodes can only meet through per-network discovery probes.
+    let store1 = ReconcileStore::new(cfg1).await;
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // Without the peer's network declared, discovery never reaches it, so no convergence.
+    assert!(
+        !wait_until(|| store2.fingerprint(..) == start_hash).await,
+        "nodes converged before the peer network was declared"
+    );
+
+    // Inject the peer network at runtime on both nodes — discovery now probes the peer.
+    store1.add_net(peer2_host);
+    store2.add_net(peer1_host);
+
+    // The running loops pick up the new network and converge.
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// Repair is decoupled from net membership: a peer learned by contact (here, seeded) is reconciled
+/// even when its address is in **none** of the declared networks (the `unclassified` bucket). Both
+/// nodes declare a single network that contains *neither* node's address, so each node's local net
+/// falls back to its own host route and the peer is unclassified — yet they still converge. This is
+/// the guarantee that makes runtime topology changes unable to cause silent divergence.
+#[tokio::test(flavor = "multi_thread")]
+async fn unclassified_peer_is_still_reconciled() {
+    let port = 8088;
+    // A declared network that contains neither node.
+    let foreign_net = "127.0.7.0/30".parse().unwrap();
+    let addr1 = "127.0.6.1".parse().unwrap();
+    let addr2 = "127.0.6.2".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(foreign_net)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(foreign_net)
+        .with_remote_interval(1)
+        .with_remote_fanout(1);
+
+    // Seeded so each knows the other, even though neither address is in any declared network.
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    store1.insert("k".to_string(), "v".to_string());
+    let start_hash = store1.fingerprint(..);
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .with_seed(addr1);
+
+    // Local net of last resort is each node's own host route (peer is not local).
+    assert_eq!(store1.local_net(), "127.0.6.1/32".parse().unwrap());
+
+    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run());
+
+    // Converges purely through the unclassified-peer repair bucket.
+    assert_until!(store2.fingerprint(..) == start_hash);
+
+    task1.abort();
+    task2.abort();
+}
+
+/// The runtime topology API mutates shared state and re-derives the local network consistently, and
+/// the scalar knob setters do not panic. Pure API-level checks (no run loop needed).
+#[tokio::test]
+async fn runtime_config_setters() {
+    let addr = "127.0.8.1".parse().unwrap();
+    let net_c = "127.0.8.0/30".parse().unwrap(); // contains addr
+    let net_d = "127.0.9.0/30".parse().unwrap(); // does not contain addr
+    let host_route = "127.0.8.1/32".parse().unwrap();
+
+    // Port 0 = ephemeral, so this never collides with the networked tests above.
+    let store = ReconcileStore::<i32, i32>::new(
+        Config::default()
+            .with_port(0)
+            .with_listen_addr(addr)
+            .with_net(net_c),
+    )
+    .await;
+    assert_eq!(store.nets(), vec![net_c]);
+    assert_eq!(store.local_net(), net_c);
+
+    // add_net: appends, leaves local net unchanged, and is idempotent.
+    assert!(store.add_net(net_d));
+    assert_eq!(store.local_net(), net_c);
+    assert_eq!(store.nets(), vec![net_c, net_d]);
+    assert!(store.add_net(net_d));
+    assert_eq!(store.nets().len(), 2, "add_net must be idempotent");
+
+    // remove_net: removing the local net re-derives it to the host route fallback.
+    assert!(store.remove_net(net_c));
+    assert_eq!(store.nets(), vec![net_d]);
+    assert_eq!(store.local_net(), host_route);
+    assert!(
+        !store.remove_net(net_c),
+        "removing an absent net returns false"
+    );
+
+    // set_nets: wholesale replacement re-derives the local net.
+    store.set_nets(&[net_c]);
+    assert_eq!(store.nets(), vec![net_c]);
+    assert_eq!(store.local_net(), net_c);
+
+    // add_net enforces the MAX_NETS cap (no-op + false beyond it).
+    for i in 0..(reconcile::reconcile_store::MAX_NETS - 1) {
+        let n = format!("127.1.{i}.0/30").parse().unwrap();
+        assert!(store.add_net(n));
+    }
+    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+    let overflow = "127.2.0.0/30".parse().unwrap();
+    assert!(
+        !store.add_net(overflow),
+        "add_net past MAX_NETS must return false"
+    );
+    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+
+    // Scalar knob setters: smoke (no getters, must not panic).
+    store.set_remote_interval(3);
+    store.set_remote_fanout(5);
+    store.set_reconcile_interval(Duration::from_millis(200));
+    store.set_tombstone_timeout(Duration::from_millis(500));
 }

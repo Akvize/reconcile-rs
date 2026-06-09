@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,7 @@ use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use tokio::net::{ToSocketAddrs, UdpSocket};
@@ -32,16 +34,16 @@ use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::diff::HashRangeQueryable;
 use crate::diff::{Diffable, HashSegment};
+use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
-use crate::gen_ip::gen_ip;
+use crate::gen_ip::{host_net, net_of};
 use crate::hlc::{HlcClock, Timestamp, Timestamped};
 use crate::observability;
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
-use crate::reconcile_store::Config;
+use crate::reconcile_store::{Config, MAX_NETS};
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
-const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 const MAX_SENDTO_RETRIES: u32 = 4;
@@ -58,6 +60,27 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Derive a node's **local network** from the declared `nets` and its `listen_addr`.
+///
+/// The local network is whichever declared net contains the listen address — the one a node
+/// reconciles with aggressively (every round). When none does (a misconfiguration), this falls back
+/// to the node's own host route (`/32`-`/128`), so only the node itself is local and every peer is
+/// treated as remote (throttled) rather than silently mis-qualified.
+///
+/// Reused on construction **and** on every runtime mutation of `nets`, so the warning fires only at
+/// those mutation boundaries — never once per reconciliation round.
+fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
+    net_of(nets, listen_addr).unwrap_or_else(|| {
+        warn!(
+            "listen address {listen_addr} is contained in none of the configured networks \
+             {nets:?}; cannot identify the local network — treating only this node as local, so \
+             every peer is remote and reconciled on the throttled cross-network cadence. Declare \
+             the network containing {listen_addr} via Config::with_net or ReconcileStore::add_net.",
+        );
+        host_net(listen_addr)
+    })
 }
 
 /// The internal reconciliation engine at the network level.
@@ -84,8 +107,38 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    peer_net: IpNet,
+    /// The geographical networks the cluster spans, each a CIDR (issue #53). One random address is
+    /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
+    /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
+    /// topology can be retuned live without recreating the node — the [`run`](Self::run) loop snapshots
+    /// it at the start of each round.
+    nets: Arc<RwLock<Vec<IpNet>>>,
+    /// The network containing this node's listen address — the one it reconciles with aggressively.
+    /// When no configured net contains the listen address, this is the node's own host route, so
+    /// only itself is local (see [`Self::new`]). **Derived** from [`nets`](Self::nets): recomputed on
+    /// every runtime mutation of `nets` (never set independently), so it can never drift out of sync.
+    local_net: Arc<RwLock<IpNet>>,
+    /// This node's own listen address, kept so [`local_net`](Self::local_net) can be re-derived
+    /// whenever [`nets`](Self::nets) changes at runtime.
+    listen_addr: IpAddr,
+    /// Send the full anti-entropy comparison to remote-network peers every `remote_interval`
+    /// rounds (the [`round`](Self::round) counter); local-network peers are contacted every round.
+    /// Shared atomic so it can be retuned at runtime.
+    remote_interval: Arc<AtomicU32>,
+    /// Max peers contacted per remote network on each cross-network round (bounds WAN fan-out).
+    /// Shared atomic so it can be retuned at runtime.
+    remote_fanout: Arc<AtomicUsize>,
+    /// How long the [`run`](Self::run) loop waits for inbound activity before initiating a
+    /// reconciliation round — the effective gossip cadence. Shared so it can be retuned at runtime.
+    reconcile_interval: Arc<RwLock<Duration>>,
+    /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
+    round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
+    /// Speculative peer discovery, behind the [`Discovery`] port. Defaults to [`RandomProbe`] (one
+    /// random address per declared network each round); consulted once per reconciliation round and
+    /// shares this engine's live `nets` and `rng`. Its results are one-shot targets, never seeded as
+    /// known peers — see [`start_reconciliation`](Self::start_reconciliation).
+    probe: Arc<dyn Discovery>,
     pub(crate) peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
     /// Per-datagram authentication policy; carries the cluster key when enabled.
@@ -97,6 +150,12 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// it can be garbage-collected. This is what gates tombstone GC on *causal stability* and
     /// prevents a peer that is partitioned for longer than the peer-expiration window from
     /// resurrecting a deleted value on its return.
+    ///
+    /// Multi-network note (issue #53): remote-network members are gossiped to on a slower cadence, so
+    /// their tombstone acknowledgments arrive later and cross-network GC is correspondingly slower —
+    /// but still strictly correct, since GC never proceeds before *every* member has acked. Lowering
+    /// [`Config::remote_interval`] or raising [`Config::remote_fanout`] speeds it up at the
+    /// cost of WAN traffic.
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
@@ -176,14 +235,36 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let map = HRTree::<K, V>::new();
         let projection = HRTree::<K, V::Projected>::new();
         let node_id = config.node_id.unwrap_or_else(rand::random);
+        // The geographical networks this cluster spans. With none declared, fall back to the
+        // historical flat loopback cluster.
+        let mut nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
+        if nets.is_empty() {
+            nets.push("127.0.0.1/8".parse().unwrap());
+        }
+        // Qualify the local network from the declared nets (warns + host-route fallback on
+        // misconfiguration). Re-derived identically on every runtime mutation of `nets`.
+        let local_net = derive_local_net(&nets, config.listen_addr);
+        // `nets` and `rng` are shared with the default speculative `RandomProbe` discovery, so a
+        // runtime topology change is immediately reflected in what it probes.
+        let nets = Arc::new(RwLock::new(nets));
+        let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
+        let probe: Arc<dyn Discovery> =
+            Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
         ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
                 socket: Arc::new(socket),
-                peer_net: config.peer_net,
-                rng: Arc::new(RwLock::new(StdRng::from_entropy())),
+                nets,
+                local_net: Arc::new(RwLock::new(local_net)),
+                listen_addr: config.listen_addr,
+                remote_interval: Arc::new(AtomicU32::new(config.remote_interval)),
+                remote_fanout: Arc::new(AtomicUsize::new(config.remote_fanout)),
+                reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
+                round: Arc::new(AtomicU32::new(0)),
+                rng,
+                probe,
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
                 authenticator,
@@ -224,6 +305,67 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
     pub fn clock_now(&self) -> Timestamp {
         self.clock.now()
+    }
+
+    /// (runtime) Replace the declared networks wholesale and re-derive the local network.
+    pub(crate) fn set_nets(&self, nets: &[IpNet]) {
+        let nets = nets.to_vec();
+        let local = derive_local_net(&nets, self.listen_addr);
+        // local_net is always derived from nets; update it together so a reader never observes a
+        // local net that is inconsistent with the freshly-installed nets for long.
+        *self.local_net.write() = local;
+        *self.nets.write() = nets;
+    }
+
+    /// (runtime) Declare an additional network. Idempotent; returns `false` (and logs) if the
+    /// [`MAX_NETS`](crate::reconcile_store::MAX_NETS) cap is reached.
+    pub(crate) fn add_net(&self, net: IpNet) -> bool {
+        let mut guard = self.nets.write();
+        if guard.contains(&net) {
+            return true;
+        }
+        if guard.len() >= MAX_NETS {
+            warn!("cannot add network {net}: already at the maximum of {MAX_NETS} networks");
+            return false;
+        }
+        guard.push(net);
+        *self.local_net.write() = derive_local_net(&guard, self.listen_addr);
+        true
+    }
+
+    /// (runtime) Stop declaring a network. Returns whether it was present. Anti-entropy repair of
+    /// already-known peers is **not** gated on net membership, so removing a net never orphans a
+    /// real peer — it only stops discovery probes into that range and may reclassify peers from
+    /// local to remote (throttled) cadence.
+    pub(crate) fn remove_net(&self, net: IpNet) -> bool {
+        let mut guard = self.nets.write();
+        let before = guard.len();
+        guard.retain(|n| *n != net);
+        let removed = guard.len() != before;
+        if removed {
+            *self.local_net.write() = derive_local_net(&guard, self.listen_addr);
+        }
+        removed
+    }
+
+    pub(crate) fn nets(&self) -> Vec<IpNet> {
+        self.nets.read().clone()
+    }
+
+    pub(crate) fn local_net(&self) -> IpNet {
+        *self.local_net.read()
+    }
+
+    pub(crate) fn set_remote_interval(&self, interval: u32) {
+        self.remote_interval.store(interval, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_remote_fanout(&self, fanout: usize) {
+        self.remote_fanout.store(fanout, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_reconcile_interval(&self, interval: Duration) {
+        *self.reconcile_interval.write() = interval;
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -312,11 +454,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // extra byte that easily detect when the buffer is too small
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        let recv_timeout = ACTIVITY_TIMEOUT;
         // start the protocol at the beginning
         self.start_reconciliation(&mut send_buf).await;
         // infinite loop
         loop {
+            // Re-read each iteration so the cadence can be retuned at runtime.
+            let recv_timeout = *self.reconcile_interval.read();
             match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
@@ -391,16 +534,64 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
-        let mut peers = self.get_peers();
-        // select a random address out of the peer network
-        // NOTE: the random address might not correspond to a real peer, so we do not add it to the
-        // list of known peers, just to our local copies of the addresses; if a peer exists at this
-        // address, they will eventually send us a message in return, and we will add them to the
-        // list of known peer
-        let addr = gen_ip(&mut *self.rng.write(), self.peer_net);
-        peers.push(addr);
-        // initiate the reconciliation protocol with all the known peers, and a random one
-        for peer in peers {
+        // Geography-aware target selection (issue #53). With a single network this reduces to the
+        // historical behaviour: every known peer is local, so all of them are contacted each round,
+        // plus a single random discovery probe.
+        //
+        // Snapshot the runtime-tunable topology/throttle once per round, so a concurrent mutation
+        // cannot tear a round and we never hold a lock across the sends below.
+        let nets = self.nets.read().clone();
+        let local = *self.local_net.read();
+        let remote_interval = self.remote_interval.load(Ordering::Relaxed).max(1);
+        let remote_fanout = self.remote_fanout.load(Ordering::Relaxed);
+        let round = self.round.fetch_add(1, Ordering::Relaxed);
+        // Treat an interval of 0 as "every round" to avoid a modulo-by-zero.
+        let do_remote = round.is_multiple_of(remote_interval);
+        let known = self.get_peers();
+
+        // De-duplicate so a discovery probe that happens to hit a known peer is not sent twice.
+        let mut targets: HashSet<IpAddr> = HashSet::new();
+
+        // Speculative discovery through the `Discovery` port (default: one random probe per network,
+        // see `RandomProbe`). The probed address might not correspond to a real peer, so we do NOT
+        // add it to the known-peer list; if a peer exists there, it will reply and be registered
+        // then. An authoritative source (e.g. DNS) instead drives the store's seed/decommission loop
+        // and is not consulted here. A transient failure simply yields no extra targets this round.
+        targets.extend(self.probe.discover().await.unwrap_or_default());
+
+        // Local network: contact every known peer, every round (fast intra-network convergence).
+        for &addr in &known {
+            if local.contains(&addr) {
+                targets.insert(addr);
+            }
+        }
+
+        // Remote peers: only on cross-network rounds, a bounded random subset per network — PLUS an
+        // `unclassified` bucket for known peers matching no declared network. Anti-entropy repair is
+        // deliberately **decoupled from net membership**: a peer learned by actual contact is never
+        // excluded from repair regardless of the declared topology. Nets only steer discovery and the
+        // local/remote throttle split, so changing the topology at runtime can never orphan a real
+        // peer from repair (worst case: suboptimal WAN traffic, never silent divergence). Fan-out is
+        // applied per bucket to keep WAN traffic bounded without designating any node as a relay.
+        if do_remote {
+            let remote_nets: Vec<IpNet> = nets.iter().copied().filter(|&n| n != local).collect();
+            let mut buckets: HashMap<Option<usize>, Vec<IpAddr>> = HashMap::new();
+            for &addr in &known {
+                if local.contains(&addr) {
+                    continue; // already contacted every round above
+                }
+                let bucket = remote_nets.iter().position(|n| n.contains(&addr));
+                buckets.entry(bucket).or_default().push(addr);
+            }
+            let mut rng = self.rng.write();
+            for (_, mut peers) in buckets {
+                peers.shuffle(&mut *rng);
+                targets.extend(peers.into_iter().take(remote_fanout));
+            }
+        }
+
+        // initiate the reconciliation protocol with the selected peers and discovery probes
+        for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             send_to_retry(
                 &self.socket,
@@ -663,6 +854,29 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         for key_acks in self.tombstone_acks.write().values_mut() {
             key_acks.remove(&peer);
         }
+    }
+
+    /// Register (or refresh) a known peer at runtime, the `&self` counterpart of the
+    /// [`with_seed`](crate::ReconcileStore::with_seed) builder.
+    ///
+    /// Inserting into [`peers`](Self::peers) (re)arms the `PEER_EXPIRATION` window and makes the
+    /// address a gossip target on the next round. This is what a dynamic discovery source (e.g.
+    /// DNS-based Kubernetes discovery) calls each round for every resolved peer. It deliberately
+    /// does **not** touch [`members`](Self::members): membership — which gates tombstone GC — must
+    /// still be *earned* by a genuine authenticated, dated datagram, so an unverified discovered
+    /// address can never block garbage collection.
+    pub(crate) fn seed_peer(&self, peer: IpAddr) {
+        self.peers.write().insert(peer, Instant::now());
+    }
+
+    /// A snapshot of the monotonic membership set (peers that gate tombstone GC).
+    pub(crate) fn members_snapshot(&self) -> HashSet<IpAddr> {
+        self.members.read().clone()
+    }
+
+    /// This node's configured listen address, used by discovery to never decommission itself.
+    pub(crate) fn listen_addr(&self) -> IpAddr {
+        self.listen_addr
     }
 }
 

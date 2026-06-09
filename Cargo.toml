@@ -41,10 +41,19 @@ metrics = ["dep:metrics"]
 # `src/prometheus.rs`). Pulls the exporter's HTTP listener stack; opt-in only. Implies
 # `metrics`, which feeds the same facade.
 metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
+# Reserved for a future `hickory-resolver`-backed DNS discovery adapter (SRV records, explicit
+# TTL/ndots control, robust resolution in static/musl images). Not implemented yet: the default
+# `DnsDiscovery` uses the system resolver via `tokio::net::lookup_host` and needs no extra crate.
+dns-hickory = []
 # Exposes the `crate::testing` seam (re-exports of `pub(crate)` reconciliation internals) so the
 # external integration-test oracles (`tests/diff.rs`, `tests/proptest_hrtree.rs`) can reach them.
 # No deps; not part of the supported public API.
 internal-testing = []
+
+[[example]]
+name = "k8s_node"
+# Builds the metrics/readiness endpoint into the binary; the Kubernetes probes target `/metrics`.
+required-features = ["metrics-prometheus"]
 
 [dependencies]
 arrayvec = "0.7.4"

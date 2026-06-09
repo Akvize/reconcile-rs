@@ -294,25 +294,17 @@ mod imp {
     /// Measure the time to send 1 insertion, and 1 removal between 2 ReconcileStore instances containing N items
     fn service_send(c: &mut Criterion) {
         let port = 8080;
-        let peer_net = "127.0.0.1/8".parse().unwrap();
+        let net = "127.0.0.1/8".parse().unwrap();
         let addr1 = "127.0.0.44".parse().unwrap();
         let addr2 = "127.0.0.45".parse().unwrap();
-        let cfg1 = Config {
-            port,
-            listen_addr: addr1,
-            peer_net,
-            cluster_key: None,
-            node_id: None,
-            encrypt: false,
-        };
-        let cfg2 = Config {
-            port,
-            listen_addr: addr2,
-            peer_net,
-            cluster_key: None,
-            node_id: None,
-            encrypt: false,
-        };
+        let cfg1 = Config::default()
+            .with_port(port)
+            .with_listen_addr(addr1)
+            .with_net(net);
+        let cfg2 = Config::default()
+            .with_port(port)
+            .with_listen_addr(addr2)
+            .with_net(net);
 
         let mut rng = rand::rngs::ThreadRng::default();
 
@@ -363,17 +355,17 @@ mod imp {
     /// Measure the time to reconcile 1 insertion/removal between ReconcileStore instances containing N items
     fn service_reconcile(c: &mut Criterion) {
         let port = 8080;
-        let peer_net = "127.0.0.1/8".parse().unwrap();
+        let net = "127.0.0.1/8".parse().unwrap();
         let addr1 = "127.0.0.44".parse().unwrap();
         let addr2 = "127.0.0.45".parse().unwrap();
         let cfg1 = Config::default()
             .with_port(port)
             .with_listen_addr(addr1)
-            .with_peer_net(peer_net);
+            .with_net(net);
         let cfg2 = Config::default()
             .with_port(port)
             .with_listen_addr(addr2)
-            .with_peer_net(peer_net);
+            .with_net(net);
 
         let mut rng = rand::rngs::ThreadRng::default();
 

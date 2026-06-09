@@ -41,7 +41,7 @@ macro_rules! assert_until {
 #[tokio::test(flavor = "multi_thread")]
 async fn mirror_converges_with_dated_store() {
     let port = 8086;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let dated_addr = "127.0.0.90".parse().unwrap();
     let mirror_addr = "127.0.0.91".parse().unwrap();
 
@@ -49,7 +49,7 @@ async fn mirror_converges_with_dated_store() {
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
-            .with_peer_net(peer_net),
+            .with_net(net),
     )
     .await;
     // Seed the mirror with the dated store's address: the mirror *drives* reconciliation over the
@@ -58,7 +58,7 @@ async fn mirror_converges_with_dated_store() {
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)
-            .with_peer_net(peer_net),
+            .with_net(net),
     )
     .await
     .with_seed(dated_addr);
@@ -105,7 +105,7 @@ async fn mirror_converges_with_dated_store() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mirror_does_not_block_tombstone_gc() {
     let port = 8087;
-    let peer_net = "127.0.0.1/8".parse().unwrap();
+    let net = "127.0.0.1/8".parse().unwrap();
     let dated_addr = "127.0.0.92".parse().unwrap();
     let mirror_addr = "127.0.0.93".parse().unwrap();
 
@@ -114,7 +114,7 @@ async fn mirror_does_not_block_tombstone_gc() {
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
-            .with_peer_net(peer_net),
+            .with_net(net),
     )
     .await
     .with_tombstone_timeout(Duration::from_millis(50));
@@ -122,7 +122,7 @@ async fn mirror_does_not_block_tombstone_gc() {
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)
-            .with_peer_net(peer_net),
+            .with_net(net),
     )
     .await
     .with_seed(dated_addr);

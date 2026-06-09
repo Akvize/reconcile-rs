@@ -1,0 +1,19 @@
+# Non-secret configuration shared by every pod. The cluster key is NOT here — it lives in a Secret
+# (see secret.example.yaml) and is injected separately.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reconcile-config
+  labels:
+    app: reconcile
+data:
+  # FQDN of the headless Service. Adjust the namespace if not "default".
+  RECONCILE_DNS_NAME: "reconcile-headless.default.svc.cluster.local"
+  RECONCILE_PORT: "8080"
+  # Address the in-process Prometheus/readiness endpoint listens on.
+  RECONCILE_METRICS_ADDR: "0.0.0.0:9000"
+  # How often (seconds) to re-resolve peers, and how many consecutive misses before a vanished pod
+  # is decommissioned (so its tombstones stop gating garbage collection).
+  RECONCILE_DISCOVERY_INTERVAL_SECS: "5"
+  RECONCILE_DISCOVERY_MISS_THRESHOLD: "3"
+  RECONCILE_LOG_LEVEL: "info"

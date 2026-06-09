@@ -9,6 +9,7 @@
 //! Provides the [`ReconcileStore`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
@@ -20,9 +21,10 @@ use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
+use crate::discovery::{Discovery, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
 use crate::hlc::Timestamp;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
@@ -34,6 +36,13 @@ const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
 /// How often the background task writes a full snapshot to the persistence backend.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Default cadence of the dynamic-discovery task (see [`ReconcileStore::with_discovery_interval`]).
+const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Default number of consecutive discovery rounds a member may be absent before it is
+/// decommissioned (see [`ReconcileStore::with_discovery_miss_threshold`]).
+const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
@@ -58,6 +67,14 @@ where
     /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
     /// [`InMemoryPersistence`], swapped out via [`with_persistence`](ReconcileStore::with_persistence).
     persistence: Arc<dyn Persistence<K, V>>,
+    /// Optional dynamic peer-discovery source (e.g. Kubernetes DNS). When `None` (the default),
+    /// discovery falls back entirely to the per-network random probing in the engine; when set, a
+    /// background task injects the discovered peers and decommissions vanished ones.
+    discovery: Option<Arc<dyn Discovery>>,
+    /// How often the discovery task resolves the peer set.
+    discovery_interval: Duration,
+    /// Consecutive missed discovery rounds before a vanished member is decommissioned.
+    discovery_miss_threshold: u32,
 }
 
 impl<K, V> Clone for ReconcileStore<K, V>
@@ -71,6 +88,9 @@ where
             engine: self.engine.clone(),
             tombstones: self.tombstones.clone(),
             persistence: self.persistence.clone(),
+            discovery: self.discovery.clone(),
+            discovery_interval: self.discovery_interval,
+            discovery_miss_threshold: self.discovery_miss_threshold,
         }
     }
 }
@@ -82,6 +102,9 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
+            discovery: None,
+            discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
+            discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
         };
         svc.add_pre_insert(|_, _| {});
         svc
@@ -149,6 +172,67 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     pub fn with_seed(self, peer: IpAddr) -> Self {
         let now = Instant::now();
         self.engine.peers.write().insert(peer, now);
+        self
+    }
+
+    /// Register (or refresh) a known peer **at runtime**, the `&self` counterpart of
+    /// [`with_seed`](Self::with_seed).
+    ///
+    /// This re-arms the peer-expiration window and makes the address a gossip target on the next
+    /// round. It is what a dynamic discovery source feeds into the store; it never grants
+    /// causal-stability membership (which a peer must still earn via an authenticated dated
+    /// datagram), so injecting an unverified address can never block tombstone garbage collection.
+    pub fn seed_peer(&self, peer: IpAddr) {
+        self.engine.seed_peer(peer);
+    }
+
+    /// Attach an **authoritative** peer-discovery source (e.g. [`DnsDiscovery`]) that maintains the
+    /// known-peer set, on top of the engine's default speculative [`RandomProbe`](crate::RandomProbe).
+    ///
+    /// While the store is [`run`](Self::run)ning, a background task calls
+    /// [`Discovery::discover`] every
+    /// [`discovery_interval`](Self::with_discovery_interval), seeds every returned address as a
+    /// known peer, and — after a member has been absent for
+    /// [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) consecutive successful
+    /// rounds — decommissions it (see [`forget_peer`](Self::forget_peer)) so its tombstones stop
+    /// gating garbage collection. See [`with_dns_discovery`](Self::with_dns_discovery) for the
+    /// Kubernetes-native default.
+    ///
+    /// The source must be [authoritative](crate::Discovery::is_authoritative): an absence is read as
+    /// a vanished peer and drives decommissioning. A speculative source like
+    /// [`RandomProbe`](crate::RandomProbe) belongs in the engine's per-round probe, not here.
+    pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
+        debug_assert!(
+            discovery.is_authoritative(),
+            "with_discovery expects an authoritative source; a speculative prober would be seeded \
+             as permanent known peers and its absences would wrongly decommission members"
+        );
+        self.discovery = Some(discovery);
+        self
+    }
+
+    /// Discover peers by resolving a DNS name — the Kubernetes-native default.
+    ///
+    /// Point `name` at a **headless** `Service` (`clusterIP: None`): its DNS name resolves to one
+    /// address record per ready pod, so the store learns every peer with a single lookup, with no
+    /// Kubernetes API client and no RBAC. `port` is the reconciliation UDP port. Shorthand for
+    /// [`with_discovery`](Self::with_discovery) with a [`DnsDiscovery`].
+    pub fn with_dns_discovery(self, name: impl Into<String>, port: u16) -> Self {
+        self.with_discovery(Arc::new(DnsDiscovery::new(name, port)))
+    }
+
+    /// Set how often the discovery task resolves the peer set (default 5 s). Only relevant when a
+    /// discovery source is configured via [`with_discovery`](Self::with_discovery).
+    pub fn with_discovery_interval(mut self, interval: Duration) -> Self {
+        self.discovery_interval = interval;
+        self
+    }
+
+    /// Set how many consecutive successful discovery rounds a previously-seen member may be absent
+    /// before it is decommissioned (default 3). A higher value tolerates longer DNS blips / rolling
+    /// restarts at the cost of holding tombstones (and their GC gate) longer.
+    pub fn with_discovery_miss_threshold(mut self, threshold: u32) -> Self {
+        self.discovery_miss_threshold = threshold;
         self
     }
 
@@ -314,6 +398,67 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.decommission_peer(peer);
     }
 
+    /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
+    /// recreating the node**. The local network is re-derived automatically (whichever new net
+    /// contains the listen address). See [`Config::nets`].
+    ///
+    /// Topology is per-node and coordination-free (the wire format carries no network tag), and is
+    /// safe to change live: anti-entropy *repair* of already-known peers is **not** gated on net
+    /// membership, so reshaping the topology never orphans a real peer from repair — it only changes
+    /// which addresses are probed for discovery and the local/remote throttle split. Worst case is
+    /// suboptimal WAN traffic, never silent divergence.
+    pub fn set_nets(&self, nets: &[IpNet]) {
+        self.engine.set_nets(nets);
+    }
+
+    /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns
+    /// `false` (and logs) if the [`MAX_NETS`] cap is already reached. The local network is re-derived.
+    pub fn add_net(&self, net: IpNet) -> bool {
+        self.engine.add_net(net)
+    }
+
+    /// (runtime) Stop declaring a network (e.g. decommissioning a region). Returns whether it was
+    /// present. Known peers keep being repaired regardless (see [`set_nets`](Self::set_nets)); to
+    /// also reclaim a region quickly elsewhere, prefer adding the new net **before** removing the old
+    /// so discovery keeps the cluster well-connected throughout the migration.
+    pub fn remove_net(&self, net: IpNet) -> bool {
+        self.engine.remove_net(net)
+    }
+
+    /// The currently declared networks.
+    pub fn nets(&self) -> Vec<IpNet> {
+        self.engine.nets()
+    }
+
+    /// The current local network (the declared net containing the listen address, else the host
+    /// route — see [`Config::nets`]).
+    pub fn local_net(&self) -> IpNet {
+        self.engine.local_net()
+    }
+
+    /// (runtime) Retune how often (in rounds) remote-network peers are reconciled. See
+    /// [`Config::remote_interval`].
+    pub fn set_remote_interval(&self, interval: u32) {
+        self.engine.set_remote_interval(interval);
+    }
+
+    /// (runtime) Retune the bounded number of peers contacted per remote network each cross-network
+    /// round. See [`Config::remote_fanout`].
+    pub fn set_remote_fanout(&self, fanout: usize) {
+        self.engine.set_remote_fanout(fanout);
+    }
+
+    /// (runtime) Retune the tombstone expiry timeout in place, visible to all clones. The runtime
+    /// counterpart of the [`with_tombstone_timeout`](Self::with_tombstone_timeout) builder.
+    pub fn set_tombstone_timeout(&self, timeout: Duration) {
+        self.tombstones.set_timeout(timeout);
+    }
+
+    /// (runtime) Retune the reconciliation cadence in place. See [`Config::reconcile_interval`].
+    pub fn set_reconcile_interval(&self, interval: Duration) {
+        self.engine.set_reconcile_interval(interval);
+    }
+
     /// Garbage-collect tombstones, **gated on causal stability**.
     ///
     /// A tombstone is removed from the map only once it is both older than the configured
@@ -345,15 +490,81 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         }
     }
 
+    /// Drive the dynamic discovery source: inject discovered peers and decommission vanished ones.
+    ///
+    /// Returns immediately (a no-op) when no discovery source is configured, so the default
+    /// random-probing behaviour is unchanged. Otherwise, every
+    /// [`discovery_interval`](Self::with_discovery_interval):
+    ///
+    /// - On a **successful** resolution, every returned address (except this node's own) is seeded
+    ///   as a known peer, re-arming its expiration and feeding it to the next gossip round.
+    /// - A previously-seen **member** that is now absent has its miss count incremented; once it
+    ///   reaches [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) it is
+    ///   decommissioned, releasing the causal-stability gate it held on tombstone GC.
+    /// - A **failed** resolution (DNS blip) is skipped entirely — it never counts as a miss — so a
+    ///   transient resolver hiccup cannot decommission a healthy peer.
+    ///
+    /// Only `members` are considered for decommissioning: membership is what gates tombstone GC, it
+    /// is earned through a real authenticated datagram, and discovery never writes to it — so a
+    /// spoofable or never-contacted address can neither block nor be the subject of GC release.
+    async fn discover_periodically(&self) {
+        let Some(discovery) = self.discovery.clone() else {
+            return; // no discovery source: leave peer-finding to the engine's per-net probing
+        };
+        let own_addr = self.engine.listen_addr();
+        // Consecutive missed rounds per member, and the set of addresses discovery has ever
+        // reported (so we only grace-decommission members we actually discovered, never peers
+        // learned by other means).
+        let mut miss_counts: HashMap<IpAddr, u32> = HashMap::new();
+        let mut seen_ever: HashSet<IpAddr> = HashSet::new();
+        loop {
+            tokio::time::sleep(self.discovery_interval).await;
+            let resolved = match discovery.discover().await {
+                Ok(addrs) => addrs,
+                Err(err) => {
+                    // Transient failure: do not touch miss counts, do not decommission anyone.
+                    debug!("discovery round failed, skipping: {err}");
+                    continue;
+                }
+            };
+            let current: HashSet<IpAddr> = resolved
+                .into_iter()
+                .filter(|addr| *addr != own_addr)
+                .collect();
+            // 1) Refresh every currently-present peer.
+            for addr in &current {
+                seen_ever.insert(*addr);
+                self.engine.seed_peer(*addr);
+                miss_counts.remove(addr);
+            }
+            // 2) Grace-account members that were discovered before but are now absent.
+            for member in self.engine.members_snapshot() {
+                if member == own_addr || current.contains(&member) || !seen_ever.contains(&member) {
+                    continue;
+                }
+                let misses = miss_counts.entry(member).or_insert(0);
+                *misses += 1;
+                if *misses >= self.discovery_miss_threshold {
+                    info!("decommissioning vanished peer {member} after {misses} missed discovery rounds");
+                    self.engine.decommission_peer(member);
+                    miss_counts.remove(&member);
+                    seen_ever.remove(&member);
+                }
+            }
+        }
+    }
+
     #[instrument(name = "reconcile.store", skip_all)]
     pub async fn run(self) {
         info!("reconcile store starting");
         let tombstones = self.clone();
         let snapshots = self.clone();
+        let discovery = self.clone();
         tokio::join!(
             self.engine.run(),
             tombstones.clear_expired_tombstones(),
             snapshots.snapshot_periodically(),
+            discovery.discover_periodically(),
         );
     }
 }
@@ -384,11 +595,38 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
     }
 }
 
+/// Maximum number of geographical networks (CIDRs) a [`Config`] can declare. A fixed-size array
+/// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
+pub const MAX_NETS: usize = 8;
+
 #[derive(Clone, Copy)]
 pub struct Config {
     pub port: u16,
     pub listen_addr: IpAddr,
-    pub peer_net: IpNet,
+    /// The geographical networks the cluster spans, each a CIDR (issue #53). Empty slots are `None`.
+    ///
+    /// Declare every network with [`with_net`](Config::with_net); a *network* is just an address
+    /// range, sized to your topology (a whole cloud region, an availability zone, or a single
+    /// subnet). This node's **local** network is whichever declared net contains
+    /// [`listen_addr`](Self::listen_addr); all others are **remote**. (If none contains it, the node
+    /// logs a loud warning and treats only itself as local — see [`ReconcileStore::new`].)
+    ///
+    /// A node auto-discovers peers in every network (one random probe per network per round) but
+    /// gossips the full anti-entropy comparison to local-network peers every round and to
+    /// remote-network peers only every [`remote_interval`](Self::remote_interval) rounds, to a
+    /// bounded [`remote_fanout`](Self::remote_fanout) subset — so cross-network (WAN) traffic stays
+    /// bounded. A peer's network is derived purely from its IP (`IpNet::contains`), so the wire
+    /// format is unchanged. With no network declared, the node uses the loopback default and behaves
+    /// like a flat single-CIDR cluster (the historical behaviour).
+    pub nets: [Option<IpNet>; MAX_NETS],
+    /// Send the full anti-entropy comparison to remote-network peers every `remote_interval`
+    /// reconciliation rounds (default `6`). Local-network peers are always contacted every round.
+    /// Lowering this speeds cross-network convergence (and tombstone GC) at the cost of WAN traffic.
+    pub remote_interval: u32,
+    /// Maximum number of peers contacted per remote network on each cross-network round (default
+    /// `2`). Bounds WAN fan-out without designating any node as a relay/gateway. Raising it speeds
+    /// cross-network convergence (and tombstone GC) at the cost of WAN traffic.
+    pub remote_fanout: usize,
     /// Optional shared cluster secret enabling per-datagram MAC authentication.
     ///
     /// When `None` (the default), the protocol is **unauthenticated**: any host able to send a
@@ -411,6 +649,11 @@ pub struct Config {
     /// default), a set cluster key authenticates plaintext datagrams with a MAC; when `true`, the
     /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
     pub encrypt: bool,
+    /// How long the reconciliation loop waits for inbound activity before initiating a round — the
+    /// effective gossip cadence (default 1 s). A shorter interval converges faster at the cost of
+    /// more traffic. Retunable at runtime via
+    /// [`set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    pub reconcile_interval: Duration,
     // may include other options in the future: tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -418,10 +661,13 @@ impl Default for Config {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
+            nets: [None; MAX_NETS],
+            remote_interval: 6,
+            remote_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
+            reconcile_interval: Duration::from_secs(1),
         }
     }
 }
@@ -434,8 +680,58 @@ impl Config {
         self.listen_addr = listen_addr;
         self
     }
-    pub fn with_peer_net(mut self, peer_net: IpNet) -> Self {
-        self.peer_net = peer_net;
+    /// Declare a geographical network the cluster spans, by its CIDR (issue #53).
+    ///
+    /// Call once per network — **including this node's own**. The node's local network is whichever
+    /// declared net contains [`listen_addr`](Config::listen_addr); the rest are remote and gossiped
+    /// to over WAN-bounded, geography-aware anti-entropy (see [`nets`](Config::nets)). With none
+    /// declared, the node uses the loopback default (a flat single-CIDR cluster).
+    ///
+    /// # Panics
+    ///
+    /// Panics if more than [`MAX_NETS`] networks are declared.
+    pub fn with_net(mut self, net: IpNet) -> Self {
+        let slot = self
+            .nets
+            .iter_mut()
+            .find(|slot| slot.is_none())
+            .unwrap_or_else(|| panic!("at most {MAX_NETS} networks are supported"));
+        *slot = Some(net);
+        self
+    }
+
+    /// Declare several networks at once (see [`with_net`](Config::with_net)).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the total number of networks exceeds [`MAX_NETS`].
+    pub fn with_nets(mut self, nets: &[IpNet]) -> Self {
+        for &net in nets {
+            self = self.with_net(net);
+        }
+        self
+    }
+
+    /// Set how often (in reconciliation rounds) the full anti-entropy comparison is sent to
+    /// remote-network peers (default `6`). See [`remote_interval`](Config::remote_interval).
+    pub fn with_remote_interval(mut self, interval: u32) -> Self {
+        self.remote_interval = interval;
+        self
+    }
+
+    /// Set the maximum number of peers contacted per remote network on each cross-network round
+    /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
+    pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
+        self.remote_fanout = fanout;
+        self
+    }
+
+    /// Set the reconciliation cadence: how long the loop waits for inbound activity before
+    /// initiating a round (default 1 s). See [`reconcile_interval`](Config::reconcile_interval).
+    /// Retunable at runtime via
+    /// [`ReconcileStore::set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    pub fn with_reconcile_interval(mut self, interval: Duration) -> Self {
+        self.reconcile_interval = interval;
         self
     }
 
@@ -492,7 +788,10 @@ mod reconcile_store_tests {
     use std::time::Duration;
 
     use crate::reconcile_engine::version_hash;
-    use crate::{reconcile_store::Config, FileSnapshot, ReconcileStore};
+    use crate::{
+        reconcile_store::{Config, MAX_NETS},
+        FileSnapshot, ReconcileStore,
+    };
 
     /// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
     /// stores without colliding on a fixed port.
@@ -500,27 +799,25 @@ mod reconcile_store_tests {
         Config {
             port: 0,
             listen_addr: "127.0.0.1".parse().unwrap(),
-            peer_net: "127.0.0.1/8".parse().unwrap(),
+            nets: [None; MAX_NETS],
+            remote_interval: 6,
+            remote_fanout: 2,
             cluster_key: None,
             node_id: None,
             encrypt: false,
+            reconcile_interval: Duration::from_secs(1),
         }
     }
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        let config = Config {
-            // A dedicated port (and a singleton peer net) isolates this test from the
-            // integration tests: peer discovery probes random addresses in the peer net on
-            // this port, so an overlapping port lets a concurrently-running test's node inject
-            // updates here.
-            port: 8090,
-            listen_addr: "127.0.0.45".parse().unwrap(),
-            peer_net: "127.0.0.45/32".parse().unwrap(),
-            cluster_key: None,
-            node_id: None,
-            encrypt: false,
-        };
+        // A dedicated port (and a singleton /32 net) isolates this test from the integration
+        // tests: peer discovery probes random addresses in the net on this port, so an overlapping
+        // port lets a concurrently-running test's node inject updates here.
+        let config = Config::default()
+            .with_port(8090)
+            .with_listen_addr("127.0.0.45".parse().unwrap())
+            .with_net("127.0.0.45/32".parse().unwrap());
         let store = ReconcileStore::<i32, i32>::new(config)
             .await
             .with_tombstone_timeout(Duration::from_millis(1));
@@ -662,5 +959,136 @@ mod reconcile_store_tests {
             !restarted.engine.is_tombstone_stable(&1, version),
             "restart dropped causal-stability state: tombstone would be GC'd and could resurrect"
         );
+    }
+
+    use std::sync::Mutex;
+
+    use crate::discovery::{DiscoverFuture, Discovery};
+
+    /// A scriptable discovery source for the grace/decommission tests. The test thread swaps the
+    /// response while the discovery loop runs.
+    #[derive(Clone)]
+    struct FakeDiscovery {
+        resp: Arc<Mutex<FakeResp>>,
+    }
+
+    #[derive(Clone)]
+    enum FakeResp {
+        /// A successful resolution returning this peer set.
+        Present(Vec<IpAddr>),
+        /// A transient failure (DNS blip).
+        Blip,
+    }
+
+    impl FakeDiscovery {
+        fn new(initial: FakeResp) -> Self {
+            FakeDiscovery {
+                resp: Arc::new(Mutex::new(initial)),
+            }
+        }
+        fn set(&self, resp: FakeResp) {
+            *self.resp.lock().unwrap() = resp;
+        }
+    }
+
+    impl Discovery for FakeDiscovery {
+        fn discover(&self) -> DiscoverFuture<'_> {
+            let resp = self.resp.lock().unwrap().clone();
+            Box::pin(async move {
+                match resp {
+                    FakeResp::Present(addrs) => Ok(addrs),
+                    FakeResp::Blip => Err(std::io::Error::new(std::io::ErrorKind::Other, "blip")),
+                }
+            })
+        }
+    }
+
+    fn discovery_config() -> Config {
+        // A real, bindable loopback address (the engine binds a socket in `new`) on an ephemeral
+        // port. No `with_net`, mirroring the Kubernetes setup where discovery is purely DNS-driven.
+        Config::default()
+            .with_port(0)
+            .with_listen_addr("127.0.0.1".parse().unwrap())
+    }
+
+    /// A member that vanishes from discovery for `miss_threshold` consecutive successful rounds is
+    /// decommissioned; the node never decommissions itself even when absent from the result.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn discovery_decommissions_vanished_member_but_not_self() {
+        let own: IpAddr = "127.0.0.1".parse().unwrap();
+        let member: IpAddr = "127.0.0.200".parse().unwrap();
+
+        let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
+        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+            .await
+            .with_discovery(Arc::new(fake.clone()))
+            .with_discovery_interval(Duration::from_millis(20))
+            .with_discovery_miss_threshold(3);
+
+        // Seed membership as if both had been contacted via dated datagrams.
+        store.engine.members.write().insert(own);
+        store.engine.members.write().insert(member);
+
+        let loop_store = store.clone();
+        let handle = tokio::spawn(async move { loop_store.discover_periodically().await });
+
+        // While the member is present in discovery it must not be decommissioned.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(
+            store.engine.members.read().contains(&member),
+            "present member was wrongly decommissioned"
+        );
+
+        // The member vanishes; after the miss threshold it is decommissioned, but self is kept.
+        fake.set(FakeResp::Present(vec![]));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !store.engine.members.read().contains(&member),
+            "vanished member was not decommissioned after the grace period"
+        );
+        assert!(
+            store.engine.members.read().contains(&own),
+            "node decommissioned itself"
+        );
+
+        handle.abort();
+    }
+
+    /// A transient discovery failure (DNS blip) must never decommission a member, however long it
+    /// lasts; only a successful resolution that omits the member counts toward the grace threshold.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn discovery_blip_does_not_decommission() {
+        let member: IpAddr = "127.0.0.201".parse().unwrap();
+
+        // Report the member present once so it enters `seen_ever`, then fail forever.
+        let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
+        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+            .await
+            .with_discovery(Arc::new(fake.clone()))
+            .with_discovery_interval(Duration::from_millis(20))
+            .with_discovery_miss_threshold(3);
+        store.engine.members.write().insert(member);
+
+        let loop_store = store.clone();
+        let handle = tokio::spawn(async move { loop_store.discover_periodically().await });
+
+        // Let the member be observed present at least once, then switch to permanent blips.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        fake.set(FakeResp::Blip);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            store.engine.members.read().contains(&member),
+            "a transient discovery failure wrongly decommissioned a member"
+        );
+
+        // Sanity: a genuine absence still decommissions, proving the mechanism is live.
+        fake.set(FakeResp::Present(vec![]));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !store.engine.members.read().contains(&member),
+            "member was not decommissioned once it genuinely vanished"
+        );
+
+        handle.abort();
     }
 }
