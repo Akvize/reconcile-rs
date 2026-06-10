@@ -147,6 +147,54 @@ async fn test() {
     task1.abort();
 }
 
+/// Regression test for the `get_mut` propagation bug: an in-place mutation must be re-stamped and
+/// broadcast so that peers converge to the edited value, exactly like a regular `insert`. Before
+/// the fix, `get_mut` neither bumped the timestamp nor broadcast, so the edit stayed local and the
+/// peer never saw it.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_mut_edit_propagates_to_peers() {
+    let port = 8089;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.100".parse().unwrap();
+    let addr2 = "127.0.0.101".parse().unwrap();
+    let cfg1 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr1)
+        .with_net(net);
+    let cfg2 = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr2)
+        .with_net(net);
+
+    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+
+    let key = "k".to_string();
+    let before = "before".to_string();
+    let after = "after".to_string();
+
+    // Seed a key on store1 and wait for store2 to observe the original value.
+    store1.insert(key.clone(), before.clone());
+    assert_until!(store2.get(&key).as_deref() == Some(&before));
+
+    // Mutate the value in place on store1.
+    store1.get_mut(&key, |v| {
+        if let Some(v) = v {
+            *v = after.clone();
+        }
+    });
+    assert_eq!(store1.get(&key).as_deref(), Some(&after));
+
+    // The crux: the in-place edit must reach store2. This fails before the fix, because `get_mut`
+    // did not re-stamp the timestamp or broadcast the change.
+    assert_until!(store2.get(&key).as_deref() == Some(&after));
+
+    task1.abort();
+    task2.abort();
+}
+
 /// Two nodes sharing the same cluster key must still converge, proving that authenticated
 /// datagrams round-trip end-to-end through the MAC layer.
 #[tokio::test(flavor = "multi_thread")]

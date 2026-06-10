@@ -499,6 +499,13 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         ret
     }
 
+    /// Broadcast a single locally-mutated entry to peers, mirroring [`insert`](Self::insert)'s
+    /// propagation. Used by in-place mutation paths (`ReconcileStore::get_mut`) that write the map
+    /// directly and must still notify peers so the edit reconciles, without re-applying it locally.
+    pub(crate) fn broadcast_update(&self, key: K, value: V) {
+        self.broadcast(vec![Message::Update::<K, V, V::Projected>((key, value))]);
+    }
+
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         // 1) First run all pre-insert hooks outside the map lock
         for (key, value) in key_values {
