@@ -27,7 +27,7 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
@@ -130,6 +130,17 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// How long the [`run`](Self::run) loop waits for inbound activity before initiating a
     /// reconciliation round — the effective gossip cadence. Shared so it can be retuned at runtime.
     reconcile_interval: Arc<RwLock<Duration>>,
+    /// Rate (bytes/sec) at which a single bulk anti-entropy value transfer to one peer is paced, or
+    /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::reconcile_store::Config::bulk_send_rate)
+    /// and is read by [`spawn_paced_send`](Self::spawn_paced_send) (issue #168).
+    bulk_send_rate: Option<usize>,
+    /// Peers with a bulk value transfer currently in flight (issue #168). At most one paced dump
+    /// runs per peer at a time: while one is in flight, the reconcile timer re-firing (the receiver
+    /// applies updates silently, so the holder sees a lull and re-initiates) must NOT spawn a second
+    /// dump over ranges still in transit — that is precisely the byte amplification this prevents.
+    /// Entries are inserted before a dump is spawned and removed (via an RAII guard, so it survives a
+    /// panic in the send task) when it finishes.
+    bulk_in_flight: Arc<RwLock<HashSet<SocketAddr>>>,
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
     round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
@@ -277,6 +288,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 remote_interval: Arc::new(AtomicU32::new(config.remote_interval)),
                 remote_fanout: Arc::new(AtomicUsize::new(config.remote_fanout)),
                 reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
+                bulk_send_rate: config.bulk_send_rate,
+                bulk_in_flight: Arc::new(RwLock::new(HashSet::new())),
                 round: Arc::new(AtomicU32::new(0)),
                 rng,
                 probe,
@@ -429,6 +442,54 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 )
                 .await;
             }
+        });
+    }
+
+    /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task (issue
+    /// #168).
+    ///
+    /// This is the cold/bulk anti-entropy path: when a peer differs over a whole range it must
+    /// receive every value in that range (most starkly, a cold/empty peer pulling the whole
+    /// dataset). Dumping them back-to-back inline on the receive loop would (a) overrun the
+    /// receiver's socket buffer — datagrams dropped in the kernel — and (b) hold the receive loop for
+    /// the whole transfer, so no other peer is served meanwhile.
+    ///
+    /// Two cooperating mechanisms fix the cold-sync amplification (issue #168):
+    ///
+    /// 1. **Pacing** to [`bulk_send_rate`](Inner::bulk_send_rate) bytes/sec, on a spawned task, keeps
+    ///    the burst below the receiver's overrun threshold and off the receive loop.
+    /// 2. A **single-dump-per-peer guard**: while a dump is in flight to a peer, a second is not
+    ///    started. The receiver applies updates *silently* (an `Update` triggers no reply), so the
+    ///    holder's own reconcile timer sees a lull and re-initiates — without this guard it would
+    ///    re-dump ranges still in transit, which is the byte amplification we are removing. Anything
+    ///    genuinely still missing (e.g. a dropped datagram) is picked up by the next reconcile round
+    ///    once the current dump finishes.
+    fn spawn_paced_send(&self, messages: Vec<Message<K, V, V::Projected>>, peer: SocketAddr) {
+        // Admit at most one in-flight dump per peer. `insert` returns false if already present.
+        if !self.bulk_in_flight.write().insert(peer) {
+            return;
+        }
+        // RAII: clears the in-flight mark when the dump finishes *or* if the send task panics, so a
+        // failed dump can never wedge a peer into "permanently transferring" and starve its sync.
+        let guard = BulkInFlightGuard {
+            set: Arc::clone(&self.bulk_in_flight),
+            peer,
+        };
+        let socket = Arc::clone(&self.socket);
+        let authenticator = self.authenticator.clone();
+        let rate = self.bulk_send_rate;
+        tokio::spawn(async move {
+            let _guard = guard;
+            let mut send_buf = Vec::new();
+            send_messages_paced(
+                &messages,
+                socket,
+                &authenticator,
+                &peer,
+                &mut send_buf,
+                rate,
+            )
+            .await;
         });
     }
 
@@ -717,25 +778,14 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 let guard = self.map.read();
                 proto::diff_round(&guard, in_comparison, &mut out_comparison, &mut differences);
             }
-            let mut messages = Vec::new();
+            // Refinement comparison items are small and latency-sensitive: send them inline, now.
             if !out_comparison.is_empty() {
                 debug!("returning {} segments", out_comparison.len());
                 trace!("segments: {out_comparison:?}");
-                for segment in out_comparison {
-                    messages.push(Message::ComparisonItem::<K, V, V::Projected>(segment))
-                }
-            }
-            if !differences.is_empty() {
-                debug!("returning {} diff_ranges", differences.len());
-                trace!("diff_ranges: {differences:?}");
-                let guard = self.map.read();
-                for range in differences {
-                    for update in guard.get_range(&range).map(|(k, v)| (k.clone(), v.clone())) {
-                        messages.push(Message::Update(update));
-                    }
-                }
-            }
-            if !messages.is_empty() {
+                let messages: Vec<_> = out_comparison
+                    .into_iter()
+                    .map(Message::ComparisonItem::<K, V, V::Projected>)
+                    .collect();
                 send_messages_to(
                     &messages,
                     Arc::clone(&self.socket),
@@ -744,6 +794,26 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     send_buf,
                 )
                 .await;
+            }
+            // The differing values are the bulk payload — a cold/empty peer pulls the whole dataset
+            // here. Hand them to a rate-paced background task so the burst cannot overrun the
+            // receiver and the receive loop stays free for other peers (issue #168).
+            if !differences.is_empty() {
+                debug!("returning {} diff_ranges", differences.len());
+                trace!("diff_ranges: {differences:?}");
+                let updates: Vec<Message<K, V, V::Projected>> = {
+                    let guard = self.map.read();
+                    let mut updates = Vec::new();
+                    for range in differences {
+                        for (k, v) in guard.get_range(&range) {
+                            updates.push(Message::Update((k.clone(), v.clone())));
+                        }
+                    }
+                    updates
+                };
+                if !updates.is_empty() {
+                    self.spawn_paced_send(updates, peer);
+                }
             }
         }
         if !updates.is_empty() {
@@ -834,19 +904,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &mut differences,
                 );
             }
-            let mut messages = Vec::new();
-            for segment in out_comparison {
-                messages.push(Message::ValueComparisonItem::<K, V, V::Projected>(segment));
-            }
-            if !differences.is_empty() {
-                let guard = self.projection.read();
-                for range in differences {
-                    for (k, p) in guard.get_range(&range) {
-                        messages.push(Message::ValueUpdate((k.clone(), p.clone())));
-                    }
-                }
-            }
-            if !messages.is_empty() {
+            // Refinement comparison items are small and latency-sensitive: send them inline, now.
+            if !out_comparison.is_empty() {
+                let messages: Vec<_> = out_comparison
+                    .into_iter()
+                    .map(Message::ValueComparisonItem::<K, V, V::Projected>)
+                    .collect();
                 send_messages_to(
                     &messages,
                     Arc::clone(&self.socket),
@@ -855,6 +918,23 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     send_buf,
                 )
                 .await;
+            }
+            // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
+            // background task, exactly like the dated bulk path (issue #168).
+            if !differences.is_empty() {
+                let updates: Vec<Message<K, V, V::Projected>> = {
+                    let guard = self.projection.read();
+                    let mut updates = Vec::new();
+                    for range in differences {
+                        for (k, p) in guard.get_range(&range) {
+                            updates.push(Message::ValueUpdate((k.clone(), p.clone())));
+                        }
+                    }
+                    updates
+                };
+                if !updates.is_empty() {
+                    self.spawn_paced_send(updates, peer);
+                }
             }
         }
         observability::record_handle_duration(timer);
@@ -948,7 +1028,11 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
     res
 }
 
-#[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
+/// Send `messages` to `peer` back-to-back (unpaced).
+///
+/// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
+/// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead (issue
+/// #168); see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
 pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
     messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,
@@ -956,10 +1040,33 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
+    send_messages_paced(messages, socket, authenticator, peer, send_buf, None).await
+}
+
+/// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
+///
+/// With `rate = None` the datagrams go out back-to-back (the historical behaviour). With
+/// `rate = Some(bytes_per_sec)` the function sleeps between datagrams so the average send rate stays
+/// at or below that bound — used for bulk anti-entropy value transfers so the burst cannot overrun
+/// the receiver's socket buffer (issue #168). Because it sleeps, it must run **off** the receive
+/// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
+/// reception of every other peer for the duration of the transfer.
+#[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
+pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize>(
+    messages: &[Message<K, V, P>],
+    socket: Arc<UdpSocket>,
+    authenticator: &auth::Authenticator,
+    peer: &SocketAddr,
+    send_buf: &mut Vec<u8>,
+    rate: Option<usize>,
+) {
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
     let max_payload = BUFFER_SIZE - authenticator.overhead();
     send_buf.clear();
+    // Anchor the pacing schedule once, so it self-corrects rather than drifting per datagram.
+    let start = Instant::now();
+    let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
         message
@@ -967,18 +1074,49 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            send_to_retry(&socket, authenticator, &send_buf[..last_size], &peer)
+            send_to_retry(&socket, authenticator, &send_buf[..last_size], peer)
                 .await
                 .unwrap();
             trace!("sent {} bytes to {peer}", last_size);
             send_buf.drain(..last_size);
+            sent_bytes += last_size;
+            pace(rate, start, sent_bytes).await;
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    send_to_retry(&socket, authenticator, send_buf, &peer)
+    send_to_retry(&socket, authenticator, send_buf, peer)
         .await
         .unwrap();
     trace!("sent last {} bytes to {peer}", send_buf.len());
+}
+
+/// Sleep, if necessary, so that having sent `sent_bytes` since `start` does not exceed `rate`
+/// bytes/sec. A `None` (or zero) rate is a no-op. The schedule is anchored to `start`, so it
+/// self-corrects and does not drift; the caller does not pace after the final datagram.
+async fn pace(rate: Option<usize>, start: Instant, sent_bytes: usize) {
+    let Some(rate) = rate.filter(|&r| r > 0) else {
+        return;
+    };
+    let expected = Duration::from_secs_f64(sent_bytes as f64 / rate as f64);
+    if let Some(delay) = expected.checked_sub(start.elapsed()) {
+        sleep(delay).await;
+    }
+}
+
+/// RAII marker that a bulk dump to `peer` is in flight (issue #168). Removing the peer on `Drop` —
+/// rather than at the end of the send task's body — guarantees the in-flight mark is cleared even if
+/// the send task panics, so a transient failure can never wedge a peer into "permanently
+/// transferring" (which would silently stop it from ever syncing again). See
+/// [`ReconcileEngine::spawn_paced_send`].
+struct BulkInFlightGuard {
+    set: Arc<RwLock<HashSet<SocketAddr>>>,
+    peer: SocketAddr,
+}
+
+impl Drop for BulkInFlightGuard {
+    fn drop(&mut self) {
+        self.set.write().remove(&self.peer);
+    }
 }
 
 #[cfg(test)]
@@ -1297,5 +1435,71 @@ mod clock_port {
 
         assert_eq!(eng.clock_now(), Timestamp::new(0, 1, 42));
         assert_eq!(eng.clock_now(), Timestamp::new(0, 2, 42));
+    }
+}
+
+#[cfg(test)]
+mod pacing {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use tokio::net::UdpSocket;
+
+    use crate::auth::Authenticator;
+    use crate::reconcilable::ValueOnly;
+    use crate::reconcile_engine::{send_messages_paced, Message};
+
+    type Msg = Message<u64, Vec<u8>, ValueOnly<u8>>;
+
+    /// `n` Update messages with `value_len`-byte values — enough to span several 64 KiB datagrams.
+    fn bulk_updates(n: u64, value_len: usize) -> Vec<Msg> {
+        (0..n)
+            .map(|k| Message::Update((k, vec![0u8; value_len])))
+            .collect()
+    }
+
+    /// Send `messages` (unauthenticated, to a discard address — the datagrams go nowhere on an
+    /// unconnected UDP socket) at `rate` and return how long it took.
+    async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let authenticator = Authenticator::new(None, false);
+        let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
+        let mut send_buf = Vec::new();
+        let start = Instant::now();
+        send_messages_paced(messages, socket, &authenticator, &peer, &mut send_buf, rate).await;
+        start.elapsed()
+    }
+
+    /// `bulk_send_rate` actually meters the transfer (issue #168): a multi-datagram payload sent at a
+    /// low rate takes substantially longer than the same payload sent unpaced. Anchored to
+    /// wall-clock, so we only assert a generous lower bound on the paced run (sleeping can only
+    /// lengthen it) and an upper bound on the unpaced run — robust to CI scheduler jitter.
+    #[tokio::test]
+    async fn bulk_send_rate_meters_the_transfer() {
+        // ~265 KiB => ~5 datagrams of 64 KiB, i.e. ~4 inter-datagram pacing points.
+        let messages = bulk_updates(256, 1024);
+
+        let unpaced = time_send(&messages, None).await;
+        assert!(
+            unpaced < Duration::from_millis(200),
+            "unpaced send should be near-instant, took {unpaced:?}"
+        );
+
+        // 512 KiB/s over ~256 KiB of leading datagrams => ~0.5 s of cumulative sleeps.
+        let paced = time_send(&messages, Some(512 * 1024)).await;
+        assert!(
+            paced >= Duration::from_millis(300),
+            "paced send should be metered to ~0.5 s, took {paced:?}"
+        );
+    }
+
+    /// A `None` rate is the historical unpaced behaviour, and an explicit `0` is treated as "no
+    /// pacing" rather than dividing by zero.
+    #[tokio::test]
+    async fn zero_or_none_rate_does_not_pace() {
+        let messages = bulk_updates(256, 1024);
+        assert!(time_send(&messages, None).await < Duration::from_millis(200));
+        assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
     }
 }
