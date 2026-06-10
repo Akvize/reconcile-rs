@@ -198,6 +198,32 @@ let body: String = handle.render();
 Enable with `cargo build --features metrics-prometheus` (or list `metrics`/`metrics-prometheus`
 in your dependency's `features`).
 
+## Operational tuning
+
+### Gossip socket buffers
+
+The gossip UDP socket requests a multi-MiB send/receive buffer by default (8 MiB; see
+`Config::recv_buffer_size` / `send_buffer_size`). The stock OS default holds only a handful of
+full-size datagrams, so a bulk or cold-sync burst can overrun the kernel **receive** buffer and the
+excess is dropped *inside the kernel*, before the application sees it.
+
+The kernel clamps the request to its maximum, so the default helps only as far as the OS allows. On
+Linux, raise the ceiling (and persist it in `/etc/sysctl.d/`) to let the buffer grow:
+
+```sh
+sysctl -w net.core.rmem_max=8388608   # 8 MiB; match Config::recv_buffer_size
+sysctl -w net.core.wmem_max=8388608
+```
+
+To check whether the kernel is dropping datagrams at the socket buffer, watch the `RcvbufErrors`
+counter (it should stay flat):
+
+```sh
+grep -A1 '^Udp:' /proc/net/snmp        # the RcvbufErrors column
+```
+
+Set either field to `None` to leave the inherited OS default untouched.
+
 ## Read-only mirror (`ReconcileMirror`)
 
 For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReconcileStore`

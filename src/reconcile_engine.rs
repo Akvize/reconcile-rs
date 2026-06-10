@@ -26,6 +26,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
+use socket2::SockRef;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -80,6 +81,46 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
         );
         host_net(listen_addr)
     })
+}
+
+/// Apply the configured `SO_RCVBUF` / `SO_SNDBUF` to the gossip socket.
+///
+/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
+/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
+/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
+/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
+/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
+/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
+/// leaves the inherited OS default untouched.
+///
+/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
+/// honoured request reads back larger than asked.
+fn set_socket_buffers(socket: &UdpSocket, config: &Config) {
+    let sock = SockRef::from(socket);
+    if let Some(size) = config.recv_buffer_size {
+        match sock.set_recv_buffer_size(size) {
+            Ok(()) => match sock.recv_buffer_size() {
+                Ok(actual) => debug!(
+                    "gossip socket SO_RCVBUF: requested {size} B, OS granted {actual} B \
+                     (raise net.core.rmem_max if a larger buffer is needed)"
+                ),
+                Err(e) => debug!("could not read back SO_RCVBUF: {e}"),
+            },
+            Err(e) => warn!("failed to set gossip socket SO_RCVBUF to {size} B: {e}"),
+        }
+    }
+    if let Some(size) = config.send_buffer_size {
+        match sock.set_send_buffer_size(size) {
+            Ok(()) => match sock.send_buffer_size() {
+                Ok(actual) => debug!(
+                    "gossip socket SO_SNDBUF: requested {size} B, OS granted {actual} B \
+                     (raise net.core.wmem_max if a larger buffer is needed)"
+                ),
+                Err(e) => debug!("could not read back SO_SNDBUF: {e}"),
+            },
+            Err(e) => warn!("failed to set gossip socket SO_SNDBUF to {size} B: {e}"),
+        }
+    }
 }
 
 /// The internal reconciliation engine at the network level.
@@ -246,6 +287,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             .await
             .unwrap();
         info!("Listening on: {}", socket.local_addr().unwrap());
+        // Size the kernel send/receive buffers before any traffic flows.
+        set_socket_buffers(&socket, &config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if authenticator.is_encrypted() {
             debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
@@ -1507,5 +1550,62 @@ mod pacing {
         let messages = bulk_updates(256, 1024);
         assert!(time_send(&messages, None).await < Duration::from_millis(200));
         assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
+    }
+}
+
+#[cfg(test)]
+mod socket_buffers {
+    use socket2::SockRef;
+
+    use crate::clock::Timestamp;
+    use crate::reconcile_engine::ReconcileEngine;
+    use crate::reconcile_store::Config;
+
+    type Tombstoned = (Timestamp, Option<i32>);
+
+    async fn engine(addr: &str, config: Config) -> ReconcileEngine<i32, Tombstoned> {
+        ReconcileEngine::new(config.with_listen_addr(addr.parse().unwrap())).await
+    }
+
+    /// The receive-buffer knob must actually size the gossip socket. Asserting an
+    /// absolute byte count would be flaky — the kernel clamps `SO_RCVBUF` to `net.core.rmem_max`,
+    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: the multi-MiB
+    /// default must yield a strictly larger buffer than an explicitly tiny request. That holds for
+    /// any `rmem_max` above a few KiB, which is true on every realistic host.
+    #[tokio::test]
+    async fn recv_buffer_size_is_configurable() {
+        // Default config requests the multi-MiB DEFAULT_SOCKET_BUFFER_SIZE.
+        let big = engine("127.0.0.90", Config::default()).await;
+        // An explicit, tiny request — well below any plausible rmem_max, so it is honoured as-is.
+        let small = engine(
+            "127.0.0.91",
+            Config::default().with_recv_buffer_size(8 * 1024),
+        )
+        .await;
+
+        let big_buf = SockRef::from(&*big.socket).recv_buffer_size().unwrap();
+        let small_buf = SockRef::from(&*small.socket).recv_buffer_size().unwrap();
+
+        assert!(
+            big_buf > small_buf,
+            "the multi-MiB default ({big_buf} B) should exceed an explicitly tiny buffer \
+             ({small_buf} B)"
+        );
+    }
+
+    /// `None` opts out of the tuning entirely, leaving the inherited OS default. Combined with the
+    /// test above (the default is large), this pins down both ends of the knob: a tiny explicit
+    /// request shrinks the buffer below the large default.
+    #[tokio::test]
+    async fn recv_buffer_size_none_leaves_os_default() {
+        let config = Config {
+            recv_buffer_size: None,
+            ..Config::default()
+        };
+        let eng = engine("127.0.0.92", config).await;
+        // Just assert it builds and the socket is usable; the OS default is host-dependent, so we
+        // only check the call path does not panic and yields a positive buffer.
+        let buf = SockRef::from(&*eng.socket).recv_buffer_size().unwrap();
+        assert!(buf > 0, "a socket always has a positive receive buffer");
     }
 }

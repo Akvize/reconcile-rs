@@ -49,6 +49,14 @@ const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 /// over ranges still in flight (the byte amplification this caps).
 const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 
+/// Default size requested for the gossip socket's send/receive buffers (`SO_SNDBUF` / `SO_RCVBUF`),
+/// in bytes (see [`Config::recv_buffer_size`]). A generous 8 MiB: the kernel silently clamps the
+/// request to the OS maximum (`net.core.rmem_max` / `wmem_max` on Linux), so this is an improvement
+/// on a tuned host and a harmless no-op on an untuned one. The stock OS default holds only a handful
+/// of full-size datagrams, which a bulk/cold sync burst overruns — dropping datagrams in the kernel
+/// before the application ever sees them.
+const DEFAULT_SOCKET_BUFFER_SIZE: usize = 8 * 1024 * 1024;
+
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The store also keeps track of the addresses of other instances.
@@ -702,6 +710,24 @@ pub struct Config {
     /// ≈ the dataset size, fast, regardless of `reconcile_interval`. Only the bulk value dump is
     /// paced; small refinement comparisons, acks, and local-write broadcasts are sent immediately.
     pub bulk_send_rate: Option<usize>,
+    /// Size to request for the gossip socket's receive buffer (`SO_RCVBUF`), in bytes.
+    ///
+    /// Defaults to 8 MiB. The kernel clamps the request to the OS
+    /// maximum (`net.core.rmem_max` on Linux) and never errors for asking too much, so a large
+    /// default is safe — it only ever helps. The stock OS default holds only a few full-size
+    /// datagrams, so a bulk/cold-sync burst overruns it and the kernel silently drops the excess
+    /// (counted as `Udp.RcvbufErrors` in `/proc/net/snmp`, invisible to the application); a
+    /// multi-MiB buffer absorbs the burst instead. Set to `None` to leave the inherited OS default
+    /// untouched. See [`with_recv_buffer_size`](Config::with_recv_buffer_size).
+    pub recv_buffer_size: Option<usize>,
+    /// Size to request for the gossip socket's send buffer (`SO_SNDBUF`), in bytes.
+    ///
+    /// Defaults to 8 MiB, clamped by the kernel to the OS maximum
+    /// (`net.core.wmem_max` on Linux). A larger send buffer lets a bulk send burst queue in the
+    /// kernel instead of failing with `EWOULDBLOCK`/`ENOBUFS` (which the engine must then retry).
+    /// Set to `None` to leave the inherited OS default untouched. See
+    /// [`with_send_buffer_size`](Config::with_send_buffer_size).
+    pub send_buffer_size: Option<usize>,
     // may include other options in the future: tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -717,6 +743,8 @@ impl Default for Config {
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
             bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
+            recv_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
+            send_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
         }
     }
 }
@@ -792,6 +820,28 @@ impl Config {
         self
     }
 
+    /// Request `size` bytes for the gossip socket's receive buffer (`SO_RCVBUF`).
+    ///
+    /// The kernel clamps the request to the OS maximum (`net.core.rmem_max` on Linux), so passing
+    /// more than the host allows is harmless — it is simply capped. Raising this (together with the
+    /// matching sysctl) is the cheap fix for datagrams dropped during bulk/cold syncs.
+    /// See [`recv_buffer_size`](Config::recv_buffer_size); to leave the OS default untouched, set
+    /// that field to `None` directly.
+    pub fn with_recv_buffer_size(mut self, size: usize) -> Self {
+        self.recv_buffer_size = Some(size);
+        self
+    }
+
+    /// Request `size` bytes for the gossip socket's send buffer (`SO_SNDBUF`).
+    ///
+    /// Clamped by the kernel to the OS maximum (`net.core.wmem_max` on Linux). See
+    /// [`send_buffer_size`](Config::send_buffer_size); to leave the OS default untouched, set that
+    /// field to `None` directly.
+    pub fn with_send_buffer_size(mut self, size: usize) -> Self {
+        self.send_buffer_size = Some(size);
+        self
+    }
+
     /// Enable per-datagram MAC authentication using a shared 32-byte cluster secret.
     ///
     /// Every outgoing datagram is then framed with a keyed MAC over its payload, and every
@@ -864,6 +914,8 @@ mod reconcile_store_tests {
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
             bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
+            recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
+            send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
         }
     }
 
