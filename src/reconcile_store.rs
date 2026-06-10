@@ -10,7 +10,6 @@
 //! to enable reconciliation between different instances over a network.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::ops::RangeBounds;
@@ -20,7 +19,6 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
-use serde::{de::DeserializeOwned, Serialize};
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
@@ -576,19 +574,32 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     }
 }
 
-// NOTE: this block intentionally does NOT use the `Value` bundle for `V`: `get_mut` does not
-// require `V: PartialEq` (unlike the main impl above), and `Value` includes `PartialEq`. Spelling
-// the data bounds out here keeps the required bound set identical (no tightening). `K` matches the
-// `Key` bundle exactly, so it is bundled.
-impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Sync + 'static>
-    ReconcileStore<K, V>
-{
+// `get_mut` shares the same `V: Value` bound as the rest of the store: an in-place edit is
+// re-stamped and broadcast (see below), and that broadcast serializes `V` through the engine's
+// `Value`-bounded path, so the bound set matches `insert`/`remove` exactly.
+impl<K: Key, V: Value> ReconcileStore<K, V> {
+    /// Mutate the value for `k` in place, then propagate the edit like [`insert`](ReconcileStore::insert).
+    ///
+    /// The callback receives `Some(&mut V)` when the key is live, or `None` when it is absent or
+    /// tombstoned. When it mutated a live value, the entry is then **re-stamped with a fresh Hybrid
+    /// Logical Clock timestamp and broadcast** to peers, exactly as a regular `insert` would be — so
+    /// an in-place edit converges across the cluster instead of remaining local. The whole
+    /// read-modify-write holds the map write lock for the duration of the callback, so it is atomic
+    /// against the reconciliation loop.
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         use crate::reconcilable::Projectable;
+        // Mint the timestamp before taking the map lock, matching the lock order of `insert`
+        // (clock, then map → projection).
+        let now = self.engine.clock_now();
+        let mut updated: Option<(Timestamp, Option<V>)> = None;
         let mut guard = self.engine.map.write();
         guard.with_mut(k, |maybe_tv| {
-            if let Some((_, v)) = maybe_tv {
-                callback(v.as_mut());
+            if let Some(tv) = maybe_tv {
+                callback(tv.1.as_mut());
+                // Re-stamp so the edit wins last-write-wins on peers and reconciles; `with_mut`
+                // recomputes the dated fingerprint from the whole (timestamp, value) afterwards.
+                tv.0 = now;
+                updated = Some(tv.clone());
             } else {
                 callback(None);
             }
@@ -598,6 +609,12 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         if let Some(tv) = guard.get(k) {
             let projected = tv.project();
             self.engine.projection.write().insert(k.clone(), projected);
+        }
+        drop(guard);
+        // Notify peers of the re-stamped entry, just like `insert`, so the edit propagates eagerly
+        // rather than being left to the next anti-entropy round (or failing to converge at all).
+        if let Some(value) = updated {
+            self.engine.broadcast_update(k.clone(), value);
         }
     }
 }
