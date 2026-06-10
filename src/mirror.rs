@@ -12,19 +12,19 @@
 //! # What it is for
 //!
 //! A dated store keeps a [`Timestamp`] next to every value so it can resolve conflicts
-//! (last-write-wins) and run the #109 tombstone causal-stability machinery. For a fleet with many
+//! (last-write-wins) and run the tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
 //! bytes per entry that the replica never needs. A `ReconcileMirror` stores only
 //! [`ValueOnly<V>`] — the `Option<V>` payload, no timestamp — and still converges with a dated peer
 //! over the **existing range-based diff protocol**, on the same UDP port.
 //!
-//! # How it stays #109-safe
+//! # How it stays causal-stability-safe
 //!
 //! The mirror speaks only the **value-only channel** of the protocol (the `ValueComparisonItem` /
-//! `ValueUpdate` messages, see issue #128). A
+//! `ValueUpdate` messages). A
 //! dated peer answers those by diffing against its value-only *projection* tree, so the mirror never
 //! sees a timestamp and the dated↔dated path is untouched. Crucially, the mirror **never
-//! acknowledges tombstones and is never added to a dated peer's #109 membership set**, so it cannot
+//! acknowledges tombstones and is never added to a dated peer's causal-stability membership set**, so it cannot
 //! block tombstone garbage collection — the regression the naive "single value-only hash" design
 //! would have caused.
 //!
@@ -87,14 +87,14 @@ type WireDated<V> = (Timestamp, Option<V>);
 
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
-/// See the [module documentation](crate::mirror) for the design and the #109-safety guarantees.
+/// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
 pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`ValueOnly`]), matching a dated peer's value-only projection.
     tree: Arc<RwLock<HRTree<K, ValueOnly<V>>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    /// The single network this read-only mirror probes for discovery (issue #53). A mirror is a
+    /// The single network this read-only mirror probes for discovery. A mirror is a
     /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
     /// containing its listen address, else the first declared network, else the loopback default.
     /// Shared so it can be retuned at runtime (see [`set_net`](Self::set_net)).
@@ -299,7 +299,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                 Ok(Message::ValueComparisonItem(segment)) => value_in_comparison.push(segment),
                 Ok(Message::ValueUpdate(update)) => value_updates.push(update),
                 // The dated channel is meaningless to a mirror (it cannot store dated values nor
-                // participate in #109). Ignore it.
+                // participate in causal stability). Ignore it.
                 Ok(Message::ComparisonItem(_)) | Ok(Message::Update(_)) | Ok(Message::Ack(_)) => {}
             }
         }
@@ -450,7 +450,7 @@ mod tests {
     }
 
     /// A live value and its `ValueOnly` projection hash identically only via the value-only basis:
-    /// per-entry, the dateless mirror saves the whole `Timestamp` (the point of #128).
+    /// per-entry, the dateless mirror saves the whole `Timestamp` (the point of the dateless mirror).
     #[test]
     fn value_only_is_smaller_per_entry() {
         let dated = std::mem::size_of::<(Timestamp, Option<u64>)>();

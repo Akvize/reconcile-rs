@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Malformed-packet fuzzing of the receive loop (issue #113).
+//! Malformed-packet fuzzing of the receive loop.
 //!
 //! A single malformed datagram from any host must never panic or kill the
 //! receive task — otherwise an unauthenticated remote could DoS the whole

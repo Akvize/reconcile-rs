@@ -20,7 +20,7 @@
 //! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), this keyed mode is
 //! upgraded from authentication-only to **authenticated encryption**: each datagram is framed as
 //! `nonce || ciphertext || tag` using XChaCha20-Poly1305 over the same cluster key, adding
-//! confidentiality (issue #96) on top of the integrity and authenticity the MAC already provides.
+//! confidentiality on top of the integrity and authenticity the MAC already provides.
 //!
 //! # Design
 //!

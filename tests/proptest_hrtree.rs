@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Property-based / generative tests (issue #113).
+//! Property-based / generative tests.
 //!
 //! These exercise the two invariants that matter most for a reconciliation
 //! library and that fixed-seed example tests cannot cover exhaustively:

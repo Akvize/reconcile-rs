@@ -66,8 +66,8 @@ impl<V> MaybeTombstone for (Timestamp, Option<V>) {
 /// `ValueOnly(Some(v))`; a tombstone is `ValueOnly(None)`.
 ///
 /// This is deliberately a *separate* type from the dated `(Timestamp, Option<V>)`: the dated value keeps
-/// its timestamp-inclusive `Hash` (required by the engine's `version_hash` for the #109
-/// causal-stability acks), so a single value-only hash never replaces it. See issue #128.
+/// its timestamp-inclusive `Hash` (required by the engine's `version_hash` for the
+/// causal-stability acks), so a single value-only hash never replaces it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ValueOnly<V>(pub Option<V>);
 

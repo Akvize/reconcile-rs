@@ -6,13 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Interop between a dated [`ReconcileStore`] and a dateless [`ReconcileMirror`] (issue #128).
+//! Interop between a dated [`ReconcileStore`] and a dateless [`ReconcileMirror`].
 //!
 //! These cover the two properties the lightweight-mirror design must guarantee:
 //! 1. **Convergence**: the mirror receives the dated store's current values (timestamps dropped),
 //!    mirrors deletions as tombstones, and its value-only fingerprint matches the dated store's
 //!    value-only projection.
-//! 2. **#109-safety**: a read-only mirror is never counted as a causal-stability member, so it
+//! 2. **Causal-stability safety**: a read-only mirror is never counted as a causal-stability member, so it
 //!    cannot block the dated store's tombstone garbage collection.
 
 use std::time::Duration;
@@ -99,7 +99,7 @@ async fn mirror_converges_with_dated_store() {
     mirror_task.abort();
 }
 
-/// A read-only mirror must never join the dated store's #109 membership set, otherwise it would
+/// A read-only mirror must never join the dated store's causal-stability membership set, otherwise it would
 /// hold back tombstone garbage collection forever (it never acknowledges tombstones). With only a
 /// mirror talking to it, the dated store must still collect an expired tombstone.
 #[tokio::test(flavor = "multi_thread")]

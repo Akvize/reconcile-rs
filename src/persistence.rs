@@ -18,15 +18,15 @@
 //!
 //! Why this matters: a node that restarts with an empty map loses its **tombstones** too. Losing
 //! tombstones is not just a durability problem — it is a correctness multiplier for tombstone
-//! resurrection (see issue #109): the restarted node behaves like a fresh replica, re-learns
+//! resurrection: the restarted node behaves like a fresh replica, re-learns
 //! already-deleted values from peers, and can re-propagate them. A durable backend recovers the
-//! tombstones (and the #109 causal-stability state) before the node rejoins the gossip protocol.
+//! tombstones (and the causal-stability state) before the node rejoins the gossip protocol.
 //!
 //! # What is persisted
 //!
 //! - **All map entries**, live values *and* tombstones (the map stores `(timestamp, Option<V>)`,
 //!   and tombstones are `(timestamp, None)` retained until causal-stability-gated GC).
-//! - The **causal-stability state** from issue #109: the membership set and the per-tombstone
+//! - The **causal-stability state**: the membership set and the per-tombstone
 //!   acknowledgments, so a restarted node still holds back GC until every replica has seen a
 //!   deletion.
 //!
@@ -63,7 +63,7 @@ pub type DatedEntries<K, V> = Vec<(K, (Timestamp, Option<V>))>;
 pub struct PersistedState<K, V> {
     /// Every key with its dated value. A `None` payload is a tombstone.
     pub entries: DatedEntries<K, V>,
-    /// Every peer this node has ever communicated with (causal-stability membership, #109).
+    /// Every peer this node has ever communicated with (causal-stability membership).
     pub members: HashSet<IpAddr>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub tombstone_acks: HashMap<K, HashMap<IpAddr, u64>>,

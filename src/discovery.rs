@@ -74,7 +74,7 @@ pub trait Discovery: Send + Sync + 'static {
 
 /// The default, **speculative** discovery: one random address per declared network each round.
 ///
-/// This is the historical auto-discovery for flat or geographically partitioned CIDRs (issue #53).
+/// This is the historical auto-discovery for flat or geographically partitioned CIDRs.
 /// The probed addresses might not be live peers, so they are used only as one-shot reconciliation
 /// targets and never seeded as known peers — if a peer exists there, it replies and is registered
 /// then. It shares the engine's live `nets` and `rng`, so retuning the topology at runtime

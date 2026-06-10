@@ -38,7 +38,7 @@
 //!    bottom of this module freeze the wire format so any change that would
 //!    break interoperability fails CI.
 //!
-//! See issue #111 and: A. Meyer, *Range-Based Set Reconciliation*
+//! See: A. Meyer, *Range-Based Set Reconciliation*
 //! (arXiv:2212.13567); Clarke et al., *Incremental Multiset Hash Functions*
 //! (ASIACRYPT 2003).
 
@@ -58,7 +58,7 @@ use serde::{Deserialize, Serialize};
 /// NOTE: a *non-empty* range can legitimately fingerprint to [`ZERO`](Fingerprint::ZERO) (elements
 /// whose hashes sum to a multiple of 2²⁵⁶). The reconciliation protocol must
 /// therefore never treat `fingerprint == ZERO` as "empty"; emptiness is decided
-/// on the element count. See issue #106.
+/// on the element count.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fingerprint(pub [u64; 4]);
 
