@@ -44,6 +44,13 @@ const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// decommissioned (see [`ReconcileStore::with_discovery_miss_threshold`]).
 const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
+/// Default rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
+/// peer is metered (see [`Config::bulk_send_rate`] and issue #168). 32 MiB/s keeps a cold-sync fast
+/// while spacing datagrams (~2 ms apart at the 64 KiB datagram size) so the burst cannot overrun the
+/// receiver's socket buffer, and so the receiver keeps being fed and does not re-issue a full diff
+/// over ranges still in flight (the byte amplification this caps).
+const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
+
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The store also keeps track of the addresses of other instances.
@@ -650,10 +657,34 @@ pub struct Config {
     /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
     pub encrypt: bool,
     /// How long the reconciliation loop waits for inbound activity before initiating a round — the
-    /// effective gossip cadence (default 1 s). A shorter interval converges faster at the cost of
-    /// more traffic. Retunable at runtime via
+    /// effective **background** anti-entropy cadence (default 1 s). It governs only divergence
+    /// detection and loss repair: local writes propagate immediately (broadcast), independent of it.
+    ///
+    /// A shorter interval repairs dropped/missed updates sooner, but background traffic grows roughly
+    /// as `1/interval` per local peer. It is also **counterproductive below a floor** of a few × the
+    /// peer RTT (and below the bulk pacing gap — see [`bulk_send_rate`](Self::bulk_send_rate)): the
+    /// diff is multi-round-trip, so re-initiating before the previous round's reply lands — or
+    /// between a bulk transfer's paced datagrams — only floods the single receive loop with redundant
+    /// comparisons, slowing convergence rather than speeding it (issue #178). Keep it ≥ a few × RTT;
+    /// the 1 s default is a safe, low-overhead choice. Retunable at runtime via
     /// [`set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
     pub reconcile_interval: Duration,
+    /// Rate, in bytes per second, at which a single **bulk** anti-entropy value transfer to one peer
+    /// is metered (issue #168). Defaults to 32 MiB/s; `None` disables pacing (the historical
+    /// back-to-back burst).
+    ///
+    /// When a peer differs over a whole range — most starkly a cold/empty peer pulling the entire
+    /// dataset — the holder would otherwise dump every value back-to-back in one burst. That burst
+    /// overruns the receiver's socket buffer (datagrams are dropped in the kernel) and, because the
+    /// receiver applies updates silently, the holder sees a lull and its own
+    /// [`reconcile_interval`](Self::reconcile_interval) timer re-issues a full diff over ranges still
+    /// in flight, which are then re-sent — inflating bytes transferred far beyond the dataset size.
+    /// Pacing the transfer on a background task (off the receive loop) keeps it below the receiver's
+    /// overrun threshold; the engine additionally sends at most one bulk transfer per peer at a time,
+    /// so a re-issued diff cannot re-send in-flight ranges. Together these make a cold sync transfer
+    /// ≈ the dataset size, fast, regardless of `reconcile_interval`. Only the bulk value dump is
+    /// paced; small refinement comparisons, acks, and local-write broadcasts are sent immediately.
+    pub bulk_send_rate: Option<usize>,
     // may include other options in the future: tombstone_ttl, metrics, etc.
 }
 impl Default for Config {
@@ -668,6 +699,7 @@ impl Default for Config {
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
+            bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
         }
     }
 }
@@ -732,6 +764,14 @@ impl Config {
     /// [`ReconcileStore::set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
     pub fn with_reconcile_interval(mut self, interval: Duration) -> Self {
         self.reconcile_interval = interval;
+        self
+    }
+
+    /// Set the rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
+    /// peer is paced (default 32 MiB/s). See [`bulk_send_rate`](Config::bulk_send_rate); to disable
+    /// pacing (the historical back-to-back burst), set that field to `None` directly.
+    pub fn with_bulk_send_rate(mut self, bytes_per_sec: usize) -> Self {
+        self.bulk_send_rate = Some(bytes_per_sec);
         self
     }
 
@@ -806,6 +846,7 @@ mod reconcile_store_tests {
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
+            bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
         }
     }
 
