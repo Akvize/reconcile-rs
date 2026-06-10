@@ -102,11 +102,11 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Its range fingerprints are timestamp-less by construction (see
     /// [`ValueOnly`](crate::reconcilable::ValueOnly)), which is what lets a dateless mirror
     /// converge with this dated store over the existing range-diff protocol. It is read-only state
-    /// for the dated↔dated path and never touches the #109 causal-stability bookkeeping.
+    /// for the dated↔dated path and never touches the causal-stability bookkeeping.
     pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
     port: u16,
     socket: Arc<UdpSocket>,
-    /// The geographical networks the cluster spans, each a CIDR (issue #53). One random address is
+    /// The geographical networks the cluster spans, each a CIDR. One random address is
     /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
     /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
     /// topology can be retuned live without recreating the node — the [`run`](Self::run) loop snapshots
@@ -132,9 +132,9 @@ pub(crate) struct Inner<K, V: Projectable> {
     reconcile_interval: Arc<RwLock<Duration>>,
     /// Rate (bytes/sec) at which a single bulk anti-entropy value transfer to one peer is paced, or
     /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::reconcile_store::Config::bulk_send_rate)
-    /// and is read by [`spawn_paced_send`](Self::spawn_paced_send) (issue #168).
+    /// and is read by [`spawn_paced_send`](Self::spawn_paced_send).
     bulk_send_rate: Option<usize>,
-    /// Peers with a bulk value transfer currently in flight (issue #168). At most one paced dump
+    /// Peers with a bulk value transfer currently in flight. At most one paced dump
     /// runs per peer at a time: while one is in flight, the reconcile timer re-firing (the receiver
     /// applies updates silently, so the holder sees a lull and re-initiates) must NOT spawn a second
     /// dump over ranges still in transit — that is precisely the byte amplification this prevents.
@@ -161,7 +161,7 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// prevents a peer that is partitioned for longer than the peer-expiration window from
     /// resurrecting a deleted value on its return.
     ///
-    /// Multi-network note (issue #53): remote-network members are gossiped to on a slower cadence, so
+    /// Multi-network note: remote-network members are gossiped to on a slower cadence, so
     /// their tombstone acknowledgments arrive later and cross-network GC is correspondingly slower —
     /// but still strictly correct, since GC never proceeds before *every* member has acked. Lowering
     /// [`Config::remote_interval`] or raising [`Config::remote_fanout`] speeds it up at the
@@ -196,7 +196,7 @@ impl<K, V: Projectable> std::ops::Deref for ReconcileEngine<K, V> {
 /// The three original variants form the **dated** channel (`ComparisonItem` / `Update` / `Ack`),
 /// exchanged between full dated stores exactly as before — their bincode tags (0, 1, 2) and wire
 /// bytes are unchanged. The two trailing variants form the additive **value-only** channel used by
-/// lightweight dateless mirrors (issue #128): they are tagged 3 and 4, so a node that does not
+/// lightweight dateless mirrors: they are tagged 3 and 4, so a node that does not
 /// understand them simply fails to deserialize and drops the datagram (the receive loop is hardened
 /// against that), keeping the protocol backward compatible on a single port.
 ///
@@ -256,7 +256,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
                  that can send UDP to this port can forge updates and poison the cluster via \
                  last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
-                 network to a trusted underlay. See issue #108 / REVIEW.md F3."
+                 network to a trusted underlay. See REVIEW.md F3."
             );
         }
         let map = HRTree::<K, V>::new();
@@ -445,8 +445,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         });
     }
 
-    /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task (issue
-    /// #168).
+    /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task.
     ///
     /// This is the cold/bulk anti-entropy path: when a peer differs over a whole range it must
     /// receive every value in that range (most starkly, a cold/empty peer pulling the whole
@@ -454,7 +453,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// receiver's socket buffer — datagrams dropped in the kernel — and (b) hold the receive loop for
     /// the whole transfer, so no other peer is served meanwhile.
     ///
-    /// Two cooperating mechanisms fix the cold-sync amplification (issue #168):
+    /// Two cooperating mechanisms fix the cold-sync amplification:
     ///
     /// 1. **Pacing** to [`bulk_send_rate`](Inner::bulk_send_rate) bytes/sec, on a spawned task, keeps
     ///    the burst below the receiver's overrun threshold and off the receive loop.
@@ -583,8 +582,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                                 //
                                 // Crucially, a sender that spoke *only* the value-only channel is a
                                 // dateless read-only mirror: it never acknowledges tombstones, so it
-                                // must NOT join the #109 membership set or it would block GC
-                                // forever (the very regression #128 must avoid). Such a mirror is
+                                // must NOT join the causal-stability membership set or it would block GC
+                                // forever (the very regression we must avoid). Such a mirror is
                                 // served reactively off `peer` and is not tracked as a peer/member.
                                 if spoke_dated {
                                     let addr = peer.ip();
@@ -617,7 +616,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
-        // Geography-aware target selection (issue #53). With a single network this reduces to the
+        // Geography-aware target selection. With a single network this reduces to the
         // historical behaviour: every known peer is local, so all of them are contacted each round,
         // plus a single random discovery probe.
         //
@@ -695,7 +694,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     ///
     /// Returns `true` if the datagram contained at least one **dated** protocol message
     /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
-    /// the sender in the #109 membership set: a sender that spoke only the value-only channel is a
+    /// the sender in the causal-stability membership set: a sender that spoke only the value-only channel is a
     /// read-only mirror and must not gate tombstone GC.
     #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
@@ -804,7 +803,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             }
             // The differing values are the bulk payload — a cold/empty peer pulls the whole dataset
             // here. Hand them to a rate-paced background task so the burst cannot overrun the
-            // receiver and the receive loop stays free for other peers (issue #168).
+            // receiver and the receive loop stays free for other peers.
             if !differences.is_empty() {
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
@@ -832,14 +831,14 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             // 1) Under a read lock, decide which merged values would actually change state. We must
             //    NOT run the pre-insert hook here: hooks are contractually executed *outside* the
             //    map's write lock (matching `just_insert`), so a hook that re-inserts cannot
-            //    re-enter the lock and deadlock (issue #149).
+            //    re-enter the lock and deadlock.
             let mut to_apply: Vec<(K, V)> = Vec::new();
             {
                 let guard = self.map.read();
                 for (k, remote_v) in updates {
                     // Advance our clock past the timestamp carried by the remote value, so a
                     // later local write is ordered after everything we have seen. This is
-                    // what prevents lost updates under clock skew (issue #110).
+                    // what prevents lost updates under clock skew.
                     self.clock.observe(remote_v.timestamp());
                     match guard.get(&k) {
                         Some(local_v) => {
@@ -897,7 +896,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Value-only channel: answer a dateless mirror by diffing against the value-only
         // *projection* tree (never the dated map) and replying with `ValueUpdate`s carrying only
         // the projected payload. This path is entirely independent of the dated channel and of the
-        // #109 causal-stability state — no acks, no membership, no GC interaction.
+        // causal-stability state — no acks, no membership, no GC interaction.
         if !value_in_comparison.is_empty() {
             debug!("received {} value-only segments", value_in_comparison.len());
             let mut differences = Vec::new();
@@ -927,7 +926,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 .await;
             }
             // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
-            // background task, exactly like the dated bulk path (issue #168).
+            // background task, exactly like the dated bulk path.
             if !differences.is_empty() {
                 let updates: Vec<Message<K, V, V::Projected>> = {
                     let guard = self.projection.read();
@@ -1038,8 +1037,8 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
 /// Send `messages` to `peer` back-to-back (unpaced).
 ///
 /// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
-/// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead (issue
-/// #168); see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
+/// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead;
+/// see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
 pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
     messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,
@@ -1055,7 +1054,7 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
 /// With `rate = None` the datagrams go out back-to-back (the historical behaviour). With
 /// `rate = Some(bytes_per_sec)` the function sleeps between datagrams so the average send rate stays
 /// at or below that bound — used for bulk anti-entropy value transfers so the burst cannot overrun
-/// the receiver's socket buffer (issue #168). Because it sleeps, it must run **off** the receive
+/// the receiver's socket buffer. Because it sleeps, it must run **off** the receive
 /// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
 /// reception of every other peer for the duration of the transfer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
@@ -1110,7 +1109,7 @@ async fn pace(rate: Option<usize>, start: Instant, sent_bytes: usize) {
     }
 }
 
-/// RAII marker that a bulk dump to `peer` is in flight (issue #168). Removing the peer on `Drop` —
+/// RAII marker that a bulk dump to `peer` is in flight. Removing the peer on `Drop` —
 /// rather than at the end of the send task's body — guarantees the in-flight mark is cleared even if
 /// the send task panics, so a transient failure can never wedge a peer into "permanently
 /// transferring" (which would silently stop it from ever syncing again). See
@@ -1190,8 +1189,8 @@ mod deadlock_regressions {
         buf
     }
 
-    /// Network-path counterpart of [`pre_insert_hook_can_call_insert_again_without_deadlock`]
-    /// (issue #149): a value arriving over the wire is integrated by [`handle_messages`], which must
+    /// Network-path counterpart of [`pre_insert_hook_can_call_insert_again_without_deadlock`]:
+    /// a value arriving over the wire is integrated by [`handle_messages`], which must
     /// run the pre-insert hook *outside* the map's write lock, just like the direct `just_insert`
     /// path. Otherwise a hook that re-inserts re-enters the (non-reentrant) write lock and deadlocks
     /// the receive loop.
@@ -1478,7 +1477,7 @@ mod pacing {
         start.elapsed()
     }
 
-    /// `bulk_send_rate` actually meters the transfer (issue #168): a multi-datagram payload sent at a
+    /// `bulk_send_rate` actually meters the transfer: a multi-datagram payload sent at a
     /// low rate takes substantially longer than the same payload sent unpaced. Anchored to
     /// wall-clock, so we only assert a generous lower bound on the paced run (sleeping can only
     /// lengthen it) and an upper bound on the unpaced run — robust to CI scheduler jitter.

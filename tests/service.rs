@@ -86,7 +86,7 @@ async fn test() {
     // deterministic, causality-respecting LWW contract. (We deliberately do *not* rely on
     // wall-clock real-time order across the two independent node clocks: two writes in the same
     // millisecond on different nodes are genuinely concurrent and resolved by node id, which is
-    // exactly the ambiguity issue #110 is about.)
+    // exactly the ambiguity this is about.)
     let key = "42".to_string();
     for i in 0..20 {
         // Unique values per iteration so each `assert_until` observes *this* write, not a value
@@ -242,7 +242,7 @@ async fn authenticated_nodes_converge() {
     task1.abort();
 }
 
-/// Regression test for issue #110: two replicas that concurrently write *different* values to
+/// Regression test: two replicas that concurrently write *different* values to
 /// the same key must converge to a single agreed value, with matching fingerprints.
 ///
 /// Before the Hybrid Logical Clock fix, conflict resolution keyed on the physical wall clock
@@ -301,7 +301,7 @@ async fn concurrent_writes_converge() {
     task2.abort();
 }
 
-/// Regression test for issue #109: a tombstone must not be garbage-collected while a replica
+/// Regression test: a tombstone must not be garbage-collected while a replica
 /// that has not acknowledged it is still a member (causal stability), and decommissioning that
 /// replica must release the tombstone for GC.
 #[tokio::test(flavor = "multi_thread")]
@@ -371,7 +371,7 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     task1.abort();
 }
 
-/// Regression test for issue #109: a value deleted while a replica is partitioned must not be
+/// Regression test: a value deleted while a replica is partitioned must not be
 /// resurrected when that replica returns with the stale value.
 #[tokio::test(flavor = "multi_thread")]
 async fn deleted_value_is_not_resurrected_by_returning_peer() {
@@ -438,7 +438,7 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
 }
 
 /// Regression test for the remote DoS where a single malformed UDP datagram panicked the
-/// receive loop, silently killing reconciliation (issue #107).
+/// receive loop, silently killing reconciliation.
 ///
 /// We send a malformed datagram to each node, then check that reconciliation still works.
 /// Before the fix, the receive loop task would panic and die, and the propagation assertion
@@ -480,7 +480,7 @@ async fn test_malformed_datagram_does_not_crash() {
 }
 
 /// Two nodes sharing the same cluster key with encryption enabled must converge, proving that
-/// payloads round-trip end-to-end through the XChaCha20-Poly1305 layer (issue #96).
+/// payloads round-trip end-to-end through the XChaCha20-Poly1305 layer.
 #[cfg(feature = "encryption")]
 #[tokio::test(flavor = "multi_thread")]
 async fn encrypted_nodes_converge() {
@@ -572,7 +572,7 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
     task1.abort();
 }
 
-/// Issue #53: two nodes in distinct geographical networks converge over cross-network anti-entropy.
+/// Two nodes in distinct geographical networks converge over cross-network anti-entropy.
 ///
 /// Networks are simulated by two disjoint /30 subnets inside the loopback range, each node living in
 /// one of them and declaring both. A dedicated port isolates the test.
@@ -619,7 +619,7 @@ async fn cross_net_reconciliation() {
     task2.abort();
 }
 
-/// Issue #53: a node auto-discovers a peer in another network purely from the network's CIDR, with
+/// A node auto-discovers a peer in another network purely from the network's CIDR, with
 /// no seed. Discovery probes one random address per network each round. To keep the test
 /// deterministic (rather than relying on a random probe landing on the peer within a subnet), each
 /// node declares the *other node's exact address* as a network (a /32), so the per-network discovery

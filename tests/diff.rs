@@ -109,7 +109,7 @@ fn test_compare() {
     )
 }
 
-// The size-not-hash regression tests for issue #106/#111 — a *non-empty* range that
+// The size-not-hash regression tests — a *non-empty* range that
 // fingerprints to `ZERO`, and equal fingerprints over different-sized ranges — require feeding
 // crafted `HashSegment`s (whose `hash`/`size` fields are deliberately set to collide) straight
 // into `diff_round`. Because `HashSegment`'s fields are `pub(crate)`, those tests live as unit

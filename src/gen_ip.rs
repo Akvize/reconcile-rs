@@ -66,7 +66,7 @@ pub fn gen_ipv6<R: Rng>(rng: &mut R, network: Ipv6Net) -> Ipv6Addr {
 
 /// One random probe address per network CIDR.
 ///
-/// Used for multi-network peer auto-discovery (issue #53): a node probes one random address inside
+/// Used for multi-network peer auto-discovery: a node probes one random address inside
 /// each configured geographical network every reconciliation round, so discovery spans every
 /// network rather than a single flat CIDR.
 pub fn probe_targets<R: Rng>(rng: &mut R, nets: &[IpNet]) -> Vec<IpAddr> {
@@ -76,7 +76,7 @@ pub fn probe_targets<R: Rng>(rng: &mut R, nets: &[IpNet]) -> Vec<IpAddr> {
 /// Return the first network in `nets` whose CIDR contains `addr`, if any.
 ///
 /// A peer's geographical network is derived purely from its IP address, so the wire format carries
-/// no network tag (issue #53).
+/// no network tag.
 pub fn net_of(nets: &[IpNet], addr: IpAddr) -> Option<IpNet> {
     nets.iter().copied().find(|net| net.contains(&addr))
 }
@@ -84,7 +84,7 @@ pub fn net_of(nets: &[IpNet], addr: IpAddr) -> Option<IpNet> {
 /// The host route (`/32` for IPv4, `/128` for IPv6) of a single address.
 ///
 /// Used as the local network of last resort: when no configured network contains a node's listen
-/// address (a misconfiguration), the node treats only itself as local (issue #53).
+/// address (a misconfiguration), the node treats only itself as local.
 pub fn host_net(addr: IpAddr) -> IpNet {
     let prefix_len = match addr {
         IpAddr::V4(_) => 32,

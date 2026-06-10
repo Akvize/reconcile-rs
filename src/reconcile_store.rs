@@ -43,7 +43,7 @@ const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
 /// Default rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
-/// peer is metered (see [`Config::bulk_send_rate`] and issue #168). 32 MiB/s keeps a cold-sync fast
+/// peer is metered (see [`Config::bulk_send_rate`]). 32 MiB/s keeps a cold-sync fast
 /// while spacing datagrams (~2 ms apart at the 64 KiB datagram size) so the burst cannot overrun the
 /// receiver's socket buffer, and so the receiver keeps being fed and does not re-issue a full diff
 /// over ranges still in flight (the byte amplification this caps).
@@ -376,7 +376,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// Unlike the previous physical-clock API, callers no longer supply timestamps: a
     /// caller-chosen `DateTime` could collide with another replica's and trigger the
-    /// non-commutative tie-break that caused permanent divergence (issue #110).
+    /// non-commutative tie-break that caused permanent divergence.
     pub fn remove_bulk(&self, keys: &[K]) {
         self.engine.insert_bulk(
             &keys
@@ -627,7 +627,7 @@ pub const MAX_NETS: usize = 8;
 pub struct Config {
     pub port: u16,
     pub listen_addr: IpAddr,
-    /// The geographical networks the cluster spans, each a CIDR (issue #53). Empty slots are `None`.
+    /// The geographical networks the cluster spans, each a CIDR. Empty slots are `None`.
     ///
     /// Declare every network with [`with_net`](Config::with_net); a *network* is just an address
     /// range, sized to your topology (a whole cloud region, an availability zone, or a single
@@ -682,12 +682,12 @@ pub struct Config {
     /// peer RTT (and below the bulk pacing gap — see [`bulk_send_rate`](Self::bulk_send_rate)): the
     /// diff is multi-round-trip, so re-initiating before the previous round's reply lands — or
     /// between a bulk transfer's paced datagrams — only floods the single receive loop with redundant
-    /// comparisons, slowing convergence rather than speeding it (issue #178). Keep it ≥ a few × RTT;
+    /// comparisons, slowing convergence rather than speeding it. Keep it ≥ a few × RTT;
     /// the 1 s default is a safe, low-overhead choice. Retunable at runtime via
     /// [`set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
     pub reconcile_interval: Duration,
     /// Rate, in bytes per second, at which a single **bulk** anti-entropy value transfer to one peer
-    /// is metered (issue #168). Defaults to 32 MiB/s; `None` disables pacing (the historical
+    /// is metered. Defaults to 32 MiB/s; `None` disables pacing (the historical
     /// back-to-back burst).
     ///
     /// When a peer differs over a whole range — most starkly a cold/empty peer pulling the entire
@@ -729,7 +729,7 @@ impl Config {
         self.listen_addr = listen_addr;
         self
     }
-    /// Declare a geographical network the cluster spans, by its CIDR (issue #53).
+    /// Declare a geographical network the cluster spans, by its CIDR.
     ///
     /// Call once per network — **including this node's own**. The node's local network is whichever
     /// declared net contains [`listen_addr`](Config::listen_addr); the rest are remote and gossiped
@@ -817,7 +817,7 @@ impl Config {
     }
 
     /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
-    /// authentication-only to authenticated **encryption** (issue #96).
+    /// authentication-only to authenticated **encryption**.
     ///
     /// This reuses the shared [`cluster_key`](Self::cluster_key) as the AEAD key, so
     /// [`with_cluster_key`](Self::with_cluster_key) must also be set on every node; a node
@@ -924,7 +924,7 @@ mod reconcile_store_tests {
         assert!(restarted.tombstones.remove(&2).is_some());
     }
 
-    /// The causal-stability state from issue #109 (membership + per-tombstone acks) must survive a
+    /// The causal-stability state (membership + per-tombstone acks) must survive a
     /// restart, otherwise GC gating is lost.
     #[tokio::test]
     async fn restart_preserves_membership_and_acks() {
@@ -966,7 +966,7 @@ mod reconcile_store_tests {
         );
     }
 
-    /// Regression for issue #122 ↔ #109: a restart must not turn a held-back tombstone into a
+    /// Regression: a restart must not turn a held-back tombstone into a
     /// collectable (and thus resurrectable) one. A fresh, empty store would treat the tombstone as
     /// causally stable (no members ⇒ GC allowed); a store that recovered its membership must still
     /// gate GC because the unacknowledged peer is restored too.
@@ -998,7 +998,7 @@ mod reconcile_store_tests {
         let fresh_version = fresh.engine.map.read().get(&1).map(version_hash).unwrap();
         assert!(
             fresh.engine.is_tombstone_stable(&1, fresh_version),
-            "a fresh restart with no membership would (wrongly) GC the tombstone — the hazard #122 describes"
+            "a fresh restart with no membership would (wrongly) GC the tombstone — the hazard this guards against"
         );
 
         // The recovered store keeps the tombstone gated, preventing resurrection.

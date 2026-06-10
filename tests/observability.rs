@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Smoke tests for the observability instrumentation (issue #94).
+//! Smoke tests for the observability instrumentation.
 //!
 //! These tests deliberately exercise only the **synchronous, same-thread** paths:
 //! `tracing::subscriber::set_default` and `metrics::with_local_recorder` are both

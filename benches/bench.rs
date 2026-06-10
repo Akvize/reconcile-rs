@@ -234,7 +234,7 @@ mod imp {
 
     /// Compare the in-memory cost of a **naive dated mirror** (`HRTree<K, (Timestamp, Option<V>)>`, which
     /// drags along a timestamp it never uses) against the **lightweight value-only mirror**
-    /// (`HRTree<K, ValueOnly<V>>`) that issue #128 introduces.
+    /// (`HRTree<K, ValueOnly<V>>`) that the lightweight-mirror design introduces.
     ///
     /// Criterion times the *fill* of each tree at growing sizes; the value-only tree both builds faster
     /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per

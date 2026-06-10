@@ -30,7 +30,7 @@
 //!   Strong Eventual Consistency.
 //!
 //! LWW still discards one of two *genuinely concurrent* writes by design; recovering both
-//! would require version vectors or a CRDT and is out of scope (see issue #110).
+//! would require version vectors or a CRDT and is out of scope.
 
 use chrono::Utc;
 use parking_lot::Mutex;

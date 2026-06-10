@@ -74,7 +74,7 @@ pub fn diff_round<K, V>(
         // produces `Included`/`Unbounded` start bounds and `Excluded`/`Unbounded` end
         // bounds (see `start_diff` and the segments pushed below). Rather than reaching
         // `unimplemented!()` — a remote-triggerable panic that would kill the
-        // reconciliation task (issue #112) — we drop any other bound shape and move on.
+        // reconciliation task — we drop any other bound shape and move on.
         let start_index = match start_bound.as_ref() {
             Bound::Unbounded => 0,
             Bound::Included(key) => tree.insertion_position(key),
@@ -109,7 +109,7 @@ pub fn diff_round<K, V>(
         // `crate::fingerprint`), so a *non-empty* range can legitimately fingerprint
         // to `ZERO`; using `hash == ZERO` as an "empty" sentinel (or `hash ==
         // local_hash` alone as "equal") would alias such ranges and cause silent,
-        // permanent divergence. See issues #106 and #111.
+        // permanent divergence.
         if hash == local_hash && size == local_size {
             continue;
         } else if size == 0 {
@@ -192,7 +192,7 @@ mod tests {
         (out_comparison, differences)
     }
 
-    // ----- Issue #112: malformed segments from the wire must be dropped, never panic. -----
+    // ----- Malformed segments from the wire must be dropped, never panic. -----
 
     /// An `Excluded` start bound used to reach `unimplemented!()`. The segment must be
     /// dropped, not panic.
@@ -255,13 +255,13 @@ mod tests {
         assert_eq!(differences, vec![(Bound::Unbounded, Bound::Unbounded)]);
     }
 
-    // ----- Issue #106 / #111: emptiness and equality are decided on `size`, never on the -----
+    // ----- Emptiness and equality are decided on `size`, never on the -----
     // range fingerprint. A range fingerprint combines per-element hashes additively, so a
     // non-empty range can legitimately fingerprint to `ZERO` and two different ranges can
     // fingerprint equally. The segment fields below are exactly what such a colliding (or
     // hostile) peer puts on the wire; we drive them straight through `diff_round`.
 
-    /// Headline #106 counterexample. A *non-empty* peer range that fingerprints to `ZERO`
+    /// Headline counterexample. A *non-empty* peer range that fingerprints to `ZERO`
     /// (e.g. two elements whose per-element hashes cancel) is advertised against our empty
     /// tree, which also fingerprints to `ZERO`. The hashes match (`ZERO == ZERO`) but the
     /// sizes differ (`2 != 0`). The buggy code short-circuited on the first `hash ==
@@ -291,7 +291,7 @@ mod tests {
         );
     }
 
-    /// #106 dual: equal fingerprints with equal sizes over a *non-empty* range are correctly
+    /// Dual: equal fingerprints with equal sizes over a *non-empty* range are correctly
     /// concluded in sync (the size check does not produce false differences). We advertise
     /// the tree's own real fingerprint and size back to it.
     #[test]
@@ -307,7 +307,7 @@ mod tests {
         assert!(differences.is_empty());
     }
 
-    /// #106 branch: equal fingerprints but *different* sizes over a non-empty range must not
+    /// Branch: equal fingerprints but *different* sizes over a non-empty range must not
     /// be mistaken for "in sync"; the range is refined instead. We feed the tree's own
     /// fingerprint with a deliberately wrong (larger) size, forcing the fan-out branch.
     #[test]

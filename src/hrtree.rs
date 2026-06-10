@@ -15,7 +15,7 @@
 //! the cumulated [`Fingerprint`] of all key-value pairs between two keys.
 //!
 //! The per-element hash and the way fingerprints are combined (256-bit addition,
-//! *not* XOR) live in [`crate::fingerprint`]; see that module and issue #111 for
+//! *not* XOR) live in [`crate::fingerprint`]; see that module for
 //! why the combiner and hash function are chosen the way they are.
 
 //! Although we did come we the idea independently, it exactly matches a paper
