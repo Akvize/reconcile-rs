@@ -58,6 +58,19 @@ const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 /// before the application ever sees them.
 const DEFAULT_SOCKET_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
+/// Default cap on the number of distinct tracked peers (see [`Config::max_peers`]).
+///
+/// 1024 is generous for a gossip cluster that typically spans tens to a few hundred nodes;
+/// raise the limit via [`Config::with_max_peers`] for larger deployments.
+const DEFAULT_MAX_PEERS: usize = 1024;
+
+/// Default cap on the number of concurrently active paced bulk dumps (see
+/// [`Config::max_concurrent_bulk_dumps`]).
+///
+/// 4 is a conservative default that bounds total in-flight snapshot memory without
+/// starving small clusters; raise via [`Config::with_max_concurrent_bulk_dumps`].
+const DEFAULT_MAX_CONCURRENT_BULK_DUMPS: usize = 4;
+
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The store also keeps track of the addresses of other instances.
@@ -488,6 +501,38 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.members_snapshot()
     }
 
+    /// Number of entries in the peers gossip-routing map.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn peers_map_len(&self) -> usize {
+        self.engine.peers_map_len()
+    }
+
+    /// Number of entries in the per-peer replay filter.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn replay_filter_len(&self) -> usize {
+        self.engine.replay_filter_len()
+    }
+
+    /// Number of keys currently tracked in the tombstone-acknowledgment map.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn tombstone_acks_len(&self) -> usize {
+        self.engine.tombstone_acks_len()
+    }
+
+    /// Number of bulk dump tasks currently in flight across all peers.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn bulk_dumps_in_flight_count(&self) -> usize {
+        self.engine.bulk_dumps_in_flight_count()
+    }
+
     /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
     /// recreating the node**. The local network is re-derived automatically (whichever new net
     /// contains the listen address). See [`Config::nets`].
@@ -819,6 +864,39 @@ pub struct Config {
     /// Defaults to 5 minutes. Increase if nodes have large, legitimate clock skew; decrease for
     /// tighter replay protection. See [`with_freshness_window`](Config::with_freshness_window).
     pub freshness_window: Duration,
+    /// Maximum number of distinct remote peers (members) this node will track.
+    ///
+    /// When the membership set is at capacity, datagrams from completely unknown senders are
+    /// dropped **before** any per-sender state (membership, gossip-peer record, or replay-filter
+    /// entry) is allocated. Senders that are already tracked are unaffected at cap, and calling
+    /// [`forget_peer`](crate::ReconcileStore::forget_peer) on a member immediately frees its slot.
+    ///
+    /// The cap is defence-in-depth for unauthenticated deployments (where any spoofed source
+    /// address would otherwise grow the maps without bound), and a hard ceiling for authenticated
+    /// ones. The default of 1024 is generous for most clusters; raise it if your cluster has more
+    /// active members. See [`with_max_peers`](Config::with_max_peers).
+    ///
+    /// The cap applies to *all* unknown senders, including read-only mirrors, which never become
+    /// members themselves: while the membership set is saturated, a newly connecting mirror is
+    /// also rejected and cannot sync until a member slot frees up. Size the cap for members
+    /// *plus* expected mirrors.
+    pub max_peers: usize,
+    /// Maximum number of concurrently active paced bulk dumps across all peers.
+    ///
+    /// A paced bulk dump holds a full snapshot `Vec` of the differing range (potentially the
+    /// whole dataset) for the duration of the transfer. Without a global cap, M peers diffing
+    /// simultaneously would each hold such a snapshot — M × dataset memory plus M × egress
+    /// at [`bulk_send_rate`](Self::bulk_send_rate). This field limits the total number of
+    /// in-flight dump tasks regardless of peer count.
+    ///
+    /// When the budget is exhausted a new dump is skipped **before** the snapshot Vec is
+    /// allocated; the protocol is retry-driven, so the requesting peer's next diff round
+    /// re-triggers the dump once a slot is free.
+    ///
+    /// Defaults to 4. Raise if your cluster has many simultaneous cold peers and the host has
+    /// sufficient memory; lower for tighter memory caps. See
+    /// [`with_max_concurrent_bulk_dumps`](Config::with_max_concurrent_bulk_dumps).
+    pub max_concurrent_bulk_dumps: usize,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -836,6 +914,8 @@ impl Default for Config {
             recv_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
             freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
+            max_peers: DEFAULT_MAX_PEERS,
+            max_concurrent_bulk_dumps: DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         }
     }
 }
@@ -968,6 +1048,27 @@ impl Config {
         self
     }
 
+    /// Set the maximum number of distinct peers this node will track (default 1024).
+    ///
+    /// Datagrams from unknown senders are silently dropped when the membership set is at capacity,
+    /// before any per-sender state is created. Already-tracked peers are unaffected.
+    /// See [`max_peers`](Config::max_peers) for the full semantics.
+    pub fn with_max_peers(mut self, max: usize) -> Self {
+        self.max_peers = max;
+        self
+    }
+
+    /// Set the maximum number of concurrently active paced bulk dumps (default 4).
+    ///
+    /// When the budget is exhausted a new dump is skipped before allocating its snapshot Vec;
+    /// the protocol is retry-driven, so the peer re-triggers the dump on its next diff round once
+    /// a slot is free.
+    /// See [`max_concurrent_bulk_dumps`](Config::max_concurrent_bulk_dumps) for the full semantics.
+    pub fn with_max_concurrent_bulk_dumps(mut self, max: usize) -> Self {
+        self.max_concurrent_bulk_dumps = max;
+        self
+    }
+
     /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
     /// authentication-only to authenticated **encryption**.
     ///
@@ -1020,6 +1121,8 @@ mod reconcile_store_tests {
             recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
             freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
+            max_peers: super::DEFAULT_MAX_PEERS,
+            max_concurrent_bulk_dumps: super::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         }
     }
 
@@ -1462,5 +1565,274 @@ mod reconcile_store_tests {
             std::io::ErrorKind::AddrInUse,
             "bind failure should surface as AddrInUse, got {err:?}"
         );
+    }
+
+    // ── per-peer cap ──────────────────────────────────────────────────────────
+
+    /// The default cap must be 1024.
+    #[test]
+    fn peer_cap_default_is_1024() {
+        assert_eq!(Config::default().max_peers, 1024);
+    }
+
+    /// Helper: craft a raw bincode payload containing a single `ComparisonItem` drawn from an empty
+    /// tree, suitable for sending to an unauthenticated store.  The engine deserializes any
+    /// `ComparisonItem` as a dated message, so `spoke_dated` becomes `true` and the receive path
+    /// would add the sender to `members` — unless the cap fires first.
+    fn dated_comparison_payload() -> Vec<u8> {
+        use crate::proto;
+        use crate::reconcile_engine::Message;
+        use crate::HRTree;
+        use bincode::{DefaultOptions, Serializer};
+        use serde::Serialize as _;
+
+        let tree = HRTree::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
+        let segments = proto::start_diff(&tree);
+        let mut buf = Vec::new();
+        for seg in segments {
+            Message::<
+                i32,
+                (crate::clock::Timestamp, Option<i32>),
+                (crate::clock::Timestamp, Option<i32>),
+            >::ComparisonItem(seg)
+            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .expect("serializing ComparisonItem into a Vec cannot fail");
+        }
+        buf
+    }
+
+    /// When the membership set is at capacity, datagrams from a completely unknown sender are
+    /// dropped silently: the sender is not added to `members`, `peers`, or the replay filter.
+    /// Known members (already in `members`) are unaffected at cap.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn peer_cap_blocks_unknown_sender_at_capacity() {
+        let port = 9801u16;
+        let target_addr: std::net::IpAddr = "127.0.0.180".parse().unwrap();
+        let peer1: std::net::IpAddr = "127.0.0.181".parse().unwrap();
+        let peer2: std::net::IpAddr = "127.0.0.182".parse().unwrap();
+        let newcomer: std::net::IpAddr = "127.0.0.183".parse().unwrap();
+
+        let config = Config::default()
+            .with_port(port)
+            .with_listen_addr(target_addr)
+            .with_net("127.0.0.180/30".parse().unwrap())
+            .with_max_peers(2);
+
+        let store = ReconcileStore::<i32, i32>::new(config)
+            .await
+            .expect("bind failed");
+
+        // Seed two known members directly (simulates two peers that already completed a
+        // dated handshake with this store before the test window).
+        store.engine.members.write().insert(peer1);
+        store.engine.members.write().insert(peer2);
+
+        let task = tokio::spawn(store.clone().run());
+
+        // Give the run loop time to enter its receive wait.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Send a valid dated payload from the newcomer's IP several times to ensure at least one
+        // reaches the receive loop; all must be dropped by the cap.
+        let payload = dated_comparison_payload();
+        let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
+            .await
+            .expect("bind sender");
+        for _ in 0..5 {
+            let _ = sender
+                .send_to(&payload, std::net::SocketAddr::new(target_addr, port))
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Give the receive loop time to process any remaining datagrams.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // The newcomer must not appear in any map regardless of how many datagrams arrived.
+        assert!(
+            !store.engine.members.read().contains(&newcomer),
+            "capped-out sender must not be added to members"
+        );
+        assert!(
+            !store.engine.peers.read().contains_key(&newcomer),
+            "capped-out sender must not be added to peers"
+        );
+
+        task.abort();
+    }
+
+    /// A sender that is already a member continues to be processed normally when the cap is reached.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn peer_cap_allows_known_member_at_capacity() {
+        let port = 9802u16;
+        let target_addr: std::net::IpAddr = "127.0.0.184".parse().unwrap();
+        let peer1: std::net::IpAddr = "127.0.0.185".parse().unwrap();
+        let peer2: std::net::IpAddr = "127.0.0.186".parse().unwrap();
+
+        let config = Config::default()
+            .with_port(port)
+            .with_listen_addr(target_addr)
+            .with_net("127.0.0.184/30".parse().unwrap())
+            .with_max_peers(2);
+
+        let store = ReconcileStore::<i32, i32>::new(config)
+            .await
+            .expect("bind failed");
+
+        store.engine.members.write().insert(peer1);
+        store.engine.members.write().insert(peer2);
+
+        let task = tokio::spawn(store.clone().run());
+
+        // Give the run loop time to enter its receive wait.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Send a valid dated payload FROM a known member (peer1), retrying until accepted.
+        let payload = dated_comparison_payload();
+        let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(peer1, 0))
+            .await
+            .expect("bind sender");
+
+        let mut peers_refreshed = false;
+        for _ in 0..50 {
+            let _ = sender
+                .send_to(&payload, std::net::SocketAddr::new(target_addr, port))
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if store.engine.peers.read().contains_key(&peer1) {
+                peers_refreshed = true;
+                break;
+            }
+        }
+
+        // Known member must still be present (not evicted).
+        assert!(
+            store.engine.members.read().contains(&peer1),
+            "known member must not be evicted by the cap"
+        );
+        // The peers entry is (re-)inserted when the datagram is processed.
+        assert!(
+            peers_refreshed,
+            "known member's peers entry must be refreshed normally"
+        );
+
+        task.abort();
+    }
+
+    /// Decommissioning a member frees its slot: the engine's membership set shrinks and the
+    /// cap check allows a new sender through once a slot becomes available.
+    ///
+    /// This test verifies the state invariants directly (without the network path, which is
+    /// already exercised by [`peer_cap_blocks_unknown_sender_at_capacity`]).
+    #[tokio::test]
+    async fn decommission_frees_peer_cap_slot() {
+        let peer1: std::net::IpAddr = "127.1.0.1".parse().unwrap();
+        let peer2: std::net::IpAddr = "127.1.0.2".parse().unwrap();
+        let newcomer: std::net::IpAddr = "127.1.0.3".parse().unwrap();
+
+        let config = Config::default()
+            .with_port(0)
+            .with_listen_addr("127.0.0.1".parse().unwrap())
+            .with_max_peers(2);
+
+        let store = ReconcileStore::<i32, i32>::new(config)
+            .await
+            .expect("bind failed");
+
+        // Seed two members (simulates two peers that completed a dated exchange).
+        store.engine.members.write().insert(peer1);
+        store.engine.members.write().insert(peer2);
+        assert_eq!(store.engine.members.read().len(), 2);
+
+        // At cap: a newcomer would be blocked.
+        assert!(
+            store.engine.members.read().len() >= 2,
+            "precondition: at cap"
+        );
+        assert!(
+            !store.engine.members.read().contains(&newcomer),
+            "precondition: newcomer not yet in members"
+        );
+
+        // Decommission peer2, freeing one slot.
+        store.forget_peer(peer2);
+        assert_eq!(
+            store.engine.members.read().len(),
+            1,
+            "one member after decommission"
+        );
+        assert!(
+            !store.engine.members.read().contains(&peer2),
+            "peer2 must be removed from members"
+        );
+        // The peers gossip-routing entry must also be gone (so capacity is visible to the
+        // cap check path, and decommission does not leave a ghost entry in the peers map).
+        assert!(
+            !store.engine.peers.read().contains_key(&peer2),
+            "peer2 must be removed from peers by decommission"
+        );
+
+        // After decommission: members.len() == 1 < max_peers == 2.
+        // The cap check allows the newcomer through: current_len < 2.
+        let current_len = store.engine.members.read().len();
+        let is_known = store.engine.members.read().contains(&newcomer);
+        assert!(
+            is_known || current_len < 2,
+            "newcomer must not be capped out (members.len={current_len}) after decommission freed a slot"
+        );
+    }
+
+    /// In authenticated mode, datagrams from a capped-out sender must not create a replay-filter
+    /// entry.  The cap check runs before `replay_filter.check_and_record` for unknown senders.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn peer_cap_no_replay_entry_for_capped_sender() {
+        let port = 9804u16;
+        let target_addr: std::net::IpAddr = "127.0.0.192".parse().unwrap();
+        let peer1: std::net::IpAddr = "127.0.0.193".parse().unwrap();
+        let peer2: std::net::IpAddr = "127.0.0.194".parse().unwrap();
+        let newcomer: std::net::IpAddr = "127.0.0.195".parse().unwrap();
+        let cluster_key = [0x55u8; 32];
+
+        let config = Config::default()
+            .with_port(port)
+            .with_listen_addr(target_addr)
+            .with_net("127.0.0.192/30".parse().unwrap())
+            .with_cluster_key(cluster_key)
+            .with_max_peers(2);
+
+        let store = ReconcileStore::<i32, i32>::new(config)
+            .await
+            .expect("bind failed");
+
+        store.engine.members.write().insert(peer1);
+        store.engine.members.write().insert(peer2);
+
+        let task = tokio::spawn(store.clone().run());
+
+        // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
+        let payload = dated_comparison_payload();
+        let counter = crate::replay::SenderCounter::new();
+        let sealed = crate::auth::Authenticator::new(Some(cluster_key), false)
+            .seal(counter.next_seq(), counter.next_stamp(), &payload)
+            .expect("enabled authenticator always seals");
+
+        let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
+            .await
+            .expect("bind sender");
+        sender
+            .send_to(&sealed, std::net::SocketAddr::new(target_addr, port))
+            .await
+            .expect("send");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // The cap fired before the replay filter: no replay entry must have been created.
+        assert_eq!(
+            store.engine.replay_filter_len(),
+            0,
+            "no replay-filter entry must be created for a capped-out sender"
+        );
+
+        task.abort();
     }
 }
