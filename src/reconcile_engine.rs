@@ -1217,6 +1217,40 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         }
     }
 
+    /// Returns `true` when `peer` has at least one tombstone it has not yet acknowledged.
+    ///
+    /// The predicate iterates the local map (the authoritative domain) looking for tombstone
+    /// entries. For each tombstone it checks whether `peer` has acknowledged the exact current
+    /// version via `tombstone_acks`. A tombstone whose key has NO entry in `tombstone_acks` at
+    /// all (fresh deletion, no ack has arrived yet) is also treated as pending — exactly the
+    /// condition that `is_tombstone_stable` blocks on.
+    ///
+    /// Locks taken: `map` read, then `tombstone_acks` read — the established lock order
+    /// (map before tombstone_acks) so this can be called from the discovery task without
+    /// risk of deadlock. Cost: O(local map entries) — acceptable for the discovery cadence
+    /// (~5 s intervals, only when a member is missing from DNS).
+    pub(crate) fn has_pending_tombstone_acks(&self, peer: IpAddr) -> bool {
+        let map = self.map.read();
+        let acks = self.tombstone_acks.read();
+        for (key, value) in map.iter() {
+            if !value.is_tombstone() {
+                continue;
+            }
+            let current_version = version_hash(value);
+            // Mirror the per-key ack test that `is_tombstone_stable` uses: the peer must have
+            // acknowledged exactly this version. If the key has no ack entry at all (fresh
+            // deletion, nobody has acked yet), the peer is pending.
+            let peer_acked = acks
+                .get(key)
+                .and_then(|key_acks| key_acks.get(&peer))
+                .is_some_and(|v| *v == current_version);
+            if !peer_acked {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Register (or refresh) a known peer at runtime, the `&self` counterpart of the
     /// [`with_seed`](crate::ReconcileStore::with_seed) builder.
     ///
@@ -1241,6 +1275,17 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     #[cfg(any(test, feature = "internal-testing"))]
     pub(crate) fn peers_map_len(&self) -> usize {
         self.peers.read().len()
+    }
+
+    /// Whether `peer` is present in the gossip-routing peers map (i.e. discovery has seeded it
+    /// at least once and the entry has not yet expired). Used as a deterministic signal in tests
+    /// to confirm that at least one discovery round has observed a peer before the test mutates
+    /// the discovery source.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn peers_contains(&self, peer: IpAddr) -> bool {
+        self.peers.read().contains_key(&peer)
     }
 
     /// Number of entries currently in the per-peer replay filter.
@@ -1726,6 +1771,48 @@ mod causal_stability {
         // Forgetting the tombstone clears its bookkeeping.
         eng.forget_tombstone(&key);
         assert!(eng.tombstone_acks.read().get(&key).is_none());
+    }
+
+    /// Regression: `has_pending_tombstone_acks` must detect a freshly-deleted tombstone that
+    /// has ZERO acks recorded (the `tombstone_acks` map has no entry for that key yet).
+    ///
+    /// The original implementation iterated `tombstone_acks.iter()` — which yields nothing when
+    /// the map is empty — and returned `false` ("no pending acks").  That is wrong: a tombstone
+    /// with no ack entry is the *most* pending of all states.  The fixed implementation iterates
+    /// the local map and treats any tombstone with a missing or mismatched ack as pending.
+    ///
+    /// If this test fails, the old predicate has been restored (see commit history).  The test
+    /// is intentionally self-contained so it can be run against either version of the predicate
+    /// to confirm the regression.
+    #[tokio::test]
+    async fn fresh_tombstone_with_zero_acks_is_pending() {
+        let eng = engine("127.0.0.66").await;
+        let peer: IpAddr = "127.0.0.67".parse().unwrap();
+        let key = 11i32;
+        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+
+        // B is a known member — gates tombstone GC.
+        eng.members.write().insert(peer);
+
+        // Insert the tombstone directly into the engine map (no gossip round needed).
+        eng.just_insert(key, tombstone);
+        assert!(eng.map.read().get(&key).is_some());
+
+        // No ack entry exists for this key yet — the tombstone is "fresh".
+        assert!(
+            eng.tombstone_acks.read().is_empty(),
+            "tombstone_acks must be empty — no ack has arrived"
+        );
+
+        // The predicate must report the peer as having pending work: `tombstone_acks` has no
+        // entry for this key, so `is_tombstone_stable` would also block.
+        assert!(
+            eng.has_pending_tombstone_acks(peer),
+            "has_pending_tombstone_acks returned false for a fresh tombstone with zero acks \
+             (resurrection hazard: the old tombstone_acks.iter() predicate iterates an empty map \
+             and returns false, triggering the fast-path decommission while the tombstone is \
+             still active)"
+        );
     }
 }
 

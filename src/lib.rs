@@ -171,6 +171,19 @@ pub mod testing {
         store.peers_map_len()
     }
 
+    /// Whether `peer` is currently in the gossip-routing peers map.
+    ///
+    /// Exposed so discovery integration tests can deterministically confirm that at least one
+    /// discovery round has seeded a peer before mutating the scripted resolver — eliminating the
+    /// `seen_ever` race that caused intermittent failures in the floor tests.
+    pub fn peers_contains<K, V>(store: &crate::ReconcileStore<K, V>, peer: std::net::IpAddr) -> bool
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.peers_contains(peer)
+    }
+
     /// Number of entries in the per-peer replay filter.
     ///
     /// Exposed for integration-test assertions so the peer-cap tests can verify that no new
