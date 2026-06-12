@@ -10,10 +10,11 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-06-09
-- **Baseline:** `master` @ `6462970` (steps 1+3, `Hlc`→`Timestamp` + `hlc`→`clock` renames); step 2 on
-  `claude/repo-cleanup-status-bcyjez`
-- **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
+- **Last updated:** 2026-06-12
+- **Baseline:** `claude/determined-franklin-s3tvt1` @ `f1423ce` (2026-06 correctness sprint; pending
+  merge to master)
+- **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
+  [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
 ---
 
@@ -24,8 +25,17 @@ The **algorithmic core** (HRTree + range fingerprint + RBSR diff) is correct and
 fixed: the crate now has a collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution,
 causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication and
 payload encryption, pluggable persistence, runtime observability, and a lightweight dateless
-read-only mirror. Remaining work is **maturity, scaling, and the confidentiality roadmap** — no
-known correctness hazard is open.
+read-only mirror. A 2026-06 adversarial audit filed implementation-level correctness bugs as
+[#195](https://github.com/Akvize/reconcile-rs/issues/195)–[#205](https://github.com/Akvize/reconcile-rs/issues/205)
+(tracking [#206](https://github.com/Akvize/reconcile-rs/issues/206)); the Phase-0 correctness
+findings ([#195](https://github.com/Akvize/reconcile-rs/issues/195),
+[#196](https://github.com/Akvize/reconcile-rs/issues/196),
+[#197](https://github.com/Akvize/reconcile-rs/issues/197),
+[#198](https://github.com/Akvize/reconcile-rs/issues/198)) plus
+[#148](https://github.com/Akvize/reconcile-rs/issues/148) are **fixed on this branch**; remaining
+audit findings ([#199](https://github.com/Akvize/reconcile-rs/issues/199)–[#205](https://github.com/Akvize/reconcile-rs/issues/205))
+are **security/robustness-grade**, scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
+Remaining work is **maturity, scaling, and the confidentiality roadmap**.
 
 ---
 
@@ -48,16 +58,16 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F10 | High | IP-scan discovery, O(N²) membership | ◐ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — `Discovery` port + `DnsDiscovery` (k8s headless-Service DNS, no IP-scan) lands a cloud-native discovery path; bounded-fan-out membership (SWIM/HyParView) still open |
 | F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_hrtree.rs`, `tests/fuzz_packets.rs` |
 | F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
-| F13 | Medium | panic-only API (no `Result`) | ◯ | [#148](https://github.com/Akvize/reconcile-rs/issues/148) — `new`/`run` still return `Self`/`()`; `unwrap` on bind/send |
-| F14 | Medium | `pre_insert` hook under the write-lock (net path) | ◯ | [#149](https://github.com/Akvize/reconcile-rs/issues/149) — hook runs under the lock on the network path |
+| F13 | Medium | panic-only API (no `Result`) | ✅ | [#148](https://github.com/Akvize/reconcile-rs/issues/148) — fallible `new` constructors (`io::Result`, `AddrInUse` surfaces); no network send can panic the run loops (`f1423ce`, this branch) |
+| F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | [#149](https://github.com/Akvize/reconcile-rs/issues/149) — `pre_insert` runs outside the write lock on both paths, with a regression test (`f4b5028`) |
 | F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
 | F16 | Medium | loopback benches + README inconsistency | ◐ | README updated; benches still loopback-only |
 | F17 | Medium/Low | maturity signals | ◐ | clippy fixed; see §3 checklist |
-| F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ◯ | [#150](https://github.com/Akvize/reconcile-rs/issues/150) — unbounded `peers`; no bincode allocation limit |
-| F19 | Low | dependency hygiene | ◯ | [#151](https://github.com/Akvize/reconcile-rs/issues/151) — `overflow-checks` off; bincode `with_limit`; `cargo audit` |
+| F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ◐ | bincode decode limit landed ([#151](https://github.com/Akvize/reconcile-rs/issues/151)); [#150](https://github.com/Akvize/reconcile-rs/issues/150) rescoped to the `peers` cap (unauthenticated mode) + per-datagram message/segment caps; related growth vectors in [#200](https://github.com/Akvize/reconcile-rs/issues/200) |
+| F19 | Low | dependency hygiene | ◐ | bincode `with_limit` landed ([#151](https://github.com/Akvize/reconcile-rs/issues/151)); `overflow-checks` and `cargo audit`/`cargo deny` in CI still open ([#203](https://github.com/Akvize/reconcile-rs/issues/203), [#205](https://github.com/Akvize/reconcile-rs/issues/205)) |
 
-**Score:** 11 resolved · 4 partial (F9, F10, F16, F17) · 4 open (F13, F14, F18, F19). All Critical
-resolved; all but one High resolved or mitigated.
+**Score:** 13 resolved · 6 partial (F9, F10, F16, F17, F18, F19) · 0 open. All Critical resolved;
+all but one High resolved or mitigated.
 
 ---
 
@@ -68,12 +78,11 @@ resolved; all but one High resolved or mitigated.
 - [x] Malformed-packet fuzz harness (`fuzz_packets.rs`)
 - [x] Security model documented (README "Security model")
 - [x] Pluggable persistence documented (README "Persistence")
-- [ ] Real semantic version (still `0.0.0-git`)
-- [ ] Declared MSRV (`rust-version`)
+- [ ] Semver and publish policy — `0.2.1` exists but policy is not yet settled ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
 - [ ] `CHANGELOG.md`
 - [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
-- [ ] miri job for the `unsafe` iterators
+- [ ] Declare + CI-pin MSRV (`rust-version`) — iterators are safe Rust (crate is `#![forbid(unsafe_code)]`); miri item dropped ([#189](https://github.com/Akvize/reconcile-rs/issues/189))
 - [ ] `overflow-checks = true` in the release profile ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
 - [ ] bincode decode limit (`with_limit`) against allocation bombs ([#150](https://github.com/Akvize/reconcile-rs/issues/150), [#151](https://github.com/Akvize/reconcile-rs/issues/151))
 
@@ -106,9 +115,29 @@ resolved; all but one High resolved or mitigated.
 ### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
 - Reconciliation latency: RBSR uses O(log n) sequential RTTs; a Rateless-IBLT pass to drain
   divergent leaves in one shot would cut WAN latency. Design choice, not a defect.
-- API ergonomics: `Result`-returning `new`/`run` (F13 — [#148](https://github.com/Akvize/reconcile-rs/issues/148));
-  `pre_insert` under the write-lock on the net path (F14 — [#149](https://github.com/Akvize/reconcile-rs/issues/149));
+- API ergonomics: `Result`-returning constructors ✅ (F13 — [#148](https://github.com/Akvize/reconcile-rs/issues/148), `f1423ce`);
+  `pre_insert` outside the write-lock ✅ (F14 — [#149](https://github.com/Akvize/reconcile-rs/issues/149), `f4b5028`);
   post-insert hooks ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
+
+### 2026-06 adversarial audit
+
+Five independent adversarial audits challenged the codebase and all open issues; findings were
+filed as [#195](https://github.com/Akvize/reconcile-rs/issues/195)–[#205](https://github.com/Akvize/reconcile-rs/issues/205)
+with roadmap and tracking in
+[#206](https://github.com/Akvize/reconcile-rs/issues/206). The Phase-0 correctness items —
+HLC restart monotonicity ([#195](https://github.com/Akvize/reconcile-rs/issues/195)), `TimeoutWheel`
+same-millisecond expiry collision ([#196](https://github.com/Akvize/reconcile-rs/issues/196)),
+fingerprint-desyncing mutable iterators ([#197](https://github.com/Akvize/reconcile-rs/issues/197)),
+and HLC far-future stamp / counter wrap ([#198](https://github.com/Akvize/reconcile-rs/issues/198))
+— are fixed on this branch; the remainder
+([#199](https://github.com/Akvize/reconcile-rs/issues/199) replay/membership poisoning,
+[#200](https://github.com/Akvize/reconcile-rs/issues/200) unbounded acks/bulk dumps,
+[#201](https://github.com/Akvize/reconcile-rs/issues/201) DNS decommission vs GC gate,
+[#202](https://github.com/Akvize/reconcile-rs/issues/202) persistence robustness,
+[#203](https://github.com/Akvize/reconcile-rs/issues/203) CI gaps,
+[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline/version drift,
+[#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch) are security/robustness-grade
+and scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 
 ### Architecture refactor
 Tracked in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and issue
