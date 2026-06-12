@@ -78,6 +78,7 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
     let discovery = ScriptedDiscovery::new(vec![addr2]);
     let store1 = ReconcileStore::<i32, i32>::new(cfg1)
         .await
+        .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(50))
         .with_discovery(Arc::new(discovery.clone()))
@@ -85,6 +86,7 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
         .with_discovery_miss_threshold(3);
     let store2 = ReconcileStore::<i32, i32>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
