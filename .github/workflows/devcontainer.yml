@@ -2,9 +2,8 @@ name: Devcontainer CI
 
 on:
   push:
-    branches: ["master"]
+    branches: ["main"]
   pull_request:
-    branches: ["master"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
