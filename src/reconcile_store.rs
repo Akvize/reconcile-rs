@@ -123,6 +123,28 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         svc
     }
 
+    /// Test-only constructor that accepts an explicit [`Clock`] adapter.
+    ///
+    /// Injects a deterministic clock (e.g. `ManualClock`) so that persistence and HLC-ordering
+    /// tests are fully reproducible without relying on real wall-clock time.
+    #[cfg(test)]
+    pub(crate) async fn new_with_clock(
+        config: Config,
+        clock: Arc<dyn crate::clock::Clock>,
+    ) -> Self {
+        let svc = ReconcileStore {
+            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new_with_clock(config, clock)
+                .await,
+            tombstones: TimeoutWheel::new(),
+            persistence: Arc::new(InMemoryPersistence::default()),
+            discovery: None,
+            discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
+            discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
+        };
+        svc.add_pre_insert(|_, _| {});
+        svc
+    }
+
     /// Plug in a durable persistence backend, **loading any previously saved state first**.
     ///
     /// Every store always owns a backend; by default that is the non-durable
@@ -140,9 +162,47 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Panics if the backend fails to load (e.g. a corrupt snapshot file): recovering from a
     /// damaged durable state is a deliberate, explicit decision rather than a silent fresh start.
     pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
+        // Warn operators when a durable backend is used with a randomly-generated node id.
+        // A random id changes on every restart, which silently alters this node's LWW
+        // conflict-resolution identity: a write made before the restart by "node X" will now
+        // race against a write made after the restart by "node Y" (a different random id), so
+        // the deterministic total order that guarantees SEC is only maintained within a single
+        // process lifetime. Stability across restarts requires an explicit id set via
+        // Config::with_node_id. Note: persisting node_id would require a format change and is
+        // deferred to a later migration.
+        if self.engine.node_id_is_random() {
+            warn!(
+                "persistence is enabled but no stable node_id was configured \
+                 (Config::with_node_id was not called). The node id is randomly generated on \
+                 every start, so this node's LWW conflict-resolution identity changes across \
+                 restarts. Conflicts between a pre-restart write and a post-restart write from \
+                 the same node are resolved non-deterministically. Set a stable, unique \
+                 Config::with_node_id to preserve consistent LWW ordering across restarts."
+            );
+        }
         if let Some(state) = backend.load().expect("failed to load persisted state") {
             *self.engine.members.write() = state.members;
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
+            // Advance the clock past every persisted timestamp so that the first post-restart
+            // write is strictly ordered after all pre-restart writes. Without this, the HLC
+            // starts cold at (wall_ms:0, counter:0); if the wall clock regressed across the
+            // restart (NTP step, VM resume — exactly the hazard HLC defends against), the first
+            // post-restart now() could be ≤ the max persisted stamp, causing a fresh write to
+            // silently lose last-write-wins to its own older persisted value.
+            //
+            // We use the trusted path (observe_trusted / clock_observe_trusted), which skips the
+            // far-future clamp that guards against hostile remote peers. Persisted stamps are
+            // self-authored: this node wrote them, so there is no remote adversary to protect
+            // against here. More importantly, after a wall-clock step BACKWARD by more than
+            // MAX_CLOCK_DRIFT_MS (NTP correction, VM resume — exactly the scenario we are
+            // defending against), an honest persisted stamp will exceed phys_now + MAX_CLOCK_DRIFT_MS
+            // and the clamped path would refuse to chase it, re-introducing the bug. The
+            // far-future clamp protects the clock during live gossip; this restore path is not
+            // live gossip. A poisoned stamp that made it into the snapshot is accepted here and
+            // consumed where stored stamps are used (e.g. tombstone expiry arithmetic).
+            for (_, (stamp, _)) in &state.entries {
+                self.engine.clock_observe_trusted(*stamp);
+            }
             // Replay through the wrapped pre-insert hook so the tombstone wheel is rebuilt with the
             // original deletion timestamps (do NOT route through the public insert helpers, which
             // would overwrite timestamps with `Utc::now()`).
@@ -894,6 +954,7 @@ mod reconcile_store_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::persistence::Persistence;
     use crate::reconcile_engine::version_hash;
     use crate::{
         reconcile_store::{Config, MAX_NETS},
@@ -1200,5 +1261,122 @@ mod reconcile_store_tests {
         );
 
         handle.abort();
+    }
+
+    // ----- Observe-on-load (HLC monotonicity across restarts) tests -----
+
+    /// After loading persisted state, the clock must be advanced past the maximum persisted
+    /// timestamp so that the first post-restart write is strictly ordered after all pre-restart
+    /// writes.
+    ///
+    /// This test FAILS without the observe-on-load fix and PASSES with it.
+    ///
+    /// Technique: use a `ManualClock` whose counter starts at zero and then load a
+    /// `PersistedState` whose max stamp is in the future relative to that clock (but within
+    /// MAX_CLOCK_DRIFT_MS, so the observe clamp does not interfere). After loading, the first
+    /// `insert` must mint a timestamp strictly greater than the persisted max.
+    #[tokio::test]
+    async fn restart_clock_advanced_past_persisted_max_stamp() {
+        use crate::clock::ManualClock;
+        use crate::persistence::{InMemoryPersistence, PersistedState};
+
+        // Build a ManualClock starting at (wall_ms=0, counter=0).
+        let clock = Arc::new(ManualClock::new(1));
+
+        // Craft a PersistedState whose only entry carries a stamp well ahead of the clock.
+        // wall_ms=100 is in the "future" relative to the ManualClock's (0, 0) starting state.
+        let persisted_stamp = crate::clock::Timestamp::new(100, 0, 1);
+        let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
+        backend
+            .save(&PersistedState {
+                entries: vec![(42, (persisted_stamp, Some(999)))],
+                members: Default::default(),
+                tombstone_acks: Default::default(),
+            })
+            .unwrap();
+
+        // Create a store with the ManualClock and load the persisted state.
+        let store =
+            ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
+                .await
+                .with_persistence(backend);
+
+        // Insert a new value; the minted timestamp must be strictly greater than persisted_stamp.
+        store.insert(99, 1);
+
+        // Read the stored timestamp for key 99 via the internal map.
+        let minted_stamp = store
+            .engine
+            .map
+            .read()
+            .get(&99)
+            .map(|(ts, _)| *ts)
+            .expect("key 99 must be present after insert");
+
+        assert!(
+            minted_stamp > persisted_stamp,
+            "post-restart write timestamp {minted_stamp:?} is not strictly greater than the \
+             persisted max {persisted_stamp:?}; the clock was not advanced on load"
+        );
+    }
+
+    /// Variant of the monotonicity test where the maximum persisted stamp is on a **tombstone**.
+    ///
+    /// The critical property: a post-restart `insert` on the same key must mint a timestamp
+    /// strictly greater than the tombstone's stamp. If it does not, an anti-entropy round with a
+    /// peer that still holds the tombstone would re-apply the tombstone via LWW (tombstone stamp
+    /// > fresh insert's stamp), silently undoing the insert — the classic tombstone-resurrection
+    /// hazard.
+    ///
+    /// This test FAILS without the observe-on-load fix and PASSES with it.
+    #[tokio::test]
+    async fn restart_insert_beats_persisted_tombstone() {
+        use crate::clock::ManualClock;
+        use crate::persistence::{InMemoryPersistence, PersistedState};
+
+        // ManualClock starting at (wall_ms=0, counter=0).
+        let clock = Arc::new(ManualClock::new(2));
+
+        // A tombstone with a stamp in the "future" relative to the cold clock.
+        let tombstone_stamp = crate::clock::Timestamp::new(200, 0, 2);
+        let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
+        backend
+            .save(&PersistedState {
+                entries: vec![(7, (tombstone_stamp, None))], // None = tombstone
+                members: Default::default(),
+                tombstone_acks: Default::default(),
+            })
+            .unwrap();
+
+        let store =
+            ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
+                .await
+                .with_persistence(backend);
+
+        // The tombstone was recovered (key 7 is absent from the live view).
+        assert!(
+            store.get(&7).is_none(),
+            "tombstone was not recovered: expected key 7 to be absent after loading"
+        );
+
+        // Insert a fresh value for key 7 and inspect the minted timestamp.
+        store.insert(7, 42);
+        let minted_stamp = store
+            .engine
+            .map
+            .read()
+            .get(&7)
+            .map(|(ts, _)| *ts)
+            .expect("key 7 must be present after insert");
+
+        // The minted stamp must be strictly greater than the tombstone's stamp. Without this,
+        // a peer that still holds the tombstone would win the LWW merge during anti-entropy
+        // and silently re-apply the tombstone, undoing the fresh insert.
+        assert!(
+            minted_stamp > tombstone_stamp,
+            "post-restart insert timestamp {minted_stamp:?} is not strictly greater than the \
+             persisted tombstone stamp {tombstone_stamp:?}; the clock was not advanced on load, \
+             so a peer reconciling with this node could resurrect the tombstone via LWW"
+        );
     }
 }

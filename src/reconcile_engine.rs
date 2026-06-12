@@ -215,6 +215,10 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// stub via [`new_with_clock`](ReconcileEngine::new_with_clock)). Shared across all clones so
     /// that every write and every received timestamp advances the same clock.
     clock: Arc<dyn Clock>,
+    /// `true` when the node id was generated at random (i.e. `Config::node_id` was `None`).
+    /// Exposed via [`node_id_is_random`](ReconcileEngine::node_id_is_random) so that the store
+    /// layer can warn operators when persistence is configured but the identity is ephemeral.
+    pub(crate) node_id_is_random: bool,
 }
 
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
@@ -270,19 +274,22 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     pub async fn new(config: Config) -> Self {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
+        let node_id_is_random = config.node_id.is_none();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
-        Self::build(config, clock).await
+        Self::build(config, clock, node_id_is_random).await
     }
 
     /// Construct an engine over an explicit [`Clock`] adapter. Test-only seam: a deterministic
     /// clock (`ManualClock`) makes HLC behaviour reproducible without real wall-clock time.
     #[cfg(test)]
     pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> Self {
-        Self::build(config, clock).await
+        // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
+        // so persistence tests do not trigger the operator warning.
+        Self::build(config, clock, false).await
     }
 
-    async fn build(config: Config, clock: Arc<dyn Clock>) -> Self {
+    async fn build(config: Config, clock: Arc<dyn Clock>, node_id_is_random: bool) -> Self {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
             .await
             .unwrap();
@@ -342,6 +349,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
                 clock,
+                node_id_is_random,
             }),
         }
     }
@@ -376,6 +384,19 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
     pub fn clock_now(&self) -> Timestamp {
         self.clock.now()
+    }
+
+    /// Advance the clock past `stamp` using the trusted path — for stamps this node itself
+    /// authored (e.g. restored from its own persisted state). Unlike the remote-peer path,
+    /// this does not apply the far-future clamp, so the clock reliably chases its own output
+    /// even after a backward wall-clock step (NTP correction, VM resume).
+    pub(crate) fn clock_observe_trusted(&self, stamp: Timestamp) {
+        self.clock.observe_trusted(stamp);
+    }
+
+    /// Returns `true` when the node id was generated at random (`Config::node_id` was `None`).
+    pub(crate) fn node_id_is_random(&self) -> bool {
+        self.node_id_is_random
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
