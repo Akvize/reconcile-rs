@@ -83,10 +83,14 @@ pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
-// The `hrtree_iter` module is `pub(crate)`, but these iterator types appear in public `HRTree`
+// The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a
 // `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).
-pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
+// `IterMut` and `ValuesMut` are intentionally omitted (and are themselves `#[cfg(test)]`-only in
+// `hrtree_iter`): they hand out `&mut V` without updating per-element hashes or the cumulative
+// `tree_hash`, so exposing them publicly would silently corrupt fingerprints. The supported
+// mutation path is `HRTree::with_mut`. A correct iterator-based design is future work.
+pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
 pub use reconcilable::{Projectable, ValueOnly};
