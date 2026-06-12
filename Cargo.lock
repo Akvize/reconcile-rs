@@ -1279,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "reconcile"
-version = "0.0.0-git"
+version = "0.2.0"
 dependencies = [
  "arrayvec",
  "bincode",

@@ -1,6 +1,6 @@
 [package]
 name = "reconcile"
-version = "0.0.0-git"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
