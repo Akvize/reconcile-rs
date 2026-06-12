@@ -879,3 +879,225 @@ async fn runtime_config_setters() {
     store.set_reconcile_interval(Duration::from_millis(200));
     store.set_tombstone_timeout(Duration::from_millis(500));
 }
+
+/// A datagram whose wall-clock stamp is far outside the freshness window must be silently dropped.
+///
+/// This test injects a legitimately-sealed datagram (correct key, correct MAC) whose stamp is set
+/// one hour in the past, well outside the default 5-minute freshness window.  The engine must
+/// reject it silently and keep running.
+///
+/// This test would FAIL against the pre-change code: old code had no replay filter and therefore no
+/// freshness check.  Any correctly-MAC-tagged datagram was accepted regardless of its timestamp,
+/// so an attacker who captured a datagram hours earlier could replay it indefinitely.  The
+/// `seal_datagram` helper also did not exist in the testing seam before this change.
+#[cfg(feature = "internal-testing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_datagram_outside_freshness_window_is_rejected() {
+    use reconcile::testing::seal_datagram;
+
+    let port = 8092;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr_victim = "127.0.9.1".parse().unwrap();
+    let key = [0xBBu8; 32];
+
+    let cfg = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr_victim)
+        .with_net(net)
+        .with_cluster_key(key);
+    // Default freshness window is 5 minutes; the injected stamp is 1 hour in the past.
+
+    let store = ReconcileStore::<i32, i32>::new(cfg)
+        .await
+        .expect("bind failed");
+    store.just_insert(0, 99);
+    let task = tokio::spawn(store.clone().run());
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let sender_sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("{}:{}", addr_victim, port);
+
+    // A stamp from 1 hour ago — definitively outside the 5-minute freshness window.
+    let one_hour_ago_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .saturating_sub(Duration::from_secs(3600))
+        .as_millis() as u64;
+
+    // A minimal `Ack` message: bincode variant index 2, key=0 (i32), version token=0 (u64).
+    // If the freshness check were absent, this would reach the handler and do nothing (no tombstone
+    // for key=0 exists).  With the freshness check, it never reaches the handler at all.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&2u32.to_le_bytes()); // Ack variant index
+    payload.extend_from_slice(&0i32.to_le_bytes()); // key = 0
+    payload.extend_from_slice(&0u64.to_le_bytes()); // version token = 0
+
+    let stale_datagram = seal_datagram(key, 1, one_hour_ago_ms, &payload);
+    sender_sock.send_to(&stale_datagram, &target).await.unwrap();
+
+    // Give the engine time to (not) process.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The injected datagram must have been rejected silently: engine is still running.
+    assert!(
+        !task.is_finished(),
+        "engine must still be running after stale datagram"
+    );
+    // No state change: the value inserted before the test started is unchanged.
+    assert_eq!(store.get(&0).as_deref(), Some(&99));
+
+    task.abort();
+}
+
+/// Replaying the same sealed datagram (identical bytes, same seq) must be silently rejected after
+/// the first delivery.
+///
+/// This test crafts a valid authenticated datagram via the `internal-testing` seam, delivers it to
+/// an authenticated store, and then delivers the exact same bytes a second time.  Because the
+/// sequence number (seq=1) is already recorded in the per-peer replay filter, the second delivery
+/// is dropped silently and the engine continues running normally.
+///
+/// This test would FAIL against the pre-change code: old code had no replay header, no
+/// `SenderCounter`, and no `ReplayFilter`.  The `Authenticator::seal` function did not accept
+/// `seq` or `stamp` parameters, and `seal_datagram` did not exist in the testing seam.
+#[cfg(feature = "internal-testing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn replayed_sealed_datagram_is_rejected() {
+    use reconcile::testing::seal_datagram;
+
+    let port = 8093;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr_victim = "127.0.10.1".parse().unwrap();
+    let key = [0xDDu8; 32];
+
+    let cfg = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr_victim)
+        .with_net(net)
+        .with_cluster_key(key);
+
+    let store = ReconcileStore::<i32, i32>::new(cfg)
+        .await
+        .expect("bind failed");
+    let task = tokio::spawn(store.clone().run());
+
+    // Give the run loop time to start before injecting traffic.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let sender_sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("{}:{}", addr_victim, port);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // A minimal `Ack` message: bincode variant index 2, key=0 (i32), version token=0 (u64).
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&2u32.to_le_bytes()); // Ack variant index
+    payload.extend_from_slice(&0i32.to_le_bytes()); // key = 0
+    payload.extend_from_slice(&0u64.to_le_bytes()); // version token = 0
+
+    // Seal once with seq=1 and a fresh stamp.
+    let datagram = seal_datagram(key, 1, now_ms, &payload);
+
+    // First delivery: seq=1 is new for this sender — passes the replay filter.
+    sender_sock.send_to(&datagram, &target).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Second delivery: identical bytes, seq=1 already recorded — must be dropped by the replay
+    // filter without reaching the message handler.
+    sender_sock.send_to(&datagram, &target).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The engine must still be alive: replay rejection is silent, not a crash.
+    assert!(
+        !task.is_finished(),
+        "engine must still be running after replay"
+    );
+
+    task.abort();
+}
+
+/// A decommissioned peer's captured datagram, replayed while still fresh, must be rejected
+/// and must not re-add the peer to membership.
+///
+/// Attack scenario: an adversary captures a valid datagram from peer X while X is active,
+/// waits for X to be decommissioned, and then replays the datagram within the freshness
+/// window. Without replay state surviving decommission, the filter treats the replay as
+/// first contact and re-adds X to `members`, re-poisoning causal-stability membership.
+///
+/// This test must FAIL against the pre-fix code (commit 4391c82): `decommission_peer` called
+/// `replay_filter.evict(peer)`, erasing per-peer state, so the replayed datagram was accepted
+/// as first contact.
+#[cfg(feature = "internal-testing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn decommissioned_peer_replay_is_rejected() {
+    use reconcile::testing::{members_snapshot, seal_datagram};
+
+    let port = 8094;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr_victim: std::net::IpAddr = "127.0.11.1".parse().unwrap();
+    let addr_sender: std::net::IpAddr = "127.0.11.2".parse().unwrap();
+    let key = [0xEEu8; 32];
+
+    let cfg = Config::default()
+        .with_port(port)
+        .with_listen_addr(addr_victim)
+        .with_net(net)
+        .with_cluster_key(key);
+
+    let store = ReconcileStore::<i32, i32>::new(cfg)
+        .await
+        .expect("bind failed");
+    let task = tokio::spawn(store.clone().run());
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let sender_sock = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(addr_sender, 0))
+        .await
+        .unwrap();
+    let target = format!("{}:{}", addr_victim, port);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // A minimal `Ack` message (variant 2): causes `spoke_dated = true` so the sender is
+    // added to `members` on acceptance.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&2u32.to_le_bytes()); // Ack variant index
+    payload.extend_from_slice(&0i32.to_le_bytes()); // key = 0
+    payload.extend_from_slice(&0u64.to_le_bytes()); // version token = 0
+
+    // Seal the datagram — this is the "captured" datagram the adversary holds.
+    let captured = seal_datagram(key, 1, now_ms, &payload);
+
+    // First delivery: peer X joins members.
+    sender_sock.send_to(&captured, &target).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        members_snapshot(&store).contains(&addr_sender),
+        "sender must have joined members after first delivery"
+    );
+
+    // Decommission peer X: removes it from members/tombstone_acks but must NOT erase replay state.
+    store.forget_peer(addr_sender);
+    assert!(
+        !members_snapshot(&store).contains(&addr_sender),
+        "sender must be gone from members after decommission"
+    );
+
+    // Replay the SAME still-fresh captured datagram.
+    sender_sock.send_to(&captured, &target).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The replay must be rejected: X must NOT be re-added to members.
+    assert!(
+        !members_snapshot(&store).contains(&addr_sender),
+        "decommissioned peer must not be re-added to members by a replayed datagram"
+    );
+
+    assert!(!task.is_finished(), "engine must still be running");
+    task.abort();
+}
