@@ -108,6 +108,10 @@ pub struct ReconcileMirror<K, V> {
     replay_filter: Arc<replay::ReplayFilter>,
     /// Invoked just before each inbound value is integrated, so callers can be notified of changes.
     on_update: Arc<RwLock<OnUpdateCallback<K, V>>>,
+    /// Hard cap on the number of dated-cluster peers the mirror tracks. Datagrams from unknown
+    /// senders are dropped before any per-sender state is allocated when the peers map reaches
+    /// this size. Sourced from [`Config::max_peers`].
+    max_peers: usize,
 }
 
 impl<K, V> Clone for ReconcileMirror<K, V> {
@@ -123,6 +127,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
             sender_counter: self.sender_counter.clone(),
             replay_filter: self.replay_filter.clone(),
             on_update: self.on_update.clone(),
+            max_peers: self.max_peers,
         }
     }
 }
@@ -172,6 +177,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             sender_counter: Arc::new(replay::SenderCounter::new()),
             replay_filter: Arc::new(replay::ReplayFilter::new(config.freshness_window)),
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
+            max_peers: config.max_peers,
         })
     }
 
@@ -382,25 +388,41 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                if self.authenticator.is_enabled() {
-                                    let sender = peer.ip();
-                                    if !self.replay_filter.check_and_record(
-                                        sender,
-                                        payload.seq,
-                                        payload.stamp,
-                                    ) {
+                                let sender = peer.ip();
+                                // Per-peer cap check: drop datagrams from unknown senders when the
+                                // peers map is at capacity, before any per-sender state is
+                                // allocated (peers slot or replay-filter entry).
+                                {
+                                    let guard = self.peers.read();
+                                    if !guard.contains_key(&sender) && guard.len() >= self.max_peers
+                                    {
                                         trace!(
-                                            "mirror dropped replayed datagram from {peer}: \
-                                             seq={} stamp={}",
-                                            payload.seq,
-                                            payload.stamp
+                                            "mirror dropped datagram from {peer}: peer cap \
+                                             reached ({}/{})",
+                                            guard.len(),
+                                            self.max_peers
                                         );
                                         continue;
                                     }
                                 }
+                                if self.authenticator.is_enabled()
+                                    && !self.replay_filter.check_and_record(
+                                        sender,
+                                        payload.seq,
+                                        payload.stamp,
+                                    )
+                                {
+                                    trace!(
+                                        "mirror dropped replayed datagram from {peer}: \
+                                         seq={} stamp={}",
+                                        payload.seq,
+                                        payload.stamp
+                                    );
+                                    continue;
+                                }
                                 self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Record the sender so we keep gossiping value-only diffs to it.
-                                self.peers.write().insert(peer.ip(), Instant::now());
+                                self.peers.write().insert(sender, Instant::now());
                             }
                             None => trace!(
                                 "mirror dropped datagram from {peer}: missing or invalid MAC"
