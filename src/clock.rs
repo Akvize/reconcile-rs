@@ -154,6 +154,22 @@ pub trait Clock: Send + Sync + 'static {
     /// that a single poisoned stamp cannot pin the local clock into the far future. The
     /// total order on [`Timestamp`] and the strict-`>` merge are unaffected.
     fn observe(&self, remote: Timestamp);
+    /// Advance the clock past a stamp that **this node itself authored** (e.g. restored from its
+    /// own persisted state), so that the first post-restart [`now`](Clock::now) is strictly
+    /// ordered after every pre-restart write.
+    ///
+    /// Unlike [`observe`](Clock::observe), implementations must **not** apply the far-future
+    /// suspicion clamp to a self-authored stamp. The clamp guards against a remote peer injecting
+    /// an arbitrarily large wall value; it must not fire on a stamp we wrote ourselves, because
+    /// refusing to chase our own past output re-introduces own-write shadowing after a backward
+    /// clock step (NTP correction, VM resume) that moved physical time behind the persisted max.
+    ///
+    /// The default implementation delegates to [`observe`](Clock::observe), which is safe for
+    /// adapters that already have no clamp (e.g. the test `ManualClock`). `HlcClock` overrides
+    /// this with a clamp-free advance to preserve the guarantee above.
+    fn observe_trusted(&self, remote: Timestamp) {
+        self.observe(remote);
+    }
 }
 
 /// A per-node Hybrid Logical Clock — the default [`Clock`] adapter.
@@ -181,6 +197,54 @@ impl HlcClock {
                 node_id,
             }),
         }
+    }
+}
+
+impl HlcClock {
+    /// Shared advance logic for [`Clock::observe`] and [`Clock::observe_trusted`].
+    ///
+    /// `effective_remote_wall` is the wall value to use for the remote stamp — callers that
+    /// apply the far-future clamp pass the clamped value; the trusted path passes the raw value.
+    /// `remote_counter` is the counter from the original `remote` stamp (unchanged by any clamp).
+    ///
+    /// Preserves strict monotonicity and counter semantics exactly as the original `observe`
+    /// implementation did in its unclamped branches.
+    fn advance_inner(
+        &self,
+        last: &mut Timestamp,
+        pt: u64,
+        effective_remote_wall: u64,
+        remote_counter: u32,
+    ) {
+        let max_wall = pt.max(last.wall_ms).max(effective_remote_wall);
+
+        // Pick the base counter from the dominant wall bucket, then advance one logical tick.
+        // advance() handles u32::MAX → (wall+1, 0) so the result can never wrap.
+        let base_counter = if max_wall == last.wall_ms && max_wall == effective_remote_wall {
+            // Both last and the (clamped) remote share max_wall: take the larger counter.
+            last.counter.max(remote_counter)
+        } else if max_wall == last.wall_ms {
+            last.counter
+        } else if max_wall == effective_remote_wall {
+            remote_counter
+        } else {
+            // Physical time leapt past both: fresh wall, counter starts at 0.
+            // We return early here rather than running through advance() to preserve the
+            // original semantics (counter = 0, not 1) for the physical-time-dominates case.
+            *last = Timestamp {
+                wall_ms: max_wall,
+                counter: 0,
+                node_id: self.node_id,
+            };
+            return;
+        };
+
+        let (new_wall, new_counter) = advance(max_wall, base_counter);
+        *last = Timestamp {
+            wall_ms: new_wall,
+            counter: new_counter,
+            node_id: self.node_id,
+        };
     }
 }
 
@@ -244,35 +308,22 @@ impl Clock for HlcClock {
             remote.wall_ms
         };
 
-        let max_wall = pt.max(last.wall_ms).max(effective_remote_wall);
+        self.advance_inner(&mut last, pt, effective_remote_wall, remote.counter);
+    }
 
-        // Pick the base counter from the dominant wall bucket, then advance one logical tick.
-        // advance() handles u32::MAX → (wall+1, 0) so the result can never wrap.
-        let base_counter = if max_wall == last.wall_ms && max_wall == effective_remote_wall {
-            // Both last and the (clamped) remote share max_wall: take the larger counter.
-            last.counter.max(remote.counter)
-        } else if max_wall == last.wall_ms {
-            last.counter
-        } else if max_wall == effective_remote_wall {
-            remote.counter
-        } else {
-            // Physical time leapt past both: fresh wall, counter starts at 0.
-            // We return early here rather than running through advance() to preserve the
-            // original semantics (counter = 0, not 1) for the physical-time-dominates case.
-            *last = Timestamp {
-                wall_ms: max_wall,
-                counter: 0,
-                node_id: self.node_id,
-            };
-            return;
-        };
-
-        let (new_wall, new_counter) = advance(max_wall, base_counter);
-        *last = Timestamp {
-            wall_ms: new_wall,
-            counter: new_counter,
-            node_id: self.node_id,
-        };
+    /// Advance the clock past a stamp this node itself authored (e.g. restored from persisted
+    /// state), without applying the far-future clamp used for remote peer stamps.
+    ///
+    /// The clamp guards against a hostile or buggy peer injecting an arbitrarily large wall
+    /// value; it must not fire on self-authored stamps. If the wall clock stepped backward by
+    /// more than [`MAX_CLOCK_DRIFT_MS`] across a restart (NTP step, VM resume), an honest
+    /// persisted stamp would exceed `phys_now + MAX_CLOCK_DRIFT_MS` and the clamped path would
+    /// fail to advance the clock past it, re-introducing the own-write-shadowing bug.
+    fn observe_trusted(&self, remote: Timestamp) {
+        let pt = phys_now_ms();
+        let mut last = self.last.lock();
+        // No clamp: pass the raw wall value directly.
+        self.advance_inner(&mut last, pt, remote.wall_ms, remote.counter);
     }
 }
 
@@ -487,6 +538,54 @@ mod tests {
         assert!(
             rolled.wall_ms() > pinned_wall,
             "wall_ms did not roll forward: {rolled:?}"
+        );
+    }
+
+    /// `observe_trusted` of a stamp far beyond `phys_now + MAX_CLOCK_DRIFT_MS` must advance the
+    /// clock all the way past that stamp (so the next `now()` is strictly greater than it), while
+    /// plain `observe` of the same stamp stays clamped and the next `now()` stays well below it.
+    ///
+    /// This pins the trusted/untrusted distinction: the trusted path is needed for persisted
+    /// stamps when the wall clock stepped backward by more than MAX_CLOCK_DRIFT_MS (NTP step,
+    /// VM resume). Without it, the clamped path would leave the clock below the persisted max,
+    /// and a fresh write would shadow an older persisted value — the own-write-shadowing bug.
+    #[test]
+    fn observe_trusted_bypasses_far_future_clamp() {
+        let pt = phys_now_ms();
+        // A stamp far beyond the cap — the exact scenario of a wall-clock backward step that
+        // makes an honest persisted stamp land outside phys_now + MAX_CLOCK_DRIFT_MS.
+        let far_future = Timestamp::new(pt + MAX_CLOCK_DRIFT_MS + 5_000_000, 3, 7);
+
+        // ---- trusted path: clock must chase the stamp ----
+        let trusted_clock = HlcClock::new(1);
+        trusted_clock.observe_trusted(far_future);
+        let after_trusted = trusted_clock.now();
+        assert!(
+            after_trusted > far_future,
+            "observe_trusted did not advance the clock past the far-future stamp: \
+             next now() {after_trusted:?} is not > {far_future:?}"
+        );
+
+        // ---- clamped path: clock must NOT chase the stamp ----
+        let clamped_clock = HlcClock::new(2);
+        clamped_clock.observe(far_future);
+        let after_clamped = clamped_clock.now();
+        // Re-read physical time for the cap bound: `observe`/`now` recompute the cap against a
+        // fresh phys_now, so basing the bound on the stale `pt` from the top of the test would
+        // flake if the wall clock advanced more than a few ms during execution. `cap_upper`
+        // re-reads now and adds slack for the +1 that `advance()` may contribute.
+        let cap_upper = phys_now_ms() + MAX_CLOCK_DRIFT_MS + 10;
+        assert!(
+            after_clamped.wall_ms() <= cap_upper,
+            "observe (clamped) let wall_ms escape the cap: {} > {}",
+            after_clamped.wall_ms(),
+            cap_upper
+        );
+        // Confirm the clamped result is below the far-future stamp (pins the distinction).
+        assert!(
+            after_clamped < far_future,
+            "clamped observe produced a stamp >= the far-future value: \
+             {after_clamped:?} should be < {far_future:?}"
         );
     }
 
