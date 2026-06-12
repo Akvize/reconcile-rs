@@ -47,6 +47,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -133,14 +134,15 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
     /// [`with_cluster_key`](Config::with_cluster_key): to mirror an authenticated cluster it must
     /// share the cluster key. The Hybrid-Logical-Clock `node_id` is ignored (a mirror mints no
     /// timestamps).
-    pub async fn new(config: Config) -> Self {
-        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
-            .await
-            .unwrap();
-        debug!(
-            "ReconcileMirror listening on: {}",
-            socket.local_addr().unwrap()
-        );
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the UDP socket cannot be bound to
+    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
+    /// the address is not available on this host.
+    pub async fn new(config: Config) -> io::Result<Self> {
+        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
+        debug!("ReconcileMirror listening on: {}", socket.local_addr()?);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if !authenticator.is_enabled() {
             warn!(
@@ -154,7 +156,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let net = net_of(&nets, config.listen_addr)
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
-        ReconcileMirror {
+        Ok(ReconcileMirror {
             tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
@@ -163,7 +165,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
-        }
+        })
     }
 
     /// Provide the address of a known dated peer, reducing the time to first sync.
@@ -260,14 +262,18 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         peers.push(addr);
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(
+            if let Err(err) = send_to_retry(
                 &self.socket,
                 &self.authenticator,
                 send_buf,
                 (peer, self.port),
             )
             .await
-            .unwrap();
+            {
+                warn!(
+                    "mirror failed to send reconciliation initiation to {peer}: {err}; continuing"
+                );
+            }
         }
     }
 
@@ -395,7 +401,9 @@ mod tests {
     /// `get` returns the live value, and absent keys are `None`.
     #[tokio::test]
     async fn get_returns_integrated_value() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
         assert!(mirror.get(&1).is_none());
         mirror.integrate(vec![(1, ValueOnly(Some("hello".to_string())))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"hello".to_string()));
@@ -406,7 +414,9 @@ mod tests {
     /// A mirrored tombstone (`ValueOnly(None)`) hides the value but is still a stored entry.
     #[tokio::test]
     async fn mirrors_tombstones() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
         mirror.integrate(vec![(1, ValueOnly(Some("v".to_string())))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"v".to_string()));
 
@@ -422,7 +432,9 @@ mod tests {
     #[tokio::test]
     async fn on_update_hook_fires() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let mirror = ReconcileMirror::<i32, i32>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
         let count = Arc::new(AtomicUsize::new(0));
         let count2 = count.clone();
         mirror.add_on_update(move |_, _| {
@@ -436,7 +448,9 @@ mod tests {
     /// content — i.e. timestamps genuinely play no part in the hash.
     #[tokio::test]
     async fn value_fingerprint_is_timestamp_independent() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config()).await;
+        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
         mirror.integrate(vec![
             (1, ValueOnly(Some("a".to_string()))),
             (2, ValueOnly(None)),

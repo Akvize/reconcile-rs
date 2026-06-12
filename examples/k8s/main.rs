@@ -132,6 +132,7 @@ async fn main() {
 
     let store = ReconcileStore::<String, String>::new(config)
         .await
+        .expect("failed to bind UDP socket")
         .with_dns_discovery(dns_name, port)
         .with_discovery_interval(discovery_interval)
         .with_discovery_miss_threshold(miss_threshold);

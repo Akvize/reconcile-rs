@@ -82,7 +82,9 @@ async fn startup_emits_info_and_security_warning_without_cluster_key() {
     let subscriber = Registry::default().with(layer);
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let _store = ReconcileStore::<String, String>::new(local_config()).await;
+    let _store = ReconcileStore::<String, String>::new(local_config())
+        .await
+        .expect("bind failed");
 
     let events = events.lock().unwrap();
     let has_info_listening = events
@@ -109,7 +111,9 @@ async fn cluster_key_suppresses_the_security_warning() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let config = local_config().with_cluster_key([7u8; 32]);
-    let _store = ReconcileStore::<String, String>::new(config).await;
+    let _store = ReconcileStore::<String, String>::new(config)
+        .await
+        .expect("bind failed");
 
     let events = events.lock().unwrap();
     let has_info_listening = events
@@ -139,7 +143,9 @@ async fn local_mutations_increment_metric_counters() {
     // `info!("Listening on")` emission from poisoning the shared callsite cache for the other
     // tests (see that helper).
     keep_callsites_hot();
-    let store = ReconcileStore::<i32, i32>::new(local_config()).await;
+    let store = ReconcileStore::<i32, i32>::new(local_config())
+        .await
+        .expect("bind failed");
 
     let recorder = DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
