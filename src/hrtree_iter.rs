@@ -10,10 +10,8 @@
 //! including:
 //! - `IntoIter`: immutable in-order traversal consuming the tree and returning `(K, V)`;
 //! - `Iter`: immutable in-order traversal returning `(&K, &V)`;
-//! - `IterMut`: mutable in-order traversal returning `(&K, &mut V)`;
 //! - `IntoValues`: immutable in-order traversal consuming the tree and yielding `V`;
 //! - `Values`: immutable in-order traversal yielding `&V`;
-//! - `ValuesMut`: mutable in-order traversal yielding `&mut V`;
 //! - `IntoKeys`: immutable in-order traversal consuming the tree and yielding `K`;
 //! - `Keys`: immutable in-order traversal yielding `&K`;
 //!
@@ -23,15 +21,14 @@
 //! Each call to `next()` then executes a constant amount of work plus at most one further descent (amortized **O(1)** per element).
 //! Memory overhead is **O(h)** for the internal stack of node pointers.
 //!
-//! # Mutable iterators (fully safe)
+//! # Mutable access
 //!
-//! `IterMut` and `ValuesMut` are implemented in safe Rust, with **no raw pointers and no `unsafe`**.
-//! The traversal keeps a stack of per-node frames, each holding the node's remaining `(key, value)`
-//! pairs and its remaining children as standard slice iterators (`slice::Iter` / `slice::IterMut`).
-//! This works because `slice::IterMut::next` hands out a `&'a mut V` whose lifetime is decoupled from
-//! the borrow of the iterator itself, so distinct values can be yielded across many `next()` calls
-//! without ever aliasing — which is exactly what the previous raw-pointer implementation emulated by
-//! hand. The whole crate is `#![forbid(unsafe_code)]`.
+//! `IterMut` and `ValuesMut` are **`#[cfg(test)]` only** (compiled out of non-test builds, and not
+//! part of the public API) because they hand out `&mut V` without updating the per-element hash
+//! (`node.hashes[i]`) or the cumulative `tree_hash`, leaving stale fingerprints that break
+//! `check_invariants`, `hash(range)`, and the reconciliation protocol. The supported mutation path
+//! is [`HRTree::with_mut`], which recomputes the element hash and propagates the signed delta to
+//! every ancestor. A correct iterator-based mutation API is future work.
 //!
 //! # Future Work: Lazy Iterators
 //!
@@ -181,11 +178,19 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
+// The mutable iterator infrastructure below is gated to `#[cfg(test)]` because `IterMut` and
+// `ValuesMut` do not update per-element hashes or the cumulative `tree_hash` on mutation —
+// leaving stale fingerprints that break `check_invariants`, `hash(range)`, and the
+// reconciliation protocol. The supported public mutation path is `HRTree::with_mut`.
+// These types are retained test-only so that the traversal logic and the read-only path remain
+// exercised; a correct iterator-based mutation design is future work.
+
 /// A per-node frame of the [`IterMut`] traversal stack.
 ///
 /// Holds the node's not-yet-yielded `(key, value)` pairs and its not-yet-visited children as
 /// standard slice iterators. Yielding `&'a mut V` from `kv` is sound because `slice::IterMut`
 /// decouples the lifetime of each returned reference from the borrow of the iterator itself.
+#[cfg(test)]
 struct Frame<'a, K, V> {
     kv: std::iter::Zip<std::slice::Iter<'a, K>, std::slice::IterMut<'a, V>>,
     children: Option<std::slice::IterMut<'a, Box<Node<K, V>>>>,
@@ -194,10 +199,19 @@ struct Frame<'a, K, V> {
 /// An in-order mutable iterator over a `HRTree`.
 ///
 /// Yields each key and a mutable reference to its associated value in ascending key order.
-pub struct IterMut<'a, K, V> {
+///
+/// # Warning — fingerprints not updated
+///
+/// This iterator hands out `&mut V` directly; it does **not** recompute the per-element hash or
+/// propagate the delta to ancestor nodes. Callers that mutate through it will leave stale
+/// fingerprints. Use [`HRTree::with_mut`] for hash-safe mutation. This type is `#[cfg(test)]`
+/// until a correct design is implemented.
+#[cfg(test)]
+struct IterMut<'a, K, V> {
     stack: Vec<Frame<'a, K, V>>,
 }
 
+#[cfg(test)]
 impl<'a, K, V> IterMut<'a, K, V> {
     /// Pushes `node` and the leftmost path beneath it onto `stack`, so that the top frame is
     /// positioned to yield the in-order-first `(key, value)` of that subtree.
@@ -231,6 +245,7 @@ impl<'a, K, V> IterMut<'a, K, V> {
     }
 }
 
+#[cfg(test)]
 impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
     type Item = (&'a K, &'a mut V);
 
@@ -257,18 +272,16 @@ impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
     }
 }
 
+#[cfg(test)]
 impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// Returns an in-order iterator over `(&K, &mut V)` pairs.
     ///
-    /// # Examples
+    /// # Warning — fingerprints not updated
     ///
-    /// ```rust
-    /// use reconcile::HRTree;
-    /// let mut tree = HRTree::from_iter(vec![(1, "a"), (2, "b")]);
-    /// let pairs: Vec<_> = tree.iter_mut().collect();
-    /// assert_eq!(pairs, vec![(&1, &mut "a"), (&2, &mut "b")]);
-    /// ```
-    pub fn iter_mut(&'a mut self) -> IterMut<'a, K, V> {
+    /// Values mutated through this iterator leave stale per-element hashes and cumulative
+    /// `tree_hash` values. Use [`HRTree::with_mut`] for hash-safe mutation.
+    /// This method is `#[cfg(test)]` until a correct design is implemented.
+    fn iter_mut(&'a mut self) -> IterMut<'a, K, V> {
         let mut stack = Vec::new();
         IterMut::push_left_path(&mut stack, &mut self.root);
         IterMut { stack }
@@ -339,35 +352,37 @@ impl<K, V> HRTree<K, V> {
     }
 }
 
-// === Values-only mutable iterator ===
+// === Values-only mutable iterator (test-only; see fingerprint warning above) ===
 
 /// A mutable in-order iterator yielding references to values only.
 ///
-/// Useful when only the values need to be updated or inspected in sequence.
-pub struct ValuesMut<'a, K, V> {
+/// # Warning — fingerprints not updated
+///
+/// Values mutated through this iterator leave stale per-element hashes and cumulative
+/// `tree_hash` values. Use [`HRTree::with_mut`] for hash-safe mutation.
+/// This type is `#[cfg(test)]` until a correct design is implemented.
+#[cfg(test)]
+struct ValuesMut<'a, K, V> {
     inner: IterMut<'a, K, V>,
 }
 
+#[cfg(test)]
 impl<'a, K: Hash + Ord, V: Hash> HRTree<K, V> {
     /// Returns an in-order iterator over `&mut V` values.
     ///
-    /// # Examples
+    /// # Warning — fingerprints not updated
     ///
-    /// ```rust
-    /// use reconcile::HRTree;
-    /// let mut tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
-    /// for val in tree.values_mut() {
-    ///     *val += 1;
-    /// }
-    /// assert_eq!(tree.values().copied().collect::<Vec<_>>(), vec![11, 21]);
-    /// ```
-    pub fn values_mut(&'a mut self) -> ValuesMut<'a, K, V> {
+    /// Values mutated through this iterator leave stale per-element hashes and cumulative
+    /// `tree_hash` values. Use [`HRTree::with_mut`] for hash-safe mutation.
+    /// This method is `#[cfg(test)]` until a correct design is implemented.
+    fn values_mut(&'a mut self) -> ValuesMut<'a, K, V> {
         ValuesMut {
             inner: self.iter_mut(),
         }
     }
 }
 
+#[cfg(test)]
 impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for ValuesMut<'a, K, V> {
     type Item = &'a mut V;
 
@@ -476,11 +491,19 @@ mod tests {
         );
     }
 
+    // `iter_mut` / `values_mut` are `#[cfg(test)]` (test-only) because they do not update
+    // per-element hashes or `tree_hash` on mutation. These tests verify read-only traversal order
+    // only; they do NOT call `check_invariants()` after mutation because hash corruption is the
+    // documented limitation. The supported mutation path is `with_mut` — see
+    // `test_with_mut_maintains_invariants`.
+
     #[test]
     fn test_iter_mut() {
         let mut tree = make_tree();
         let collected: Vec<_> = tree.iter_mut().map(|(_, v)| *v).collect();
         let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        // read-only traversal: no mutation, so fingerprints remain valid
+        tree.check_invariants();
         assert_eq!(collected, expected);
     }
 
@@ -498,8 +521,11 @@ mod tests {
                 *v = value;
             }
         }
+        // Values in memory are updated correctly …
         let collected: Vec<_> = tree.iter().map(|(_, &v)| v).collect();
         assert_eq!(collected, expected);
+        // … but fingerprints are stale: check_invariants() would panic here — the demotion bug.
+        // Use `with_mut` for hash-safe mutation.
     }
 
     #[test]
@@ -521,6 +547,8 @@ mod tests {
         let mut tree = make_tree();
         let collected: Vec<_> = tree.values_mut().map(|v| *v).collect();
         let expected: Vec<_> = BASE_ITEMS.iter().map(|&(_, v)| v).collect();
+        // read-only traversal: no mutation, so fingerprints remain valid
+        tree.check_invariants();
         assert_eq!(collected, expected);
     }
 
@@ -538,8 +566,50 @@ mod tests {
                 *v = value;
             }
         }
+        // Values in memory are updated correctly …
         let collected: Vec<_> = tree.iter().map(|(_, &v)| v).collect();
         assert_eq!(collected, expected);
+        // … but fingerprints are stale: check_invariants() would panic here — the demotion bug.
+        // Use `with_mut` for hash-safe mutation.
+    }
+
+    /// Verifies that `with_mut` is the correct mutation path: values change in memory, the
+    /// per-element hash and every ancestor's cumulative hash are recomputed, and the tree
+    /// remains fully consistent with `check_invariants()`. Also confirms that the range hash
+    /// reflects the updated value.
+    #[test]
+    fn test_with_mut_maintains_invariants() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+        let mut tree = make_tree();
+        tree.check_invariants();
+
+        let hash_before = tree.hash(&..);
+
+        // Mutate several keys at random positions; each must leave the tree consistent.
+        for _ in 0..20 {
+            let idx = rng.gen_range(0..TREE_SIZE);
+            let (key, _) = BASE_ITEMS[idx];
+            let new_value: u64 = rng.gen();
+            tree.with_mut(&key, |v| *v.unwrap() = new_value);
+            tree.check_invariants();
+        }
+
+        // After all mutations the global hash must differ from the pre-mutation snapshot
+        // (astronomically unlikely to collide for random u64 values).
+        let hash_after = tree.hash(&..);
+        assert_ne!(
+            hash_before, hash_after,
+            "tree hash unchanged after with_mut mutations — fingerprints not updated"
+        );
+
+        // A partial-range hash must still satisfy the additive identity:
+        // hash(..mid) + hash(mid..) == hash(..)
+        let mid = BASE_ITEMS[TREE_SIZE / 2].0;
+        assert_eq!(
+            tree.hash(&(..mid)) + tree.hash(&(mid..)),
+            tree.hash(&..),
+            "partial-range hashes do not sum to the global hash"
+        );
     }
 
     #[test]
@@ -568,16 +638,18 @@ mod tests {
         // shared
         assert!(empty.keys().next().is_none());
         assert!(empty.values().next().is_none());
-        // mutable
+        // mutable (read-only traversal — no values mutated, fingerprints stay valid)
         let mut empty_mut = empty.clone();
         assert!(empty_mut.iter_mut().next().is_none());
         assert!(empty_mut.values_mut().next().is_none());
+        empty_mut.check_invariants();
     }
 
     #[test]
     fn test_all_iterators_single_leaf() {
         let mut single = HRTree::new();
         single.insert(42, 99);
+        single.check_invariants();
         // immutable
         assert_eq!(single.iter().collect::<Vec<_>>(), vec![(&42, &99)]);
         // consuming
@@ -590,14 +662,12 @@ mod tests {
         // shared
         assert_eq!(single.keys().copied().collect::<Vec<_>>(), vec![42]);
         assert_eq!(single.values().copied().collect::<Vec<_>>(), vec![99]);
-        // mutable
-        for (_k, v) in single.iter_mut() {
-            *v += 1;
-        }
+        // mutation via with_mut: values change and fingerprints stay consistent
+        single.with_mut(&42, |v| *v.unwrap() += 1);
+        single.check_invariants();
         assert_eq!(single.iter().collect::<Vec<_>>(), vec![(&42, &100)]);
-        for val in single.values_mut() {
-            *val *= 2;
-        }
+        single.with_mut(&42, |v| *v.unwrap() *= 2);
+        single.check_invariants();
         assert_eq!(single.values().copied().collect::<Vec<_>>(), vec![200]);
     }
 }
