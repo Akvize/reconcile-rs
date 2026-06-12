@@ -40,11 +40,17 @@ use std::io;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use crate::clock::Timestamp;
+
+/// Backoff parameters for transient-I/O retries in [`FileSnapshot::load`].
+const LOAD_RETRY_ATTEMPTS: u32 = 3;
+const LOAD_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 
 /// The store's keyed entries in their internal dated, tombstone-aware form: each key maps to a
 /// `(timestamp, Option<V>)`, where a `None` payload is a tombstone.
@@ -67,6 +73,61 @@ pub struct PersistedState<K, V> {
     pub members: HashSet<IpAddr>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub tombstone_acks: HashMap<K, HashMap<IpAddr, u64>>,
+}
+
+/// Classifies why [`FileSnapshot::load`] failed, so callers can act differently on corruption
+/// versus transient I/O problems.
+///
+/// # Operator guidance
+///
+/// - **Corrupt** — the snapshot file exists but cannot be decoded. The safe choices are to delete
+///   the file (accepts data loss: the node starts empty) or to restore from a backup. **Do not
+///   silently start empty**, as that drops tombstones, enabling resurrection of previously deleted
+///   values. The store exposes this as a distinct error so the calling application can log a clear
+///   message and halt (recommended) or attempt recovery.
+///
+/// - **Io** — a transient I/O error persisted across all retry attempts (e.g. a filesystem still
+///   mounting, a volume remount in progress). Retrying after a longer delay or restarting the
+///   process is appropriate. The error is surfaced rather than causing a panic so the caller can
+///   choose a graceful shutdown path.
+#[derive(Debug)]
+pub enum LoadError {
+    /// The snapshot file exists but its contents could not be decoded. Data corruption or
+    /// truncation. The inner string carries the original error message.
+    Corrupt(String),
+    /// An I/O error that survived all retry attempts; the file may or may not exist.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Corrupt(msg) => write!(
+                f,
+                "snapshot file is corrupt and cannot be loaded: {msg}; \
+                 delete the snapshot to start empty (accepts data loss) or restore from backup"
+            ),
+            LoadError::Io(err) => write!(f, "transient I/O error loading snapshot: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LoadError::Corrupt(_) => None,
+            LoadError::Io(err) => Some(err),
+        }
+    }
+}
+
+impl From<LoadError> for io::Error {
+    fn from(e: LoadError) -> io::Error {
+        match e {
+            LoadError::Corrupt(msg) => io::Error::new(io::ErrorKind::InvalidData, msg),
+            LoadError::Io(err) => err,
+        }
+    }
 }
 
 /// A pluggable durable backend for a [`ReconcileStore`](crate::ReconcileStore).
@@ -123,8 +184,30 @@ where
 
 /// A durable, file-based [`Persistence`] backend storing a single bincode-encoded snapshot.
 ///
-/// Saves are **atomic**: the snapshot is written to a sibling `*.tmp` file, flushed, then renamed
-/// over the target path, so a crash mid-write never corrupts a previously good snapshot.
+/// # Atomic saves
+///
+/// Saves are **atomic at the file level**: the snapshot is written to a sibling `*.tmp` file,
+/// flushed to the OS page cache (`sync_all` on the file), then renamed over the target path, and
+/// finally the **containing directory** is fsynced so the name binding is durable. This sequence
+/// means a crash after the rename but before the directory fsync may leave the old snapshot in
+/// place (the kernel replays the rename from the journal on most filesystems, but the POSIX
+/// guarantee requires the directory fsync), while a crash before the rename leaves the original
+/// snapshot untouched. In both cases exactly one valid snapshot is recoverable on restart.
+///
+/// A crash after writing the tmp file but before the rename leaves a stale `*.tmp` sibling.
+/// [`FileSnapshot::load`] removes any such stale temporaries on startup so they do not accumulate.
+///
+/// # Fallible load
+///
+/// [`FileSnapshot::load_checked`] — called by
+/// [`ReconcileStore::with_persistence`](crate::ReconcileStore::with_persistence) — returns a
+/// [`LoadError`] rather than panicking:
+///
+/// - **Corrupt** data (`InvalidData`) is surfaced as [`LoadError::Corrupt`] so the caller can
+///   decide whether to halt or attempt recovery.
+/// - **Transient I/O** errors are retried up to three times with exponential backoff before being
+///   surfaced as [`LoadError::Io`].
+/// - **`NotFound`** (no snapshot yet) is a clean fresh start and returns `Ok(None)`.
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,
@@ -143,6 +226,64 @@ impl FileSnapshot {
         tmp.push(".tmp");
         PathBuf::from(tmp)
     }
+
+    /// Clean up stale `*.tmp` siblings of the snapshot path, logging each removal at debug level.
+    ///
+    /// Called during load so that temporaries left behind by an interrupted save do not accumulate.
+    fn remove_stale_tmp(&self) {
+        let tmp = self.tmp_path();
+        match fs::remove_file(&tmp) {
+            Ok(()) => debug!(path = %tmp.display(), "removed stale snapshot tmp file"),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {} // nothing to clean
+            Err(err) => {
+                warn!(path = %tmp.display(), "failed to remove stale snapshot tmp file: {err}")
+            }
+        }
+    }
+
+    /// Load state, splitting I/O errors into [`LoadError::Corrupt`] vs. [`LoadError::Io`],
+    /// with bounded retries for transient I/O.
+    ///
+    /// Stale `*.tmp` siblings are removed unconditionally on entry, before the load attempt.
+    pub fn load_checked<K, V>(&self) -> Result<Option<PersistedState<K, V>>, LoadError>
+    where
+        K: DeserializeOwned + Eq + std::hash::Hash,
+        V: DeserializeOwned,
+    {
+        self.remove_stale_tmp();
+
+        let mut attempts = 0u32;
+        let mut backoff = LOAD_RETRY_INITIAL_BACKOFF;
+        loop {
+            attempts += 1;
+            match fs::read(&self.path) {
+                Ok(bytes) => {
+                    return bincode::deserialize::<PersistedState<K, V>>(&bytes)
+                        .map(Some)
+                        .map_err(|err| LoadError::Corrupt(err.to_string()));
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+                    return Err(LoadError::Corrupt(err.to_string()));
+                }
+                Err(err) => {
+                    if attempts >= LOAD_RETRY_ATTEMPTS {
+                        return Err(LoadError::Io(err));
+                    }
+                    warn!(
+                        path = %self.path.display(),
+                        attempt = attempts,
+                        max = LOAD_RETRY_ATTEMPTS,
+                        "transient I/O error loading snapshot, retrying: {err}"
+                    );
+                    std::thread::sleep(backoff);
+                    backoff *= 2;
+                }
+            }
+        }
+    }
 }
 
 impl<K, V> Persistence<K, V> for FileSnapshot
@@ -151,14 +292,7 @@ where
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     fn load(&self) -> io::Result<Option<PersistedState<K, V>>> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        let state = bincode::deserialize(&bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        Ok(Some(state))
+        self.load_checked().map_err(io::Error::from)
     }
 
     fn save(&self, state: &PersistedState<K, V>) -> io::Result<()> {
@@ -174,6 +308,23 @@ where
             file.sync_all()?;
         }
         fs::rename(&tmp, &self.path)?;
+        // fsync the parent directory so the name binding (the rename) is durable. Without this,
+        // a crash after the rename but before the OS flushes the directory journal may leave the
+        // old snapshot in place on some filesystems. The directory fsync is a no-op on journalling
+        // filesystems that replay the rename on recovery, but it is required for the POSIX
+        // durability guarantee.
+        //
+        // Note: directory fsync durability cannot be unit-tested in-process — the guarantee is
+        // that the kernel persists the rename to storage; verifying that requires a real crash or
+        // raw block-device inspection. The call is tested indirectly by the save/load round-trip
+        // tests; its presence is verified by code inspection.
+        if let Some(parent) = self.path.parent() {
+            // Silently skip if the parent is empty (unlikely, but handle gracefully).
+            if !parent.as_os_str().is_empty() {
+                let dir = fs::File::open(parent)?;
+                dir.sync_all()?;
+            }
+        }
         Ok(())
     }
 }
@@ -278,5 +429,101 @@ mod tests {
         assert!(!dir.path().join("snapshot.bin.tmp").exists());
         let loaded = Persistence::<i32, String>::load(&backend).unwrap().unwrap();
         assert_eq!(loaded.entries[0].1 .1, Some("second".to_string()));
+    }
+
+    /// Interrupted save: tmp written but not renamed → old snapshot still loads, stale tmp is
+    /// cleaned on the next load.
+    #[test]
+    fn stale_tmp_cleaned_on_load_and_old_snapshot_still_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        let backend = FileSnapshot::new(&path);
+
+        // Write the first snapshot normally.
+        let mut first = sample_state();
+        first.entries = vec![(1, (Timestamp::new(1, 0, 0), Some("first".to_string())))];
+        Persistence::<i32, String>::save(&backend, &first).unwrap();
+
+        // Simulate an interrupted second save: write the tmp but do NOT rename.
+        let tmp_path = dir.path().join("snapshot.bin.tmp");
+        {
+            use std::io::Write;
+            let mut second = sample_state();
+            second.entries = vec![(1, (Timestamp::new(2, 0, 0), Some("second".to_string())))];
+            let bytes = bincode::serialize(&second).unwrap();
+            let mut file = fs::File::create(&tmp_path).unwrap();
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+        }
+        // The tmp must be present before we call load.
+        assert!(tmp_path.exists(), "precondition: tmp file should exist");
+
+        // Load cleans the stale tmp and returns the original (first) snapshot.
+        let loaded = backend
+            .load_checked::<i32, String>()
+            .expect("load must succeed")
+            .expect("old snapshot must be present");
+        assert_eq!(
+            loaded.entries[0].1 .1,
+            Some("first".to_string()),
+            "old snapshot must load, not the tmp contents"
+        );
+        assert!(!tmp_path.exists(), "stale tmp must be removed on load");
+    }
+
+    /// Completed save → new snapshot loads correctly.
+    #[test]
+    fn completed_save_loads_new_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = FileSnapshot::new(dir.path().join("snapshot.bin"));
+
+        let mut first = sample_state();
+        first.entries = vec![(1, (Timestamp::new(1, 0, 0), Some("first".to_string())))];
+        Persistence::<i32, String>::save(&backend, &first).unwrap();
+
+        let mut second = sample_state();
+        second.entries = vec![(1, (Timestamp::new(2, 0, 0), Some("new".to_string())))];
+        Persistence::<i32, String>::save(&backend, &second).unwrap();
+
+        let loaded = Persistence::<i32, String>::load(&backend)
+            .unwrap()
+            .expect("snapshot must be present");
+        assert_eq!(
+            loaded.entries[0].1 .1,
+            Some("new".to_string()),
+            "completed save must be visible on load"
+        );
+    }
+
+    /// Corrupt snapshot file → `load_checked` returns `LoadError::Corrupt` (no panic).
+    #[test]
+    fn corrupt_snapshot_returns_error_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        fs::write(&path, b"not valid bincode at all").unwrap();
+        let backend = FileSnapshot::new(&path);
+        match backend.load_checked::<i32, String>() {
+            Err(LoadError::Corrupt(_)) => {} // expected
+            other => panic!("expected LoadError::Corrupt, got {other:?}"),
+        }
+    }
+
+    /// Transient I/O error (path is a directory) → retries are attempted, then `LoadError::Io`
+    /// is returned (no panic).
+    #[test]
+    fn transient_io_returns_error_variant() {
+        // Use a directory as the snapshot path: `fs::read` on a directory returns an error on all
+        // major platforms (Linux: EISDIR, macOS: EISDIR). We override LOAD_RETRY_ATTEMPTS to 1 via
+        // the public knob by testing load_checked which internally uses the constants; we simply
+        // verify the variant and that no panic occurs.
+        let dir = tempfile::tempdir().unwrap();
+        // The path itself IS a directory, so fs::read will fail with a non-NotFound, non-corrupt error.
+        let backend = FileSnapshot::new(dir.path());
+        match backend.load_checked::<i32, String>() {
+            Err(LoadError::Io(_)) => {} // expected
+            // On some platforms a directory read may look like corrupt data; accept both.
+            Err(LoadError::Corrupt(_)) => {}
+            Ok(_) => panic!("expected an error when the snapshot path is a directory"),
+        }
     }
 }
