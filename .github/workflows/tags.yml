@@ -1,5 +1,10 @@
 name: tags
 
+# Triggered by pushing a tag of the form vX.Y.Z (issue #204).
+# The repo uses manual version bumps: update Cargo.toml and Cargo.lock,
+# commit, then push the matching tag.  This workflow enforces the contract
+# by failing loudly when the tag and the manifest version disagree.
+
 on:
   push:
     tags: [ "v*" ]
@@ -17,12 +22,25 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Set version
-        run: echo "VERSION=${GITHUB_REF##*\/v}" >> $GITHUB_ENV
       - uses: actions/checkout@v4
-      - name: Set Cargo.toml version
-        run: sed "s/0\\.0\\.0-git/$VERSION/" -i Cargo.toml Cargo.lock
+      - name: Verify tag matches Cargo.toml version
+        # Extract the version from the tag (strips the leading "v") and compare
+        # it against the version declared in Cargo.toml.  Fail loudly on any
+        # mismatch so a stale or wrong-version tag never silently republishes
+        # the wrong crate version.
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CRATE_VERSION=$(cargo metadata --no-deps --format-version 1 | \
+            python3 -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])")
+          echo "Tag version:   $TAG_VERSION"
+          echo "Crate version: $CRATE_VERSION"
+          if [ "$TAG_VERSION" != "$CRATE_VERSION" ]; then
+            echo "ERROR: tag 'v${TAG_VERSION}' does not match Cargo.toml version '${CRATE_VERSION}'."
+            echo "Bump the version in Cargo.toml (and Cargo.lock) and commit before pushing the tag."
+            exit 1
+          fi
+          echo "VERSION=$CRATE_VERSION" >> "$GITHUB_ENV"
       - name: Login on crates repository
         run: echo ${{ secrets.CARGO_REGISTRY_TOKEN }} | cargo login
       - name: Publish crate
-        run: cargo publish --allow-dirty
+        run: cargo publish
