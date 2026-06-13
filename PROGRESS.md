@@ -10,9 +10,11 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-06-12
-- **Baseline:** `claude/determined-franklin-s3tvt1` @ `f1423ce` (2026-06 correctness sprint; pending
-  merge to master)
+- **Last updated:** 2026-06-13
+- **Baseline:** `claude/p1-5-ci-matrix` @ `32193cc` (CI hardening: feature-matrix + macOS + MSRV
+  lanes; scalable test time budget; MSRV declaration — see issues
+  [#203](https://github.com/Akvize/reconcile-rs/issues/203) and
+  [#189](https://github.com/Akvize/reconcile-rs/issues/189))
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
   [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
@@ -81,8 +83,9 @@ all but one High resolved or mitigated.
 - [ ] Semver and publish policy — `0.2.1` exists but policy is not yet settled ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
 - [ ] `CHANGELOG.md`
 - [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
+- [x] Feature-matrix CI — dedicated `mac-hmac`, `encryption`, and `macos` jobs; scalable poll budget via `RECONCILE_TEST_TIME_MULTIPLIER` ([#203](https://github.com/Akvize/reconcile-rs/issues/203))
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
-- [ ] Declare + CI-pin MSRV (`rust-version`) — iterators are safe Rust (crate is `#![forbid(unsafe_code)]`); miri item dropped ([#189](https://github.com/Akvize/reconcile-rs/issues/189))
+- [x] Declare + CI-pin MSRV (`rust-version = "1.85"`) — iterators are safe Rust (crate is `#![forbid(unsafe_code)]`); miri item dropped ([#189](https://github.com/Akvize/reconcile-rs/issues/189))
 - [ ] `overflow-checks = true` in the release profile ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
 - [ ] bincode decode limit (`with_limit`) against allocation bombs ([#150](https://github.com/Akvize/reconcile-rs/issues/150), [#151](https://github.com/Akvize/reconcile-rs/issues/151))
 

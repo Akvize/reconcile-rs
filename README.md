@@ -511,6 +511,15 @@ changes from 10 to 1,000,000 elements.
 **Note:** These benchmarks are performed locally on the loop-back network
 interface. On a real network, transmission delays will make the values larger.
 
+## Minimum Supported Rust Version (MSRV)
+
+The crate requires **Rust 1.85** or later (`rust-version = "1.85"` in `Cargo.toml`).
+This is enforced by a dedicated CI job that runs `cargo check` against that toolchain on
+every push.
+
+**Policy:** an MSRV bump is treated as a **minor version increment** (e.g. 0.2 → 0.3) and
+documented in `CHANGELOG.md`. Patch releases never raise the MSRV.
+
 ## Testing and coverage
 
 The crate is covered by unit, integration, property-based and documentation
@@ -533,4 +542,6 @@ cargo llvm-cov --workspace --html     # browsable HTML report under target/llvm-
 ```
 
 Coverage is collected with the crate's default features. The `mac-blake3` and
-`mac-hmac` backends are mutually exclusive, so do **not** pass `--all-features`.
+`mac-hmac` backends are mutually exclusive at build time (`mac-blake3` takes precedence
+when both are enabled), so a separate CI job (`mac-hmac`) exercises the HMAC-SHA256
+backend with `--no-default-features --features mac-hmac`.
