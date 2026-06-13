@@ -112,11 +112,15 @@ jobs:
       run: cargo build --all --verbose
     - name: Add loopback aliases
       # macOS only configures 127.0.0.1 on lo0 (Linux routes all of 127/8); the
-      # engine/store unit tests bind distinct 127.0.0.x addresses to isolate their
-      # UDP sockets, so alias the range they use before running them.
+      # engine/store unit tests bind distinct 127.x addresses to isolate their UDP
+      # sockets, so alias them before running. The 127.0.0.x range is aliased densely;
+      # any other 127.x literal the tests use is extracted from the source so this stays
+      # correct as tests are added. `|| true` tolerates non-bindable literals (e.g. the
+      # 127.0.0.0/8 CIDR network address) without failing the step.
       run: |
-        for i in $(seq 2 254); do sudo ifconfig lo0 alias 127.0.0.$i up; done
-        sudo ifconfig lo0 alias 127.1.0.3 up
+        for i in $(seq 2 254); do sudo ifconfig lo0 alias 127.0.0.$i up || true; done
+        grep -rhoE '127(\.[0-9]+){3}' src/ | sort -u | grep -vE '^127\.0\.0\.' | \
+          while read -r addr; do sudo ifconfig lo0 alias "$addr" up || true; done
     - name: Run unit tests (lib only)
       run: cargo test --lib --all-features --verbose
 
