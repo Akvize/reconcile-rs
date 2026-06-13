@@ -174,8 +174,9 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// reconciliation round — the effective gossip cadence. Shared so it can be retuned at runtime.
     reconcile_interval: Arc<RwLock<Duration>>,
     /// Rate (bytes/sec) at which a single bulk anti-entropy value transfer to one peer is paced, or
-    /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::reconcile_store::Config::bulk_send_rate)
-    /// and is read by [`spawn_paced_send`](Self::spawn_paced_send).
+    /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::reconcile_store::Config::bulk_send_rate),
+    /// already floored at construction (see `MIN_BULK_SEND_RATE`), and is read by
+    /// [`spawn_paced_send`](Self::spawn_paced_send).
     bulk_send_rate: Option<usize>,
     /// Peers with a bulk value transfer currently in flight. At most one paced dump
     /// runs per peer at a time: while one is in flight, the reconcile timer re-firing (the receiver
@@ -341,17 +342,44 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         info!("Listening on: {}", socket.local_addr()?);
         // Size the kernel send/receive buffers before any traffic flows.
         set_socket_buffers(&socket, &config);
+        // Floor the bulk pacing rate. A non-None rate below the floor would make `pace()` sleep for
+        // an effectively unbounded time while holding the per-peer in-flight mark, wedging that
+        // peer's sync; raise it (with a warning) so the in-flight mark always turns over promptly.
+        // None (pacing disabled) is an explicit choice and left untouched.
+        let bulk_send_rate = config.bulk_send_rate.map(|rate| {
+            if rate < crate::reconcile_store::MIN_BULK_SEND_RATE {
+                warn!(
+                    "bulk_send_rate {rate} B/s is below the {} B/s floor and would stall bulk \
+                     syncs; raising it to the floor",
+                    crate::reconcile_store::MIN_BULK_SEND_RATE
+                );
+                crate::reconcile_store::MIN_BULK_SEND_RATE
+            } else {
+                rate
+            }
+        });
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if authenticator.is_encrypted() {
             debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
         } else if authenticator.is_enabled() {
             debug!("per-datagram MAC authentication ENABLED");
+        } else if config.acknowledged_no_key {
+            // The operator explicitly acknowledged keyless mode via Config::with_insecure_no_key.
+            // The trust model is unchanged (still unauthenticated, still leaks the dataset); only
+            // the loud warning is downgraded so a deliberate keyless deployment is not nagged.
+            info!(
+                "no cluster key set (acknowledged via Config::with_insecure_no_key): UDP \
+                 reconciliation is UNAUTHENTICATED and serves the whole dataset to any host that \
+                 can reach this port. Run only on a trusted network underlay."
+            );
         } else {
             warn!(
                 "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
                  that can send UDP to this port can forge updates and poison the cluster via \
-                 last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
-                 network to a trusted underlay. See REVIEW.md F3."
+                 last-write-wins, and will be served the ENTIRE dataset through anti-entropy diff \
+                 dumps. Set Config::with_cluster_key on every node, or restrict the network to a \
+                 trusted underlay (and acknowledge with Config::with_insecure_no_key to silence \
+                 this warning)."
             );
         }
         let map = HRTree::<K, V>::new();
@@ -383,7 +411,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 remote_interval: Arc::new(AtomicU32::new(config.remote_interval)),
                 remote_fanout: Arc::new(AtomicUsize::new(config.remote_fanout)),
                 reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
-                bulk_send_rate: config.bulk_send_rate,
+                bulk_send_rate,
                 bulk_in_flight: Arc::new(RwLock::new(HashSet::new())),
                 bulk_dumps_in_flight: Arc::new(AtomicUsize::new(0)),
                 max_concurrent_bulk_dumps: config.max_concurrent_bulk_dumps,
@@ -1299,8 +1327,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
 
     /// Number of entries currently in the peers gossip-routing map.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn peers_map_len(&self) -> usize {
         self.peers.read().len()
     }
@@ -1310,32 +1338,32 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// to confirm that at least one discovery round has observed a peer before the test mutates
     /// the discovery source.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn peers_contains(&self, peer: IpAddr) -> bool {
         self.peers.read().contains_key(&peer)
     }
 
     /// Number of entries currently in the per-peer replay filter.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn replay_filter_len(&self) -> usize {
         self.replay_filter.len()
     }
 
     /// Number of keys currently tracked in the tombstone-acknowledgment map.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn tombstone_acks_len(&self) -> usize {
         self.tombstone_acks.read().len()
     }
 
     /// Number of bulk dump tasks currently in flight across all peers.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn bulk_dumps_in_flight_count(&self) -> usize {
         self.bulk_dumps_in_flight.load(Ordering::Acquire)
     }
@@ -1944,6 +1972,46 @@ mod pacing {
         let messages = bulk_updates(256, 1024);
         assert!(time_send(&messages, None).await < Duration::from_millis(200));
         assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
+    }
+
+    /// A configured `bulk_send_rate` below the floor must be raised to it at construction, so a
+    /// paced dump cannot sleep unboundedly while holding the per-peer in-flight mark. `None` (pacing
+    /// disabled) is an explicit choice and stays untouched.
+    #[tokio::test]
+    async fn sub_floor_bulk_send_rate_is_clamped_at_construction() {
+        use crate::clock::Timestamp;
+        use crate::reconcile_engine::ReconcileEngine;
+        use crate::reconcile_store::{Config, MIN_BULK_SEND_RATE};
+
+        type Tombstoned = (Timestamp, Option<i32>);
+
+        // Each case binds a distinct loopback address on an ephemeral port (port 0), so the sockets
+        // never collide while a prior engine is still in scope.
+        let make = |addr: &str, rate: Option<usize>| {
+            let mut config = Config::default().with_listen_addr(addr.parse().unwrap());
+            config.bulk_send_rate = rate;
+            config
+        };
+
+        // A 1 B/s rate is far below the floor and is raised to it.
+        let eng: ReconcileEngine<i32, Tombstoned> =
+            ReconcileEngine::new(make("127.0.0.71", Some(1)))
+                .await
+                .expect("bind failed");
+        assert_eq!(eng.bulk_send_rate, Some(MIN_BULK_SEND_RATE));
+
+        // A rate at or above the floor is preserved verbatim.
+        let eng: ReconcileEngine<i32, Tombstoned> =
+            ReconcileEngine::new(make("127.0.0.72", Some(MIN_BULK_SEND_RATE * 4)))
+                .await
+                .expect("bind failed");
+        assert_eq!(eng.bulk_send_rate, Some(MIN_BULK_SEND_RATE * 4));
+
+        // None disables pacing and is left untouched.
+        let eng: ReconcileEngine<i32, Tombstoned> = ReconcileEngine::new(make("127.0.0.73", None))
+            .await
+            .expect("bind failed");
+        assert_eq!(eng.bulk_send_rate, None);
     }
 }
 

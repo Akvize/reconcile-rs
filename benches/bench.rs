@@ -1,14 +1,16 @@
 // The benchmark drives the internal range-fingerprint via `HRTree::hash`, which is `pub(crate)`.
 // Like the integration-test oracles it reaches that internal through the gated
-// `reconcile::testing` seam (the `range_hash` shim), so the real bench body only compiles with the
-// `internal-testing` feature. Without it we fall back to an empty `main` so the target still links.
-#[cfg(not(feature = "internal-testing"))]
+// `reconcile::testing` seam (the `range_hash` shim), so the real bench body only compiles under the
+// `reconcile_internal_testing` cfg flag. Without it we fall back to an empty `main` so the target
+// still links. The flag is set by this repo's `.cargo/config.toml` (it is not a Cargo feature, so
+// it never ships to consumers of the published crate).
+#[cfg(not(reconcile_internal_testing))]
 fn main() {}
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 use imp::main;
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 mod imp {
     use std::collections::BTreeMap;
     use std::time::Duration;

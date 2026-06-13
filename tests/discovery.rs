@@ -126,10 +126,10 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
 
 // ── Wall-time floor tests ─────────────────────────────────────────────────────────────────────
 //
-// These tests inspect the membership set directly, which requires the `internal-testing` feature
-// gate (the same gate used by the peer-cap and replay tests in `tests/service.rs`).
+// These tests inspect the membership set directly, which requires the `reconcile_internal_testing`
+// cfg gate (the same gate used by the peer-cap and replay tests in `tests/service.rs`).
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 mod floor {
     use super::*;
     use reconcile::testing::{members_snapshot, peers_contains, tombstone_acks_len};

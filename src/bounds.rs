@@ -16,6 +16,12 @@
 //! These bundles cover only the data bounds; *entry-semantics* bounds (such as
 //! [`Projectable`](crate::reconcilable::Projectable)) are not bundled here and travel as extra
 //! bounds alongside `V: Value` where required.
+//!
+//! The [`Hash`] bound carries a correctness requirement: per-element fingerprints hash the key and
+//! value into one stream with no separator (see [`fingerprint::hash`](crate::fingerprint::hash)),
+//! so a custom `Hash` impl on a key or value type **must be self-delimiting** or two distinct
+//! elements can collide across the key/value boundary and the replicas silently fail to converge.
+//! The standard library's impls (integers, `str`/`String`, slices/`Vec`) already satisfy this.
 
 use std::fmt::Debug;
 use std::hash::Hash;

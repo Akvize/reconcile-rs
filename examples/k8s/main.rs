@@ -9,10 +9,11 @@
 //! A Kubernetes-native reconcile node — the example behind `examples/k8s/`.
 //!
 //! It binds to its pod IP, derives a stable node identity from the pod name, discovers its peers by
-//! resolving a headless `Service` over DNS, and exposes a `/metrics` endpoint for the kubelet
-//! probes. Everything is taken from the environment (the Kubernetes downward API + a ConfigMap /
-//! Secret), so the same image works for every replica. See `examples/k8s/base/` for the manifests
-//! and `examples/k8s/kind/` for a local playground.
+//! resolving a headless `Service` over DNS, exposes a `/metrics` endpoint (Prometheus scrape +
+//! liveness probe), and a separate readiness endpoint that only reports ready once the store is
+//! built and its gossip loop is running. Everything is taken from the environment (the Kubernetes
+//! downward API + a ConfigMap / Secret), so the same image works for every replica. See
+//! `examples/k8s/base/` for the manifests and `examples/k8s/kind/` for a local playground.
 //!
 //! To make reconciliation *observable*, it also runs a small **demo** behaviour (clearly fenced
 //! below with `--- demo ---` markers — delete those two blocks for a bare production node):
@@ -36,12 +37,58 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use reconcile::{reconcile_store::Config, ReconcileStore};
+
+/// Serve a minimal readiness endpoint that returns `200` only once `ready` has been set, and `503`
+/// before that. Pointing the kubelet readiness probe here (rather than at `/metrics`) keeps a pod
+/// out of the headless-Service DNS — and thus out of every peer's `DnsDiscovery` set — until its
+/// store is actually built and its gossip loop is running. `/metrics` comes up too early (it is the
+/// in-process Prometheus listener, live before `ReconcileStore::new` binds the UDP socket), so a
+/// pod probing `/metrics` would advertise itself before it could serve a single reconciliation.
+///
+/// This complements the discovery decommission-floor behaviour: readiness gates a pod *into*
+/// rotation only when it can serve, while the decommission floor governs how long a vanished member
+/// is tolerated before its tombstone-GC gate is released. The two are independent — one is join-time
+/// health, the other leave-time grace — and both keep DNS membership honest.
+async fn serve_readiness(addr: SocketAddr, ready: Arc<AtomicBool>) {
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect("failed to bind the readiness endpoint");
+    loop {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            continue;
+        };
+        let ready = Arc::clone(&ready);
+        tokio::spawn(async move {
+            // Drain the request line(s); we serve a fixed response regardless of path.
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = if ready.load(Ordering::Relaxed) {
+                "ready"
+            } else {
+                "not ready"
+            };
+            let status = if ready.load(Ordering::Relaxed) {
+                "200 OK"
+            } else {
+                "503 Service Unavailable"
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+    }
+}
 
 /// Read a required environment variable or exit with a clear message.
 fn required(name: &str) -> String {
@@ -103,6 +150,9 @@ async fn main() {
     let metrics_addr: SocketAddr = optional("RECONCILE_METRICS_ADDR", "0.0.0.0:9000")
         .parse()
         .expect("RECONCILE_METRICS_ADDR must be host:port");
+    let ready_addr: SocketAddr = optional("RECONCILE_READY_ADDR", "0.0.0.0:9001")
+        .parse()
+        .expect("RECONCILE_READY_ADDR must be host:port");
     // How often this pod refreshes its own heartbeat key.
     let heartbeat_interval = Duration::from_secs(
         optional("RECONCILE_HEARTBEAT_SECS", "5")
@@ -125,7 +175,17 @@ async fn main() {
         ),
     }
 
-    // Expose /metrics for the kubelet readiness/liveness probes.
+    // Start the readiness endpoint immediately, reporting NOT ready: the kubelet readiness probe
+    // targets it, so the pod stays out of the headless-Service DNS (and out of peers' DnsDiscovery)
+    // until the store below is built and its gossip loop is running. We flip it to ready only after
+    // `ReconcileStore::new` has bound the UDP socket and `run()` is about to start.
+    let ready = Arc::new(AtomicBool::new(false));
+    tokio::spawn(serve_readiness(ready_addr, Arc::clone(&ready)));
+
+    // Expose /metrics for the kubelet liveness probe and for Prometheus scraping. SECURITY: this
+    // endpoint is unauthenticated and leaks operational info — keep it cluster-internal (see the
+    // ConfigMap caveat) and bind it to a trusted interface rather than 0.0.0.0 if a node-local
+    // sidecar is the only scraper.
     reconcile::prometheus::serve(metrics_addr)
         .await
         .expect("failed to start the metrics endpoint");
@@ -170,5 +230,8 @@ async fn main() {
     // --- end demo ---------------------------------------------------------------------------
 
     info!(%pod_ip, %pod_name, port, "reconcile k8s node starting; writing heartbeats; discovering peers over DNS");
+    // The store is built and its UDP socket is bound; the gossip loop starts on the next line.
+    // Flip readiness on so the kubelet adds the pod to the Service DNS now that it can serve peers.
+    ready.store(true, Ordering::Relaxed);
     store.run().await;
 }
