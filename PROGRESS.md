@@ -11,7 +11,7 @@
 >   architecture migration (one sub-issue per phase).
 
 - **Last updated:** 2026-06-09
-- **Baseline:** `master` @ `6462970` (steps 1+3, `Hlc`→`Timestamp` + `hlc`→`clock` renames); step 2 on
+- **Baseline:** `main` @ `6462970` (steps 1+3, `Hlc`→`Timestamp` + `hlc`→`clock` renames); step 2 on
   `claude/repo-cleanup-status-bcyjez`
 - **Manifest:** `0.0.0-git` (unpublished; API and wire/on-disk formats may still change)
 
