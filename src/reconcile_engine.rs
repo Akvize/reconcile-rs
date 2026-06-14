@@ -184,6 +184,14 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Entries are inserted before a dump is spawned and removed (via an RAII guard, so it survives a
     /// panic in the send task) when it finishes.
     bulk_in_flight: Arc<RwLock<HashSet<SocketAddr>>>,
+    /// Count of bulk dump tasks currently in flight across all peers. When this reaches
+    /// [`max_concurrent_bulk_dumps`](Self::max_concurrent_bulk_dumps), new dumps are skipped before
+    /// allocating their snapshot Vec; the protocol is retry-driven, so the requesting peer's next
+    /// diff round re-triggers the dump once a slot is free. Decremented by an RAII guard on the
+    /// spawned task, so a panicking task never leaks a slot.
+    bulk_dumps_in_flight: Arc<AtomicUsize>,
+    /// Global cap on the number of concurrently active paced bulk dumps.
+    max_concurrent_bulk_dumps: usize,
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
     round: Arc<AtomicU32>,
     rng: Arc<RwLock<StdRng>>,
@@ -229,6 +237,9 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Exposed via [`node_id_is_random`](ReconcileEngine::node_id_is_random) so that the store
     /// layer can warn operators when persistence is configured but the identity is ephemeral.
     pub(crate) node_id_is_random: bool,
+    /// Hard cap on the number of tracked remote peers. Datagrams from unknown senders are dropped
+    /// before any per-sender state is allocated when the membership set reaches this size.
+    max_peers: usize,
 }
 
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
@@ -359,6 +370,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
                 bulk_send_rate: config.bulk_send_rate,
                 bulk_in_flight: Arc::new(RwLock::new(HashSet::new())),
+                bulk_dumps_in_flight: Arc::new(AtomicUsize::new(0)),
+                max_concurrent_bulk_dumps: config.max_concurrent_bulk_dumps,
                 round: Arc::new(AtomicU32::new(0)),
                 rng,
                 probe,
@@ -371,6 +384,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
                 clock,
                 node_id_is_random,
+                max_peers: config.max_peers,
             }),
         })
     }
@@ -532,6 +546,50 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         });
     }
 
+    /// Try to claim both a per-peer in-flight slot and a global concurrent-dump slot.
+    ///
+    /// Returns `Some((peer_guard, global_guard))` when both slots are available, or `None` when
+    /// either is already taken. The caller checks this **before** snapshotting the differing range
+    /// into a `Vec`, so a skipped dump allocates nothing. The guards release their slots on drop,
+    /// ensuring cleanup even if the spawned task panics.
+    fn try_claim_dump_slot(
+        &self,
+        peer: SocketAddr,
+    ) -> Option<(BulkInFlightGuard, BulkDumpCountGuard)> {
+        // Per-peer guard: at most one dump per peer at a time.
+        if !self.bulk_in_flight.write().insert(peer) {
+            return None;
+        }
+        // Global budget: at most `max_concurrent_bulk_dumps` across all peers. The
+        // compare-exchange loop increments only if currently below the cap. If at cap, release the
+        // per-peer mark before returning so that slot is not leaked.
+        let budget = self.max_concurrent_bulk_dumps;
+        let claimed = self
+            .bulk_dumps_in_flight
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                if n < budget {
+                    Some(n + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
+        if !claimed {
+            self.bulk_in_flight.write().remove(&peer);
+            trace!("skipped bulk dump to {peer}: global dump budget ({budget}) exhausted");
+            return None;
+        }
+        Some((
+            BulkInFlightGuard {
+                set: Arc::clone(&self.bulk_in_flight),
+                peer,
+            },
+            BulkDumpCountGuard {
+                counter: Arc::clone(&self.bulk_dumps_in_flight),
+            },
+        ))
+    }
+
     /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task.
     ///
     /// This is the cold/bulk anti-entropy path: when a peer differs over a whole range it must
@@ -550,23 +608,26 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     ///    re-dump ranges still in transit, which is the byte amplification we are removing. Anything
     ///    genuinely still missing (e.g. a dropped datagram) is picked up by the next reconcile round
     ///    once the current dump finishes.
-    fn spawn_paced_send(&self, messages: Vec<Message<K, V, V::Projected>>, peer: SocketAddr) {
-        // Admit at most one in-flight dump per peer. `insert` returns false if already present.
-        if !self.bulk_in_flight.write().insert(peer) {
-            return;
-        }
-        // RAII: clears the in-flight mark when the dump finishes *or* if the send task panics, so a
-        // failed dump can never wedge a peer into "permanently transferring" and starve its sync.
-        let guard = BulkInFlightGuard {
-            set: Arc::clone(&self.bulk_in_flight),
-            peer,
-        };
+    /// 3. A **global concurrent-dump budget** (`max_concurrent_bulk_dumps`): even with the per-peer
+    ///    guard, M peers diffing simultaneously would each hold a full snapshot Vec. This cap limits
+    ///    total in-flight dump tasks. The caller checks the budget via [`try_claim_dump_slot`](Self::try_claim_dump_slot)
+    ///    **before** building the snapshot Vec, so a skipped dump allocates nothing.
+    fn spawn_paced_send(
+        &self,
+        messages: Vec<Message<K, V, V::Projected>>,
+        peer: SocketAddr,
+        peer_guard: BulkInFlightGuard,
+        global_guard: BulkDumpCountGuard,
+    ) {
         let socket = Arc::clone(&self.socket);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
         tokio::spawn(async move {
-            let _guard = guard;
+            // Hold both RAII guards for the lifetime of the task: they release their respective
+            // slots on drop, even if this task is aborted or panics.
+            let _peer_guard = peer_guard;
+            let _global_guard = global_guard;
             let mut send_buf = Vec::new();
             send_messages_paced(
                 &messages,
@@ -664,27 +725,50 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
+                                let sender = peer.ip();
+                                // Per-peer cap check: if this sender is not yet tracked (not a
+                                // member) and the membership set is at capacity, drop the datagram
+                                // before allocating any per-sender state (replay filter entry,
+                                // peers map slot, or membership slot). Authenticated datagrams are
+                                // verified first (above), so this gate cannot be triggered by a
+                                // forged source address in authenticated mode.
+                                //
+                                // The check is intentionally placed *before* the replay filter so
+                                // that no replay-filter entry is created for a capped-out sender.
+                                // Known senders (already in `members`) bypass the cap.
+                                let is_known = self.members.read().contains(&sender);
+                                if !is_known {
+                                    let current_len = self.members.read().len();
+                                    if current_len >= self.max_peers {
+                                        trace!(
+                                            "dropped datagram from {peer}: peer cap reached \
+                                             ({current_len}/{})",
+                                            self.max_peers
+                                        );
+                                        observability::record_datagram_dropped("peer_cap");
+                                        continue;
+                                    }
+                                }
                                 // In authenticated modes, perform the replay check *after*
                                 // authentication (so forgeries cannot poison the per-peer state)
                                 // and *before* message processing. In unauthenticated mode
                                 // seq/stamp are both 0 and `is_enabled()` is false, so the check
                                 // is skipped entirely.
-                                if self.authenticator.is_enabled() {
-                                    let sender = peer.ip();
-                                    if !self.replay_filter.check_and_record(
+                                if self.authenticator.is_enabled()
+                                    && !self.replay_filter.check_and_record(
                                         sender,
                                         payload.seq,
                                         payload.stamp,
-                                    ) {
-                                        trace!(
-                                            "dropped replayed or stale datagram from {peer}: \
-                                             seq={} stamp={}",
-                                            payload.seq,
-                                            payload.stamp
-                                        );
-                                        observability::record_datagram_dropped("replay");
-                                        continue;
-                                    }
+                                    )
+                                {
+                                    trace!(
+                                        "dropped replayed or stale datagram from {peer}: \
+                                         seq={} stamp={}",
+                                        payload.seq,
+                                        payload.stamp
+                                    );
+                                    observability::record_datagram_dropped("replay");
+                                    continue;
                                 }
                                 let spoke_dated =
                                     self.handle_messages(payload, peer, &mut send_buf).await;
@@ -701,9 +785,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                                 // forever (the very regression we must avoid). Such a mirror is
                                 // served reactively off `peer` and is not tracked as a peer/member.
                                 if spoke_dated {
-                                    let addr = peer.ip();
-                                    self.peers.write().insert(addr, Instant::now());
-                                    self.members.write().insert(addr);
+                                    self.peers.write().insert(sender, Instant::now());
+                                    self.members.write().insert(sender);
                                 }
                             }
                             None => {
@@ -868,13 +951,29 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 let map_guard = self.map.read();
                 let mut guard = self.tombstone_acks.write();
                 for (key, version) in acks {
+                    // Accept an ack only for a key we locally hold as a tombstone. Acks for
+                    // never-existent or non-tombstone keys are dropped here so they cannot
+                    // accumulate in `tombstone_acks` without bound.
+                    //
+                    // Ordering hazard: this gate cannot tell "a key we will never hold" from
+                    // "a key we don't hold YET". In a cluster of three or more nodes an ack
+                    // can arrive before the deletion it acknowledges (the acking peer may have
+                    // learned the deletion via a different gossip edge), and a dropped ack is
+                    // not re-delivered. Any future change to causal-stability GC must account
+                    // for this rather than rely on early acks being retained.
+                    let local_tombstone = map_guard.get(&key).filter(|v| v.is_tombstone());
+                    let Some(local_v) = local_tombstone else {
+                        trace!(
+                            "dropped ack from {peer_ip} for key with no local tombstone; \
+                             ignoring to prevent unbounded bookkeeping"
+                        );
+                        continue;
+                    };
                     let entry = guard.entry(key.clone()).or_default();
                     let already = entry.get(&peer_ip) == Some(&version);
                     entry.insert(peer_ip, version);
                     if !already {
-                        let holds_same_tombstone = map_guard
-                            .get(&key)
-                            .is_some_and(|v| v.is_tombstone() && version_hash(v) == version);
+                        let holds_same_tombstone = version_hash(local_v) == version;
                         if holds_same_tombstone {
                             reciprocal_acks
                                 .push(Message::Ack::<K, V, V::Projected>((key, version)));
@@ -927,18 +1026,24 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             if !differences.is_empty() {
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
-                let updates: Vec<Message<K, V, V::Projected>> = {
-                    let guard = self.map.read();
-                    let mut updates = Vec::new();
-                    for range in differences {
-                        for (k, v) in guard.get_range(&range) {
-                            updates.push(Message::Update((k.clone(), v.clone())));
+                // Claim both slots (per-peer + global budget) *before* snapshotting the range
+                // into a Vec. A skipped dump allocates nothing; the peer re-initiates on its
+                // next diff round once a slot is free.
+                if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
+                    let updates: Vec<Message<K, V, V::Projected>> = {
+                        let guard = self.map.read();
+                        let mut updates = Vec::new();
+                        for range in differences {
+                            for (k, v) in guard.get_range(&range) {
+                                updates.push(Message::Update((k.clone(), v.clone())));
+                            }
                         }
+                        updates
+                    };
+                    if !updates.is_empty() {
+                        self.spawn_paced_send(updates, peer, peer_guard, global_guard);
                     }
-                    updates
-                };
-                if !updates.is_empty() {
-                    self.spawn_paced_send(updates, peer);
+                    // If updates is empty the guards drop here, releasing both slots.
                 }
             }
         }
@@ -1050,18 +1155,20 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
             // background task, exactly like the dated bulk path.
             if !differences.is_empty() {
-                let updates: Vec<Message<K, V, V::Projected>> = {
-                    let guard = self.projection.read();
-                    let mut updates = Vec::new();
-                    for range in differences {
-                        for (k, p) in guard.get_range(&range) {
-                            updates.push(Message::ValueUpdate((k.clone(), p.clone())));
+                if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
+                    let updates: Vec<Message<K, V, V::Projected>> = {
+                        let guard = self.projection.read();
+                        let mut updates = Vec::new();
+                        for range in differences {
+                            for (k, p) in guard.get_range(&range) {
+                                updates.push(Message::ValueUpdate((k.clone(), p.clone())));
+                            }
                         }
+                        updates
+                    };
+                    if !updates.is_empty() {
+                        self.spawn_paced_send(updates, peer, peer_guard, global_guard);
                     }
-                    updates
-                };
-                if !updates.is_empty() {
-                    self.spawn_paced_send(updates, peer);
                 }
             }
         }
@@ -1104,6 +1211,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// peer to membership. Keeping the replay state lets the bitmap reject the captured datagram.
     pub(crate) fn decommission_peer(&self, peer: IpAddr) {
         self.members.write().remove(&peer);
+        self.peers.write().remove(&peer);
         for key_acks in self.tombstone_acks.write().values_mut() {
             key_acks.remove(&peer);
         }
@@ -1125,6 +1233,38 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// A snapshot of the monotonic membership set (peers that gate tombstone GC).
     pub(crate) fn members_snapshot(&self) -> HashSet<IpAddr> {
         self.members.read().clone()
+    }
+
+    /// Number of entries currently in the peers gossip-routing map.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn peers_map_len(&self) -> usize {
+        self.peers.read().len()
+    }
+
+    /// Number of entries currently in the per-peer replay filter.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn replay_filter_len(&self) -> usize {
+        self.replay_filter.len()
+    }
+
+    /// Number of keys currently tracked in the tombstone-acknowledgment map.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn tombstone_acks_len(&self) -> usize {
+        self.tombstone_acks.read().len()
+    }
+
+    /// Number of bulk dump tasks currently in flight across all peers.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn bulk_dumps_in_flight_count(&self) -> usize {
+        self.bulk_dumps_in_flight.load(Ordering::Acquire)
     }
 
     /// This node's configured listen address, used by discovery to never decommission itself.
@@ -1274,6 +1414,19 @@ struct BulkInFlightGuard {
 impl Drop for BulkInFlightGuard {
     fn drop(&mut self) {
         self.set.write().remove(&self.peer);
+    }
+}
+
+/// RAII counter-decrement for the global concurrent-dump budget. Decrements the shared atomic on
+/// `Drop`, guaranteeing the slot is freed even if the task holding it panics or is aborted. See
+/// [`ReconcileEngine::try_claim_dump_slot`].
+struct BulkDumpCountGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for BulkDumpCountGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -1735,5 +1888,184 @@ mod socket_buffers {
         // only check the call path does not panic and yields a positive buffer.
         let buf = SockRef::from(&*eng.socket).recv_buffer_size().unwrap();
         assert!(buf > 0, "a socket always has a positive receive buffer");
+    }
+}
+
+#[cfg(test)]
+mod tombstone_ack_bounds {
+    use std::net::SocketAddr;
+
+    use bincode::{DefaultOptions, Serializer};
+    use serde::Serialize;
+
+    use super::Message;
+    use crate::auth;
+    use crate::clock::Timestamp;
+    use crate::reconcile_engine::{version_hash, ReconcileEngine};
+    use crate::reconcile_store::Config;
+
+    type Tombstoned = (Timestamp, Option<i32>);
+
+    async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
+        // Use a distinct port per module to avoid bind conflicts between parallel test runs.
+        let config = Config::default()
+            .with_port(0)
+            .with_listen_addr(addr.parse().unwrap());
+        ReconcileEngine::new(config).await.expect("bind failed")
+    }
+
+    fn ack_bytes(key: i32, version: u64) -> Vec<u8> {
+        let msg =
+            Message::Ack::<i32, Tombstoned, crate::reconcilable::ValueOnly<i32>>((key, version));
+        let mut buf = Vec::new();
+        msg.serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .unwrap();
+        buf
+    }
+
+    /// An ack for a key that does not exist locally must not create any entry in
+    /// `tombstone_acks`. Without the fix, `or_default()` allocates on every ack for
+    /// an arbitrary key, enabling unbounded growth.
+    #[tokio::test]
+    async fn ack_for_unknown_key_does_not_grow_tombstone_acks() {
+        let eng = engine("127.0.0.93").await;
+        let peer: SocketAddr = "127.0.0.94:9000".parse().unwrap();
+
+        let bytes = ack_bytes(42, 999);
+        let payload = auth::Authenticator::new(None, false)
+            .open(&bytes)
+            .expect("unauthenticated open");
+        let mut send_buf = Vec::new();
+        eng.handle_messages(payload, peer, &mut send_buf).await;
+
+        assert_eq!(
+            eng.tombstone_acks_len(),
+            0,
+            "ack for unknown key must not insert into tombstone_acks"
+        );
+    }
+
+    /// An ack for a key that exists locally but is a *live* (non-tombstone) value must
+    /// likewise be dropped.
+    #[tokio::test]
+    async fn ack_for_live_key_does_not_grow_tombstone_acks() {
+        let eng = engine("127.0.0.95").await;
+        let key = 10;
+        // Insert a live value (Some(_) = not a tombstone).
+        eng.just_insert(key, (Timestamp::new(1, 0, 0), Some(42)));
+
+        let peer: SocketAddr = "127.0.0.96:9000".parse().unwrap();
+        let bytes = ack_bytes(key, 123);
+        let payload = auth::Authenticator::new(None, false)
+            .open(&bytes)
+            .expect("unauthenticated open");
+        let mut send_buf = Vec::new();
+        eng.handle_messages(payload, peer, &mut send_buf).await;
+
+        assert_eq!(
+            eng.tombstone_acks_len(),
+            0,
+            "ack for a live (non-tombstone) key must not insert into tombstone_acks"
+        );
+    }
+
+    /// An ack for a key that IS a local tombstone must be recorded normally; the
+    /// decommission test verifies tombstone GC still completes.
+    #[tokio::test]
+    async fn ack_for_local_tombstone_is_recorded() {
+        let eng = engine("127.0.0.97").await;
+        let key = 20;
+        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+        let version = version_hash(&tombstone);
+        eng.just_insert(key, tombstone);
+
+        let peer: SocketAddr = "127.0.0.98:9000".parse().unwrap();
+        let bytes = ack_bytes(key, version);
+        let payload = auth::Authenticator::new(None, false)
+            .open(&bytes)
+            .expect("unauthenticated open");
+        let mut send_buf = Vec::new();
+        eng.handle_messages(payload, peer, &mut send_buf).await;
+
+        assert_eq!(
+            eng.tombstone_acks_len(),
+            1,
+            "ack for a local tombstone must be recorded in tombstone_acks"
+        );
+
+        // Causal-stability GC still completes: with one member who has acked and no
+        // other members, the tombstone is stable and bookkeeping is cleared on forget.
+        eng.members.write().insert(peer.ip());
+        assert!(
+            eng.is_tombstone_stable(&key, version),
+            "tombstone should be stable after the only member has acked"
+        );
+        eng.forget_tombstone(&key);
+        assert_eq!(
+            eng.tombstone_acks_len(),
+            0,
+            "forget_tombstone must clear tombstone_acks for the key"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dump_budget {
+    use crate::reconcile_store::Config;
+
+    /// Default budget is 4, matching DEFAULT_MAX_CONCURRENT_BULK_DUMPS.
+    #[test]
+    fn default_budget_is_four() {
+        assert_eq!(Config::default().max_concurrent_bulk_dumps, 4);
+    }
+
+    /// `with_max_concurrent_bulk_dumps` overrides the value.
+    #[test]
+    fn builder_sets_budget() {
+        let cfg = Config::default().with_max_concurrent_bulk_dumps(1);
+        assert_eq!(cfg.max_concurrent_bulk_dumps, 1);
+    }
+
+    /// With a budget of 1, claiming a second slot before the first is released must fail.
+    /// After the first slot is dropped its count returns to zero and a fresh claim succeeds.
+    #[tokio::test]
+    async fn budget_guard_limits_and_releases_slots() {
+        use crate::clock::Timestamp;
+        use crate::reconcile_engine::ReconcileEngine;
+
+        type Tombstoned = (Timestamp, Option<i32>);
+
+        let config = Config::default()
+            .with_port(0)
+            .with_listen_addr("127.0.0.99".parse().unwrap())
+            .with_max_concurrent_bulk_dumps(1);
+        let eng = ReconcileEngine::<i32, Tombstoned>::new(config)
+            .await
+            .expect("bind failed");
+
+        let peer_a: std::net::SocketAddr = "127.0.0.100:9001".parse().unwrap();
+        let peer_b: std::net::SocketAddr = "127.0.0.101:9001".parse().unwrap();
+
+        // First claim succeeds.
+        let slot_a = eng.try_claim_dump_slot(peer_a);
+        assert!(slot_a.is_some(), "first slot must be available");
+        assert_eq!(eng.bulk_dumps_in_flight_count(), 1);
+
+        // Second claim (different peer) is rejected — budget exhausted.
+        let slot_b = eng.try_claim_dump_slot(peer_b);
+        assert!(slot_b.is_none(), "second slot must be rejected at budget 1");
+        assert_eq!(eng.bulk_dumps_in_flight_count(), 1);
+
+        // Releasing the first slot (drop) frees it for the next caller.
+        drop(slot_a);
+        assert_eq!(eng.bulk_dumps_in_flight_count(), 0);
+
+        // Now peer_b's retry succeeds.
+        let slot_b_retry = eng.try_claim_dump_slot(peer_b);
+        assert!(
+            slot_b_retry.is_some(),
+            "slot must be available after release"
+        );
+        drop(slot_b_retry);
     }
 }

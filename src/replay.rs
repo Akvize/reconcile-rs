@@ -378,6 +378,14 @@ impl ReplayFilter {
         }
     }
 
+    /// Number of peers currently tracked by the filter.
+    ///
+    /// Exposed for test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub(crate) fn len(&self) -> usize {
+        self.peers.lock().len()
+    }
+
     /// Remove the replay state for a peer, freeing its memory immediately.
     ///
     /// This is an explicit escape hatch for tests. Production code does not call this — per-peer
