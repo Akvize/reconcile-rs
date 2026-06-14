@@ -12,7 +12,7 @@
 
 - **Last updated:** 2026-06-12
 - **Baseline:** `claude/determined-franklin-s3tvt1` @ `f1423ce` (2026-06 correctness sprint; pending
-  merge to master)
+  merge to main)
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
   [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
