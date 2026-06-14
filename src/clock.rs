@@ -37,8 +37,14 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-/// Maximum number of milliseconds by which a remote clock may lead physical time before
+/// Default maximum number of milliseconds by which a remote clock may lead physical time before
 /// its `wall_ms` is clamped when updating the local clock state.
+///
+/// This is only the default: the threshold is configurable per node via
+/// [`Config::max_clock_drift_ms`](crate::reconcile_store::Config::max_clock_drift_ms) /
+/// [`Config::with_max_clock_drift_ms`](crate::reconcile_store::Config::with_max_clock_drift_ms),
+/// which the engine passes to the default `HlcClock` adapter. The rationale below explains why this
+/// default value was chosen.
 ///
 /// **Why 1 hour?**
 /// NTP-disciplined clocks rarely deviate by more than a few hundred milliseconds in practice;
@@ -66,7 +72,7 @@ use tracing::warn;
 /// `Timestamp` is returned to the caller unchanged and will win if it is numerically larger
 /// than competing local values. The clamp only stops the *local clock* from chasing that
 /// value into the far future.
-pub const MAX_CLOCK_DRIFT_MS: u64 = 3_600_000; // 1 hour
+pub const DEFAULT_MAX_CLOCK_DRIFT_MS: u64 = 3_600_000; // 1 hour
 
 /// A Hybrid Logical Clock timestamp.
 ///
@@ -150,7 +156,7 @@ pub trait Clock: Send + Sync + 'static {
     ///
     /// This "ordered-after" guarantee holds for remote stamps within a bounded lead over
     /// physical time; an implementation may clamp a remote stamp that leads physical time by
-    /// an implausibly large margin (see [`MAX_CLOCK_DRIFT_MS`]) so
+    /// an implausibly large, configurable margin (default [`DEFAULT_MAX_CLOCK_DRIFT_MS`]) so
     /// that a single poisoned stamp cannot pin the local clock into the far future. The
     /// total order on [`Timestamp`] and the strict-`>` merge are unaffected.
     fn observe(&self, remote: Timestamp);
@@ -165,16 +171,23 @@ pub trait Clock: Send + Sync + 'static {
 #[derive(Debug)]
 pub(crate) struct HlcClock {
     node_id: u64,
+    /// Maximum milliseconds a remote stamp may lead physical time before [`observe`](Clock::observe)
+    /// clamps it when advancing the local clock state (see [`DEFAULT_MAX_CLOCK_DRIFT_MS`] for the
+    /// rationale; set per node via
+    /// [`Config::with_max_clock_drift_ms`](crate::reconcile_store::Config::with_max_clock_drift_ms)).
+    max_clock_drift_ms: u64,
     /// Last timestamp produced or observed; the wall/counter pair is updated atomically
     /// under the mutex so that [`now`](HlcClock::now) stays strictly monotonic.
     last: Mutex<Timestamp>,
 }
 
 impl HlcClock {
-    /// Create a clock for the node identified by `node_id`.
-    pub fn new(node_id: u64) -> HlcClock {
+    /// Create a clock for the node identified by `node_id`, clamping remote stamps that lead
+    /// physical time by more than `max_clock_drift_ms` (see [`DEFAULT_MAX_CLOCK_DRIFT_MS`]).
+    pub fn new(node_id: u64, max_clock_drift_ms: u64) -> HlcClock {
         HlcClock {
             node_id,
+            max_clock_drift_ms,
             last: Mutex::new(Timestamp {
                 wall_ms: 0,
                 counter: 0,
@@ -218,25 +231,26 @@ impl Clock for HlcClock {
     /// greater than `remote`, so a local write following the receipt of a remote value is
     /// ordered after it. This is what prevents lost updates under clock skew.
     ///
-    /// **Far-future clamp**: if `remote.wall_ms` exceeds physical now by more than
-    /// [`MAX_CLOCK_DRIFT_MS`], it is treated as though it arrived at
-    /// `phys_now + MAX_CLOCK_DRIFT_MS`. A `warn!` is emitted so operators can detect
-    /// misbehaving or compromised peers. The remote's own `Timestamp` is left untouched
+    /// **Far-future clamp**: if `remote.wall_ms` exceeds physical now by more than this clock's
+    /// configured `max_clock_drift_ms` (default [`DEFAULT_MAX_CLOCK_DRIFT_MS`]), it is treated as
+    /// though it arrived at `phys_now + max_clock_drift_ms`. A `warn!` is emitted so operators can
+    /// detect misbehaving or compromised peers. The remote's own `Timestamp` is left untouched
     /// for LWW purposes; only the local clock state is protected.
     fn observe(&self, remote: Timestamp) {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
 
         // Clamp remote.wall_ms so a buggy or malicious peer cannot pin the local clock
-        // arbitrarily far into the future (see MAX_CLOCK_DRIFT_MS for the full rationale).
-        let cap = pt.saturating_add(MAX_CLOCK_DRIFT_MS);
+        // arbitrarily far into the future (see DEFAULT_MAX_CLOCK_DRIFT_MS for the full rationale).
+        let cap = pt.saturating_add(self.max_clock_drift_ms);
         let effective_remote_wall = if remote.wall_ms > cap {
             warn!(
                 remote_wall_ms = remote.wall_ms,
                 remote_node_id = remote.node_id,
                 phys_now_ms = pt,
                 cap_ms = cap,
-                "remote timestamp exceeds local clock by more than MAX_CLOCK_DRIFT_MS; \
+                max_clock_drift_ms = self.max_clock_drift_ms,
+                "remote timestamp leads local clock by more than the configured max drift; \
                  clamping to cap to protect local clock state"
             );
             cap
@@ -338,7 +352,7 @@ mod tests {
 
     #[test]
     fn now_is_strictly_monotonic() {
-        let clock = HlcClock::new(1);
+        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
         let mut prev = clock.now();
         for _ in 0..10_000 {
             let next = clock.now();
@@ -349,11 +363,11 @@ mod tests {
 
     #[test]
     fn counter_increments_when_wall_does_not_advance() {
-        let clock = HlcClock::new(1);
-        // Force the clock a little into the future (within MAX_CLOCK_DRIFT_MS) so physical
+        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        // Force the clock a little into the future (within DEFAULT_MAX_CLOCK_DRIFT_MS) so physical
         // time cannot advance past it for the duration of the test: every `now()` must then
         // bump the counter. We no longer use u64::MAX here because the far-future clamp
-        // (see observe()) correctly rejects values beyond phys_now + MAX_CLOCK_DRIFT_MS.
+        // (see observe()) correctly rejects values beyond phys_now + DEFAULT_MAX_CLOCK_DRIFT_MS.
         let near_future = phys_now_ms() + 60_000; // 60 s ahead — well within the 1-hour cap
         clock.observe(Timestamp::new(near_future, 0, 9));
         let a = clock.now();
@@ -366,9 +380,9 @@ mod tests {
     fn observe_advances_past_a_future_timestamp() {
         // Reproduces defect (a) for *legitimate* skew: a peer with a clock running a few
         // seconds ahead. After observing its timestamp, our next local write must be ordered
-        // *after* it, not lost. (Far-future stamps beyond MAX_CLOCK_DRIFT_MS are clamped;
+        // *after* it, not lost. (Far-future stamps beyond DEFAULT_MAX_CLOCK_DRIFT_MS are clamped;
         // see `observe_far_future_is_clamped` for that case.)
-        let clock = HlcClock::new(1);
+        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
         let future = Timestamp::new(phys_now_ms() + 5_000, 5, 2); // 5 s ahead: well within cap
         clock.observe(future);
         let local = clock.now();
@@ -408,11 +422,11 @@ mod tests {
     // ----- New tests for the two bug fixes -----
 
     /// Observing a stamp near u64::MAX must not pin the local clock anywhere near u64::MAX.
-    /// The next `now()` must be within phys_now + MAX_CLOCK_DRIFT_MS + small margin,
+    /// The next `now()` must be within phys_now + DEFAULT_MAX_CLOCK_DRIFT_MS + small margin,
     /// and strict monotonicity relative to any previously minted stamp must hold.
     #[test]
     fn observe_far_future_is_clamped() {
-        let clock = HlcClock::new(1);
+        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
 
         // Mint one local stamp first so we have a baseline for the monotonicity check.
         let before_clamp = clock.now();
@@ -432,7 +446,7 @@ mod tests {
         let pt = phys_now_ms();
         // Allow a generous margin above the cap: the result may be at cap + 1 due to advance(),
         // but must never approach adversarial.wall_ms.
-        let upper_bound = pt + MAX_CLOCK_DRIFT_MS + 10;
+        let upper_bound = pt + DEFAULT_MAX_CLOCK_DRIFT_MS + 10;
         assert!(
             after_clamp.wall_ms() <= upper_bound,
             "clock was not clamped: wall_ms {} >> cap {}",
@@ -444,14 +458,14 @@ mod tests {
     /// Repeated observes of increasing far-future stamps must not ratchet past the cap.
     #[test]
     fn repeated_far_future_observes_do_not_escape_cap() {
-        let clock = HlcClock::new(2);
+        let clock = HlcClock::new(2, DEFAULT_MAX_CLOCK_DRIFT_MS);
         // Feed three different stamps all well beyond the cap.
         for delta in [u64::MAX / 2, u64::MAX - 500, u64::MAX - 1] {
             clock.observe(Timestamp::new(delta, 0, 99));
         }
         let minted = clock.now();
         let pt = phys_now_ms();
-        let upper_bound = pt + MAX_CLOCK_DRIFT_MS + 10;
+        let upper_bound = pt + DEFAULT_MAX_CLOCK_DRIFT_MS + 10;
         assert!(
             minted.wall_ms() <= upper_bound,
             "wall_ms {} escaped the cap {}",
@@ -465,7 +479,7 @@ mod tests {
     /// greater timestamp with no wrapping.
     #[test]
     fn counter_overflow_rolls_wall_forward() {
-        let clock = HlcClock::new(3);
+        let clock = HlcClock::new(3, DEFAULT_MAX_CLOCK_DRIFT_MS);
 
         // Pin the local clock to a wall value and max counter by directly observing a stamp.
         // We set wall_ms to phys_now + 1 so physical time will not advance past it during the
@@ -506,5 +520,28 @@ mod tests {
         let (w3, c3) = advance(u64::MAX, u32::MAX);
         assert_eq!(w3, u64::MAX, "wall saturates at u64::MAX");
         assert_eq!(c3, 0);
+    }
+
+    /// The clamp threshold is configurable: a clock built with a tighter `max_clock_drift_ms`
+    /// clamps a remote stamp that the default 1-hour bound would have accepted.
+    #[test]
+    fn custom_max_clock_drift_is_respected() {
+        let drift = 1_000; // 1 s cap, far tighter than the 1-hour default
+        let clock = HlcClock::new(1, drift);
+
+        // A stamp 60 s ahead is well within the default cap but well beyond this clock's 1 s cap,
+        // so observing it must clamp the local clock rather than chase the remote wall.
+        let pt_before = phys_now_ms();
+        clock.observe(Timestamp::new(pt_before + 60_000, 0, 99));
+
+        let minted = clock.now();
+        let pt = phys_now_ms();
+        let upper_bound = pt + drift + 10; // small margin for advance()/elapsed time
+        assert!(
+            minted.wall_ms() <= upper_bound,
+            "custom drift cap not enforced: wall_ms {} > cap {}",
+            minted.wall_ms(),
+            upper_bound
+        );
     }
 }
