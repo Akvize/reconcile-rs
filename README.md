@@ -10,12 +10,12 @@
 [crates-badge]: https://img.shields.io/crates/v/reconcile.svg
 [crates-url]: https://crates.io/crates/reconcile
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-MIT
+[mit-url]: https://github.com/Akvize/reconcile-rs/blob/main/LICENSE-MIT
 [apache-badge]: https://img.shields.io/badge/license-APACHE-blue.svg
-[apache-url]: https://github.com/Akvize/reconcile-rs/blob/master/LICENSE-APACHE
-[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml/badge.svg
-[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/master.yml
-[codecov-badge]: https://codecov.io/gh/Akvize/reconcile-rs/branch/master/graph/badge.svg
+[apache-url]: https://github.com/Akvize/reconcile-rs/blob/main/LICENSE-APACHE
+[actions-badge]: https://github.com/Akvize/reconcile-rs/actions/workflows/main.yml/badge.svg
+[actions-url]: https://github.com/Akvize/reconcile-rs/actions/workflows/main.yml
+[codecov-badge]: https://codecov.io/gh/Akvize/reconcile-rs/branch/main/graph/badge.svg
 [codecov-url]: https://codecov.io/gh/Akvize/reconcile-rs
 [docs-badge]: https://docs.rs/reconcile/badge.svg
 [docs-url]: https://docs.rs/reconcile/latest/reconcile/
