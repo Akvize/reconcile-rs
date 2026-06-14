@@ -15,8 +15,9 @@
   lanes; scalable test time budget; MSRV declaration — see issues
   [#203](https://github.com/Akvize/reconcile-rs/issues/203) and
   [#189](https://github.com/Akvize/reconcile-rs/issues/189))
-- **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
-  [#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- **Manifest:** `0.2.1` (published on crates.io; release pipeline and semver policy fixed by
+  [#204](https://github.com/Akvize/reconcile-rs/issues/204); breaking changes ride 0.3.0 — see
+  `CHANGELOG.md`)
 
 ---
 
@@ -80,8 +81,9 @@ all but one High resolved or mitigated.
 - [x] Malformed-packet fuzz harness (`fuzz_packets.rs`)
 - [x] Security model documented (README "Security model")
 - [x] Pluggable persistence documented (README "Persistence")
-- [ ] Semver and publish policy — `0.2.1` exists but policy is not yet settled ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
-- [ ] `CHANGELOG.md`
+- [x] Semver and publish policy — release pipeline restored (tag-version verification); 0.3.0 break
+  policy documented in `CHANGELOG.md` ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- [x] `CHANGELOG.md` — seeded with 0.2.1 baseline and Unreleased (0.3.0) section
 - [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
 - [x] Feature-matrix CI — dedicated `mac-hmac`, `encryption`, and `macos` jobs; scalable poll budget via `RECONCILE_TEST_TIME_MULTIPLIER` ([#203](https://github.com/Akvize/reconcile-rs/issues/203))
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
