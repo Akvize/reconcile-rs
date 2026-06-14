@@ -43,7 +43,7 @@ the cluster as an empty replica.
 In code, this would look like this:
 
 ```rust
-let mut store = ReconcileStore::new(Config::default()).await;
+let mut store = ReconcileStore::new(Config::default()).await.unwrap();
 tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
@@ -94,7 +94,7 @@ To close this vector, provide a shared 32-byte cluster secret on **every** node:
 ```rust
 let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
 let config = Config::default().with_cluster_key(key);
-let store = ReconcileStore::new(config).await;
+let store = ReconcileStore::new(config).await.unwrap();
 ```
 
 With a key set, every outgoing datagram is framed with a per-datagram keyed MAC over its payload,
@@ -157,6 +157,7 @@ use reconcile::{reconcile_store::Config, FileSnapshot, ReconcileStore};
 
 let store = ReconcileStore::new(Config::default())
     .await
+    .unwrap()
     .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
 tokio::spawn(store.clone().run()); // periodically snapshots in the background
 ```
@@ -244,6 +245,7 @@ use reconcile::{reconcile_store::Config, ReconcileMirror};
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
 let mirror = ReconcileMirror::<String, String>::new(Config::default())
     .await
+    .unwrap()
     .with_seed(dated_addr);
 tokio::spawn(mirror.clone().run());
 // `mirror.get(&key)` reflects the cluster's current values; deletions appear as `None`.
@@ -268,7 +270,7 @@ let config = Config::default()
     .with_net("10.1.0.0/16".parse().unwrap())  // this node's network (contains listen_addr)
     .with_net("10.2.0.0/16".parse().unwrap())  // another location
     .with_net("10.3.0.0/16".parse().unwrap()); // and another
-let store = ReconcileStore::<String, String>::new(config).await;
+let store = ReconcileStore::<String, String>::new(config).await.unwrap();
 ```
 
 This node's **local** network is whichever declared net contains its `listen_addr`; all others are
@@ -337,6 +339,7 @@ let config = Config::default()
 // Note: no `with_net` — discovery is purely DNS-driven in Kubernetes.
 let store = ReconcileStore::<String, String>::new(config)
     .await
+    .unwrap()
     .with_dns_discovery("reconcile-headless.default.svc.cluster.local", 8080);
 store.run().await;
 ```

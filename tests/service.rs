@@ -51,10 +51,16 @@ async fn test() {
     });
 
     // start reconciliation stores for tree1 and tree2
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_hash = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store2 = ReconcileStore::new(cfg2)
+        .await
+        .expect("bind failed")
+        .with_seed(addr1);
     // Check the initial state *before* spawning the run loops: store1's `insert_bulk` already
     // spawned a background broadcast to its seeded peer (store2), so once store2 starts
     // receiving these asserts would race with reconciliation.
@@ -166,8 +172,14 @@ async fn get_mut_edit_propagates_to_peers() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
-    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
+    let store2 = ReconcileStore::new(cfg2)
+        .await
+        .expect("bind failed")
+        .with_seed(addr1);
     let task1 = tokio::spawn(store1.clone().run());
     let task2 = tokio::spawn(store2.clone().run());
 
@@ -222,10 +234,16 @@ async fn authenticated_nodes_converge() {
         (key, value)
     });
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_hash = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store2 = ReconcileStore::new(cfg2)
+        .await
+        .expect("bind failed")
+        .with_seed(addr1);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
@@ -271,9 +289,11 @@ async fn concurrent_writes_converge() {
 
     let store1 = ReconcileStore::<String, String>::new(cfg1)
         .await
+        .expect("bind failed")
         .with_seed(addr2);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1);
     let task1 = tokio::spawn(store1.clone().run());
     let task2 = tokio::spawn(store2.clone().run());
@@ -326,10 +346,12 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     // would be GC'd almost immediately.
     let store1 = ReconcileStore::<i32, i32>::new(cfg1)
         .await
+        .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(50));
     let store2 = ReconcileStore::<i32, i32>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
@@ -391,10 +413,12 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
 
     let store1 = ReconcileStore::<i32, i32>::new(cfg1)
         .await
+        .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(50));
     let store2 = ReconcileStore::<i32, i32>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
@@ -458,8 +482,14 @@ async fn test_malformed_datagram_does_not_crash() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
-    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
+    let store2 = ReconcileStore::new(cfg2)
+        .await
+        .expect("bind failed")
+        .with_seed(addr1);
     let task1 = tokio::spawn(store1.clone().run());
     let task2 = tokio::spawn(store2.clone().run());
 
@@ -509,10 +539,16 @@ async fn encrypted_nodes_converge() {
         (key, value)
     });
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_hash = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+    let store2 = ReconcileStore::new(cfg2)
+        .await
+        .expect("bind failed")
+        .with_seed(addr1);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
@@ -552,11 +588,15 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
         .with_cluster_key([0x99u8; 32]) // different key
         .with_encryption();
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert("secret".to_string(), "value".to_string());
     let start_hash = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
@@ -600,11 +640,15 @@ async fn cross_net_reconciliation() {
         .with_remote_interval(1)
         .with_remote_fanout(1);
 
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert("key".to_string(), "value".to_string());
     let start_hash = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1);
     assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
 
@@ -651,10 +695,12 @@ async fn cross_net_discovery_without_seed() {
         .with_remote_fanout(1);
 
     // No `with_seed`: the two nodes must find each other purely through per-network discovery probes.
-    let store1 = ReconcileStore::new(cfg1).await;
+    let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
     let start_hash = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .expect("bind failed");
 
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
@@ -695,10 +741,12 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
         .with_remote_fanout(1);
 
     // No seed: the nodes can only meet through per-network discovery probes.
-    let store1 = ReconcileStore::new(cfg1).await;
+    let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
     let start_hash = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2).await;
+    let store2 = ReconcileStore::<String, String>::new(cfg2)
+        .await
+        .expect("bind failed");
 
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
@@ -746,11 +794,15 @@ async fn unclassified_peer_is_still_reconciled() {
         .with_remote_fanout(1);
 
     // Seeded so each knows the other, even though neither address is in any declared network.
-    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+    let store1 = ReconcileStore::new(cfg1)
+        .await
+        .expect("bind failed")
+        .with_seed(addr2);
     store1.insert("k".to_string(), "v".to_string());
     let start_hash = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
+        .expect("bind failed")
         .with_seed(addr1);
 
     // Local net of last resort is each node's own host route (peer is not local).
@@ -782,7 +834,8 @@ async fn runtime_config_setters() {
             .with_listen_addr(addr)
             .with_net(net_c),
     )
-    .await;
+    .await
+    .expect("bind failed");
     assert_eq!(store.nets(), vec![net_c]);
     assert_eq!(store.local_net(), net_c);
 

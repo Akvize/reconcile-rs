@@ -47,7 +47,9 @@ async fn main() {
         key_values.push((key, value));
     }
     let key_values = key_values.as_slice();
-    let mut service = ReconcileStore::new(config).await;
+    let mut service = ReconcileStore::new(config)
+        .await
+        .expect("failed to bind UDP socket");
     service.insert_bulk(key_values);
     info!("Global fingerprint is {}", service.fingerprint(..));
 
