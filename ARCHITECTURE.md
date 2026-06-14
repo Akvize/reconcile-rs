@@ -8,8 +8,9 @@ instances. This document describes the **current architecture** and the **target
 [`PROGRESS.md`](./PROGRESS.md) and are assumed here as the baseline; the state-of-the-art
 positioning is in [`SOTA.md`](./SOTA.md).
 
-The crate is unpublished (`0.0.0-git`); the public API and the on-wire / on-disk formats are not yet
-stable and may change. Code locations are given as `file:line` against the current tree.
+The crate is published on crates.io as `reconcile` **0.2.1**. The public API and the on-wire /
+on-disk formats are not yet stable — breaking changes ride a minor-version bump (next: 0.3.0,
+see `CHANGELOG.md`). Code locations are given as `file:line` against the current tree.
 
 ---
 
