@@ -13,14 +13,29 @@
 //! crate-level "Security model" documentation). To close that vector, when a cluster key is
 //! configured (see
 //! [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key)), every outgoing
-//! datagram is framed as `tag || payload` where `tag` is a keyed MAC over `payload`, and every
-//! incoming datagram is verified **before** any deserialization.
+//! datagram is framed as `tag || replay_header || payload` where `tag` is a keyed MAC over
+//! `replay_header || payload`, and every incoming datagram is verified **before** any
+//! deserialization.
+//!
+//! The `replay_header` is a 16-byte prefix (`seq || stamp`, each a little-endian `u64`) that is
+//! authenticated together with the payload. It provides the data the receiver needs for
+//! replay-protection checks (see [`crate::replay`]).
 //!
 //! With the `encryption` feature and
 //! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), this keyed mode is
 //! upgraded from authentication-only to **authenticated encryption**: each datagram is framed as
 //! `nonce || ciphertext || tag` using XChaCha20-Poly1305 over the same cluster key, adding
-//! confidentiality on top of the integrity and authenticity the MAC already provides.
+//! confidentiality on top of the integrity and authenticity the MAC already provides. The replay
+//! header is part of the plaintext that is encrypted.
+//!
+//! # Wire layout (authenticated modes)
+//!
+//! MAC mode: `tag (32 B) || seq (8 B LE) || stamp (8 B LE) || protocol_messages`
+//!
+//! Encryption mode: `nonce (24 B) || encrypt(seq (8 B LE) || stamp (8 B LE) || protocol_messages) || tag (16 B)`
+//!
+//! The replay header is inside the authenticated / encrypted region in both cases, so it cannot be
+//! tampered with by an observer.
 //!
 //! # Design
 //!
@@ -39,6 +54,8 @@
 //!   impossible to deserialize bytes that have not cleared the authentication gate.
 
 use std::borrow::Cow;
+
+use crate::replay::REPLAY_HEADER_LEN;
 
 /// Length in bytes of the authentication tag prepended to every datagram.
 pub(crate) const TAG_LEN: usize = 32;
@@ -96,15 +113,45 @@ impl Tag {
 /// The rest of the engine can only obtain one through [`Authenticator::open`], so message handling
 /// cannot, by construction, run on bytes that were not cleared first ("parse, don't validate").
 ///
+/// In authenticated modes the payload also carries the `seq` and `stamp` extracted from the
+/// replay header; in unauthenticated mode both are zero (replay protection is disabled).
+///
 /// The bytes are borrowed from the receive buffer in the MAC and unauthenticated modes (zero-copy),
 /// and owned in the encrypted mode where decryption produces a fresh plaintext buffer; [`Cow`]
 /// captures both without forcing an allocation on the common path.
-pub(crate) struct Payload<'a>(Cow<'a, [u8]>);
+pub(crate) struct Payload<'a> {
+    bytes: Cow<'a, [u8]>,
+    /// Sender sequence number extracted from the replay header, or 0 in unauthenticated mode.
+    pub(crate) seq: u64,
+    /// Sender wall-clock stamp (ms since epoch) from the replay header, or 0 in unauthenticated
+    /// mode.
+    pub(crate) stamp: u64,
+}
 
 impl Payload<'_> {
     pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
+        &self.bytes
     }
+}
+
+/// Build a replay header: `seq (8 bytes LE) || stamp (8 bytes LE)`.
+fn encode_replay_header(seq: u64, stamp: u64) -> [u8; REPLAY_HEADER_LEN] {
+    let mut header = [0u8; REPLAY_HEADER_LEN];
+    header[..8].copy_from_slice(&seq.to_le_bytes());
+    header[8..].copy_from_slice(&stamp.to_le_bytes());
+    header
+}
+
+/// Parse a replay header from the front of a byte slice.
+///
+/// Returns `(seq, stamp, rest)` or `None` if the slice is shorter than the header.
+fn decode_replay_header(data: &[u8]) -> Option<(u64, u64, &[u8])> {
+    if data.len() < REPLAY_HEADER_LEN {
+        return None;
+    }
+    let seq = u64::from_le_bytes(data[..8].try_into().unwrap());
+    let stamp = u64::from_le_bytes(data[8..16].try_into().unwrap());
+    Some((seq, stamp, &data[REPLAY_HEADER_LEN..]))
 }
 
 /// The keyed MAC primitive used to authenticate datagrams.
@@ -229,60 +276,97 @@ impl Authenticator {
         }
     }
 
-    /// Number of extra bytes a sealed datagram adds, for MTU/buffer accounting.
+    /// Number of extra bytes a sealed datagram adds over the raw protocol messages, for
+    /// MTU/buffer accounting.
+    ///
+    /// In authenticated modes this includes both the cryptographic overhead (tag / nonce+tag) and
+    /// the 16-byte replay header.
     pub(crate) fn overhead(&self) -> usize {
         match self {
             Authenticator::Disabled => 0,
-            Authenticator::Enabled(_) => TAG_LEN,
+            Authenticator::Enabled(_) => TAG_LEN + REPLAY_HEADER_LEN,
             #[cfg(feature = "encryption")]
-            Authenticator::Encrypted(_) => AEAD_NONCE_LEN + AEAD_TAG_LEN,
+            Authenticator::Encrypted(_) => AEAD_NONCE_LEN + REPLAY_HEADER_LEN + AEAD_TAG_LEN,
         }
     }
 
-    /// Frame an outgoing datagram.
+    /// Frame an outgoing datagram, injecting the replay header.
     ///
-    /// - `Enabled`: `tag(payload) || payload`.
-    /// - `Encrypted`: `nonce || ciphertext || tag` (the payload is never sent in the clear).
+    /// - `Enabled`: `tag(replay_header || payload) || replay_header || payload`.
+    /// - `Encrypted`: `nonce || ciphertext(replay_header || payload) || tag`.
     ///
     /// Returns `Some(framed)` when enabled/encrypted, or `None` when disabled (the caller then
     /// sends `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
-    pub(crate) fn seal(&self, payload: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn seal(&self, seq: u64, stamp: u64, payload: &[u8]) -> Option<Vec<u8>> {
         match self {
             Authenticator::Disabled => None,
             Authenticator::Enabled(key) => {
-                let tag = ClusterMac::tag(key, payload);
-                let mut framed = Vec::with_capacity(TAG_LEN + payload.len());
+                let header = encode_replay_header(seq, stamp);
+                // Authenticated region: replay_header || payload
+                let mut protected = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
+                protected.extend_from_slice(&header);
+                protected.extend_from_slice(payload);
+                let tag = ClusterMac::tag(key, &protected);
+                // Wire: tag || replay_header || payload
+                let mut framed = Vec::with_capacity(TAG_LEN + protected.len());
                 framed.extend_from_slice(tag.as_bytes());
-                framed.extend_from_slice(payload);
+                framed.extend_from_slice(&protected);
                 Some(framed)
             }
             #[cfg(feature = "encryption")]
-            Authenticator::Encrypted(key) => Some(encryption::seal(key, payload)),
+            Authenticator::Encrypted(key) => {
+                let header = encode_replay_header(seq, stamp);
+                // Plaintext = replay_header || payload; both are encrypted and authenticated.
+                let mut plaintext = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
+                plaintext.extend_from_slice(&header);
+                plaintext.extend_from_slice(payload);
+                Some(encryption::seal(key, &plaintext))
+            }
         }
     }
 
     /// Authenticate (and, in encrypted mode, decrypt) an incoming datagram, returning the
     /// [`Payload`] cleared for processing.
     ///
-    /// - `Enabled`: the datagram must be `tag || payload` with a valid tag.
-    /// - `Encrypted`: the datagram must be `nonce || ciphertext || tag` that decrypts under the
-    ///   cluster key.
+    /// In authenticated modes the returned [`Payload`] also carries the `seq` and `stamp` values
+    /// extracted from the replay header; the caller must perform the replay check before processing
+    /// the messages. In unauthenticated mode both fields are zero.
     ///
-    /// On any failure (too short, invalid tag, decryption error) `None` is returned and the caller
-    /// drops it silently. When disabled, the whole datagram is returned as the payload.
+    /// On any failure (too short, invalid tag, decryption error, missing replay header) `None` is
+    /// returned and the caller drops it silently.
     pub(crate) fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a>> {
         match self {
-            Authenticator::Disabled => Some(Payload(Cow::Borrowed(datagram))),
+            Authenticator::Disabled => Some(Payload {
+                bytes: Cow::Borrowed(datagram),
+                seq: 0,
+                stamp: 0,
+            }),
             Authenticator::Enabled(key) => {
-                if datagram.len() < TAG_LEN {
+                if datagram.len() < TAG_LEN + REPLAY_HEADER_LEN {
                     return None;
                 }
-                let (tag, payload) = datagram.split_at(TAG_LEN);
-                ClusterMac::verify(key, payload, tag).then_some(Payload(Cow::Borrowed(payload)))
+                let (tag, protected) = datagram.split_at(TAG_LEN);
+                if !ClusterMac::verify(key, protected, tag) {
+                    return None;
+                }
+                // Strip the replay header from the front of the authenticated region.
+                let (seq, stamp, messages) = decode_replay_header(protected)?;
+                Some(Payload {
+                    bytes: Cow::Borrowed(messages),
+                    seq,
+                    stamp,
+                })
             }
             #[cfg(feature = "encryption")]
             Authenticator::Encrypted(key) => {
-                encryption::open(key, datagram).map(|plaintext| Payload(Cow::Owned(plaintext)))
+                let plaintext = encryption::open(key, datagram)?;
+                // The plaintext starts with the replay header.
+                let (seq, stamp, messages) = decode_replay_header(&plaintext)?;
+                Some(Payload {
+                    bytes: Cow::Owned(messages.to_vec()),
+                    seq,
+                    stamp,
+                })
             }
         }
     }
@@ -333,6 +417,7 @@ mod encryption {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::replay::REPLAY_HEADER_LEN;
 
     fn key(byte: u8) -> ClusterKey {
         ClusterKey::new([byte; KEY_LEN])
@@ -372,18 +457,20 @@ mod tests {
     fn seal_open_roundtrip() {
         let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
         let payload = b"some serialized message";
-        let sealed = auth.seal(payload).expect("enabled");
-        assert_eq!(sealed.len(), TAG_LEN + payload.len());
-        assert_eq!(
-            auth.open(&sealed).map(|p| p.as_bytes().to_vec()),
-            Some(payload.to_vec())
-        );
+        let sealed = auth.seal(1, 12345, payload).expect("enabled");
+        // MAC overhead + replay header + payload
+        assert_eq!(sealed.len(), TAG_LEN + REPLAY_HEADER_LEN + payload.len());
+        let p = auth.open(&sealed).expect("should open");
+        assert_eq!(p.as_bytes(), payload);
+        assert_eq!(p.seq, 1);
+        assert_eq!(p.stamp, 12345);
     }
 
     #[test]
     fn open_too_short() {
         let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
-        // Fewer than TAG_LEN bytes can never carry a valid tag.
+        // Fewer than TAG_LEN + REPLAY_HEADER_LEN bytes can never carry a valid datagram.
+        assert!(auth.open(&[0u8; TAG_LEN + REPLAY_HEADER_LEN - 1]).is_none());
         assert!(auth.open(&[0u8; 10]).is_none());
         assert!(auth.open(&[]).is_none());
     }
@@ -391,7 +478,7 @@ mod tests {
     #[test]
     fn open_wrong_key() {
         let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false)
-            .seal(b"payload")
+            .seal(1, 99, b"payload")
             .expect("enabled");
         assert!(Authenticator::new(Some([0x22; KEY_LEN]), false)
             .open(&sealed)
@@ -404,12 +491,27 @@ mod tests {
         assert!(!auth.is_enabled());
         assert!(!auth.is_encrypted());
         assert_eq!(auth.overhead(), 0);
-        assert!(auth.seal(b"payload").is_none());
-        // Any datagram clears the gate unchanged in unauthenticated mode.
-        assert_eq!(
-            auth.open(b"raw bytes").map(|p| p.as_bytes().to_vec()),
-            Some(b"raw bytes".to_vec())
-        );
+        assert!(auth.seal(0, 0, b"payload").is_none());
+        // Any datagram clears the gate unchanged in unauthenticated mode; seq/stamp are 0.
+        let p = auth
+            .open(b"raw bytes")
+            .expect("unauthenticated always clears");
+        assert_eq!(p.as_bytes(), b"raw bytes");
+        assert_eq!(p.seq, 0);
+        assert_eq!(p.stamp, 0);
+    }
+
+    /// Replay: the same sealed datagram must be accepted by `open` (the auth gate does not do
+    /// replay checks), but the payload carries the seq/stamp so the caller can do them.
+    #[test]
+    fn replay_header_round_trips_seq_and_stamp() {
+        let auth = Authenticator::new(Some([0xAB; KEY_LEN]), false);
+        let payload = b"hello";
+        let sealed = auth.seal(42, 9999, payload).expect("enabled");
+        let p = auth.open(&sealed).expect("valid tag");
+        assert_eq!(p.seq, 42);
+        assert_eq!(p.stamp, 9999);
+        assert_eq!(p.as_bytes(), payload);
     }
 
     #[cfg(feature = "encryption")]
@@ -425,21 +527,28 @@ mod tests {
             let auth = encryptor(0x11);
             assert!(auth.is_enabled());
             assert!(auth.is_encrypted());
-            assert_eq!(auth.overhead(), AEAD_NONCE_LEN + AEAD_TAG_LEN);
+            assert_eq!(
+                auth.overhead(),
+                super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + super::AEAD_TAG_LEN
+            );
 
             let payload = b"some serialized message";
-            let sealed = auth.seal(payload).expect("encrypted");
-            assert_eq!(sealed.len(), AEAD_NONCE_LEN + payload.len() + AEAD_TAG_LEN);
+            let sealed = auth.seal(1, 555, payload).expect("encrypted");
+            // nonce + replay_header + payload + AEAD tag
             assert_eq!(
-                auth.open(&sealed).map(|p| p.as_bytes().to_vec()),
-                Some(payload.to_vec())
+                sealed.len(),
+                super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + payload.len() + super::AEAD_TAG_LEN
             );
+            let p = auth.open(&sealed).expect("should decrypt");
+            assert_eq!(p.as_bytes(), payload);
+            assert_eq!(p.seq, 1);
+            assert_eq!(p.stamp, 555);
         }
 
         #[test]
         fn ciphertext_hides_plaintext() {
             let payload = b"the quick brown fox jumps over the lazy dog";
-            let sealed = encryptor(0x11).seal(payload).expect("encrypted");
+            let sealed = encryptor(0x11).seal(1, 0, payload).expect("encrypted");
             // The plaintext must not appear anywhere in the framed datagram.
             assert!(!sealed
                 .windows(payload.len())
@@ -453,15 +562,15 @@ mod tests {
             let auth = encryptor(0x11);
             let payload = b"identical payload";
             assert_ne!(
-                auth.seal(payload).expect("encrypted"),
-                auth.seal(payload).expect("encrypted")
+                auth.seal(1, 0, payload).expect("encrypted"),
+                auth.seal(2, 0, payload).expect("encrypted")
             );
         }
 
         #[test]
         fn tamper_is_rejected() {
             let auth = encryptor(0x11);
-            let mut sealed = auth.seal(b"payload").expect("encrypted");
+            let mut sealed = auth.seal(1, 0, b"payload").expect("encrypted");
             // Flip a ciphertext byte (past the nonce): authentication must fail.
             let last = sealed.len() - 1;
             sealed[last] ^= 0x01;
@@ -470,18 +579,28 @@ mod tests {
 
         #[test]
         fn wrong_key_is_rejected() {
-            let sealed = encryptor(0x11).seal(b"payload").expect("encrypted");
+            let sealed = encryptor(0x11).seal(1, 0, b"payload").expect("encrypted");
             assert!(encryptor(0x22).open(&sealed).is_none());
         }
 
         #[test]
         fn truncated_is_rejected() {
             let auth = encryptor(0x11);
-            // Shorter than nonce + tag can never carry a valid datagram.
+            // Shorter than nonce + replay_header + tag can never carry a valid datagram.
             assert!(auth
-                .open(&[0u8; AEAD_NONCE_LEN + AEAD_TAG_LEN - 1])
+                .open(&[0u8; super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + super::AEAD_TAG_LEN - 1])
                 .is_none());
             assert!(auth.open(&[]).is_none());
+        }
+
+        #[test]
+        fn replay_header_survives_encryption() {
+            let auth = encryptor(0x33);
+            let sealed = auth.seal(77, 888888, b"data").expect("encrypted");
+            let p = auth.open(&sealed).expect("should decrypt");
+            assert_eq!(p.seq, 77);
+            assert_eq!(p.stamp, 888888);
+            assert_eq!(p.as_bytes(), b"data");
         }
     }
 }
