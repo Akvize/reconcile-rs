@@ -846,7 +846,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let remote_fanout = self.remote_fanout.load(Ordering::Relaxed);
         let round = self.round.fetch_add(1, Ordering::Relaxed);
         // Treat an interval of 0 as "every round" to avoid a modulo-by-zero.
-        let do_remote = round.is_multiple_of(remote_interval);
+        let do_remote = round % remote_interval == 0;
         let known = self.get_peers();
 
         // De-duplicate so a discovery probe that happens to hit a known peer is not sent twice.

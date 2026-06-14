@@ -54,8 +54,103 @@ jobs:
     - name: Check that the crate is publishable
       run: cargo publish --allow-dirty --dry-run
 
+  # Exercises the HMAC-SHA256 MAC backend, which is compiled out by --all-features
+  # (mac-blake3 takes precedence when both are enabled). Without this lane, a regression
+  # in HmacSha256Mac or any mac-hmac-gated code ships green.
+  mac-hmac:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-hmac-${{ hashFiles('**/Cargo.lock') }}
+    - name: Build (mac-hmac, no default features)
+      run: cargo build --no-default-features --features mac-hmac --verbose
+    - name: Test (mac-hmac, no default features)
+      run: cargo test --no-default-features --features mac-hmac --verbose
+    - name: Test (mac-hmac + encryption)
+      run: cargo test --no-default-features --features mac-hmac,encryption --verbose
+
+  # Exercises the encryption feature together with the default (blake3) MAC backend.
+  # --all-features already covers this path in lint-and-test; this job makes it explicit
+  # and runs it independently so encryption regressions are easy to spot in CI.
+  encryption:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-enc-${{ hashFiles('**/Cargo.lock') }}
+    - name: Test (mac-blake3 + encryption)
+      run: cargo test --features encryption --verbose
+
+  # macOS build + unit tests only. Integration tests (real UDP sockets, loopback
+  # routing, multi-thread tokio) are Linux-only for now: the socket-buffer sysctl
+  # tuning and timing budgets the integration suite relies on behave differently on
+  # macOS shared runners. Unit tests (with the loopback aliases added below) catch
+  # compiler regressions and platform-specific socket/ABI issues.
+  macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Build
+      run: cargo build --all --verbose
+    - name: Add loopback aliases
+      # macOS only configures 127.0.0.1 on lo0 (Linux routes all of 127/8); the
+      # engine/store unit tests bind distinct 127.x addresses to isolate their UDP
+      # sockets, so alias them before running. The 127.0.0.x range is aliased densely;
+      # any other 127.x literal the tests use is extracted from the source so this stays
+      # correct as tests are added. `|| true` tolerates non-bindable literals (e.g. the
+      # 127.0.0.0/8 CIDR network address) without failing the step.
+      run: |
+        for i in $(seq 2 254); do sudo ifconfig lo0 alias 127.0.0.$i up || true; done
+        grep -rhoE '127(\.[0-9]+){3}' src/ | sort -u | grep -vE '^127\.0\.0\.' | \
+          while read -r addr; do sudo ifconfig lo0 alias "$addr" up || true; done
+    - name: Run unit tests (lib only)
+      run: cargo test --lib --all-features --verbose
+
+  # MSRV check: compile all targets against the declared minimum supported Rust version.
+  # Uses `cargo check` (not `cargo test`) to keep the job cheap: the borrow checker
+  # catches the language-level regressions that matter, without the cost of codegen or
+  # linking. A full test run on the MSRV toolchain would also require pinning every
+  # transitive dependency, which is out of scope here.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install MSRV toolchain
+      uses: dtolnay/rust-toolchain@1.85
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+    - name: Check (MSRV, all targets, all features)
+      run: cargo check --all-targets --all-features
+
   coverage:
     runs-on: ubuntu-latest
+    env:
+      # llvm-cov instrumentation slows the test suite by 2-5×; scale the integration-test
+      # poll budgets accordingly so "convergence timed out" is not a spurious failure.
+      RECONCILE_TEST_TIME_MULTIPLIER: 3
     steps:
     - uses: actions/checkout@v3
     - name: Install llvm-tools-preview
