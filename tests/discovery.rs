@@ -17,14 +17,14 @@ use std::time::Duration;
 use reconcile::discovery::{DiscoverFuture, Discovery};
 use reconcile::{reconcile_store::Config, ReconcileStore};
 
-async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
-    for _ in 0..200 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if f() {
-            return true;
-        }
-    }
-    false
+mod common;
+
+// Discovery tests use a 200-iteration base (2 s at default speed) because the
+// decommission/floor scenarios involve multiple discovery rounds with non-trivial
+// sleeps between them.
+#[allow(dead_code)]
+async fn wait_until<F: FnMut() -> bool>(f: F) -> bool {
+    common::wait_until_with_budget(f, 200).await
 }
 
 macro_rules! assert_until {

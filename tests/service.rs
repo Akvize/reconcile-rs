@@ -7,19 +7,9 @@ use rand::{
 
 use reconcile::{reconcile_store::Config, Fingerprint, ReconcileStore};
 
-/// Wait for a while until the provided predicate becomes true
-///
-/// If the predicate become true in the delay, return true, otherwise return false. This functions
-/// minimizes the wait time by checking regularly if the predicate is true.
-async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
-    for _ in 0..100 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if f() {
-            return true;
-        }
-    }
-    false
-}
+mod common;
+
+use common::wait_until;
 
 macro_rules! assert_until {
     ( $x:expr ) => {
