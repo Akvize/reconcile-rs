@@ -86,7 +86,7 @@ jobs:
 
       # The point of this job is to verify the devcontainer image itself builds and
       # works, not to re-run the full suite — fmt, clippy and the complete test matrix
-      # already run (faster) in the `master` workflow's lint-and-test job. So we only
+      # already run (faster) in the `main` workflow's lint-and-test job. So we only
       # smoke the dev image: compile every target and run the fast lib unit tests.
       - name: Smoke-build inside devcontainer
         run: |
