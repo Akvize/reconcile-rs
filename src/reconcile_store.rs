@@ -478,6 +478,16 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.decommission_peer(peer);
     }
 
+    /// Return the current membership set.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate. Members
+    /// are peers that have sent at least one dated, authenticated datagram and gate tombstone
+    /// garbage collection via causal stability.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn members_snapshot(&self) -> std::collections::HashSet<std::net::IpAddr> {
+        self.engine.members_snapshot()
+    }
+
     /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
     /// recreating the node**. The local network is re-derived automatically (whichever new net
     /// contains the listen address). See [`Config::nets`].
@@ -799,7 +809,16 @@ pub struct Config {
     /// Set to `None` to leave the inherited OS default untouched. See
     /// [`with_send_buffer_size`](Config::with_send_buffer_size).
     pub send_buffer_size: Option<usize>,
-    // may include other options in the future: tombstone_ttl, metrics, etc.
+    /// Maximum deviation between a datagram's sender wall-clock stamp and local physical time for
+    /// the datagram to be accepted in authenticated modes.
+    ///
+    /// Datagrams whose freshness stamp is more than this far in the past **or** future are
+    /// silently dropped, preventing replay of old authenticated traffic. Only applied in
+    /// authenticated modes (MAC or encrypted); unauthenticated mode ignores this setting.
+    ///
+    /// Defaults to 5 minutes. Increase if nodes have large, legitimate clock skew; decrease for
+    /// tighter replay protection. See [`with_freshness_window`](Config::with_freshness_window).
+    pub freshness_window: Duration,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -816,6 +835,7 @@ impl Default for Config {
             bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
+            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
         }
     }
 }
@@ -937,6 +957,17 @@ impl Config {
         self
     }
 
+    /// Set the freshness window for replay protection in authenticated modes (default 5 minutes).
+    ///
+    /// Datagrams whose sender wall-clock stamp deviates from local physical time by more than
+    /// `window` in either direction are silently dropped. A narrower window tightens replay
+    /// protection; a wider one tolerates larger clock skew between nodes. Has no effect in
+    /// unauthenticated mode (no cluster key). See [`freshness_window`](Config::freshness_window).
+    pub fn with_freshness_window(mut self, window: Duration) -> Self {
+        self.freshness_window = window;
+        self
+    }
+
     /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
     /// authentication-only to authenticated **encryption**.
     ///
@@ -988,6 +1019,7 @@ mod reconcile_store_tests {
             bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
+            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
         }
     }
 

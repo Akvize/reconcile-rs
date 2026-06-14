@@ -42,12 +42,19 @@
 //! # Security model
 //!
 //! By default the UDP reconciliation protocol is **unauthenticated**: any host able to send a
-//! datagram to the port can forge an update and poison the whole cluster through last-write-wins.
-//! To prevent this, configure a shared cluster secret with
+//! datagram to the port can forge an update and poison the whole cluster through last-write-wins,
+//! and there is **no replay protection** — a captured datagram can be re-injected later to
+//! re-poison membership or re-deliver stale data. Unauthenticated mode is intentionally unprotected
+//! against both attacks; it is suitable only for fully trusted network underlays.
+//!
+//! To close the forgery and replay vectors, configure a shared cluster secret with
 //! [`Config::with_cluster_key`](reconcile_store::Config::with_cluster_key) on **every** node: this
-//! enables a per-datagram keyed MAC that is verified before deserialization, silently dropping
-//! unauthenticated or forged datagrams. See the README "Security model" section for the full
-//! threat model and scope.
+//! enables per-datagram MAC authentication and per-sender replay protection. Every datagram carries
+//! a monotonically increasing sequence number and a sender wall-clock stamp (both inside the
+//! authenticated region); the receiver maintains per-peer state and rejects duplicates, stale
+//! out-of-window sequences, and datagrams whose freshness stamp deviates from local physical time
+//! by more than the configured freshness window (default 5 minutes). See the README "Security
+//! model" section for the full threat model and scope.
 
 // The entire crate is implemented in safe Rust; this turns any `unsafe` block into a hard
 // compile error.
@@ -76,6 +83,7 @@ pub(crate) mod hrtree_iter;
 pub(crate) mod observability;
 pub(crate) mod proto;
 pub(crate) mod reconcile_engine;
+pub(crate) mod replay;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
@@ -121,5 +129,33 @@ pub mod testing {
         R: std::ops::RangeBounds<K>,
     {
         tree.hash(range)
+    }
+
+    /// Seal a raw payload with the given 32-byte cluster key, sequence number, and wall-clock stamp
+    /// using MAC authentication (not encryption), producing the on-wire datagram bytes.
+    ///
+    /// Exposed so integration tests can craft legitimately-sealed datagrams and inject them via a
+    /// raw UDP socket to exercise the anti-replay pipeline end-to-end.  The output format matches
+    /// what the engine sends in authenticated (non-encrypted) mode:
+    /// `tag(32) || seq(8 LE) || stamp(8 LE) || payload`.
+    pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
+        crate::auth::Authenticator::new(Some(key), false)
+            .seal(seq, stamp, payload)
+            .expect("Enabled authenticator always seals")
+    }
+
+    /// Return the current membership set for integration-test assertions.
+    ///
+    /// Members are peers that have sent at least one dated, authenticated datagram and gate
+    /// tombstone garbage collection via causal stability. Exposed so integration tests can
+    /// assert that a decommissioned peer was not re-added to membership by a replayed datagram.
+    pub fn members_snapshot<K, V>(
+        store: &crate::ReconcileStore<K, V>,
+    ) -> std::collections::HashSet<std::net::IpAddr>
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.members_snapshot()
     }
 }
