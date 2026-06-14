@@ -40,6 +40,13 @@ const B: usize = 6;
 const MIN_CAPACITY: usize = B - 1;
 const MAX_CAPACITY: usize = 2 * B - 1;
 
+// A node only ever splits at `len == MAX_CAPACITY` (`2 * B - 1`), promoting the median and leaving
+// `B - 1` keys on each side. For both sides to be non-empty after a split, `B - 1 >= 1`, i.e.
+// `B >= 3` (`MAX_CAPACITY >= 5`, an odd median split). At `B == 2` (`MAX_CAPACITY == 3`) the split
+// can leave a node empty, violating the B-tree occupancy invariant. Pin the lower bound here so a
+// future retune of `B` that crosses it fails to compile rather than silently corrupting the tree.
+const _: () = assert!(B >= 3);
+
 type InsertionTuple<K, V> = Option<(K, V, Fingerprint, Box<Node<K, V>>)>;
 
 /// Which sibling a [`Node::steal`] rotates a separator from.
@@ -98,7 +105,8 @@ impl<K, V> Node<K, V> {
     ) -> InsertionTuple<K, V> {
         assert_eq!(self.children.is_none(), right_child.is_none());
         if self.keys.is_full() {
-            // TODO: handle case where self.keys.len() == 2 without leaving empty node
+            // A split promotes the median and leaves `B - 1` keys on each side; both are non-empty
+            // because `B >= 3` (asserted at the top of this module). `mid` is the median index.
             let mid = self.keys.len() / 2;
             // split
             let mut right_sibling = Box::new(Node {

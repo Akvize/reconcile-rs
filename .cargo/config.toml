@@ -1,0 +1,16 @@
+# Repository-local build configuration. This file is NOT packaged (it lives outside the crate's
+# published file set — verify with `cargo package --list`), so it never ships to consumers of the
+# published crate.
+#
+# It turns on the `reconcile_internal_testing` cfg for every build and test run IN THIS REPOSITORY.
+# That cfg gates the `reconcile::testing` seam (re-exports of `pub(crate)` reconciliation internals
+# in `src/lib.rs`) and the related test-only methods, so the external integration-test oracles
+# (`tests/diff.rs`, `tests/proptest_hrtree.rs`) and the benchmark can reach them — while downstream
+# consumers of the crate, who do not have this file and cannot set the cfg via a Cargo feature,
+# cannot.
+#
+# An env `RUSTFLAGS` / `RUSTDOCFLAGS` OVERRIDES these (it is not merged), so any CI step that sets
+# those env vars must append `--cfg reconcile_internal_testing` itself (see `.github/workflows`).
+[build]
+rustflags = ["--cfg", "reconcile_internal_testing"]
+rustdocflags = ["--cfg", "reconcile_internal_testing"]

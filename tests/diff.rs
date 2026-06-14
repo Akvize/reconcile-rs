@@ -1,4 +1,4 @@
-#![cfg(feature = "internal-testing")]
+#![cfg(reconcile_internal_testing)]
 
 use std::hash::Hash;
 use std::ops::Bound;

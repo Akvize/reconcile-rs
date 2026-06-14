@@ -51,12 +51,23 @@ spec:
             - name: metrics
               containerPort: 9000
               protocol: TCP
+            - name: ready
+              containerPort: 9001
+              protocol: TCP
+          # Readiness gates the pod into the headless-Service DNS (and thus into peers'
+          # DnsDiscovery). It MUST reflect real store health, not just "an HTTP port is open":
+          # /metrics is the in-process Prometheus listener and comes up before ReconcileStore::new
+          # binds the UDP socket, so probing it would advertise a pod that cannot yet serve a single
+          # reconciliation. The dedicated /ready endpoint returns 200 only once the store is built
+          # and its gossip loop is running. (This is join-time health; the discovery decommission
+          # floor of issue #201 governs leave-time grace — the two are independent.)
           readinessProbe:
             httpGet:
-              path: /metrics
-              port: metrics
+              path: /ready
+              port: ready
             initialDelaySeconds: 3
             periodSeconds: 5
+          # Liveness only checks the process is alive and serving HTTP, so /metrics is fine here.
           livenessProbe:
             httpGet:
               path: /metrics

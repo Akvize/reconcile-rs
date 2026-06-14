@@ -71,6 +71,18 @@ const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 /// over ranges still in flight (the byte amplification this caps).
 const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 
+/// Floor, in bytes per second, applied to a configured [`Config::bulk_send_rate`]. A non-`None`
+/// rate below this is raised to it (with a warning) when the engine is built.
+///
+/// A paced bulk dump holds the per-peer in-flight mark for the whole transfer, and `pace()` sleeps
+/// `sent_bytes / rate` between datagrams. A tiny rate turns that sleep into an effectively unbounded
+/// stall that wedges the peer's sync (it is the single in-flight dump for that peer, so no further
+/// reconciliation with it can start). 1 MiB/s keeps even one full-size datagram (`BUFFER_SIZE`,
+/// ~64 KiB) pacing in well under a second (~62 ms), so the in-flight mark always turns over
+/// promptly while still allowing operators to throttle a cold sync hard. `None` (pacing disabled)
+/// is left untouched — it is an explicit choice, not a misconfiguration.
+pub(crate) const MIN_BULK_SEND_RATE: usize = 1024 * 1024;
+
 /// Default size requested for the gossip socket's send/receive buffers (`SO_SNDBUF` / `SO_RCVBUF`),
 /// in bytes (see [`Config::recv_buffer_size`]). A generous 8 MiB: the kernel silently clamps the
 /// request to the OS maximum (`net.core.rmem_max` / `wmem_max` on Linux), so this is an improvement
@@ -717,18 +729,18 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     /// Return the current membership set.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate. Members
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate. Members
     /// are peers that have sent at least one dated, authenticated datagram and gate tombstone
     /// garbage collection via causal stability.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn members_snapshot(&self) -> std::collections::HashSet<std::net::IpAddr> {
         self.engine.members_snapshot()
     }
 
     /// Number of entries in the peers gossip-routing map.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn peers_map_len(&self) -> usize {
         self.engine.peers_map_len()
     }
@@ -737,32 +749,32 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// least once and the entry has not yet expired). Used in tests to deterministically confirm
     /// that at least one discovery round has observed the peer before the resolver is mutated.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn peers_contains(&self, peer: std::net::IpAddr) -> bool {
         self.engine.peers_contains(peer)
     }
 
     /// Number of entries in the per-peer replay filter.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn replay_filter_len(&self) -> usize {
         self.engine.replay_filter_len()
     }
 
     /// Number of keys currently tracked in the tombstone-acknowledgment map.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn tombstone_acks_len(&self) -> usize {
         self.engine.tombstone_acks_len()
     }
 
     /// Number of bulk dump tasks currently in flight across all peers.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn bulk_dumps_in_flight_count(&self) -> usize {
         self.engine.bulk_dumps_in_flight_count()
     }
@@ -1058,7 +1070,28 @@ pub struct Config {
     /// UDP datagram to the port can forge updates and poison the cluster. When set, every node in
     /// the cluster must use the **same** 32-byte key (and the same MAC backend feature). See
     /// [`Config::with_cluster_key`].
+    ///
+    /// # Keyless mode leaks the entire dataset
+    ///
+    /// Keyless mode is not merely unauthenticated *writes*; it also leaks *reads*. The discovery
+    /// probe (`RandomProbe`) answers any host inside a configured network/CIDR, and the anti-entropy
+    /// protocol then serves that host whatever it is missing. A stranger that squats a single IP in
+    /// the range — or spoofs one, since UDP source addresses are forgeable — eventually receives the
+    /// **entire dataset** through the paced bulk diff dumps, with no key and no per-peer identity to
+    /// stop it. Run keyless only on a fully trusted network underlay. To both authenticate and stop
+    /// the leak, set [`with_cluster_key`](Self::with_cluster_key) on every node; to keep keyless mode
+    /// deliberately (and silence the startup warning), acknowledge it with
+    /// [`with_insecure_no_key`](Self::with_insecure_no_key).
     pub cluster_key: Option<[u8; 32]>,
+    /// Operator acknowledgment that running without a [`cluster_key`](Self::cluster_key) is
+    /// intentional (set via [`with_insecure_no_key`](Self::with_insecure_no_key)).
+    ///
+    /// Purely advisory: it changes **nothing** about the protocol — keyless mode is still
+    /// unauthenticated and still leaks the dataset (see [`cluster_key`](Self::cluster_key)). Its only
+    /// effect is to downgrade the loud startup `SECURITY` warning to a single acknowledged-once line,
+    /// so an operator who has accepted the trust model is not nagged on every restart. It is ignored
+    /// when a key *is* set.
+    pub acknowledged_no_key: bool,
     /// Identity of this node, used as the deterministic tie-break in the Hybrid Logical
     /// Clock total order. When `None` (the default), a random id is generated at startup.
     ///
@@ -1102,6 +1135,11 @@ pub struct Config {
     /// so a re-issued diff cannot re-send in-flight ranges. Together these make a cold sync transfer
     /// ≈ the dataset size, fast, regardless of `reconcile_interval`. Only the bulk value dump is
     /// paced; small refinement comparisons, acks, and local-write broadcasts are sent immediately.
+    ///
+    /// A non-`None` rate is floored at 1 MiB/s when the store is built: a paced dump holds the
+    /// per-peer in-flight mark for its whole duration, so a tiny rate would make pacing sleep for
+    /// an effectively unbounded time and wedge that peer's sync. A configured value below the floor
+    /// is raised to it with a warning; `None` (pacing disabled) is left untouched.
     pub bulk_send_rate: Option<usize>,
     /// Size to request for the gossip socket's receive buffer (`SO_RCVBUF`), in bytes.
     ///
@@ -1174,6 +1212,7 @@ impl Default for Config {
             remote_interval: 6,
             remote_fanout: 2,
             cluster_key: None,
+            acknowledged_no_key: false,
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
@@ -1251,7 +1290,8 @@ impl Config {
     }
 
     /// Set the rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
-    /// peer is paced (default 32 MiB/s). See [`bulk_send_rate`](Config::bulk_send_rate); to disable
+    /// peer is paced (default 32 MiB/s). Values below the 1 MiB/s floor are raised to it (with a
+    /// warning) when the store is built. See [`bulk_send_rate`](Config::bulk_send_rate); to disable
     /// pacing (the historical back-to-back burst), set that field to `None` directly.
     pub fn with_bulk_send_rate(mut self, bytes_per_sec: usize) -> Self {
         self.bulk_send_rate = Some(bytes_per_sec);
@@ -1292,6 +1332,22 @@ impl Config {
     /// logs a loud warning at startup and runs unauthenticated.
     pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
         self.cluster_key = Some(key);
+        self
+    }
+
+    /// Explicitly acknowledge running **without** a cluster key.
+    ///
+    /// Keyless mode is the default, but it is unauthenticated *and leaks the entire dataset* to any
+    /// host that can reach the port (see [`cluster_key`](Config::cluster_key) for the concrete
+    /// leak). Calling this is an operator statement that the keyless trust model — a fully trusted
+    /// network underlay — is understood and intended. It is purely advisory: it does **not** change
+    /// the protocol or add any protection. Its only effect is to downgrade the loud startup
+    /// `SECURITY` warning to a single acknowledged line, so a deliberately keyless deployment is not
+    /// nagged on every restart.
+    ///
+    /// Has no effect once [`with_cluster_key`](Config::with_cluster_key) is set; do not call both.
+    pub fn with_insecure_no_key(mut self) -> Self {
+        self.acknowledged_no_key = true;
         self
     }
 
@@ -1381,6 +1437,7 @@ mod reconcile_store_tests {
             remote_interval: 6,
             remote_fanout: 2,
             cluster_key: None,
+            acknowledged_no_key: false,
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),

@@ -380,8 +380,8 @@ impl ReplayFilter {
 
     /// Number of peers currently tracked by the filter.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under the `reconcile_internal_testing` cfg gate.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn len(&self) -> usize {
         self.peers.lock().len()
     }
