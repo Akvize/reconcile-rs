@@ -271,7 +271,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
         let node_id = config.node_id.unwrap_or_else(rand::random);
-        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id, config.max_clock_drift_ms));
+        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
         Self::build(config, clock).await
     }
 
