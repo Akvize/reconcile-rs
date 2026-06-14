@@ -42,7 +42,7 @@ the cluster as an empty replica.
 
 In code, this would look like this:
 
-```rust
+```rust,ignore
 let mut store = ReconcileStore::new(Config::default()).await.unwrap();
 tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
@@ -91,7 +91,7 @@ performance limitations.
 
 To close this vector, provide a shared 32-byte cluster secret on **every** node:
 
-```rust
+```rust,ignore
 let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
 let config = Config::default().with_cluster_key(key);
 let store = ReconcileStore::new(config).await.unwrap();
@@ -114,7 +114,7 @@ feature, `Config::with_encryption()` upgrades it to authenticated **encryption**
 framed as `nonce || ciphertext || tag` with [XChaCha20-Poly1305] over the same 32-byte cluster key,
 and is decrypted-and-verified before deserialization.
 
-```rust
+```rust,ignore
 // requires the `encryption` feature
 let config = Config::default().with_cluster_key(key).with_encryption();
 ```
@@ -151,15 +151,34 @@ tombstones, and the issue-#109 causal-stability bookkeeping (membership and per-
 acknowledgments) — is reloaded **before** the node rejoins the gossip protocol, so a restart does
 not look like a fresh, empty replica:
 
-```rust
+```rust,no_run
 use std::sync::Arc;
-use reconcile::{reconcile_store::Config, FileSnapshot, ReconcileStore};
+use reconcile::{reconcile_store::Config, FileSnapshot, LoadError, ReconcileStore};
 
-let store = ReconcileStore::new(Config::default())
-    .await
-    .unwrap()
-    .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
-tokio::spawn(store.clone().run()); // periodically snapshots in the background
+async fn start() -> Result<(), Box<dyn std::error::Error>> {
+    let store = ReconcileStore::<String, String>::new(Config::default())
+        .await?
+        .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
+
+    let store = match store {
+        Ok(s) => s,
+        Err(LoadError::Corrupt(msg)) => {
+            // The snapshot file exists but could not be decoded.
+            // Do NOT silently start empty: that drops tombstones and enables resurrection
+            // of previously deleted values. Alert an operator and halt; if data loss is
+            // acceptable, delete the snapshot file and restart.
+            return Err(format!("snapshot corrupt, operator action required: {msg}").into());
+        }
+        Err(LoadError::Io(err)) => {
+            // Transient I/O failure (e.g. volume still mounting). Retry after a short
+            // delay rather than discarding durable state.
+            return Err(format!("transient I/O error loading snapshot, retry later: {err}").into());
+        }
+    };
+
+    tokio::spawn(store.clone().run()); // periodically snapshots in the background
+    Ok(())
+}
 ```
 
 The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
@@ -183,7 +202,7 @@ stays lean:
 - `metrics-prometheus` — additionally provides `reconcile::prometheus` to install a Prometheus
   recorder and either serve a `/metrics` endpoint or render the exposition text yourself:
 
-```rust,no_run
+```rust,ignore
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 // Serve a /metrics HTTP endpoint (requires a Tokio runtime):
 reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
@@ -239,7 +258,7 @@ value-only projection* of its data and answers a mirror's value-only diff agains
 mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is never counted as a
 causal-stability member, so it cannot hold back a dated node's garbage collection.
 
-```rust
+```rust,ignore
 use reconcile::{reconcile_store::Config, ReconcileMirror};
 
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
@@ -262,7 +281,7 @@ cloud region, an availability zone, or a single subnet. The model is intentional
 per location, no rack/host level and no hierarchy), because the CIDR mask already lets you pick the
 granularity. Declare every network with `with_net` — **including this node's own**:
 
-```rust
+```rust,ignore
 use reconcile::{reconcile_store::Config, ReconcileStore};
 
 let config = Config::default()
@@ -302,7 +321,7 @@ re-bind the socket and lose its identity) — useful for elastic deployments: op
 decommissioning one, or retuning WAN traffic on the fly. These `&self` methods on `ReconcileStore`
 take effect on the running `run()` loop:
 
-```rust
+```rust,ignore
 store.add_net("10.4.0.0/16".parse().unwrap()); // start gossiping with a new location
 store.remove_net("10.3.0.0/16".parse().unwrap()); // stop probing a retired one
 store.set_nets(&nets);                          // replace the whole topology at once
@@ -330,7 +349,7 @@ almost never lands on a live pod. Instead, point the store at a **headless `Serv
 (`clusterIP: None`): its DNS name resolves to one address record per ready pod, giving every peer in
 a single lookup — the canonical StatefulSet pattern, with **no Kubernetes API access and no RBAC**.
 
-```rust
+```rust,ignore
 use reconcile::{reconcile_store::Config, ReconcileStore};
 
 let config = Config::default()

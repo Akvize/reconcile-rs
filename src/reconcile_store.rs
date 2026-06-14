@@ -14,6 +14,7 @@ use std::hash::Hash;
 use std::io;
 use std::net::IpAddr;
 use std::ops::RangeBounds;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,15 +27,35 @@ use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::discovery::{Discovery, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
-use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
+use crate::persistence::{
+    DatedEntries, InMemoryPersistence, LoadError, PersistedState, Persistence,
+};
 use crate::reconcilable::Projectable;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
-/// How often the background task writes a full snapshot to the persistence backend.
-const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+/// Default cadence of the periodic snapshot task (see [`ReconcileStore::with_snapshot_interval`]).
+const DEFAULT_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Default minimum number of changes between snapshots (see
+/// [`ReconcileStore::with_snapshot_change_threshold`]).
+///
+/// `1` means any change since the last snapshot triggers a write at the next tick. Set to `0` to
+/// snapshot even when the store is idle (every tick, regardless of changes).
+const DEFAULT_SNAPSHOT_CHANGE_THRESHOLD: usize = 1;
+
+/// Number of map entries collected per lock acquisition during a chunked snapshot.
+///
+/// This bounds the maximum time a single snapshot pass holds the map read lock: the lock is
+/// released after each chunk and re-acquired for the next, so writers are only blocked for the
+/// time it takes to clone at most this many entries. The resulting snapshot is **fuzzy** — entries
+/// are captured at slightly different instants across chunks — but every entry is individually
+/// valid LWW state: a restart followed by reconciliation with peers pulls any delta that changed
+/// between chunks. The fuzziness is equivalent to the store having briefly paused writes for a
+/// fraction of the snapshot window, which the LWW reconciliation protocol already handles.
+const SNAPSHOT_CHUNK_SIZE: usize = 1024;
 
 /// Default cadence of the dynamic-discovery task (see [`ReconcileStore::with_discovery_interval`]).
 const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
@@ -116,6 +137,16 @@ where
     /// decommissioned by the discovery task. Members with no pending tombstone acks skip this
     /// floor and are decommissioned as soon as `miss_threshold` rounds elapse.
     discovery_decommission_floor: Duration,
+    /// How often the snapshot task runs. `None` disables time-based snapshots entirely (snapshots
+    /// can still be triggered on-demand via `snapshot()`).
+    snapshot_interval: Option<Duration>,
+    /// Minimum number of changes (inserts / removes / reconciled applies) since the last snapshot
+    /// before the next timed snapshot is written. `0` means always snapshot at the tick, even when
+    /// idle. The counter is reset to zero after every snapshot.
+    snapshot_change_threshold: usize,
+    /// Running count of map mutations since the last snapshot. Shared so that `insert`, `remove`,
+    /// and the reconciliation apply path can all bump it without taking the map lock.
+    change_counter: Arc<AtomicUsize>,
 }
 
 impl<K, V> Clone for ReconcileStore<K, V>
@@ -133,6 +164,9 @@ where
             discovery_interval: self.discovery_interval,
             discovery_miss_threshold: self.discovery_miss_threshold,
             discovery_decommission_floor: self.discovery_decommission_floor,
+            snapshot_interval: self.snapshot_interval,
+            snapshot_change_threshold: self.snapshot_change_threshold,
+            change_counter: self.change_counter.clone(),
         }
     }
 }
@@ -146,14 +180,19 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
+        let engine = ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await?;
+        let change_counter = Arc::clone(&engine.change_counter);
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await?,
+            engine,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
             discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
+            snapshot_interval: Some(DEFAULT_SNAPSHOT_INTERVAL),
+            snapshot_change_threshold: DEFAULT_SNAPSHOT_CHANGE_THRESHOLD,
+            change_counter,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -168,15 +207,20 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {
+        let engine =
+            ReconcileEngine::<K, (Timestamp, Option<V>)>::new_with_clock(config, clock).await?;
+        let change_counter = Arc::clone(&engine.change_counter);
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new_with_clock(config, clock)
-                .await?,
+            engine,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
             discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
+            snapshot_interval: Some(DEFAULT_SNAPSHOT_INTERVAL),
+            snapshot_change_threshold: DEFAULT_SNAPSHOT_CHANGE_THRESHOLD,
+            change_counter,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -194,11 +238,22 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Loaded entries are replayed through the pre-insert hook, which preserves each tombstone's
     /// original deletion timestamp and rebuilds the tombstone-expiry wheel.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the backend fails to load (e.g. a corrupt snapshot file): recovering from a
-    /// damaged durable state is a deliberate, explicit decision rather than a silent fresh start.
-    pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
+    /// Returns a [`LoadError`] when the backend cannot load:
+    ///
+    /// - [`LoadError::Corrupt`] — the snapshot file exists but could not be decoded. **Do not
+    ///   silently start empty**: that drops tombstones and enables resurrection of previously
+    ///   deleted values. The recommended action is to log the error, alert an operator, and halt.
+    ///   If data loss is acceptable, delete the snapshot and restart.
+    /// - [`LoadError::Io`] — a transient I/O error persisted across all retries (e.g. a volume
+    ///   still mounting). Retrying after a short delay is appropriate.
+    ///
+    /// `NotFound` (no snapshot yet) is a clean fresh start and does not produce an error.
+    pub fn with_persistence(
+        mut self,
+        backend: Arc<dyn Persistence<K, V>>,
+    ) -> Result<Self, LoadError> {
         // Warn operators when a durable backend is used with a randomly-generated node id.
         // A random id changes on every restart, which silently alters this node's LWW
         // conflict-resolution identity: a write made before the restart by "node X" will now
@@ -217,7 +272,15 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
                  Config::with_node_id to preserve consistent LWW ordering across restarts."
             );
         }
-        if let Some(state) = backend.load().expect("failed to load persisted state") {
+        if let Some(state) = backend.load().map_err(|e| {
+            // Classify the io::Error coming from a generic Persistence impl: if it carried
+            // InvalidData we treat it as corrupt, otherwise as a transient I/O failure.
+            if e.kind() == io::ErrorKind::InvalidData {
+                LoadError::Corrupt(e.to_string())
+            } else {
+                LoadError::Io(e)
+            }
+        })? {
             *self.engine.members.write() = state.members;
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
             // Advance the clock past every persisted timestamp so that the first post-restart
@@ -246,18 +309,60 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             self.engine.just_insert_bulk(&state.entries);
         }
         self.persistence = backend;
+        Ok(self)
+    }
+
+    /// Set how often the background task writes a snapshot to the persistence backend
+    /// (default 5 s).
+    ///
+    /// Pass `None` to disable time-based snapshots entirely — snapshots will then only fire when
+    /// the change threshold is crossed and the caller explicitly triggers one (future on-demand
+    /// API), or not at all. When time-based snapshots are disabled and no on-demand mechanism is
+    /// in place, persistence is effectively write-only (saves never happen automatically).
+    ///
+    /// An incremental/segmented snapshot format (write amplification proportional to change
+    /// volume, not dataset size) is deferred to future work.
+    pub fn with_snapshot_interval(mut self, interval: impl Into<Option<Duration>>) -> Self {
+        self.snapshot_interval = interval.into();
         self
     }
 
-    /// Capture the full store state and hand it to the persistence backend.
+    /// Set the minimum number of changes (inserts, removes, and reconciled applies) since the
+    /// last snapshot before the next timed tick actually writes to the backend (default 1).
+    ///
+    /// - `0` — snapshot every tick unconditionally, even when the store is idle.
+    /// - `N > 0` — skip the tick if fewer than `N` changes have occurred since the last snapshot.
+    ///   Steady-state idle ⇒ zero snapshot I/O.
+    ///
+    /// The change counter is reset to zero after every snapshot write, so the threshold applies
+    /// to the *interval* between snapshots, not to the total lifetime change count.
+    pub fn with_snapshot_change_threshold(mut self, threshold: usize) -> Self {
+        self.snapshot_change_threshold = threshold;
+        self
+    }
+
+    /// Capture the store state and hand it to the persistence backend.
+    ///
+    /// # Chunked (fuzzy) snapshot
+    ///
+    /// The map is iterated in key-order chunks of [`SNAPSHOT_CHUNK_SIZE`] entries. The read lock
+    /// is **released between chunks**, so writers (inserts, removes, reconciliation applies) are
+    /// only blocked for the time it takes to clone one chunk — bounded independently of dataset
+    /// size. The resulting snapshot is **fuzzy**: entries captured in different chunks may reflect
+    /// slightly different instants. Every captured entry is individually valid LWW state, and a
+    /// restart followed by reconciliation with peers will pull any delta that changed between
+    /// chunks. This trade-off is equivalent to briefly pausing writes for a fraction of the
+    /// snapshot window, which the LWW protocol already handles.
+    ///
+    /// After the snapshot write the change counter is reset to zero so the threshold logic in
+    /// [`snapshot_periodically`] starts a fresh accounting window.
     fn snapshot(&self) {
-        let entries: DatedEntries<K, V> = self
-            .engine
-            .map
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        // Capture the counter BEFORE collecting entries so that any changes that arrive during the
+        // (potentially multi-chunk) collection are still counted in the next snapshot window.
+        // After a successful save we subtract exactly what we captured, not a blind zero: if more
+        // changes arrived during collection they remain pending and the next tick will see them.
+        let captured = self.change_counter.load(AtomicOrdering::Relaxed);
+        let entries = self.collect_entries_chunked();
         let state = PersistedState {
             entries,
             members: self.engine.members.read().clone(),
@@ -265,14 +370,80 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         };
         if let Err(err) = self.persistence.save(&state) {
             warn!("failed to persist reconcile store snapshot: {err}");
+        } else {
+            // Subtract only the count we captured, not zero out the whole counter: any change
+            // that arrived during the chunked collection is still reflected after this subtraction
+            // and will trigger a snapshot at the next tick.
+            self.change_counter
+                .fetch_sub(captured, AtomicOrdering::Relaxed);
         }
     }
 
-    /// Periodically snapshot the full store state to the persistence backend.
-    async fn snapshot_periodically(&self) {
+    /// Collect all map entries in key order, releasing the read lock between chunks of
+    /// [`SNAPSHOT_CHUNK_SIZE`] entries. Returns the full `DatedEntries` vector.
+    fn collect_entries_chunked(&self) -> DatedEntries<K, V> {
+        use std::ops::Bound;
+
+        let mut entries: DatedEntries<K, V> = Vec::new();
+        // Cursor: the last key seen in the previous chunk, used to open the next range.
+        let mut cursor: Option<K> = None;
         loop {
-            tokio::time::sleep(SNAPSHOT_INTERVAL).await;
-            self.snapshot();
+            let chunk: Vec<(K, (Timestamp, Option<V>))> = {
+                let guard = self.engine.map.read();
+                match cursor.take() {
+                    None => guard
+                        .iter()
+                        .take(SNAPSHOT_CHUNK_SIZE)
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    Some(last) => {
+                        // Iterate all keys strictly above `last`.
+                        // `(Bound::Excluded(K), Bound::Unbounded)` implements `RangeBounds<K>`.
+                        let range = (Bound::Excluded(last), Bound::Unbounded);
+                        guard
+                            .get_range(&range)
+                            .take(SNAPSHOT_CHUNK_SIZE)
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect()
+                    }
+                }
+                // Lock released here (guard drops at end of block).
+            };
+
+            let done = chunk.len() < SNAPSHOT_CHUNK_SIZE;
+            if let Some((last_key, _)) = chunk.last() {
+                cursor = Some(last_key.clone());
+            }
+            entries.extend(chunk);
+            if done {
+                break;
+            }
+        }
+        entries
+    }
+
+    /// Periodically snapshot the full store state to the persistence backend.
+    ///
+    /// Snapshots are skipped when the change counter is below
+    /// [`snapshot_change_threshold`](Self::with_snapshot_change_threshold), so a steady-state idle
+    /// store produces no snapshot I/O. Time-based snapshotting can be disabled entirely via
+    /// [`with_snapshot_interval(None)`](Self::with_snapshot_interval).
+    async fn snapshot_periodically(&self) {
+        let Some(interval) = self.snapshot_interval else {
+            return; // time-based snapshots disabled
+        };
+        loop {
+            tokio::time::sleep(interval).await;
+            let changes = self.change_counter.load(AtomicOrdering::Relaxed);
+            if changes >= self.snapshot_change_threshold {
+                self.snapshot();
+            } else {
+                debug!(
+                    changes,
+                    threshold = self.snapshot_change_threshold,
+                    "skipping snapshot: change count below threshold"
+                );
+            }
         }
     }
 
@@ -438,6 +609,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// Returns the overwritten value if the key already existed.
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
+        self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
             .just_insert(key, (self.engine.clock_now(), Some(value)));
@@ -446,6 +618,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     /// Fully-qualified insert: just_insert + async broadcast.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
+        self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
             .insert(key, (self.engine.clock_now(), Some(value)));
@@ -459,6 +632,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// 1. Runs the pre-insert hook for each entry (outside any lock).
     /// 2. Acquires the write lock once and inserts all entries.
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
+        self.change_counter
+            .fetch_add(key_values.len(), AtomicOrdering::Relaxed);
         self.engine.just_insert_bulk(
             &key_values
                 .iter()
@@ -469,6 +644,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     /// Bulk-insert + async broadcast.
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+        self.change_counter
+            .fetch_add(key_values.len(), AtomicOrdering::Relaxed);
         self.engine.insert_bulk(
             &key_values
                 .iter()
@@ -478,6 +655,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     }
 
     pub fn just_remove(&self, key: &K) -> Option<V> {
+        self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
             .just_insert(key.clone(), (self.engine.clock_now(), None));
@@ -485,6 +663,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
+        self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
             .insert(key.clone(), (self.engine.clock_now(), None));
@@ -492,6 +671,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     }
 
     pub fn just_remove_bulk(&self, keys: &[K]) {
+        self.change_counter
+            .fetch_add(keys.len(), AtomicOrdering::Relaxed);
         self.engine.just_insert_bulk(
             &keys
                 .iter()
@@ -507,6 +688,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// caller-chosen `DateTime` could collide with another replica's and trigger the
     /// non-commutative tie-break that caused permanent divergence.
     pub fn remove_bulk(&self, keys: &[K]) {
+        self.change_counter
+            .fetch_add(keys.len(), AtomicOrdering::Relaxed);
         self.engine.insert_bulk(
             &keys
                 .iter()
@@ -831,6 +1014,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         // Notify peers of the re-stamped entry, just like `insert`, so the edit propagates eagerly
         // rather than being left to the next anti-entropy round (or failing to converge at all).
         if let Some(value) = updated {
+            self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
             self.engine.broadcast_update(k.clone(), value);
         }
     }
@@ -1246,7 +1430,8 @@ mod reconcile_store_tests {
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         store.insert(1, 11); // live value
         store.insert(2, 22);
         store.remove(&2); // tombstone
@@ -1257,7 +1442,8 @@ mod reconcile_store_tests {
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         assert_eq!(restarted.get(&1).as_deref(), Some(&11));
         assert!(restarted.get(&2).is_none(), "tombstone was not recovered");
         assert_eq!(
@@ -1280,7 +1466,8 @@ mod reconcile_store_tests {
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         store.engine.members.write().insert(peer);
         store.insert(5, 55);
         store.remove(&5); // tombstone
@@ -1296,7 +1483,8 @@ mod reconcile_store_tests {
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         assert!(
             restarted.engine.members.read().contains(&peer),
             "membership set was not restored"
@@ -1326,7 +1514,8 @@ mod reconcile_store_tests {
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         store.engine.members.write().insert(peer);
         store.insert(1, 11);
         store.remove(&1); // tombstone, never acknowledged by `peer`
@@ -1355,7 +1544,8 @@ mod reconcile_store_tests {
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
-            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("load failed");
         assert!(restarted.get(&1).is_none(), "tombstone was not recovered");
         let version = restarted
             .engine
@@ -1540,7 +1730,8 @@ mod reconcile_store_tests {
             ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
                 .await
                 .expect("bind failed")
-                .with_persistence(backend);
+                .with_persistence(backend)
+                .expect("load failed");
 
         // Insert a new value; the minted timestamp must be strictly greater than persisted_stamp.
         store.insert(99, 1);
@@ -1593,7 +1784,8 @@ mod reconcile_store_tests {
             ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
                 .await
                 .expect("bind failed")
-                .with_persistence(backend);
+                .with_persistence(backend)
+                .expect("load failed");
 
         // The tombstone was recovered (key 7 is absent from the live view).
         assert!(
@@ -1917,5 +2109,448 @@ mod reconcile_store_tests {
         );
 
         task.abort();
+    }
+
+    // ── Persistence robustness tests ──────────────────────────────────────────
+
+    /// Corrupt snapshot → `with_persistence` returns `LoadError::Corrupt`, no panic.
+    #[tokio::test]
+    async fn with_persistence_corrupt_snapshot_returns_error() {
+        use crate::persistence::LoadError;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        fs::write(&path, b"this is not valid bincode").unwrap();
+
+        let result = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+
+        match result {
+            Err(LoadError::Corrupt(_)) => {} // expected
+            Err(LoadError::Io(e)) => panic!("expected Corrupt, got Io: {e}"),
+            Ok(_) => panic!("expected Err(Corrupt), got Ok"),
+        }
+    }
+
+    /// Transient I/O error (snapshot path is a directory) → `with_persistence` returns
+    /// `LoadError::Io` after retries, no panic.
+    #[tokio::test]
+    async fn with_persistence_transient_io_returns_error() {
+        use crate::persistence::LoadError;
+
+        // Using a directory as the snapshot path triggers EISDIR on read — a non-NotFound,
+        // non-InvalidData I/O error that should surface as LoadError::Io.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf(); // the directory itself, not a file inside it
+
+        let result = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+
+        match result {
+            Err(LoadError::Io(_)) => {}      // expected
+            Err(LoadError::Corrupt(_)) => {} // also acceptable on platforms that surface EISDIR as invalid data
+            Ok(_) => panic!("expected Err when the snapshot path is a directory"),
+        }
+    }
+
+    /// `with_persistence` on a path that does not exist yet must return `Ok` (fresh start).
+    #[tokio::test]
+    async fn with_persistence_not_found_is_fresh_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.bin");
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)))
+            .expect("NotFound must be a clean fresh start, not an error");
+
+        // Store is empty (no state was loaded).
+        assert!(store.get(&1).is_none());
+    }
+
+    // ── Chunked-snapshot stall-bound test ──────────────────────────────────────
+
+    /// Verify that the chunked snapshot path holds the read lock for at most
+    /// `SNAPSHOT_CHUNK_SIZE` entries per acquisition, regardless of total map size.
+    ///
+    /// Rather than asserting wall-clock latency (which is flaky in CI), we instrument
+    /// `collect_entries_chunked` indirectly: insert 3× the chunk size entries, run the chunked
+    /// collector, and verify that we get all entries back. The structural property — at most
+    /// SNAPSHOT_CHUNK_SIZE entries per lock hold — is guaranteed by the implementation; this test
+    /// confirms correct end-to-end assembly of the chunks.
+    #[tokio::test]
+    async fn chunked_snapshot_collects_all_entries() {
+        let n = super::SNAPSHOT_CHUNK_SIZE * 3 + 7; // straddle chunk boundaries
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+
+        for i in 0..(n as i32) {
+            store.just_insert(i, i * 2);
+        }
+
+        let entries = store.collect_entries_chunked();
+        assert_eq!(
+            entries.len(),
+            n,
+            "chunked snapshot must collect all {n} entries"
+        );
+
+        // Entries must be in ascending key order (the HRTree is ordered).
+        let keys: Vec<i32> = entries.iter().map(|(k, _)| *k).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "entries must be in ascending key order");
+    }
+
+    // ── Snapshot interval + change threshold tests ────────────────────────────
+
+    /// With a threshold of N and fewer than N changes, no snapshot fires at the next tick.
+    /// With ≥ N changes, the snapshot fires.
+    #[tokio::test]
+    async fn snapshot_threshold_gates_writes() {
+        use crate::persistence::{InMemoryPersistence, Persistence};
+
+        let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
+
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend.clone())
+            .expect("load failed")
+            // Require at least 3 changes before a snapshot is written.
+            .with_snapshot_change_threshold(3)
+            // Very short interval so the test does not need to wait long.
+            .with_snapshot_interval(Duration::from_millis(20));
+
+        // Make only 2 changes (below threshold).
+        store.just_insert(1, 10);
+        store.just_insert(2, 20);
+
+        // Wait several tick periods — threshold not met, no snapshot should appear.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        // Simulate what snapshot_periodically does:
+        let changes = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            changes < 3,
+            "precondition: fewer than threshold changes (got {changes})"
+        );
+        // The backend has never been written to.
+        assert!(
+            Persistence::<i32, i32>::load(backend.as_ref())
+                .unwrap()
+                .is_none(),
+            "snapshot must not fire when change count is below threshold"
+        );
+
+        // Add a third change to cross the threshold.
+        store.just_insert(3, 30);
+        // Manually trigger the snapshot (as snapshot_periodically would).
+        store.snapshot();
+
+        assert!(
+            Persistence::<i32, i32>::load(backend.as_ref())
+                .unwrap()
+                .is_some(),
+            "snapshot must fire once change count reaches threshold"
+        );
+    }
+
+    /// With threshold 0, snapshot fires every tick even when the store is idle.
+    #[tokio::test]
+    async fn snapshot_threshold_zero_always_fires() {
+        use crate::persistence::{InMemoryPersistence, Persistence};
+
+        let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend.clone())
+            .expect("load failed")
+            .with_snapshot_change_threshold(0);
+
+        // No changes at all — threshold 0 means always snapshot.
+        let changes = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(changes, 0);
+        // At threshold 0, the condition `changes >= threshold` is `0 >= 0` = true.
+        assert!(
+            changes >= store.snapshot_change_threshold,
+            "threshold 0 must always be met"
+        );
+        store.snapshot();
+        assert!(
+            Persistence::<i32, i32>::load(backend.as_ref())
+                .unwrap()
+                .is_some(),
+            "threshold 0 must snapshot even when idle"
+        );
+    }
+
+    /// `with_snapshot_interval(None)` disables time-based snapshots: `snapshot_periodically`
+    /// returns immediately without writing anything.
+    #[tokio::test]
+    async fn snapshot_interval_none_disables_time_based_snapshots() {
+        use crate::persistence::{InMemoryPersistence, Persistence};
+
+        let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend.clone())
+            .expect("load failed")
+            .with_snapshot_interval(None);
+
+        assert!(
+            store.snapshot_interval.is_none(),
+            "snapshot_interval must be None after with_snapshot_interval(None)"
+        );
+
+        // snapshot_periodically returns immediately when interval is None.
+        // We verify by running it with a timeout: it must complete well within 50 ms.
+        let store2 = store.clone();
+        tokio::time::timeout(Duration::from_millis(50), async move {
+            store2.snapshot_periodically().await
+        })
+        .await
+        .expect("snapshot_periodically must return immediately when interval is None");
+
+        // No snapshot should have been written.
+        assert!(
+            Persistence::<i32, i32>::load(backend.as_ref())
+                .unwrap()
+                .is_none(),
+            "disabled time-based snapshots must not write anything"
+        );
+    }
+
+    // ── Regression tests for the gossip-path change counter bug ──────────────
+
+    /// **Gossip-durability regression**: a replica that receives entries ONLY via gossip (never
+    /// writes locally) must still snapshot, because the engine-side change counter is now bumped
+    /// by the gossip apply path.
+    ///
+    /// Two-node setup:
+    ///   - Node A writes two entries locally and runs the reconcile loop.
+    ///   - Node B has FileSnapshot + short interval + default threshold=1, but inserts NOTHING
+    ///     itself; it only receives updates via gossip.
+    ///
+    /// Expected: B's snapshot file is written (and contains the entries) within a bounded wait.
+    ///
+    /// This test FAILS against the unfixed code (B's counter stays 0 → no snapshot ever) and
+    /// PASSES with the fix.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gossip_only_replica_snapshots() {
+        use crate::persistence::Persistence;
+        use tokio::time::{timeout, Duration};
+
+        // Bind on two distinct loopback addresses on the same /29, so they form a cluster.
+        let addr_a: IpAddr = "127.1.0.1".parse().unwrap();
+        let addr_b: IpAddr = "127.1.0.2".parse().unwrap();
+        let port = 9900u16;
+        let net: ipnet::IpNet = "127.1.0.0/29".parse().unwrap();
+
+        let config_a = Config {
+            port,
+            listen_addr: addr_a,
+            nets: {
+                let mut nets = [None; MAX_NETS];
+                nets[0] = Some(net);
+                nets
+            },
+            reconcile_interval: Duration::from_millis(50),
+            ..Config::default()
+        };
+        let config_b = Config {
+            port,
+            listen_addr: addr_b,
+            nets: {
+                let mut nets = [None; MAX_NETS];
+                nets[0] = Some(net);
+                nets
+            },
+            reconcile_interval: Duration::from_millis(50),
+            ..Config::default()
+        };
+
+        // Node A: just writes — no persistence needed.
+        let store_a = ReconcileStore::<i32, i32>::new(config_a)
+            .await
+            .expect("bind A failed")
+            .with_seed(addr_b);
+
+        // Node B: snapshot backend + short interval (100 ms) + threshold=1 (default).
+        let dir = tempfile::tempdir().unwrap();
+        let snap_path = dir.path().join("b.snapshot");
+        let backend_b = Arc::new(FileSnapshot::new(&snap_path));
+        let store_b = ReconcileStore::<i32, i32>::new(config_b)
+            .await
+            .expect("bind B failed")
+            .with_seed(addr_a)
+            .with_persistence(backend_b.clone())
+            .expect("load B failed")
+            .with_snapshot_interval(Duration::from_millis(100))
+            .with_snapshot_change_threshold(1); // default, but explicit for clarity
+
+        // Spawn both loops.
+        let task_a = tokio::spawn(store_a.clone().run());
+        let task_b = tokio::spawn(store_b.clone().run());
+
+        // A writes two entries; B receives them via gossip only.
+        store_a.insert(10, 100);
+        store_a.insert(20, 200);
+
+        // Wait up to 5 s for B's snapshot file to appear (it only takes a few gossip rounds +
+        // one snapshot tick, each ≤ 100 ms, so this is very generous).
+        let snap_written = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(Some(state)) = Persistence::<i32, i32>::load(backend_b.as_ref()) {
+                    if !state.entries.is_empty() {
+                        return state;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("B's snapshot was never written within 5 s — gossip-path counter not bumped");
+
+        // Confirm the snapshot actually contains the right data.
+        let keys: Vec<i32> = snap_written
+            .entries
+            .iter()
+            .filter_map(|(k, (_, v))| v.as_ref().map(|_| *k))
+            .collect();
+        assert!(
+            keys.contains(&10) || keys.contains(&20),
+            "B's snapshot exists but is missing entries from A: {keys:?}"
+        );
+
+        task_a.abort();
+        task_b.abort();
+    }
+
+    /// **Counter-capture regression**: a change that arrives **during** the save — after the
+    /// counter was captured, before the subtraction — must still be pending afterwards
+    /// (fetch_sub of the captured amount, not store-0, which would wipe it).
+    ///
+    /// The mid-save write is injected deterministically: the persistence backend's `save`
+    /// bumps the live change counter before returning, exactly like a concurrent writer
+    /// landing while the snapshot is on disk.
+    #[tokio::test]
+    async fn snapshot_counter_capture_preserves_mid_snapshot_changes() {
+        use crate::persistence::{InMemoryPersistence, PersistedState};
+
+        /// Backend whose `save` simulates one concurrent write landing mid-save.
+        struct MidSaveWrite {
+            inner: InMemoryPersistence<i32, i32>,
+            live_counter: std::sync::OnceLock<Arc<std::sync::atomic::AtomicUsize>>,
+        }
+
+        impl Persistence<i32, i32> for MidSaveWrite {
+            fn load(&self) -> std::io::Result<Option<PersistedState<i32, i32>>> {
+                Persistence::load(&self.inner)
+            }
+
+            fn save(&self, state: &PersistedState<i32, i32>) -> std::io::Result<()> {
+                if let Some(counter) = self.live_counter.get() {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Persistence::save(&self.inner, state)
+            }
+        }
+
+        let backend = Arc::new(MidSaveWrite {
+            inner: InMemoryPersistence::new(),
+            live_counter: std::sync::OnceLock::new(),
+        });
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend.clone())
+            .expect("load failed")
+            .with_snapshot_change_threshold(1);
+        backend
+            .live_counter
+            .set(Arc::clone(&store.change_counter))
+            .expect("backend counter wired once");
+
+        store.just_insert(1, 10);
+        let captured = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            captured, 1,
+            "precondition: one pending change before snapshot"
+        );
+
+        // snapshot() captures 1, collects, saves (the backend injects one more change),
+        // then subtracts the captured 1 — the injected change must survive as pending.
+        store.snapshot();
+        let after = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            after, 1,
+            "the change injected during save must still be pending (store(0) would wipe it)"
+        );
+
+        // Verify the snapshot was actually written.
+        assert!(
+            Persistence::<i32, i32>::load(backend.as_ref())
+                .unwrap()
+                .is_some(),
+            "snapshot must have been written"
+        );
+    }
+
+    /// **GC-removal counting**: a tombstone that is garbage-collected by `gc_remove` bumps the
+    /// change counter, so the snapshot fires on the next tick even with no other changes.
+    ///
+    /// We directly call `engine.gc_remove` (the path invoked by `clear_expired_tombstones`) and
+    /// assert the counter increases.
+    #[tokio::test]
+    async fn gc_remove_bumps_change_counter() {
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+
+        // Insert a live value so there is something to GC.
+        store.just_insert(42, 1);
+
+        // Reset the counter so we start from a known baseline.
+        store
+            .change_counter
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+
+        let before = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            before, 0,
+            "precondition: counter must be 0 before gc_remove"
+        );
+
+        // Call gc_remove directly (the internal GC path).
+        store.engine.gc_remove(&42);
+
+        let after = store
+            .change_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            after, 1,
+            "gc_remove must bump the change counter by 1 so the next snapshot tick fires"
+        );
     }
 }

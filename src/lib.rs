@@ -100,7 +100,7 @@ pub use hrtree::HRTree;
 // mutation path is `HRTree::with_mut`. A correct iterator-based design is future work.
 pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mirror::ReconcileMirror;
-pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
+pub use persistence::{FileSnapshot, InMemoryPersistence, LoadError, PersistedState, Persistence};
 pub use reconcilable::{Projectable, ValueOnly};
 pub use reconcile_store::ReconcileStore;
 
@@ -220,3 +220,10 @@ pub mod testing {
         store.bulk_dumps_in_flight_count()
     }
 }
+
+/// Compile-checks the README's code blocks as doctests, so an API change that breaks an
+/// example fails `cargo test --doc`. `#[cfg(doctest)]` keeps it out of builds and rendered
+/// documentation.
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;

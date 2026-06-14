@@ -240,6 +240,21 @@ pub(crate) struct Inner<K, V: Projectable> {
     /// Hard cap on the number of tracked remote peers. Datagrams from unknown senders are dropped
     /// before any per-sender state is allocated when the membership set reaches this size.
     max_peers: usize,
+    /// Running count of map mutations since the last snapshot.
+    ///
+    /// Shared with [`ReconcileStore`](crate::reconcile_store::ReconcileStore): the store keeps a
+    /// clone of the same `Arc` so that local-write methods (`insert`, `remove`, etc.) and the
+    /// gossip apply / GC paths — all of which live in the engine — bump a **single** atomic.
+    /// The store's snapshot loop reads and resets this counter to decide whether to write.
+    ///
+    /// **Increment sites (exactly one per mutation path, no double-counting):**
+    /// - Local writes: incremented by `ReconcileStore`'s public methods (`insert`, `remove`, …)
+    ///   before calling `just_insert` / `just_insert_bulk`.  Those methods call `map_insert`
+    ///   internally, but `map_insert` itself does *not* touch the counter.
+    /// - Gossip applies: incremented here, in `handle_messages`, after the re-reconcile write
+    ///   loop — once per entry actually written to `to_apply`.
+    /// - GC removes: incremented in `gc_remove` — one per tombstone purged.
+    pub(crate) change_counter: Arc<AtomicUsize>,
 }
 
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
@@ -385,6 +400,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 clock,
                 node_id_is_random,
                 max_peers: config.max_peers,
+                change_counter: Arc::new(AtomicUsize::new(0)),
             }),
         })
     }
@@ -413,7 +429,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     pub(crate) fn gc_remove(&self, key: &K) -> Option<V> {
         let mut guard = self.map.write();
         self.projection.write().remove(key);
-        guard.remove(key)
+        let removed = guard.remove(key);
+        if removed.is_some() {
+            self.change_counter.fetch_add(1, Ordering::Relaxed);
+        }
+        removed
     }
 
     /// Mint a fresh Hybrid Logical Clock timestamp for a local write.
@@ -1094,6 +1114,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             //    order, so re-applying a value that became stale meanwhile is a no-op — the stale
             //    case is handled identically to the direct path.
             if !to_apply.is_empty() {
+                let apply_count = to_apply.len();
                 let mut guard = self.map.write();
                 for (k, v) in to_apply {
                     let merged_v = match guard.get(&k) {
@@ -1106,6 +1127,13 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         acks_to_send.push(Message::Ack::<K, V, V::Projected>((k, version)));
                     }
                 }
+                // Count every entry actually written via gossip so the snapshot threshold is met
+                // even on a replica that only receives data through anti-entropy (never writes
+                // locally). This is the only site that bumps the counter for the gossip path;
+                // local-write methods bump it themselves before calling just_insert, so there is
+                // no overlap between the two paths.
+                self.change_counter
+                    .fetch_add(apply_count, Ordering::Relaxed);
             }
             if !acks_to_send.is_empty() {
                 send_messages_to(
