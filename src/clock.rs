@@ -40,11 +40,10 @@ use tracing::warn;
 /// Default maximum number of milliseconds by which a remote clock may lead physical time before
 /// its `wall_ms` is clamped when updating the local clock state.
 ///
-/// This is only the default: the threshold is configurable per node via
-/// [`Config::max_clock_drift_ms`](crate::reconcile_store::Config::max_clock_drift_ms) /
-/// [`Config::with_max_clock_drift_ms`](crate::reconcile_store::Config::with_max_clock_drift_ms),
-/// which the engine passes to the default `HlcClock` adapter. The rationale below explains why this
-/// default value was chosen.
+/// This is only the default the `HlcClock` adapter is built with; the threshold is a property of
+/// the clock itself, overridable at construction (see `HlcClock::with_max_clock_drift_ms`) rather
+/// than a knob on the store's [`Config`](crate::reconcile_store::Config). The rationale below
+/// explains why this default value was chosen.
 ///
 /// **Why 1 hour?**
 /// NTP-disciplined clocks rarely deviate by more than a few hundred milliseconds in practice;
@@ -172,9 +171,9 @@ pub trait Clock: Send + Sync + 'static {
 pub(crate) struct HlcClock {
     node_id: u64,
     /// Maximum milliseconds a remote stamp may lead physical time before [`observe`](Clock::observe)
-    /// clamps it when advancing the local clock state (see [`DEFAULT_MAX_CLOCK_DRIFT_MS`] for the
-    /// rationale; set per node via
-    /// [`Config::with_max_clock_drift_ms`](crate::reconcile_store::Config::with_max_clock_drift_ms)).
+    /// clamps it when advancing the local clock state. Owned by the clock (not the store), defaulting
+    /// to [`DEFAULT_MAX_CLOCK_DRIFT_MS`] and overridable via
+    /// [`with_max_clock_drift_ms`](HlcClock::with_max_clock_drift_ms).
     max_clock_drift_ms: u64,
     /// Last timestamp produced or observed; the wall/counter pair is updated atomically
     /// under the mutex so that [`now`](HlcClock::now) stays strictly monotonic.
@@ -182,18 +181,29 @@ pub(crate) struct HlcClock {
 }
 
 impl HlcClock {
-    /// Create a clock for the node identified by `node_id`, clamping remote stamps that lead
-    /// physical time by more than `max_clock_drift_ms` (see [`DEFAULT_MAX_CLOCK_DRIFT_MS`]).
-    pub fn new(node_id: u64, max_clock_drift_ms: u64) -> HlcClock {
+    /// Create a clock for the node identified by `node_id`, using the default far-future clamp
+    /// threshold ([`DEFAULT_MAX_CLOCK_DRIFT_MS`]). Override it with
+    /// [`with_max_clock_drift_ms`](HlcClock::with_max_clock_drift_ms).
+    pub fn new(node_id: u64) -> HlcClock {
         HlcClock {
             node_id,
-            max_clock_drift_ms,
+            max_clock_drift_ms: DEFAULT_MAX_CLOCK_DRIFT_MS,
             last: Mutex::new(Timestamp {
                 wall_ms: 0,
                 counter: 0,
                 node_id,
             }),
         }
+    }
+
+    /// Override how far (in milliseconds) a remote stamp may lead physical time before
+    /// [`observe`](Clock::observe) clamps it (default [`DEFAULT_MAX_CLOCK_DRIFT_MS`]). The clamp
+    /// threshold is a clock concern, configured here rather than through the store's
+    /// [`Config`](crate::reconcile_store::Config).
+    #[allow(dead_code)]
+    pub fn with_max_clock_drift_ms(mut self, max_clock_drift_ms: u64) -> HlcClock {
+        self.max_clock_drift_ms = max_clock_drift_ms;
+        self
     }
 }
 
@@ -352,7 +362,7 @@ mod tests {
 
     #[test]
     fn now_is_strictly_monotonic() {
-        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(1);
         let mut prev = clock.now();
         for _ in 0..10_000 {
             let next = clock.now();
@@ -363,7 +373,7 @@ mod tests {
 
     #[test]
     fn counter_increments_when_wall_does_not_advance() {
-        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(1);
         // Force the clock a little into the future (within DEFAULT_MAX_CLOCK_DRIFT_MS) so physical
         // time cannot advance past it for the duration of the test: every `now()` must then
         // bump the counter. We no longer use u64::MAX here because the far-future clamp
@@ -382,7 +392,7 @@ mod tests {
         // seconds ahead. After observing its timestamp, our next local write must be ordered
         // *after* it, not lost. (Far-future stamps beyond DEFAULT_MAX_CLOCK_DRIFT_MS are clamped;
         // see `observe_far_future_is_clamped` for that case.)
-        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(1);
         let future = Timestamp::new(phys_now_ms() + 5_000, 5, 2); // 5 s ahead: well within cap
         clock.observe(future);
         let local = clock.now();
@@ -426,7 +436,7 @@ mod tests {
     /// and strict monotonicity relative to any previously minted stamp must hold.
     #[test]
     fn observe_far_future_is_clamped() {
-        let clock = HlcClock::new(1, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(1);
 
         // Mint one local stamp first so we have a baseline for the monotonicity check.
         let before_clamp = clock.now();
@@ -458,7 +468,7 @@ mod tests {
     /// Repeated observes of increasing far-future stamps must not ratchet past the cap.
     #[test]
     fn repeated_far_future_observes_do_not_escape_cap() {
-        let clock = HlcClock::new(2, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(2);
         // Feed three different stamps all well beyond the cap.
         for delta in [u64::MAX / 2, u64::MAX - 500, u64::MAX - 1] {
             clock.observe(Timestamp::new(delta, 0, 99));
@@ -479,7 +489,7 @@ mod tests {
     /// greater timestamp with no wrapping.
     #[test]
     fn counter_overflow_rolls_wall_forward() {
-        let clock = HlcClock::new(3, DEFAULT_MAX_CLOCK_DRIFT_MS);
+        let clock = HlcClock::new(3);
 
         // Pin the local clock to a wall value and max counter by directly observing a stamp.
         // We set wall_ms to phys_now + 1 so physical time will not advance past it during the
@@ -522,12 +532,12 @@ mod tests {
         assert_eq!(c3, 0);
     }
 
-    /// The clamp threshold is configurable: a clock built with a tighter `max_clock_drift_ms`
+    /// The clamp threshold is a clock-level knob: a clock built with a tighter `max_clock_drift_ms`
     /// clamps a remote stamp that the default 1-hour bound would have accepted.
     #[test]
     fn custom_max_clock_drift_is_respected() {
         let drift = 1_000; // 1 s cap, far tighter than the 1-hour default
-        let clock = HlcClock::new(1, drift);
+        let clock = HlcClock::new(1).with_max_clock_drift_ms(drift);
 
         // A stamp 60 s ahead is well within the default cap but well beyond this clock's 1 s cap,
         // so observing it must clamp the local clock rather than chase the remote wall.

@@ -22,7 +22,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
-use crate::clock::{Timestamp, DEFAULT_MAX_CLOCK_DRIFT_MS};
+use crate::clock::Timestamp;
 use crate::discovery::{Discovery, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
@@ -674,17 +674,6 @@ pub struct Config {
     /// collisions negligible; set an explicit id only when you need a stable, reproducible
     /// ordering (e.g. in tests).
     pub node_id: Option<u64>,
-    /// Maximum milliseconds a remote stamp may lead local physical time before the Hybrid Logical
-    /// Clock clamps it when advancing local clock state (default [`DEFAULT_MAX_CLOCK_DRIFT_MS`],
-    /// i.e. 1 hour).
-    ///
-    /// The clamp stops a single far-future stamp — which any sender can inject in the default
-    /// unauthenticated mode — from permanently pinning every node's clock and destroying LWW
-    /// recency. It bounds only how far the *local clock* chases a remote stamp; a stored value keeps
-    /// its own stamp as LWW data. Lower it to tighten the bound on tolerated skew, or raise it for
-    /// environments with legitimately larger clock drift. See
-    /// [`with_max_clock_drift_ms`](Config::with_max_clock_drift_ms).
-    pub max_clock_drift_ms: u64,
     /// Whether to encrypt datagram payloads (not just authenticate them).
     ///
     /// Only ever set through `Config::with_encryption` (available with the `encryption` cargo
@@ -751,7 +740,6 @@ impl Default for Config {
             remote_fanout: 2,
             cluster_key: None,
             node_id: None,
-            max_clock_drift_ms: DEFAULT_MAX_CLOCK_DRIFT_MS,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
             bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
@@ -812,14 +800,6 @@ impl Config {
     /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
     pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
         self.remote_fanout = fanout;
-        self
-    }
-
-    /// Set how far (in milliseconds) a remote stamp may lead local physical time before the Hybrid
-    /// Logical Clock clamps it (default [`DEFAULT_MAX_CLOCK_DRIFT_MS`], i.e. 1 hour). See
-    /// [`max_clock_drift_ms`](Config::max_clock_drift_ms).
-    pub fn with_max_clock_drift_ms(mut self, max_clock_drift_ms: u64) -> Self {
-        self.max_clock_drift_ms = max_clock_drift_ms;
         self
     }
 
@@ -931,7 +911,6 @@ mod reconcile_store_tests {
             remote_fanout: 2,
             cluster_key: None,
             node_id: None,
-            max_clock_drift_ms: super::DEFAULT_MAX_CLOCK_DRIFT_MS,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
             bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
