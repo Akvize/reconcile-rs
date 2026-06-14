@@ -158,4 +158,52 @@ pub mod testing {
     {
         store.members_snapshot()
     }
+
+    /// Number of entries in the peers gossip-routing map.
+    ///
+    /// Exposed for integration-test assertions so the peer-cap tests can verify that no new
+    /// gossip-peer record is created for a capped-out sender.
+    pub fn peers_map_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.peers_map_len()
+    }
+
+    /// Number of entries in the per-peer replay filter.
+    ///
+    /// Exposed for integration-test assertions so the peer-cap tests can verify that no new
+    /// replay-filter entry is created for a capped-out sender.
+    pub fn replay_filter_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.replay_filter_len()
+    }
+
+    /// Number of keys currently tracked in the tombstone-acknowledgment map.
+    ///
+    /// Exposed for integration-test assertions so tests can verify that acks for
+    /// non-tombstone keys are dropped without growing bookkeeping.
+    pub fn tombstone_acks_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.tombstone_acks_len()
+    }
+
+    /// Number of bulk dump tasks currently in flight across all peers.
+    ///
+    /// Exposed for integration-test assertions so tests can verify that the global dump
+    /// budget is respected and slots are released after completion.
+    pub fn bulk_dumps_in_flight_count<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    where
+        K: crate::bounds::Key,
+        V: crate::bounds::Value,
+    {
+        store.bulk_dumps_in_flight_count()
+    }
 }
