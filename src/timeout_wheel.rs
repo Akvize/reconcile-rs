@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -11,18 +11,22 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// # Collision safety
 ///
-/// The wheel maps each `DateTime<Utc>` expiry instant to a **`Vec<T>`** rather than a single `T`.
-/// Multiple entries sharing the same millisecond instant (e.g. two keys passed to `remove_bulk`
-/// in the same wall-clock millisecond) each occupy their own slot inside the `Vec`, so neither
+/// The wheel maps each `DateTime<Utc>` expiry instant to a **`HashSet<T>`** rather than a single
+/// `T`. Multiple entries sharing the same millisecond instant (e.g. two keys passed to `remove_bulk`
+/// in the same wall-clock millisecond) each occupy their own slot inside the set, so neither
 /// silently overwrites the other.
+///
+/// Using a `HashSet` (rather than a `Vec`) for the bucket keeps per-value `insert`/`remove` O(1):
+/// removing one of `n` entries sharing an instant no longer scans the whole bucket, so a
+/// `remove_bulk` of `n` same-instant keys is O(n) overall instead of O(n²).
 #[derive(Clone, Default)]
 pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
-    /// Primary ordering structure: `expiry_instant` → `Vec<value>`.
+    /// Primary ordering structure: `expiry_instant` → `HashSet<value>`.
     ///
-    /// A `Vec` per instant means that two entries sharing the same timestamp are stored as
+    /// A set per instant means that two entries sharing the same timestamp are stored as
     /// separate elements in the same bucket; `remove_bulk` of ≥2 keys in the same millisecond
-    /// no longer silently drops one of them.
-    wheel: Arc<RwLock<BTreeMap<DateTime<Utc>, Vec<T>>>>,
+    /// no longer silently drops one of them, and locating a single value in the bucket is O(1).
+    wheel: Arc<RwLock<BTreeMap<DateTime<Utc>, HashSet<T>>>>,
     /// Reverse index: value → expiry instant, used by `remove` to locate the wheel bucket.
     map: Arc<RwLock<HashMap<T, DateTime<Utc>>>>,
     /// Shared so the expiry timeout can be retuned at runtime (see [`set_timeout`](Self::set_timeout)).
@@ -62,7 +66,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         // bumped by a re-remove).
         if let Some(old_instant) = map.get(&e) {
             if let Some(bucket) = wheel.get_mut(old_instant) {
-                bucket.retain(|x| x != &e);
+                bucket.remove(&e);
                 if bucket.is_empty() {
                     let old_instant = *old_instant;
                     wheel.remove(&old_instant);
@@ -70,7 +74,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
             }
         }
 
-        wheel.entry(instant).or_default().push(e.clone());
+        wheel.entry(instant).or_default().insert(e.clone());
         map.insert(e, instant);
     }
 
@@ -100,7 +104,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         let instant = map.remove(value)?;
 
         if let Some(bucket) = wheel.get_mut(&instant) {
-            bucket.retain(|x| x != value);
+            bucket.remove(value);
             if bucket.is_empty() {
                 wheel.remove(&instant);
             }
@@ -209,5 +213,31 @@ mod tests {
             assert_eq!(wheel_count, m.len(), "after removes");
             assert_eq!(m.len(), 3);
         }
+    }
+
+    /// Bulk-remove many entries sharing a single instant (the O(n²)-prone path): every value is
+    /// removed exactly once, the shared bucket is dropped when emptied, and wheel/map stay in sync.
+    #[test]
+    fn bulk_remove_same_instant_clears_everything() {
+        let wheel: TimeoutWheel<i32> = TimeoutWheel::new().with_timeout(Duration::ZERO);
+        let shared = instant_ms(4_000_000);
+
+        let n = 1_000;
+        for i in 0..n {
+            wheel.insert(i, shared);
+        }
+        // One bucket holds all n entries.
+        assert_eq!(wheel.wheel.read().unwrap().len(), 1);
+
+        for i in 0..n {
+            assert_eq!(wheel.remove(&i), Some(i));
+        }
+
+        assert!(wheel.expired().is_empty());
+        assert!(
+            wheel.wheel.read().unwrap().is_empty(),
+            "emptied bucket dropped"
+        );
+        assert!(wheel.map.read().unwrap().is_empty());
     }
 }
