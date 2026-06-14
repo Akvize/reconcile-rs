@@ -240,6 +240,25 @@ impl Hasher for Blake3Hasher {
 /// combines into range fingerprints. It is BLAKE3 over the key bytes followed by
 /// the value bytes, fed in a fixed, portable encoding (see the `Blake3Hasher` adapter),
 /// and is part of the wire protocol — see the golden-vector tests.
+///
+/// # Domain separation is the caller's burden
+///
+/// The key and the value are hashed into **one** BLAKE3 stream back-to-back, with **no length
+/// prefix or separator** between them. The encoding is therefore only collision-free across the
+/// key/value boundary when each type's [`Hash`] impl is **self-delimiting** — i.e. the byte stream
+/// it writes unambiguously encodes its own length. If both `K` and `V` can emit variable-length
+/// byte runs without a length marker, two *different* elements can hash identically because the
+/// boundary shifts: `k1 ‖ v1 == k2 ‖ v2` (e.g. `("ab", "c")` and `("a", "bc")`). Two elements that
+/// collide here are indistinguishable to the range-diff protocol, so a real difference can go
+/// undetected and the replicas silently fail to converge on those keys.
+///
+/// The standard library's `Hash` impls used as keys/values here are self-delimiting and safe:
+/// integers and other fixed-width primitives write a fixed number of bytes; slices/`Vec` prepend
+/// their length (`Hash::hash` calls `write_usize(len)` first); and `str`/`String` write a trailing
+/// `0xff` sentinel after the bytes. A **custom**
+/// `Hash` impl is safe as long as it is self-delimiting; if it concatenates variable-length fields
+/// without lengths, give it a self-delimiting impl (e.g. `#[derive(Hash)]`, or hash a length before
+/// each variable-length field) before using the type as a `K` or `V`.
 pub fn hash<K: Hash, V: Hash>(key: &K, value: &V) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
     key.hash(&mut hasher);

@@ -89,7 +89,19 @@ performance limitations.
 > poison propagates to the whole cluster through last-write-wins. UDP source addresses are
 > spoofable, so this is anonymous.
 
-To close this vector, provide a shared 32-byte cluster secret on **every** node:
+> **Keyless mode also leaks the whole dataset.** The default `RandomProbe` discovery answers any
+> host inside a configured CIDR, and anti-entropy then serves it whatever it is missing. A stranger
+> that squats (or spoofs) one IP in the range eventually receives the **entire dataset** through the
+> paced bulk diff dumps — no key, no per-peer identity stops it. Keyless mode is therefore safe only
+> on a fully trusted network underlay.
+
+Keyless is the out-of-the-box default. If you deliberately run keyless on a trusted underlay,
+acknowledge it with `Config::default().with_insecure_no_key()` — this changes nothing about the
+protocol but downgrades the loud startup `SECURITY` warning to a single acknowledged line, so a
+deliberate deployment is not nagged on every restart.
+
+To close both vectors (forged writes *and* the read leak), provide a shared 32-byte cluster secret
+on **every** node:
 
 ```rust,ignore
 let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
@@ -204,7 +216,8 @@ stays lean:
 
 ```rust,ignore
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-// Serve a /metrics HTTP endpoint (requires a Tokio runtime):
+// Serve a /metrics HTTP endpoint (requires a Tokio runtime). `0.0.0.0` listens on every
+// interface — see the exposure caveat below; prefer a trusted interface in production:
 reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
 
 // ...or install the recorder and render the text yourself through your own HTTP server:
@@ -217,6 +230,13 @@ let body: String = handle.render();
 
 Enable with `cargo build --features metrics-prometheus` (or list `metrics`/`metrics-prometheus`
 in your dependency's `features`).
+
+> **Exposure caveat.** The `/metrics` endpoint is _unauthenticated_ and leaks operational
+> information (dataset size and churn, byte/datagram counters, peer and reconciliation activity)
+> that an observer can use to fingerprint your deployment. Binding `0.0.0.0:9000`, as the examples
+> do for convenience, listens on **every** interface. In production, bind it to `127.0.0.1` (or a
+> trusted management interface) and/or restrict access with a firewall or a Kubernetes
+> `NetworkPolicy`. Do not expose it on an untrusted network.
 
 ## Operational tuning
 

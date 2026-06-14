@@ -20,7 +20,7 @@
 //!    key sets, and convergence survives reordered, duplicated and dropped
 //!    messages — modelling the lossy UDP transport.
 
-#![cfg(feature = "internal-testing")]
+#![cfg(reconcile_internal_testing)]
 
 use std::collections::BTreeMap;
 use std::ops::Bound;

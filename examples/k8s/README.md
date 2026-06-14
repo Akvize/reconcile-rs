@@ -16,8 +16,11 @@ crate. The library itself lives in [`../../src/`](../../src/).
 ## The node
 
 [`main.rs`](main.rs) is env-driven and discovers its peers by resolving the headless `Service` over
-DNS (no Kubernetes API access, no RBAC). It runs the store and exposes `/metrics` for the kubelet
-probes. To make reconciliation observable it also runs a small **demo** behaviour — a periodic
+DNS (no Kubernetes API access, no RBAC). It runs the store and exposes `/metrics` (Prometheus scrape
+plus the kubelet liveness probe) and a separate `/ready` endpoint that reports ready only once the
+store is built and gossiping — so a pod is not advertised to the Service DNS (and peers'
+`DnsDiscovery`) before it can serve. To make reconciliation observable it also runs a small **demo**
+behaviour — a periodic
 per-pod heartbeat write plus a hook that logs reconciled keys, so you watch convergence directly in
 `kubectl logs`. Those two blocks are fenced with `--- demo ---` markers; delete them for a bare
 production node.

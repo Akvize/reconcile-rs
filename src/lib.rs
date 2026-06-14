@@ -111,10 +111,12 @@ pub use reconcile_store::ReconcileStore;
 /// integration tests need to reach a handful of their internals to drive the diff protocol. This
 /// module re-exports exactly those symbols so the default public surface stays clean while the
 /// tests can still reach them. It is hidden from docs and only compiled under `cfg(test)` or the
-/// `internal-testing` feature (integration tests are separate crates, so `cfg(test)` does not
-/// apply to them — they enable the feature instead).
+/// `reconcile_internal_testing` cfg flag (integration tests are separate crates, so `cfg(test)`
+/// does not apply to them — they rely on the flag instead). The flag is **not** a Cargo feature: it
+/// is set by this repository's `.cargo/config.toml` for its own builds/tests and never ships to
+/// consumers of the published crate, so downstream code cannot reach this seam.
 #[doc(hidden)]
-#[cfg(any(test, feature = "internal-testing"))]
+#[cfg(any(test, reconcile_internal_testing))]
 pub mod testing {
     pub use crate::fingerprint::hash;
     pub use crate::proto::{diff_round, start_diff, DiffRange, HashSegment};

@@ -16,11 +16,22 @@
 //! The metrics themselves are only emitted when the `metrics` feature is enabled;
 //! `metrics-prometheus` implies it.
 //!
+//! # Exposure caveat
+//!
+//! The `/metrics` endpoint is **unauthenticated** and exposes operational information — dataset
+//! size and churn, byte/datagram counters, peer and reconciliation activity — that an observer can
+//! use to fingerprint your deployment. The examples bind `0.0.0.0:9000` for convenience, which
+//! listens on **every** interface. In production, bind it to `127.0.0.1` (or a trusted management
+//! interface) and let your scrape agent reach it locally, and/or restrict it with a firewall or a
+//! Kubernetes `NetworkPolicy`. Do not expose it on an untrusted network.
+//!
 //! # Serving a `/metrics` endpoint
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! // Installs the recorder and spawns a background HTTP server exposing `/metrics`.
+//! // `0.0.0.0` listens on every interface — see the exposure caveat above; prefer a trusted
+//! // interface (e.g. `127.0.0.1:9000`) in production.
 //! reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
 //! // ... then start your store: `store.run().await;`
 //! # Ok(())
@@ -62,6 +73,9 @@ pub fn install_recorder() -> Result<PrometheusHandle, BuildError> {
 /// Requires a Tokio runtime (the listener is spawned onto the current runtime). Returns once
 /// the listener is set up; the server then runs in the background. Call this exactly once,
 /// early in `main`, before starting the reconciliation loop.
+///
+/// The endpoint is unauthenticated and leaks operational information; choose `addr` accordingly
+/// (prefer `127.0.0.1`/a trusted interface over `0.0.0.0`). See the module-level exposure caveat.
 pub async fn serve(addr: SocketAddr) -> Result<(), BuildError> {
     PrometheusBuilder::new()
         .with_http_listener(addr)

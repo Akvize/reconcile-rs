@@ -880,7 +880,7 @@ async fn runtime_config_setters() {
 /// freshness check.  Any correctly-MAC-tagged datagram was accepted regardless of its timestamp,
 /// so an attacker who captured a datagram hours earlier could replay it indefinitely.  The
 /// `seal_datagram` helper also did not exist in the testing seam before this change.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_datagram_outside_freshness_window_is_rejected() {
     use reconcile::testing::seal_datagram;
@@ -943,7 +943,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
 /// Replaying the same sealed datagram (identical bytes, same seq) must be silently rejected after
 /// the first delivery.
 ///
-/// This test crafts a valid authenticated datagram via the `internal-testing` seam, delivers it to
+/// This test crafts a valid authenticated datagram via the `reconcile::testing` seam, delivers it to
 /// an authenticated store, and then delivers the exact same bytes a second time.  Because the
 /// sequence number (seq=1) is already recorded in the per-peer replay filter, the second delivery
 /// is dropped silently and the engine continues running normally.
@@ -951,7 +951,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
 /// This test would FAIL against the pre-change code: old code had no replay header, no
 /// `SenderCounter`, and no `ReplayFilter`.  The `Authenticator::seal` function did not accept
 /// `seq` or `stamp` parameters, and `seal_datagram` did not exist in the testing seam.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn replayed_sealed_datagram_is_rejected() {
     use reconcile::testing::seal_datagram;
@@ -1020,7 +1020,7 @@ async fn replayed_sealed_datagram_is_rejected() {
 /// This test must FAIL against the pre-fix code (commit 4391c82): `decommission_peer` called
 /// `replay_filter.evict(peer)`, erasing per-peer state, so the replayed datagram was accepted
 /// as first contact.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn decommissioned_peer_replay_is_rejected() {
     use reconcile::testing::{members_snapshot, seal_datagram};
