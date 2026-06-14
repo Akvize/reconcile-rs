@@ -71,6 +71,16 @@ const DEFAULT_MAX_PEERS: usize = 1024;
 /// starving small clusters; raise via [`Config::with_max_concurrent_bulk_dumps`].
 const DEFAULT_MAX_CONCURRENT_BULK_DUMPS: usize = 4;
 
+/// Default wall-time floor before a member with pending unacked tombstones may be decommissioned
+/// by the discovery task (see [`ReconcileStore::with_discovery_decommission_floor`]).
+///
+/// 10 minutes is long enough to absorb a readiness-probe blip that drops a pod from a Kubernetes
+/// headless Service (the event this floor was designed for) while still reclaiming the GC gate
+/// within a reasonable horizon when a member is genuinely gone. Members with **no** pending
+/// tombstone acks are not subject to the floor and are decommissioned as soon as
+/// `miss_threshold` rounds have elapsed.
+const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
+
 /// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
 ///
 /// The store also keeps track of the addresses of other instances.
@@ -102,6 +112,10 @@ where
     discovery_interval: Duration,
     /// Consecutive missed discovery rounds before a vanished member is decommissioned.
     discovery_miss_threshold: u32,
+    /// Minimum continuous absence time before a member with pending unacked tombstones is
+    /// decommissioned by the discovery task. Members with no pending tombstone acks skip this
+    /// floor and are decommissioned as soon as `miss_threshold` rounds elapse.
+    discovery_decommission_floor: Duration,
 }
 
 impl<K, V> Clone for ReconcileStore<K, V>
@@ -118,6 +132,7 @@ where
             discovery: self.discovery.clone(),
             discovery_interval: self.discovery_interval,
             discovery_miss_threshold: self.discovery_miss_threshold,
+            discovery_decommission_floor: self.discovery_decommission_floor,
         }
     }
 }
@@ -138,6 +153,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
+            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -160,6 +176,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
+            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -326,6 +343,30 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// restarts at the cost of holding tombstones (and their GC gate) longer.
     pub fn with_discovery_miss_threshold(mut self, threshold: u32) -> Self {
         self.discovery_miss_threshold = threshold;
+        self
+    }
+
+    /// Set the minimum continuous absence before a member with **pending unacked tombstones**
+    /// may be decommissioned by the discovery task (default 10 minutes).
+    ///
+    /// When a member has been absent from consecutive discovery rounds for at least
+    /// `miss_threshold` but still has tombstones it has never acknowledged, the discovery task
+    /// will not release the member's causal-stability gate until it has been absent continuously
+    /// for at least this duration. The absence clock resets whenever the member reappears in a
+    /// discovery round, so a transient blip — including a Kubernetes readiness-probe hiccup that
+    /// momentarily drops a pod from the headless Service — cannot advance it.
+    ///
+    /// Members with **no** pending tombstone acks are unaffected by this floor: they are
+    /// decommissioned as soon as `miss_threshold` rounds have elapsed, preserving the existing
+    /// fast-path behaviour for the common case.
+    ///
+    /// **Trade-off**: a longer floor provides stronger protection against tombstone resurrection
+    /// (a member that was briefly absent cannot cause a deleted value to reappear on its return),
+    /// at the cost of delaying the GC-slot release for members that are genuinely gone. Tune
+    /// this value to be comfortably larger than the longest expected transient absence
+    /// (readiness-probe blip, rolling restart, brief network partition) in your environment.
+    pub fn with_discovery_decommission_floor(mut self, floor: Duration) -> Self {
+        self.discovery_decommission_floor = floor;
         self
     }
 
@@ -509,6 +550,16 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.peers_map_len()
     }
 
+    /// Whether `peer` is currently in the gossip-routing peers map (discovery has seeded it at
+    /// least once and the entry has not yet expired). Used in tests to deterministically confirm
+    /// that at least one discovery round has observed the peer before the resolver is mutated.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn peers_contains(&self, peer: std::net::IpAddr) -> bool {
+        self.engine.peers_contains(peer)
+    }
+
     /// Number of entries in the per-peer replay filter.
     ///
     /// Exposed for integration-test assertions under the `internal-testing` feature gate.
@@ -635,9 +686,13 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///   as a known peer, re-arming its expiration and feeding it to the next gossip round.
     /// - A previously-seen **member** that is now absent has its miss count incremented; once it
     ///   reaches [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) it is
-    ///   decommissioned, releasing the causal-stability gate it held on tombstone GC.
-    /// - A **failed** resolution (DNS blip) is skipped entirely — it never counts as a miss — so a
-    ///   transient resolver hiccup cannot decommission a healthy peer.
+    ///   decommissioned, releasing the causal-stability gate it held on tombstone GC. When the
+    ///   member has pending unacked tombstones, decommissioning additionally requires that its
+    ///   continuous absence has lasted at least
+    ///   [`discovery_decommission_floor`](Self::with_discovery_decommission_floor).
+    /// - A **failed** resolution (DNS blip) is skipped entirely — it never counts as a miss and
+    ///   never advances the absence clock — so a transient resolver hiccup cannot decommission a
+    ///   healthy peer.
     ///
     /// Only `members` are considered for decommissioning: membership is what gates tombstone GC, it
     /// is earned through a real authenticated datagram, and discovery never writes to it — so a
@@ -647,17 +702,20 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             return; // no discovery source: leave peer-finding to the engine's per-net probing
         };
         let own_addr = self.engine.listen_addr();
-        // Consecutive missed rounds per member, and the set of addresses discovery has ever
-        // reported (so we only grace-decommission members we actually discovered, never peers
-        // learned by other means).
+        // Consecutive missed rounds per member, the set of addresses discovery has ever reported
+        // (so we only grace-decommission members we actually discovered, never peers learned by
+        // other means), and the wall-clock instant at which each member first went absent in the
+        // current consecutive run (reset whenever the member reappears).
         let mut miss_counts: HashMap<IpAddr, u32> = HashMap::new();
         let mut seen_ever: HashSet<IpAddr> = HashSet::new();
+        let mut absent_since: HashMap<IpAddr, Instant> = HashMap::new();
         loop {
             tokio::time::sleep(self.discovery_interval).await;
             let resolved = match discovery.discover().await {
                 Ok(addrs) => addrs,
                 Err(err) => {
-                    // Transient failure: do not touch miss counts, do not decommission anyone.
+                    // Transient failure: do not touch miss counts or absence clocks; never
+                    // decommission anyone.
                     debug!("discovery round failed, skipping: {err}");
                     continue;
                 }
@@ -666,25 +724,50 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
                 .into_iter()
                 .filter(|addr| *addr != own_addr)
                 .collect();
-            // 1) Refresh every currently-present peer.
+            // 1) Refresh every currently-present peer; reset the absence clock on reappearance.
             for addr in &current {
                 seen_ever.insert(*addr);
                 self.engine.seed_peer(*addr);
                 miss_counts.remove(addr);
+                absent_since.remove(addr);
             }
             // 2) Grace-account members that were discovered before but are now absent.
             for member in self.engine.members_snapshot() {
                 if member == own_addr || current.contains(&member) || !seen_ever.contains(&member) {
                     continue;
                 }
+                // Record the first moment of this consecutive absence run.
+                let first_absent = *absent_since.entry(member).or_insert_with(Instant::now);
                 let misses = miss_counts.entry(member).or_insert(0);
                 *misses += 1;
-                if *misses >= self.discovery_miss_threshold {
-                    info!("decommissioning vanished peer {member} after {misses} missed discovery rounds");
+                if *misses < self.discovery_miss_threshold {
+                    continue;
+                }
+                // miss_threshold reached. Fast path: no pending acks → decommission immediately.
+                if !self.engine.has_pending_tombstone_acks(member) {
+                    info!(
+                        "decommissioning vanished peer {member} after {misses} missed discovery rounds"
+                    );
                     self.engine.decommission_peer(member);
                     miss_counts.remove(&member);
                     seen_ever.remove(&member);
+                    absent_since.remove(&member);
+                    continue;
                 }
+                // Slow path: member has pending unacked tombstones — require the floor to have
+                // elapsed before releasing its causal-stability gate.
+                if first_absent.elapsed() >= self.discovery_decommission_floor {
+                    info!(
+                        "decommissioning vanished peer {member} after {misses} missed discovery \
+                         rounds and {} s of continuous absence (pending tombstone acks present)",
+                        first_absent.elapsed().as_secs()
+                    );
+                    self.engine.decommission_peer(member);
+                    miss_counts.remove(&member);
+                    seen_ever.remove(&member);
+                    absent_since.remove(&member);
+                }
+                // Otherwise: floor not yet elapsed; keep waiting.
             }
         }
     }
