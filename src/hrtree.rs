@@ -31,7 +31,7 @@ use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
-use range_cmp::{RangeComparable, RangeOrdering};
+use range_cmp::{RangeOrd, RangeOrdering};
 use tracing::trace;
 
 use crate::fingerprint::{hash, Fingerprint};
@@ -632,10 +632,10 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
 
             let mut cum_hash = Fingerprint::ZERO;
             let mut i = 0;
-            while i < node.keys.len() && node.keys[i].range_cmp(range) == RangeOrdering::Below {
+            while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Below {
                 i += 1;
             }
-            while i < node.keys.len() && node.keys[i].range_cmp(range) == RangeOrdering::Inside {
+            while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Inside {
                 let cur_bound = Some(&node.keys[i]);
                 if let Some(children) = node.children.as_ref() {
                     cum_hash += aux(&children[i], range, lower_bound, cur_bound);
@@ -765,7 +765,7 @@ impl<K: Ord, V> HRTree<K, V> {
         // traverse interior nodes
         'main_loop: while let Some(children) = node.children.as_ref() {
             for i in 0..node.keys.len() {
-                match node.keys[i].range_cmp(range) {
+                match node.keys[i].rcmp(range) {
                     RangeOrdering::Below => (),
                     RangeOrdering::Above => {
                         node = &children[i];
@@ -776,15 +776,16 @@ impl<K: Ord, V> HRTree<K, V> {
                         node = &children[i];
                         continue 'main_loop;
                     }
+                    RangeOrdering::Empty => break,
                 }
             }
             node = children.last().as_ref().unwrap();
         }
         // traverse leaf node
         for i in 0..node.keys.len() {
-            match node.keys[i].range_cmp(range) {
+            match node.keys[i].rcmp(range) {
                 RangeOrdering::Below => (),
-                RangeOrdering::Above => {
+                RangeOrdering::Above | RangeOrdering::Empty => {
                     break;
                 }
                 RangeOrdering::Inside => {

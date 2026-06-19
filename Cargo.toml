@@ -80,7 +80,7 @@ metrics-exporter-prometheus = { version = "0.16", optional = true, default-featu
 once_cell = "1.21.3"
 parking_lot = "0.12.1"
 rand = "0.8.5"
-range-cmp = "0.1.1"
+range-cmp = "1"
 serde = { version = "1.0.192", features = ["derive"] }
 sha2 = { version = "0.10", optional = true }
 # Sizes the gossip UDP socket's SO_RCVBUF / SO_SNDBUF (issue #169). Already in the tree as a
