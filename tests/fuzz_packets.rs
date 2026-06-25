@@ -67,7 +67,9 @@ async fn malformed_datagrams_do_not_panic_or_corrupt_state() {
         .with_listen_addr(victim_addr.parse().unwrap());
     // No cluster key: arbitrary bytes are *not* dropped at the auth gate and
     // reach the deserializer, which is exactly the path we want to fuzz.
-    let store = ReconcileStore::<i32, String>::new(config).await;
+    let store = ReconcileStore::<i32, String>::new(config)
+        .await
+        .expect("bind failed");
     store.just_insert(0, "legit".to_string());
 
     let task = tokio::spawn(store.clone().run());

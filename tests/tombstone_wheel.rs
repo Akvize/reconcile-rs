@@ -62,6 +62,7 @@ async fn isolated_store(
             .with_port(port),
     )
     .await
+    .expect("bind failed")
     .with_tombstone_timeout(tombstone_timeout)
 }
 

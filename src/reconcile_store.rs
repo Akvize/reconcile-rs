@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::io;
 use std::net::IpAddr;
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -109,10 +110,16 @@ where
 }
 
 impl<K: Key, V: Value> ReconcileStore<K, V> {
-    /// Create a new `ReconcileStore`, set up network and tombstones.
-    pub async fn new(config: Config) -> Self {
+    /// Create a new `ReconcileStore`, binding the gossip UDP socket and setting up tombstone tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the UDP socket cannot be bound to
+    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
+    /// the address is not available on this host.
+    pub async fn new(config: Config) -> io::Result<Self> {
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await,
+            engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await?,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
@@ -120,7 +127,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
         };
         svc.add_pre_insert(|_, _| {});
-        svc
+        Ok(svc)
     }
 
     /// Test-only constructor that accepts an explicit [`Clock`] adapter.
@@ -131,10 +138,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     pub(crate) async fn new_with_clock(
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
-    ) -> Self {
+    ) -> io::Result<Self> {
         let svc = ReconcileStore {
             engine: ReconcileEngine::<K, (Timestamp, Option<V>)>::new_with_clock(config, clock)
-                .await,
+                .await?,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
@@ -142,7 +149,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
         };
         svc.add_pre_insert(|_, _| {});
-        svc
+        Ok(svc)
     }
 
     /// Plug in a durable persistence backend, **loading any previously saved state first**.
@@ -627,6 +634,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         }
     }
 
+    /// Drive the gossip and reconciliation loops forever.
+    ///
+    /// This method does not return and cannot fail: network send errors are logged and
+    /// counted, never fatal, so a vanished or unreachable peer cannot stop the loops.
     #[instrument(name = "reconcile.store", skip_all)]
     pub async fn run(self) {
         info!("reconcile store starting");
@@ -991,6 +1002,7 @@ mod reconcile_store_tests {
             .with_net("127.0.0.45/32".parse().unwrap());
         let store = ReconcileStore::<i32, i32>::new(config)
             .await
+            .expect("bind failed")
             .with_tombstone_timeout(Duration::from_millis(1));
 
         // This test exercises the tombstone TimeoutWheel directly; it deliberately does *not*
@@ -1015,6 +1027,7 @@ mod reconcile_store_tests {
 
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         store.insert(1, 11); // live value
         store.insert(2, 22);
@@ -1025,6 +1038,7 @@ mod reconcile_store_tests {
         // A brand-new store recovers the previous state from the same file.
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         assert_eq!(restarted.get(&1).as_deref(), Some(&11));
         assert!(restarted.get(&2).is_none(), "tombstone was not recovered");
@@ -1047,6 +1061,7 @@ mod reconcile_store_tests {
 
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         store.engine.members.write().insert(peer);
         store.insert(5, 55);
@@ -1062,6 +1077,7 @@ mod reconcile_store_tests {
 
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         assert!(
             restarted.engine.members.read().contains(&peer),
@@ -1091,6 +1107,7 @@ mod reconcile_store_tests {
 
         let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         store.engine.members.write().insert(peer);
         store.insert(1, 11);
@@ -1105,7 +1122,9 @@ mod reconcile_store_tests {
 
         // Sanity check the hazard: a *fresh* store (no recovered membership) would consider the
         // same tombstone stable and collect it.
-        let fresh = ReconcileStore::<i32, i32>::new(ephemeral_config()).await;
+        let fresh = ReconcileStore::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
         fresh.insert(1, 11);
         fresh.remove(&1);
         let fresh_version = fresh.engine.map.read().get(&1).map(version_hash).unwrap();
@@ -1117,6 +1136,7 @@ mod reconcile_store_tests {
         // The recovered store keeps the tombstone gated, preventing resurrection.
         let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
             .await
+            .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
         assert!(restarted.get(&1).is_none(), "tombstone was not recovered");
         let version = restarted
@@ -1192,6 +1212,7 @@ mod reconcile_store_tests {
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
         let store = ReconcileStore::<i32, i32>::new(discovery_config())
             .await
+            .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
             .with_discovery_interval(Duration::from_millis(20))
             .with_discovery_miss_threshold(3);
@@ -1235,6 +1256,7 @@ mod reconcile_store_tests {
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
         let store = ReconcileStore::<i32, i32>::new(discovery_config())
             .await
+            .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
             .with_discovery_interval(Duration::from_millis(20))
             .with_discovery_miss_threshold(3);
@@ -1299,6 +1321,7 @@ mod reconcile_store_tests {
         let store =
             ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
                 .await
+                .expect("bind failed")
                 .with_persistence(backend);
 
         // Insert a new value; the minted timestamp must be strictly greater than persisted_stamp.
@@ -1351,6 +1374,7 @@ mod reconcile_store_tests {
         let store =
             ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
                 .await
+                .expect("bind failed")
                 .with_persistence(backend);
 
         // The tombstone was recovered (key 7 is absent from the live view).
@@ -1377,6 +1401,34 @@ mod reconcile_store_tests {
             "post-restart insert timestamp {minted_stamp:?} is not strictly greater than the \
              persisted tombstone stamp {tombstone_stamp:?}; the clock was not advanced on load, \
              so a peer reconciling with this node could resurrect the tombstone via LWW"
+        );
+    }
+
+    /// `new` must return `Err` rather than panic when the requested port is already in use.
+    ///
+    /// We hold a `std::net::UdpSocket` on the same address/port first; the OS will refuse the
+    /// second bind and the fallible constructor must surface that error to the caller.
+    #[tokio::test]
+    async fn new_returns_err_on_bind_failure() {
+        // Occupy a loopback port chosen by the OS (bind to :0, then read it back) so this test
+        // cannot collide with a fixed port already taken by the parallel suite or a stray process.
+        let holder =
+            std::net::UdpSocket::bind("127.0.0.50:0").expect("pre-condition: a port must be free");
+        let busy = holder
+            .local_addr()
+            .expect("holder must report its bound address");
+
+        let config = Config::default()
+            .with_port(busy.port())
+            .with_listen_addr(busy.ip());
+        let result = ReconcileStore::<i32, i32>::new(config).await;
+        let err = result
+            .err()
+            .expect("expected Err when the bind address is already in use");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::AddrInUse,
+            "bind failure should surface as AddrInUse, got {err:?}"
         );
     }
 }

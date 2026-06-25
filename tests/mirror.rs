@@ -51,7 +51,8 @@ async fn mirror_converges_with_dated_store() {
             .with_listen_addr(dated_addr)
             .with_net(net),
     )
-    .await;
+    .await
+    .expect("bind failed");
     // Seed the mirror with the dated store's address: the mirror *drives* reconciliation over the
     // value-only channel, so it just needs to know where to send.
     let mirror = ReconcileMirror::<String, String>::new(
@@ -61,6 +62,7 @@ async fn mirror_converges_with_dated_store() {
             .with_net(net),
     )
     .await
+    .expect("bind failed")
     .with_seed(dated_addr);
 
     // Populate the dated store with live values and one key we will later delete.
@@ -117,6 +119,7 @@ async fn mirror_does_not_block_tombstone_gc() {
             .with_net(net),
     )
     .await
+    .expect("bind failed")
     .with_tombstone_timeout(Duration::from_millis(50));
     let mirror = ReconcileMirror::<i32, i32>::new(
         Config::default()
@@ -125,6 +128,7 @@ async fn mirror_does_not_block_tombstone_gc() {
             .with_net(net),
     )
     .await
+    .expect("bind failed")
     .with_seed(dated_addr);
 
     dated.insert(1, 11);

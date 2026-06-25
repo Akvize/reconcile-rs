@@ -323,9 +323,15 @@ mod imp {
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
                     // start reconciliation stores
-                    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+                    let store1 = ReconcileStore::new(cfg1)
+                        .await
+                        .expect("bind failed")
+                        .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+                    let store2 = ReconcileStore::new(cfg2)
+                        .await
+                        .expect("bind failed")
+                        .with_seed(addr1);
                     store2.insert_bulk(&key_values[..size]);
                     let task1 = tokio::spawn(store1.clone().run());
                     let task2 = tokio::spawn(store2.clone().run());
@@ -384,9 +390,15 @@ mod imp {
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
                     // start reconciliation services
-                    let store1 = ReconcileStore::new(cfg1).await.with_seed(addr2);
+                    let store1 = ReconcileStore::new(cfg1)
+                        .await
+                        .expect("bind failed")
+                        .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReconcileStore::new(cfg2).await.with_seed(addr1);
+                    let store2 = ReconcileStore::new(cfg2)
+                        .await
+                        .expect("bind failed")
+                        .with_seed(addr1);
                     store2.insert_bulk(&key_values[..size]);
                     let task1 = tokio::spawn(store1.clone().run());
                     let task2 = tokio::spawn(store2.clone().run());

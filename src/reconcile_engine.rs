@@ -13,6 +13,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -271,7 +272,14 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
 impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestamped>
     ReconcileEngine<K, V>
 {
-    pub async fn new(config: Config) -> Self {
+    /// Create a new engine, binding the gossip UDP socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the UDP socket cannot be bound to
+    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
+    /// the address is not available on this host.
+    pub async fn new(config: Config) -> io::Result<Self> {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
         let node_id_is_random = config.node_id.is_none();
@@ -283,17 +291,19 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Construct an engine over an explicit [`Clock`] adapter. Test-only seam: a deterministic
     /// clock (`ManualClock`) makes HLC behaviour reproducible without real wall-clock time.
     #[cfg(test)]
-    pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> Self {
+    pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
         // so persistence tests do not trigger the operator warning.
         Self::build(config, clock, false).await
     }
 
-    async fn build(config: Config, clock: Arc<dyn Clock>, node_id_is_random: bool) -> Self {
-        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port))
-            .await
-            .unwrap();
-        info!("Listening on: {}", socket.local_addr().unwrap());
+    async fn build(
+        config: Config,
+        clock: Arc<dyn Clock>,
+        node_id_is_random: bool,
+    ) -> io::Result<Self> {
+        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
+        info!("Listening on: {}", socket.local_addr()?);
         // Size the kernel send/receive buffers before any traffic flows.
         set_socket_buffers(&socket, &config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
@@ -326,7 +336,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
         let probe: Arc<dyn Discovery> =
             Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
-        ReconcileEngine {
+        Ok(ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
@@ -351,7 +361,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 clock,
                 node_id_is_random,
             }),
-        }
+        })
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
@@ -595,6 +605,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         self.broadcast(messages);
     }
 
+    /// Drive the gossip and reconciliation loops forever.
+    ///
+    /// This method does not return and cannot fail: network send errors are logged and
+    /// counted, never fatal, so a vanished or unreachable peer cannot stop the loops.
     #[instrument(name = "reconcile.run", skip_all, fields(port = self.port))]
     pub async fn run(self) {
         // extra byte that easily detect when the buffer is too small
@@ -739,14 +753,16 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // initiate the reconciliation protocol with the selected peers and discovery probes
         for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
-            send_to_retry(
+            if let Err(err) = send_to_retry(
                 &self.socket,
                 &self.authenticator,
                 send_buf,
                 (peer, self.port),
             )
             .await
-            .unwrap();
+            {
+                warn!("failed to send reconciliation initiation to {peer}: {err}; continuing");
+            }
         }
         observability::record_round_duration(timer);
     }
@@ -1144,20 +1160,24 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            send_to_retry(&socket, authenticator, &send_buf[..last_size], peer)
-                .await
-                .unwrap();
-            trace!("sent {} bytes to {peer}", last_size);
+            if let Err(err) =
+                send_to_retry(&socket, authenticator, &send_buf[..last_size], peer).await
+            {
+                warn!("failed to send datagram to {peer}: {err}; continuing");
+            } else {
+                trace!("sent {} bytes to {peer}", last_size);
+            }
             send_buf.drain(..last_size);
             sent_bytes += last_size;
             pace(rate, start, sent_bytes).await;
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    send_to_retry(&socket, authenticator, send_buf, peer)
-        .await
-        .unwrap();
-    trace!("sent last {} bytes to {peer}", send_buf.len());
+    if let Err(err) = send_to_retry(&socket, authenticator, send_buf, peer).await {
+        warn!("failed to send final datagram to {peer}: {err}; continuing");
+    } else {
+        trace!("sent last {} bytes to {peer}", send_buf.len());
+    }
 }
 
 /// Sleep, if necessary, so that having sent `sent_bytes` since `start` does not exceed `rate`
@@ -1214,7 +1234,7 @@ mod deadlock_regressions {
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
-        let svc = ReconcileStore::new(config).await;
+        let svc = ReconcileStore::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
@@ -1276,7 +1296,9 @@ mod deadlock_regressions {
                 let config = Config::default()
                     .with_port(8083)
                     .with_listen_addr("127.0.0.50".parse().unwrap());
-                let engine = ReconcileEngine::<i32, (Timestamp, Option<u8>)>::new(config).await;
+                let engine = ReconcileEngine::<i32, (Timestamp, Option<u8>)>::new(config)
+                    .await
+                    .expect("bind failed");
 
                 // The same re-entrant hook as the direct-path test, registered on the engine whose
                 // map `handle_messages` writes to: it calls back into `just_insert` on that engine.
@@ -1369,7 +1391,9 @@ mod auth_attack {
             .with_port(port)
             .with_listen_addr(victim_addr.parse().unwrap())
             .with_cluster_key(key);
-        let store = ReconcileStore::<i32, String>::new(config).await;
+        let store = ReconcileStore::<i32, String>::new(config)
+            .await
+            .expect("bind failed");
         store.just_insert(0, "legit".to_string());
         let task = tokio::spawn(store.clone().run());
 
@@ -1409,7 +1433,7 @@ mod causal_stability {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr(addr.parse().unwrap());
-        ReconcileEngine::new(config).await
+        ReconcileEngine::new(config).await.expect("bind failed")
     }
 
     #[tokio::test]
@@ -1501,7 +1525,9 @@ mod clock_port {
             .with_listen_addr("127.0.0.70".parse().unwrap());
         let clock = Arc::new(ManualClock::new(42));
         let eng: ReconcileEngine<i32, (Timestamp, Option<i32>)> =
-            ReconcileEngine::new_with_clock(config, clock).await;
+            ReconcileEngine::new_with_clock(config, clock)
+                .await
+                .expect("bind failed");
 
         assert_eq!(eng.clock_now(), Timestamp::new(0, 1, 42));
         assert_eq!(eng.clock_now(), Timestamp::new(0, 2, 42));
@@ -1585,7 +1611,9 @@ mod socket_buffers {
     type Tombstoned = (Timestamp, Option<i32>);
 
     async fn engine(addr: &str, config: Config) -> ReconcileEngine<i32, Tombstoned> {
-        ReconcileEngine::new(config.with_listen_addr(addr.parse().unwrap())).await
+        ReconcileEngine::new(config.with_listen_addr(addr.parse().unwrap()))
+            .await
+            .expect("bind failed")
     }
 
     /// The receive-buffer knob must actually size the gossip socket. Asserting an
