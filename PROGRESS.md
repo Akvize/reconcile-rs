@@ -10,9 +10,11 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-06-12
-- **Baseline:** `claude/determined-franklin-s3tvt1` @ `f1423ce` (2026-06 correctness sprint; pending
-  merge to main)
+- **Last updated:** 2026-06-29
+- **Baseline:** `claude/priority-issues-review-2lu5e9` (2026-06 correctness sprint; stacked on the
+  Phase-1 bounded-growth work [#215](https://github.com/Akvize/reconcile-rs/issues/215), pending
+  merge to main) — adds the [#216](https://github.com/Akvize/reconcile-rs/issues/216) tombstone-GC
+  convergence fix
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
   [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
@@ -32,7 +34,9 @@ findings ([#195](https://github.com/Akvize/reconcile-rs/issues/195),
 [#196](https://github.com/Akvize/reconcile-rs/issues/196),
 [#197](https://github.com/Akvize/reconcile-rs/issues/197),
 [#198](https://github.com/Akvize/reconcile-rs/issues/198)) plus
-[#148](https://github.com/Akvize/reconcile-rs/issues/148) are **fixed on this branch**; remaining
+[#148](https://github.com/Akvize/reconcile-rs/issues/148) are **fixed on this branch**, as is the
+[#216](https://github.com/Akvize/reconcile-rs/issues/216) tombstone-GC convergence bug (causal
+stability was unreachable in clusters of three or more nodes); remaining
 audit findings ([#199](https://github.com/Akvize/reconcile-rs/issues/199)–[#205](https://github.com/Akvize/reconcile-rs/issues/205))
 are **security/robustness-grade**, scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 Remaining work is **maturity, scaling, and the confidentiality roadmap**.
@@ -129,7 +133,11 @@ HLC restart monotonicity ([#195](https://github.com/Akvize/reconcile-rs/issues/1
 same-millisecond expiry collision ([#196](https://github.com/Akvize/reconcile-rs/issues/196)),
 fingerprint-desyncing mutable iterators ([#197](https://github.com/Akvize/reconcile-rs/issues/197)),
 and HLC far-future stamp / counter wrap ([#198](https://github.com/Akvize/reconcile-rs/issues/198))
-— are fixed on this branch; the remainder
+— are fixed on this branch, together with the tombstone-GC convergence bug
+([#216](https://github.com/Akvize/reconcile-rs/issues/216), found during the
+[#215](https://github.com/Akvize/reconcile-rs/issues/215) review: causal stability was unreachable
+at three or more nodes because tombstone acks were pairwise and non-transitive — now every node
+re-acknowledges the tombstones it holds on each reconciliation round); the remainder
 ([#199](https://github.com/Akvize/reconcile-rs/issues/199) replay/membership poisoning,
 [#200](https://github.com/Akvize/reconcile-rs/issues/200) unbounded acks/bulk dumps,
 [#201](https://github.com/Akvize/reconcile-rs/issues/201) DNS decommission vs GC gate,

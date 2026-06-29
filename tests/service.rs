@@ -27,6 +27,25 @@ macro_rules! assert_until {
     };
 }
 
+/// Like [`wait_until`] but waits up to ~10 s. Tombstone GC is gated on a 1 s scan loop
+/// (`TOMBSTONE_CLEARING`) plus the wall-clock tombstone timeout, so events that depend on a
+/// completed GC need a longer budget than the 1 s [`wait_until`].
+async fn wait_until_slow<F: FnMut() -> bool>(mut f: F) -> bool {
+    for _ in 0..1000 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if f() {
+            return true;
+        }
+    }
+    false
+}
+
+macro_rules! assert_until_slow {
+    ( $x:expr ) => {
+        assert!(wait_until_slow(|| $x).await, stringify!($x))
+    };
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test() {
     let port = 8080;
@@ -1100,4 +1119,165 @@ async fn decommissioned_peer_replay_is_rejected() {
 
     assert!(!task.is_finished(), "engine must still be running");
     task.abort();
+}
+
+/// Regression test: in a cluster of three or more nodes, a deleted key's tombstone must eventually
+/// be garbage-collected on **every** node once they have all held it long enough —
+/// with **no** manual `forget_peer`/decommission. Before the periodic re-acknowledgment fix the
+/// causal-stability ack matrix never completed at N≥3 (two non-originating replicas never learned
+/// that the other held the deletion), so this assertion hung forever.
+///
+/// Full-mesh topology: every node seeds the other two.
+#[tokio::test(flavor = "multi_thread")]
+async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
+    // Dedicated port for test isolation (see `tombstone_is_retained_until_peer_acknowledges`).
+    let port = 8120;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.110".parse().unwrap();
+    let addr2 = "127.0.0.111".parse().unwrap();
+    let addr3 = "127.0.0.112".parse().unwrap();
+
+    // Short tombstone timeout (quick GC eligibility) and short reconcile interval (re-acks flow
+    // fast) keep the test brief; GC still cannot fire until causal stability is reached.
+    let mk = |addr| {
+        Config::default()
+            .with_port(port)
+            .with_listen_addr(addr)
+            .with_net(net)
+            .with_reconcile_interval(Duration::from_millis(100))
+    };
+    let store1 = ReconcileStore::<i32, i32>::new(mk(addr1))
+        .await
+        .expect("bind failed")
+        .with_seed(addr2)
+        .with_seed(addr3)
+        .with_tombstone_timeout(Duration::from_millis(200));
+    let store2 = ReconcileStore::<i32, i32>::new(mk(addr2))
+        .await
+        .expect("bind failed")
+        .with_seed(addr1)
+        .with_seed(addr3)
+        .with_tombstone_timeout(Duration::from_millis(200));
+    let store3 = ReconcileStore::<i32, i32>::new(mk(addr3))
+        .await
+        .expect("bind failed")
+        .with_seed(addr1)
+        .with_seed(addr2)
+        .with_tombstone_timeout(Duration::from_millis(200));
+
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+    let task3 = tokio::spawn(store3.clone().run());
+
+    // Each node writes a distinct live key; once all keys are visible everywhere, every pair has
+    // exchanged dated messages, so all three are mutual causal-stability members.
+    store1.insert(1, 11);
+    store2.insert(2, 22);
+    store3.insert(3, 33);
+    assert_until!(store1.get(&2).as_deref() == Some(&22) && store1.get(&3).as_deref() == Some(&33));
+    assert_until!(store2.get(&1).as_deref() == Some(&11) && store2.get(&3).as_deref() == Some(&33));
+    assert_until!(store3.get(&1).as_deref() == Some(&11) && store3.get(&2).as_deref() == Some(&22));
+
+    // Delete key 1 on store1 and let the tombstone propagate to both other nodes.
+    store1.remove(&1);
+    assert_until!(store2.get(&1).is_none() && store3.get(&1).is_none());
+
+    // Once all three converge on the tombstone state, capture that fingerprint. It only changes
+    // again when the tombstone is actually GC'd (the live keys 2 and 3 are never rewritten).
+    let fp_tombstone = store1.fingerprint(..);
+    assert_until!(
+        store2.fingerprint(..) == fp_tombstone && store3.fingerprint(..) == fp_tombstone
+    );
+
+    // The regression: with NO decommissioning, the tombstone must be collected on all three nodes
+    // (this hung before the fix), and they must converge to the same post-GC fingerprint.
+    assert_until_slow!(store1.fingerprint(..) != fp_tombstone);
+    assert_until_slow!(store2.fingerprint(..) != fp_tombstone);
+    assert_until_slow!(store3.fingerprint(..) != fp_tombstone);
+    let fp_collected = store1.fingerprint(..);
+    assert_until_slow!(
+        store2.fingerprint(..) == fp_collected && store3.fingerprint(..) == fp_collected
+    );
+
+    task1.abort();
+    task2.abort();
+    task3.abort();
+}
+
+/// Companion to the mesh test, in a line topology (A↔B↔C: the middle node relays; A and C never
+/// communicate directly, so each is a member only of B). End-to-end coverage that GC still
+/// converges when propagation is relayed rather than broadcast from a single origin.
+///
+/// Note: the strict regression guard is the *mesh* test above — that is the configuration in
+/// which the pre-fix ack matrix provably never completes (B and C learn the deletion simultaneously
+/// from A and never exchange acks). A relayed line incidentally completes the matrix through the
+/// existing stale-value ack path during each adjacent node's value→tombstone transition, so it
+/// converges even without the periodic-re-ack fix; this test simply confirms the fix does not
+/// regress that path.
+#[tokio::test(flavor = "multi_thread")]
+async fn tombstone_gc_converges_in_3_node_cluster_line() {
+    let port = 8121;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let addr1 = "127.0.0.113".parse().unwrap();
+    let addr2 = "127.0.0.114".parse().unwrap();
+    let addr3 = "127.0.0.115".parse().unwrap();
+
+    let mk = |addr| {
+        Config::default()
+            .with_port(port)
+            .with_listen_addr(addr)
+            .with_net(net)
+            .with_reconcile_interval(Duration::from_millis(100))
+    };
+    // Line: A seeds B; B seeds A and C; C seeds B. Seeds define the intended topology; a stray
+    // discovery probe could only add connectivity, which never prevents GC convergence.
+    let store1 = ReconcileStore::<i32, i32>::new(mk(addr1))
+        .await
+        .expect("bind failed")
+        .with_seed(addr2)
+        .with_tombstone_timeout(Duration::from_millis(200));
+    let store2 = ReconcileStore::<i32, i32>::new(mk(addr2))
+        .await
+        .expect("bind failed")
+        .with_seed(addr1)
+        .with_seed(addr3)
+        .with_tombstone_timeout(Duration::from_millis(200));
+    let store3 = ReconcileStore::<i32, i32>::new(mk(addr3))
+        .await
+        .expect("bind failed")
+        .with_seed(addr2)
+        .with_tombstone_timeout(Duration::from_millis(200));
+
+    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run());
+    let task3 = tokio::spawn(store3.clone().run());
+
+    // Data converges through the middle node B.
+    store1.insert(1, 11);
+    store3.insert(3, 33);
+    assert_until!(store1.get(&3).as_deref() == Some(&33));
+    assert_until!(store3.get(&1).as_deref() == Some(&11));
+    assert_until!(store2.get(&1).as_deref() == Some(&11) && store2.get(&3).as_deref() == Some(&33));
+
+    // Delete key 1 on store1; the tombstone must reach C via B.
+    store1.remove(&1);
+    assert_until!(store2.get(&1).is_none() && store3.get(&1).is_none());
+
+    let fp_tombstone = store1.fingerprint(..);
+    assert_until!(
+        store2.fingerprint(..) == fp_tombstone && store3.fingerprint(..) == fp_tombstone
+    );
+
+    // The tombstone must be GC'd on all three nodes with no decommissioning.
+    assert_until_slow!(store1.fingerprint(..) != fp_tombstone);
+    assert_until_slow!(store2.fingerprint(..) != fp_tombstone);
+    assert_until_slow!(store3.fingerprint(..) != fp_tombstone);
+    let fp_collected = store1.fingerprint(..);
+    assert_until_slow!(
+        store2.fingerprint(..) == fp_collected && store3.fingerprint(..) == fp_collected
+    );
+
+    task1.abort();
+    task2.abort();
+    task3.abort();
 }

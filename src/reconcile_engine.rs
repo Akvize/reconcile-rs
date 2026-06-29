@@ -47,6 +47,11 @@ use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
+/// Byte budget for the tombstone re-acknowledgments piggybacked onto each reconciliation datagram.
+/// Kept well under [`BUFFER_SIZE`] so the datagram still fits after authentication framing; when
+/// more tombstones are held than fit in one round, a round-advancing window covers the remainder on
+/// subsequent rounds.
+const REACK_BYTE_BUDGET: usize = 8 * 1024;
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
@@ -228,6 +233,14 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
+    /// The set of keys this node currently holds as a tombstone, maintained at the single map
+    /// mutation sink ([`map_insert`](ReconcileEngine::map_insert) /
+    /// [`gc_remove`](ReconcileEngine::gc_remove)). It lets the gossip round enumerate held
+    /// tombstones in O(1) (without scanning the map) and re-acknowledge each of them to every
+    /// member every round, so causal-stability acknowledgments keep flowing until a tombstone is
+    /// collected — without which the acknowledgment matrix never completes in a cluster of three or
+    /// more nodes.
+    pub(crate) live_tombstones: Arc<RwLock<HashSet<K>>>,
     /// This node's clock, reached only through the [`Clock`] port so the engine never reads
     /// physical time itself ([`HlcClock`] is the default adapter; a test injects a deterministic
     /// stub via [`new_with_clock`](ReconcileEngine::new_with_clock)). Shared across all clones so
@@ -382,6 +395,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 replay_filter: Arc::new(replay::ReplayFilter::new(config.freshness_window)),
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
+                live_tombstones: Arc::new(RwLock::new(HashSet::new())),
                 clock,
                 node_id_is_random,
                 max_peers: config.max_peers,
@@ -401,10 +415,23 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         self.projection.read().hash(&range)
     }
 
-    /// Insert into the dated `map` **and** mirror the value-only projection, under a consistent
-    /// lock order (`map` then `projection`) shared by every mutation path so the two trees never
-    /// deadlock against each other. The caller already holds the `map` write guard.
+    /// Insert into the dated `map` **and** mirror the value-only projection (and the live-tombstone
+    /// index), under a consistent lock order (`map` → `live_tombstones` → `projection`) shared by
+    /// every mutation path so the structures never deadlock against each other. The caller already
+    /// holds the `map` write guard.
     fn map_insert(&self, guard: &mut HRTree<K, V>, key: K, value: V) -> Option<V> {
+        // Keep the live-tombstone index in step with the map at its single mutation sink: a
+        // tombstone value adds the key; any live value (a fresh insert, or an LWW overwrite that
+        // resurrects a previously-deleted key) removes it. This index drives the per-round
+        // causal-stability re-acknowledgment in `start_reconciliation`.
+        {
+            let mut live_tombstones = self.live_tombstones.write();
+            if value.is_tombstone() {
+                live_tombstones.insert(key.clone());
+            } else {
+                live_tombstones.remove(&key);
+            }
+        }
         self.projection.write().insert(key.clone(), value.project());
         guard.insert(key, value)
     }
@@ -412,6 +439,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Remove a key from the dated `map` and its value-only projection (the GC removal path).
     pub(crate) fn gc_remove(&self, key: &K) -> Option<V> {
         let mut guard = self.map.write();
+        self.live_tombstones.write().remove(key);
         self.projection.write().remove(key);
         guard.remove(key)
     }
@@ -870,6 +898,9 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             }
         }
 
+        // Piggyback causal-stability re-acknowledgments for the tombstones we hold.
+        self.append_tombstone_reacks(send_buf, round);
+
         // initiate the reconciliation protocol with the selected peers and discovery probes
         for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
@@ -886,6 +917,59 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             }
         }
         observability::record_round_duration(timer);
+    }
+
+    /// Append a causal-stability re-acknowledgment (`Message::Ack`) for each tombstone this node
+    /// currently holds onto `send_buf`, returning the number appended.
+    ///
+    /// Acks otherwise only flow back to the node a tombstone was *received* from, so in a cluster of
+    /// three or more nodes two non-originating replicas never learn that the other holds the
+    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Re-acking
+    /// held tombstones every round — riding the broadcast `send_buf` to the same geography-throttled
+    /// targets as the diff itself — makes the ack matrix converge transitively. It also dissolves
+    /// the ack-before-tombstone ordering hazard: a receiver that does not hold the tombstone yet
+    /// drops the ack (the admission gate in `handle_messages`, which records an ack only for a
+    /// locally-held tombstone) and simply records it on a later round.
+    ///
+    /// The datagram is kept bounded: at most [`REACK_BYTE_BUDGET`] bytes of acks are appended, and
+    /// when more tombstones are held than fit, the window start advances with `round` so every
+    /// tombstone is re-acked within a bounded number of rounds. The keys are sorted so that window
+    /// is deterministic across rounds (`HashSet` iteration order is not).
+    fn append_tombstone_reacks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
+        let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
+        if keys.is_empty() {
+            return 0;
+        }
+        keys.sort_unstable();
+        let n = keys.len();
+        let budget = send_buf.len() + REACK_BYTE_BUDGET;
+        let start = (round as usize) % n;
+        let map_guard = self.map.read();
+        let mut appended = 0;
+        let mut budget_truncated = false;
+        for offset in 0..n {
+            if send_buf.len() >= budget {
+                budget_truncated = true;
+                break;
+            }
+            let key = &keys[(start + offset) % n];
+            // Re-confirm against the map: the tombstone may have been resurrected or GC'd since we
+            // snapshotted the index, and only the live tombstone's version is a valid ack.
+            if let Some(v) = map_guard.get(key).filter(|v| v.is_tombstone()) {
+                Message::Ack::<K, V, V::Projected>((key.clone(), version_hash(v)))
+                    .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+                    .expect("serializing an Ack into an in-memory buffer cannot fail");
+                appended += 1;
+            }
+        }
+        if budget_truncated {
+            trace!(
+                "re-acked {appended}/{n} held tombstones this round (datagram byte budget reached); \
+                 the remainder rotates in on subsequent rounds"
+            );
+        }
+        observability::record_tombstone_reacks(appended);
+        appended
     }
 
     /// Handle the messages contained in an already-authenticated [`Payload`].
@@ -942,55 +1026,30 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // record tombstone acknowledgments received from the peer
         if !acks.is_empty() {
             let peer_ip = peer.ip();
-            // Reciprocate acks for tombstones we also hold, so that the deletion originator
-            // (which never receives the tombstone as an inbound update, hence is never acked
-            // by the peer) can still reach causal stability. The `already`-guard bounds this
-            // to at most one extra round-trip and prevents an infinite ack ping-pong.
-            let mut reciprocal_acks = Vec::new();
-            {
-                let map_guard = self.map.read();
-                let mut guard = self.tombstone_acks.write();
-                for (key, version) in acks {
-                    // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                    // never-existent or non-tombstone keys are dropped here so they cannot
-                    // accumulate in `tombstone_acks` without bound.
-                    //
-                    // Ordering hazard: this gate cannot tell "a key we will never hold" from
-                    // "a key we don't hold YET". In a cluster of three or more nodes an ack
-                    // can arrive before the deletion it acknowledges (the acking peer may have
-                    // learned the deletion via a different gossip edge), and a dropped ack is
-                    // not re-delivered. Any future change to causal-stability GC must account
-                    // for this rather than rely on early acks being retained.
-                    let local_tombstone = map_guard.get(&key).filter(|v| v.is_tombstone());
-                    let Some(local_v) = local_tombstone else {
-                        trace!(
-                            "dropped ack from {peer_ip} for key with no local tombstone; \
-                             ignoring to prevent unbounded bookkeeping"
-                        );
-                        continue;
-                    };
-                    let entry = guard.entry(key.clone()).or_default();
-                    let already = entry.get(&peer_ip) == Some(&version);
-                    entry.insert(peer_ip, version);
-                    if !already {
-                        let holds_same_tombstone = version_hash(local_v) == version;
-                        if holds_same_tombstone {
-                            reciprocal_acks
-                                .push(Message::Ack::<K, V, V::Projected>((key, version)));
-                        }
-                    }
+            let map_guard = self.map.read();
+            let mut guard = self.tombstone_acks.write();
+            for (key, version) in acks {
+                // Accept an ack only for a key we locally hold as a tombstone. Acks for
+                // never-existent or non-tombstone keys are dropped here so they cannot accumulate
+                // in `tombstone_acks` without bound.
+                //
+                // This gate cannot tell "a key we will never hold" from "a key we don't hold YET":
+                // in a cluster of three or more nodes an ack can arrive before the deletion it
+                // acknowledges (the acking peer learned the deletion via a different gossip edge),
+                // and the dropped ack is not re-delivered by the sender. That is benign because
+                // every node re-acknowledges the tombstones it holds on every reconciliation round
+                // (see `start_reconciliation`): once we hold the tombstone, the next round's re-ack
+                // records the peer's acknowledgment. Pairwise reciprocation is no longer needed —
+                // the periodic re-ack is what makes the ack matrix complete across three or more
+                // replicas.
+                if map_guard.get(&key).is_some_and(|v| v.is_tombstone()) {
+                    guard.entry(key).or_default().insert(peer_ip, version);
+                } else {
+                    trace!(
+                        "dropped ack from {peer_ip} for key with no local tombstone; \
+                         ignoring to prevent unbounded bookkeeping"
+                    );
                 }
-            }
-            if !reciprocal_acks.is_empty() {
-                send_messages_to(
-                    &reciprocal_acks,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
             }
         }
         // handle messages
@@ -1645,8 +1704,12 @@ mod auth_attack {
 mod causal_stability {
     use std::net::IpAddr;
 
+    use bincode::{DefaultOptions, Deserializer};
+    use serde::Deserialize;
+
     use crate::clock::Timestamp;
-    use crate::reconcile_engine::{version_hash, ReconcileEngine};
+    use crate::reconcilable::ValueOnly;
+    use crate::reconcile_engine::{version_hash, Message, ReconcileEngine};
     use crate::reconcile_store::Config;
 
     type Tombstoned = (Timestamp, Option<i32>);
@@ -1698,6 +1761,43 @@ mod causal_stability {
             .or_default()
             .insert(peer_b, version);
         assert!(eng.is_tombstone_stable(&key, version));
+    }
+
+    /// Every reconciliation round must re-emit an `Ack` for each tombstone the node currently holds,
+    /// so the causal-stability ack matrix keeps converging at three or more nodes (where a held
+    /// tombstone is otherwise never re-advertised once two replicas agree on it).
+    /// Deterministic, socket-free: insert a tombstone, run one round, and inspect the datagram.
+    #[tokio::test]
+    async fn reconciliation_round_reacks_held_tombstones() {
+        let eng = engine("127.0.0.66").await;
+        let live_key = 1;
+        let tombstone_key = 2;
+        // A live value must NOT be re-acked; a tombstone must be.
+        eng.just_insert(live_key, (Timestamp::new(1, 0, 0), Some(11)));
+        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+        eng.just_insert(tombstone_key, tombstone);
+        let expected_version = version_hash(&tombstone);
+
+        let mut buf = Vec::new();
+        eng.start_reconciliation(&mut buf).await;
+
+        // Decode every message in the datagram and collect the acks.
+        let mut acks: Vec<(i32, u64)> = Vec::new();
+        let mut de = Deserializer::from_slice(&buf, DefaultOptions::new());
+        while let Ok(msg) = Message::<i32, Tombstoned, ValueOnly<i32>>::deserialize(&mut de) {
+            if let Message::Ack(ack) = msg {
+                acks.push(ack);
+            }
+        }
+
+        assert!(
+            acks.contains(&(tombstone_key, expected_version)),
+            "the round must re-ack the held tombstone (key {tombstone_key}); got {acks:?}"
+        );
+        assert!(
+            !acks.iter().any(|(k, _)| *k == live_key),
+            "a live value must never be re-acked; got {acks:?}"
+        );
     }
 
     #[tokio::test]
