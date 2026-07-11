@@ -523,6 +523,94 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
     }
 
+    /// The number of **live** entries currently held.
+    ///
+    /// Deletions are tombstones that linger in the map until causal-stability-gated GC reclaims
+    /// them, so this excludes them and can be smaller than the raw map size. It is `O(n)`: it scans
+    /// the map filtering out tombstones.
+    pub fn len(&self) -> usize {
+        self.engine
+            .map
+            .read()
+            .iter()
+            .filter(|(_, v)| v.1.is_some())
+            .count()
+    }
+
+    /// Whether the store holds no live entry. `O(n)` worst case, but returns as soon as it finds a
+    /// live value. A store that holds only tombstones is empty.
+    pub fn is_empty(&self) -> bool {
+        !self.engine.map.read().iter().any(|(_, v)| v.1.is_some())
+    }
+
+    /// Whether `k` maps to a live value (a tombstoned key reads as absent).
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.get(k).is_some()
+    }
+
+    /// Call `f` for every live entry, in key order.
+    ///
+    /// The map read lock is held only for the duration of the call, and the borrows handed to `f`
+    /// cannot escape it — so a long-running scan cannot leak the guard and stall the reconciliation
+    /// loop. Do not perform blocking work or call back into the store from `f`.
+    pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
+        let guard = self.engine.map.read();
+        for (k, v) in guard.iter() {
+            if let Some(value) = v.1.as_ref() {
+                f(k, value);
+            }
+        }
+    }
+
+    /// Call `f` for every live entry whose key falls in `range`, in key order. Mirrors the
+    /// [`fingerprint`](Self::fingerprint) range signature; same locking discipline as
+    /// [`for_each`](Self::for_each).
+    pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
+        let guard = self.engine.map.read();
+        for (k, v) in guard.get_range(&range) {
+            if let Some(value) = v.1.as_ref() {
+                f(k, value);
+            }
+        }
+    }
+
+    /// Snapshot all live entries into an owned `Vec`, in key order. Clones under the read lock;
+    /// prefer [`for_each`](Self::for_each) to avoid the copy for large scans.
+    pub fn to_vec(&self) -> Vec<(K, V)> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .filter_map(|(k, v)| v.1.as_ref().map(|value| (k.clone(), value.clone())))
+            .collect()
+    }
+
+    /// Snapshot the live entries whose keys fall in `range` into an owned `Vec`, in key order.
+    pub fn range_to_vec<R: RangeBounds<K>>(&self, range: R) -> Vec<(K, V)> {
+        let guard = self.engine.map.read();
+        guard
+            .get_range(&range)
+            .filter_map(|(k, v)| v.1.as_ref().map(|value| (k.clone(), value.clone())))
+            .collect()
+    }
+
+    /// The keys of all live entries, in order. Thin owned convenience over [`to_vec`](Self::to_vec).
+    pub fn keys(&self) -> Vec<K> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .filter_map(|(k, v)| v.1.as_ref().map(|_| k.clone()))
+            .collect()
+    }
+
+    /// The values of all live entries, in key order.
+    pub fn values(&self) -> Vec<V> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .filter_map(|(_, v)| v.1.as_ref().cloned())
+            .collect()
+    }
+
     /// Insert a single key/value pair, running the pre-insert hook first.
     ///
     /// # Behavior
