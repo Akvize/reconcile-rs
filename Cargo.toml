@@ -45,6 +45,11 @@ debug = true
 name = "bench"
 harness = false
 
+# System-level, end-to-end benchmarks over the public API (no internal seam, so no feature gate).
+[[bench]]
+name = "system"
+harness = false
+
 [features]
 default = ["mac-blake3"]
 # Per-datagram MAC authentication and payload confidentiality moved to the `gossip` crate together
