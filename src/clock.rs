@@ -351,21 +351,6 @@ impl Clock for HlcClock {
     }
 }
 
-/// A value that carries a [`Timestamp`].
-///
-/// Lets the reconciliation engine read the timestamp of a stored value (to advance its
-/// clock on receipt) without knowing the concrete value type.
-pub trait Timestamped {
-    /// The Hybrid Logical Clock timestamp attached to this value.
-    fn timestamp(&self) -> Timestamp;
-}
-
-impl<V> Timestamped for (Timestamp, V) {
-    fn timestamp(&self) -> Timestamp {
-        self.0
-    }
-}
-
 /// Deterministic [`Clock`] adapter for tests: no physical-time read at all.
 ///
 /// [`now`](Clock::now) bumps the logical counter; [`observe`](Clock::observe) jumps to a strictly

@@ -15,7 +15,7 @@
 //! (last-write-wins) and run the tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
 //! bytes per entry that the replica never needs. A `ReconcileMirror` stores only
-//! [`ValueOnly<V>`] — the `Option<V>` payload, no timestamp — and still converges with a dated peer
+//! [`State<V>`] — the `Option<V>` payload, no timestamp — and still converges with a dated peer
 //! over the **existing range-based diff protocol**, on the same UDP port.
 //!
 //! # How it stays causal-stability-safe
@@ -69,7 +69,7 @@ use crate::clock::Timestamp;
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
-use crate::reconcilable::ValueOnly;
+use crate::reconcilable::{Entry, State};
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
 use crate::replay;
@@ -79,21 +79,21 @@ const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
-type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &ValueOnly<V>)>;
+type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &State<V>)>;
 
 /// The wire value type a mirror names for (de)serialization. The mirror never stores a dated value;
 /// it only needs the type so the shared [`Message`] enum has a concrete `Update` payload (which it
-/// ignores) and so the value-only [`Projected`](crate::reconcilable::Projectable::Projected) type
-/// resolves to [`ValueOnly<V>`].
-type WireDated<V> = (Timestamp, Option<V>);
+/// ignores) and so the value-only projection type resolves to
+/// [`State<V>`](crate::reconcilable::State).
+type WireDated<V> = Entry<Timestamp, V>;
 
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
 /// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
 pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
-    /// [`ValueOnly`]), matching a dated peer's value-only projection.
-    tree: Arc<RwLock<HRTree<K, ValueOnly<V>>>>,
+    /// [`State`](crate::reconcilable::State)), matching a dated peer's value-only projection.
+    tree: Arc<RwLock<HRTree<K, State<V>>>>,
     port: u16,
     socket: Arc<UdpSocket>,
     /// The single network this read-only mirror probes for discovery. A mirror is a
@@ -167,7 +167,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
         Ok(ReconcileMirror {
-            tree: Arc::new(RwLock::new(HRTree::<K, ValueOnly<V>>::new())),
+            tree: Arc::new(RwLock::new(HRTree::<K, State<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
             net: Arc::new(RwLock::new(net)),
@@ -200,15 +200,15 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
     /// Register a hook invoked (outside the map lock) just before each inbound value is integrated.
     ///
     /// Useful to be notified of changes mirrored from the dated cluster. The tombstone case is
-    /// `ValueOnly(None)`.
-    pub fn add_on_update<F: Send + Sync + Fn(&K, &ValueOnly<V>) + 'static>(&self, on_update: F) {
+    /// `State::Tombstone`.
+    pub fn add_on_update<F: Send + Sync + Fn(&K, &State<V>) + 'static>(&self, on_update: F) {
         *self.on_update.write() = Box::new(on_update);
     }
 
     /// Get the live value for a key, or `None` if the key is absent or holds a mirrored tombstone.
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.tree.read();
-        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|vo| vo.as_value())).ok()
+        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|vo| vo.value())).ok()
     }
 
     /// Whether the mirror currently holds a live value for the key (a tombstone counts as absent).
@@ -241,7 +241,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
     /// Integrate inbound value-only updates by plain overwrite (the mirror holds no timestamp to
     /// compare against — it trusts the authoritative dated peer). Hooks run outside the map lock,
     /// so a hook may safely call back into the mirror.
-    fn integrate(&self, updates: Vec<(K, ValueOnly<V>)>) {
+    fn integrate(&self, updates: Vec<(K, State<V>)>) {
         if updates.is_empty() {
             return;
         }
@@ -263,7 +263,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let segments = proto::start_diff(&self.tree.read());
         send_buf.clear();
         for segment in segments {
-            Message::ValueComparisonItem::<K, WireDated<V>, ValueOnly<V>>(segment)
+            Message::ValueComparisonItem::<K, WireDated<V>, State<V>>(segment)
                 .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
                 .unwrap();
         }
@@ -300,10 +300,10 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let payload = payload.as_bytes();
         trace!("mirror received {} bytes from {peer}", payload.len());
         let mut value_in_comparison = Vec::new();
-        let mut value_updates: Vec<(K, ValueOnly<V>)> = Vec::new();
+        let mut value_updates: Vec<(K, State<V>)> = Vec::new();
         let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
         loop {
-            match Message::<K, WireDated<V>, ValueOnly<V>>::deserialize(&mut deserializer) {
+            match Message::<K, WireDated<V>, State<V>>::deserialize(&mut deserializer) {
                 Err(ref kind) => {
                     if let bincode::ErrorKind::Io(err) = kind.as_ref() {
                         if err.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -348,7 +348,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             if !out_comparison.is_empty() {
                 let messages: Vec<_> = out_comparison
                     .into_iter()
-                    .map(Message::<K, WireDated<V>, ValueOnly<V>>::ValueComparisonItem)
+                    .map(Message::<K, WireDated<V>, State<V>>::ValueComparisonItem)
                     .collect();
                 send_messages_to(
                     &messages,
@@ -452,24 +452,24 @@ mod tests {
             .await
             .expect("bind failed");
         assert!(mirror.get(&1).is_none());
-        mirror.integrate(vec![(1, ValueOnly(Some("hello".to_string())))]);
+        mirror.integrate(vec![(1, State::Present("hello".to_string()))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"hello".to_string()));
         assert!(mirror.contains_key(&1));
         assert_eq!(mirror.len(), 1);
     }
 
-    /// A mirrored tombstone (`ValueOnly(None)`) hides the value but is still a stored entry.
+    /// A mirrored tombstone (`State::Tombstone`) hides the value but is still a stored entry.
     #[tokio::test]
     async fn mirrors_tombstones() {
         let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
-        mirror.integrate(vec![(1, ValueOnly(Some("v".to_string())))]);
+        mirror.integrate(vec![(1, State::Present("v".to_string()))]);
         assert_eq!(mirror.get(&1).as_deref(), Some(&"v".to_string()));
 
         // A later tombstone overwrites it: the value disappears from `get`, but the key is retained
         // as a tombstone (the mirror has no timestamp and trusts the authoritative peer).
-        mirror.integrate(vec![(1, ValueOnly(None))]);
+        mirror.integrate(vec![(1, State::Tombstone)]);
         assert!(mirror.get(&1).is_none());
         assert!(!mirror.contains_key(&1));
         assert_eq!(mirror.len(), 1, "the tombstone is retained as an entry");
@@ -487,7 +487,7 @@ mod tests {
         mirror.add_on_update(move |_, _| {
             count2.fetch_add(1, Ordering::SeqCst);
         });
-        mirror.integrate(vec![(1, ValueOnly(Some(10))), (2, ValueOnly(None))]);
+        mirror.integrate(vec![(1, State::Present(10)), (2, State::Tombstone)]);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -499,23 +499,23 @@ mod tests {
             .await
             .expect("bind failed");
         mirror.integrate(vec![
-            (1, ValueOnly(Some("a".to_string()))),
-            (2, ValueOnly(None)),
+            (1, State::Present("a".to_string())),
+            (2, State::Tombstone),
         ]);
 
-        let mut reference: HRTree<i32, ValueOnly<String>> = HRTree::new();
-        reference.insert(1, ValueOnly(Some("a".to_string())));
-        reference.insert(2, ValueOnly(None));
+        let mut reference: HRTree<i32, State<String>> = HRTree::new();
+        reference.insert(1, State::Present("a".to_string()));
+        reference.insert(2, State::Tombstone);
 
         assert_eq!(mirror.fingerprint(..), reference.hash(&..));
     }
 
-    /// A live value and its `ValueOnly` projection hash identically only via the value-only basis:
+    /// A live value and its `State` projection hash identically only via the value-only basis:
     /// per-entry, the dateless mirror saves the whole `Timestamp` (the point of the dateless mirror).
     #[test]
     fn value_only_is_smaller_per_entry() {
-        let dated = std::mem::size_of::<(Timestamp, Option<u64>)>();
-        let light = std::mem::size_of::<ValueOnly<u64>>();
+        let dated = std::mem::size_of::<Entry<Timestamp, u64>>();
+        let light = std::mem::size_of::<State<u64>>();
         assert!(
             light < dated,
             "value-only entry ({light} B) should be smaller than dated entry ({dated} B)"

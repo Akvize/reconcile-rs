@@ -13,9 +13,10 @@
 //! once, with blanket impls, so implementation sites can read `impl<K: Key, V: Value>` instead of
 //! spelling the full list out each time.
 //!
-//! These bundles cover only the data bounds; *entry-semantics* bounds (such as
-//! [`Projectable`](crate::reconcilable::Projectable)) are not bundled here and travel as extra
-//! bounds alongside `V: Value` where required.
+//! These bundles cover only the data bounds. *Entry semantics* (tombstone, timestamp, merge,
+//! projection) are not bounds at all: they are inherent methods on
+//! [`Entry`](crate::reconcilable::Entry) / [`State`](crate::reconcilable::State), so they travel
+//! with the concrete domain type rather than with the `V` bound (see `ARCHITECTURE.md` §3.8).
 //!
 //! The [`Hash`] bound carries a correctness requirement: per-element fingerprints hash the key and
 //! value into one stream with no separator (see [`fingerprint::hash`](crate::fingerprint::hash)),

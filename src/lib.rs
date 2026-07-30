@@ -101,7 +101,7 @@ pub use hrtree::HRTree;
 pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, LoadError, PersistedState, Persistence};
-pub use reconcilable::{Projectable, ValueOnly};
+pub use reconcilable::{Entry, State};
 pub use reconcile_store::ReconcileStore;
 
 /// Internal seam for the external integration-test oracles (`tests/diff.rs`,

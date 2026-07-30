@@ -41,16 +41,31 @@ Replace call sites with the hash-safe mutation path —
 `ReconcileStore::get_mut` (or `HRTree::with_mut`) — which recomputes the
 fingerprint on every edit.
 
-### Breaking (planned, not yet landed) — wire and on-disk format (`Entry` / `State` migration, issue #143)
+### Breaking — wire and on-disk format (`Entry` / `State` domain type, issue #143)
 
-The `Entry<Timestamp, V>` / `State<V>` domain-type migration (architecture step 4,
-`ARCHITECTURE.md` §6) will replace the internal `(Timestamp, Option<V>)` tuple,
-changing both the gossip wire format and the `FileSnapshot` on-disk format.
-If it lands in time it rides this release (one coordinated break beats two);
-**existing snapshots will not be forward-compatible** — pre-break snapshots must
-be rejected cleanly via `LoadError::Corrupt` with a descriptive message rather
-than silently misinterpreted.  Tracked in issue #143; this entry is the policy
-record, not a landed change.
+The internal `(Timestamp, Option<V>)` tuple is replaced by an intention-revealing
+`Entry<Timestamp, V>` cell with a `State<V>` (`Present(V)` / `Tombstone`) payload
+(architecture step 4, `ARCHITECTURE.md` §6). This **changes both the gossip wire
+format and the `FileSnapshot` on-disk format** — a coordinated break riding this
+release alongside the anti-replay change above. Concretely:
+
+- The value-shape helper traits `Reconcilable`, `MaybeTombstone` (`reconcilable.rs`)
+  and `Timestamped` (`clock.rs`) are removed; their behaviour is now inherent on
+  `Entry` (`is_tombstone` / `value` / `merge`, the last carrying the LWW policy)
+  and plain `stamp` field access.
+- `Projectable` / `ValueOnly<V>` are dissolved: the dateless mirror's value-only
+  projection **is** `State<V>` (`Entry::project` → `State<V>`), so the dated store
+  and the dateless `ReconcileMirror` share one domain type. `State`'s `Hash` stays
+  timestamp-less (invariant #8); `Entry`'s covers the stamp (invariant #7).
+- The public pre-insert hook `ReconcileStore::add_pre_insert` now takes
+  `&Entry<Timestamp, V>` (was `&(Timestamp, Option<V>)`), and `PersistedState` /
+  `DatedEntries` carry `Entry<Timestamp, V>`.
+- `reconcile::{Entry, State}` are now exported (replacing `Projectable` / `ValueOnly`).
+- `FileSnapshot` now writes a versioned header (`RCNL` magic + `u32` format version).
+  **Existing (0.2.x, header-less) snapshots are not forward-compatible** and are
+  rejected cleanly with `LoadError::Corrupt` and a descriptive message rather than
+  being silently misinterpreted (which would drop tombstones and re-enable the
+  resurrection hazard of issue #109).
 
 ### Changed — MSRV raised to 1.85
 

@@ -23,7 +23,7 @@ mod imp {
     };
 
     use reconcile::testing::range_hash;
-    use reconcile::{reconcile_store::Config, HRTree, ReconcileStore, Timestamp, ValueOnly};
+    use reconcile::{reconcile_store::Config, Entry, HRTree, ReconcileStore, State, Timestamp};
 
     fn hrtree_new(c: &mut Criterion) {
         let mut group = c.benchmark_group("HRTree::new");
@@ -242,11 +242,11 @@ mod imp {
     /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
     /// entry — the whole point of the optimization for fleets with many passive read replicas.
     fn mirror_memory(c: &mut Criterion) {
-        let dated = std::mem::size_of::<(Timestamp, Option<u32>)>();
-        let light = std::mem::size_of::<ValueOnly<u32>>();
+        let dated = std::mem::size_of::<Entry<Timestamp, u32>>();
+        let light = std::mem::size_of::<State<u32>>();
         println!(
-            "[mirror memory] per-entry value size: dated (Timestamp, Option<u32>) = {dated} B, \
-         value-only ValueOnly<u32> = {light} B, saved = {} B/entry",
+            "[mirror memory] per-entry value size: dated Entry<Timestamp, u32> = {dated} B, \
+         value-only State<u32> = {light} B, saved = {} B/entry",
             dated - light
         );
 
@@ -266,25 +266,25 @@ mod imp {
             group.sample_size(10.max(1_000_000 / size).min(100));
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(
-                BenchmarkId::new("dated (Timestamp, Option<u32>)", size),
+                BenchmarkId::new("dated Entry<Timestamp, u32>", size),
                 &size,
                 |b, &size| {
                     b.iter(|| {
-                        let mut tree = HRTree::<u32, (Timestamp, Option<u32>)>::new();
+                        let mut tree = HRTree::<u32, Entry<Timestamp, u32>>::new();
                         for &k in keys[..size].iter() {
-                            tree.insert(k, (Timestamp::new(k as u64, 0, 0), Some(k)));
+                            tree.insert(k, Entry::present(Timestamp::new(k as u64, 0, 0), k));
                         }
                     })
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("value-only ValueOnly<u32>", size),
+                BenchmarkId::new("value-only State<u32>", size),
                 &size,
                 |b, &size| {
                     b.iter(|| {
-                        let mut tree = HRTree::<u32, ValueOnly<u32>>::new();
+                        let mut tree = HRTree::<u32, State<u32>>::new();
                         for &k in keys[..size].iter() {
-                            tree.insert(k, ValueOnly(Some(k)));
+                            tree.insert(k, State::Present(k));
                         }
                     })
                 },
