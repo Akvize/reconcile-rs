@@ -66,6 +66,7 @@ use tracing::{debug, trace, warn};
 use crate::auth;
 use crate::bounds::Key;
 use crate::clock::Timestamp;
+use crate::codec::BincodeCodec;
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
@@ -73,6 +74,7 @@ use crate::reconcilable::{Entry, State};
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
 use crate::replay;
+use crate::transport::UdpTransport;
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
@@ -276,11 +278,11 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
-                &self.socket,
+                &UdpTransport::new(Arc::clone(&self.socket)),
                 &self.authenticator,
                 &self.sender_counter,
                 send_buf,
-                (peer, self.port),
+                SocketAddr::new(peer, self.port),
             )
             .await
             {
@@ -352,7 +354,8 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     .collect();
                 send_messages_to(
                     &messages,
-                    Arc::clone(&self.socket),
+                    &UdpTransport::new(Arc::clone(&self.socket)),
+                    &BincodeCodec::new(),
                     &self.authenticator,
                     &self.sender_counter,
                     &peer,

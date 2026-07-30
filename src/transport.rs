@@ -20,7 +20,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use socket2::SockRef;
 use tokio::net::UdpSocket;
+use tracing::{debug, warn};
 
 /// Abstracts connectionless datagram I/O (send / receive / local address).
 ///
@@ -54,9 +56,70 @@ impl UdpTransport {
         UdpTransport(socket)
     }
 
+    /// Bind a UDP socket at `addr` and size its kernel send/receive buffers, returning the ready
+    /// transport. `recv_buffer_size` / `send_buffer_size` size `SO_RCVBUF` / `SO_SNDBUF`
+    /// respectively; `None` leaves the inherited OS default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the socket cannot be bound to `addr` (e.g. the port is in use).
+    pub async fn bind(
+        addr: SocketAddr,
+        recv_buffer_size: Option<usize>,
+        send_buffer_size: Option<usize>,
+    ) -> io::Result<Self> {
+        let socket = UdpSocket::bind(addr).await?;
+        set_socket_buffers(&socket, recv_buffer_size, send_buffer_size);
+        Ok(UdpTransport(Arc::new(socket)))
+    }
+
     /// Borrow the underlying socket (e.g. to tune `SO_RCVBUF` / `SO_SNDBUF`).
     pub fn socket(&self) -> &UdpSocket {
         &self.0
+    }
+}
+
+/// Apply the requested `SO_RCVBUF` / `SO_SNDBUF` sizes to a gossip socket.
+///
+/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
+/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
+/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
+/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
+/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
+/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
+/// leaves the inherited OS default untouched.
+///
+/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
+/// honoured request reads back larger than asked.
+fn set_socket_buffers(
+    socket: &UdpSocket,
+    recv_buffer_size: Option<usize>,
+    send_buffer_size: Option<usize>,
+) {
+    let sock = SockRef::from(socket);
+    if let Some(size) = recv_buffer_size {
+        match sock.set_recv_buffer_size(size) {
+            Ok(()) => match sock.recv_buffer_size() {
+                Ok(actual) => debug!(
+                    "gossip socket SO_RCVBUF: requested {size} B, OS granted {actual} B \
+                     (raise net.core.rmem_max if a larger buffer is needed)"
+                ),
+                Err(e) => debug!("could not read back SO_RCVBUF: {e}"),
+            },
+            Err(e) => warn!("failed to set gossip socket SO_RCVBUF to {size} B: {e}"),
+        }
+    }
+    if let Some(size) = send_buffer_size {
+        match sock.set_send_buffer_size(size) {
+            Ok(()) => match sock.send_buffer_size() {
+                Ok(actual) => debug!(
+                    "gossip socket SO_SNDBUF: requested {size} B, OS granted {actual} B \
+                     (raise net.core.wmem_max if a larger buffer is needed)"
+                ),
+                Err(e) => debug!("could not read back SO_SNDBUF: {e}"),
+            },
+            Err(e) => warn!("failed to set gossip socket SO_SNDBUF to {size} B: {e}"),
+        }
     }
 }
 

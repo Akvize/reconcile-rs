@@ -67,6 +67,27 @@ release alongside the anti-replay change above. Concretely:
   being silently misinterpreted (which would drop tombstones and re-enable the
   resurrection hazard of issue #109).
 
+### Added — `Transport` and `Codec` ports (hexagonal I/O boundary, issue #144)
+
+The reconciliation engine no longer calls `tokio::net` or `bincode` directly: it
+drives its datagram I/O and wire encoding through two new public ports
+(architecture step 5, `ARCHITECTURE.md` §3.4). **No wire-format change** — the
+frozen bincode `DefaultOptions` config and `Message` tag order are preserved.
+
+- `Transport` port + `UdpTransport` adapter (`reconcile::{Transport, UdpTransport}`):
+  datagram send/recv/local-addr over `Addr = SocketAddr`. `UdpTransport::bind`
+  owns the socket bind and `SO_RCVBUF` / `SO_SNDBUF` sizing.
+- `Codec` port + `BincodeCodec` adapter (`reconcile::{Codec, BincodeCodec}`):
+  `encode` to a buffer and `decode_stream` with a `max_items` cap that bounds the
+  datagram-expansion DoS (issue #151).
+- Authentication stays **ahead of** the codec: the MAC is verified on raw bytes
+  before any decode (invariant #5) — the `Codec` never absorbs authentication.
+- The engine is generic over the codec (default `BincodeCodec`) and holds the
+  transport as `Arc<dyn Transport<Addr = SocketAddr>>`, so an in-memory transport
+  makes convergence testable with no real sockets (a deterministic convergence
+  proptest now runs over it). New dependency: `async-trait` (for the `Transport`
+  port) and tokio's `sync` feature (for the in-memory test transport).
+
 ### Changed — MSRV raised to 1.85
 
 The minimum supported Rust version is **1.85** (declared in `Cargo.toml`
