@@ -62,6 +62,7 @@
 
 pub mod bounds;
 pub mod clock;
+pub mod codec;
 pub mod discovery;
 pub mod fingerprint;
 pub mod hrtree;
@@ -69,6 +70,7 @@ pub mod mirror;
 pub mod persistence;
 pub mod reconcilable;
 pub mod reconcile_store;
+pub mod transport;
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
 #[cfg(feature = "metrics-prometheus")]
@@ -88,9 +90,11 @@ pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
 pub use clock::{Clock, Timestamp};
+pub use codec::{BincodeCodec, Codec};
 pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
+pub use transport::{Transport, UdpTransport};
 // The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a
 // `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).
