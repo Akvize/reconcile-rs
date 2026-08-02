@@ -1127,7 +1127,7 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
     let addr2 = "127.0.0.111".parse().unwrap();
     let addr3 = "127.0.0.112".parse().unwrap();
 
-    // Short tombstone timeout (quick GC eligibility) and short reconcile interval (re-acks flow
+    // Short tombstone timeout (quick GC eligibility) and short reconcile interval (ack resends flow
     // fast) keep the test brief; GC still cannot fire until causal stability is reached.
     let mk = |addr| {
         Config::default()
@@ -1200,7 +1200,7 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
 /// which the pre-fix ack matrix provably never completes (B and C learn the deletion simultaneously
 /// from A and never exchange acks). A relayed line incidentally completes the matrix through the
 /// existing stale-value ack path during each adjacent node's value→tombstone transition, so it
-/// converges even without the periodic-re-ack fix; this test simply confirms the fix does not
+/// converges even without the periodic-ack-resend fix; this test simply confirms the fix does not
 /// regress that path.
 #[tokio::test(flavor = "multi_thread")]
 async fn tombstone_gc_converges_in_3_node_cluster_line() {

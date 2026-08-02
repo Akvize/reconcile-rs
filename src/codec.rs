@@ -11,9 +11,9 @@
 //!
 //! The reconciliation engine drives itself over this port instead of calling `bincode` directly, so
 //! the encoding is a substitutable adapter rather than a hard dependency of the domain.
-//! Authentication ([`Authenticator`](crate::auth)) always sits **ahead of** the codec: the MAC is
-//! verified on the raw datagram bytes before any decoding runs (invariant #5), so a forged datagram
-//! never reaches [`decode_stream`](Codec::decode_stream).
+//! Datagram authentication always sits **ahead of** the codec: the MAC is verified on the raw
+//! datagram bytes before any decoding runs (invariant #5), so a forged datagram never reaches
+//! [`decode_stream`](Codec::decode_stream).
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;

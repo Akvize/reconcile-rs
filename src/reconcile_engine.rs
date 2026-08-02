@@ -51,11 +51,11 @@ const BUFFER_SIZE: usize = 65507;
 /// bounded operation (issue #151) rather than an unbounded allocation.
 const MAX_MESSAGES_PER_DATAGRAM: usize = BUFFER_SIZE;
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
-/// Byte budget for the tombstone re-acknowledgments piggybacked onto each reconciliation datagram.
+/// Byte budget for the tombstone ack resends piggybacked onto each reconciliation datagram.
 /// Kept well under [`BUFFER_SIZE`] so the datagram still fits after authentication framing; when
 /// more tombstones are held than fit in one round, a round-advancing window covers the remainder on
 /// subsequent rounds.
-const REACK_BYTE_BUDGET: usize = 8 * 1024;
+const TOMBSTONE_ACK_RESEND_BYTE_BUDGET: usize = 8 * 1024;
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
@@ -591,6 +591,17 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
         guard.keys().cloned().collect()
     }
 
+    /// Bundle this engine's outbound ports and send state for the batched-message helpers
+    /// ([`send_messages_to`] / [`send_messages_paced`]). See [`SendPorts`].
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>, C> {
+        SendPorts {
+            transport: &*self.transport,
+            codec: &*self.codec,
+            authenticator: &self.authenticator,
+            sender_counter: &self.sender_counter,
+        }
+    }
+
     pub fn just_insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
         // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
@@ -621,19 +632,16 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         tokio::spawn(async move {
+            let ports = SendPorts {
+                transport: &*transport,
+                codec: &*codec,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(
-                    &messages,
-                    &*transport,
-                    &*codec,
-                    &authenticator,
-                    &sender_counter,
-                    &peer,
-                    &mut send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &ports, &peer, &mut send_buf).await;
             }
         });
     }
@@ -721,18 +729,14 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
             // slots on drop, even if this task is aborted or panics.
             let _peer_guard = peer_guard;
             let _global_guard = global_guard;
+            let ports = SendPorts {
+                transport: &*transport,
+                codec: &*codec,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
-            send_messages_paced(
-                &messages,
-                &*transport,
-                &*codec,
-                &authenticator,
-                &sender_counter,
-                &peer,
-                &mut send_buf,
-                rate,
-            )
-            .await;
+            send_messages_paced(&messages, &ports, &peer, &mut send_buf, rate).await;
         });
     }
 
@@ -971,8 +975,8 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
             }
         }
 
-        // Piggyback causal-stability re-acknowledgments for the tombstones we hold.
-        self.append_tombstone_reacks(send_buf, round);
+        // Piggyback causal-stability ack resends for the tombstones we hold.
+        self.resend_held_tombstone_acks(send_buf, round);
 
         // initiate the reconciliation protocol with the selected peers and discovery probes
         for peer in targets {
@@ -992,30 +996,30 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
         observability::record_round_duration(timer);
     }
 
-    /// Append a causal-stability re-acknowledgment (`Message::Ack`) for each tombstone this node
+    /// Resend a causal-stability acknowledgment (`Message::Ack`) for each tombstone this node
     /// currently holds onto `send_buf`, returning the number appended.
     ///
     /// Acks otherwise only flow back to the node a tombstone was *received* from, so in a cluster of
     /// three or more nodes two non-originating replicas never learn that the other holds the
-    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Re-acking
-    /// held tombstones every round — riding the broadcast `send_buf` to the same geography-throttled
-    /// targets as the diff itself — makes the ack matrix converge transitively. It also dissolves
-    /// the ack-before-tombstone ordering hazard: a receiver that does not hold the tombstone yet
-    /// drops the ack (the admission gate in `handle_messages`, which records an ack only for a
-    /// locally-held tombstone) and simply records it on a later round.
+    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Resending the
+    /// ack for every held tombstone every round — riding the broadcast `send_buf` to the same
+    /// geography-throttled targets as the diff itself — makes the ack matrix converge transitively.
+    /// It also dissolves the ack-before-tombstone ordering hazard: a receiver that does not hold the
+    /// tombstone yet drops the ack (the admission gate in `handle_messages`, which records an ack
+    /// only for a locally-held tombstone) and simply records it on a later round.
     ///
-    /// The datagram is kept bounded: at most [`REACK_BYTE_BUDGET`] bytes of acks are appended, and
-    /// when more tombstones are held than fit, the window start advances with `round` so every
-    /// tombstone is re-acked within a bounded number of rounds. The keys are sorted so that window
-    /// is deterministic across rounds (`HashSet` iteration order is not).
-    fn append_tombstone_reacks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
+    /// The datagram is kept bounded: at most [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes of acks are
+    /// appended, and when more tombstones are held than fit, the window start advances with `round`
+    /// so every tombstone's ack is resent within a bounded number of rounds. The keys are sorted so
+    /// the window is deterministic across rounds (`HashSet` iteration order is not).
+    fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
         let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
         if keys.is_empty() {
             return 0;
         }
         keys.sort_unstable();
         let n = keys.len();
-        let budget = send_buf.len() + REACK_BYTE_BUDGET;
+        let budget = send_buf.len() + TOMBSTONE_ACK_RESEND_BYTE_BUDGET;
         let start = (round as usize) % n;
         let map_guard = self.map.read();
         let mut appended = 0;
@@ -1043,11 +1047,11 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
         }
         if budget_truncated {
             trace!(
-                "re-acked {appended}/{n} held tombstones this round (datagram byte budget reached); \
-                 the remainder rotates in on subsequent rounds"
+                "resent {appended}/{n} held-tombstone acks this round (datagram byte budget \
+                 reached); the remainder rotates in on subsequent rounds"
             );
         }
-        observability::record_tombstone_reacks(appended);
+        observability::record_tombstone_acks_resent(appended);
         appended
     }
 
@@ -1113,11 +1117,11 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                 // in a cluster of three or more nodes an ack can arrive before the deletion it
                 // acknowledges (the acking peer learned the deletion via a different gossip edge),
                 // and the dropped ack is not re-delivered by the sender. That is benign because
-                // every node re-acknowledges the tombstones it holds on every reconciliation round
-                // (see `start_reconciliation`): once we hold the tombstone, the next round's re-ack
-                // records the peer's acknowledgment. Pairwise reciprocation is no longer needed —
-                // the periodic re-ack is what makes the ack matrix complete across three or more
-                // replicas.
+                // every node resends the ack for the tombstones it holds on every reconciliation
+                // round (see `start_reconciliation`): once we hold the tombstone, the next round's
+                // ack resend records the peer's acknowledgment. Pairwise reciprocation is no longer
+                // needed — the periodic ack resend is what makes the ack matrix complete across
+                // three or more replicas.
                 if map_guard.get(&key).is_some_and(|v| v.is_tombstone()) {
                     guard.entry(key).or_default().insert(peer_ip, version);
                 } else {
@@ -1145,16 +1149,7 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                     .into_iter()
                     .map(Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    &*self.transport,
-                    &*self.codec,
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // The differing values are the bulk payload — a cold/empty peer pulls the whole dataset
             // here. Hand them to a rate-paced background task so the burst cannot overrun the
@@ -1256,16 +1251,7 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                     .fetch_add(apply_count, Ordering::Relaxed);
             }
             if !acks_to_send.is_empty() {
-                send_messages_to(
-                    &acks_to_send,
-                    &*self.transport,
-                    &*self.codec,
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&acks_to_send, &self.send_ports(), &peer, send_buf).await;
             }
         }
         // Value-only channel: answer a dateless mirror by diffing against the value-only
@@ -1291,16 +1277,7 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                     .into_iter()
                     .map(Message::ValueComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    &*self.transport,
-                    &*self.codec,
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
             // background task, exactly like the dated bulk path.
@@ -1468,6 +1445,19 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
     }
 }
 
+/// Bundles the outbound ports and per-node send state that a batched-message send needs: the
+/// [`Transport`] and [`Codec`] ports, the datagram authenticator, and the per-sender replay
+/// counter. These four pieces always travel together into [`send_messages_to`] and
+/// [`send_messages_paced`] from both call sites (the engine and
+/// [`ReconcileMirror`](crate::mirror::ReconcileMirror)); bundling them into one reference keeps
+/// each helper's signature short instead of repeating the same four parameters everywhere.
+pub(crate) struct SendPorts<'a, T: ?Sized, C> {
+    pub(crate) transport: &'a T,
+    pub(crate) codec: &'a C,
+    pub(crate) authenticator: &'a auth::Authenticator,
+    pub(crate) sender_counter: &'a replay::SenderCounter,
+}
+
 pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
     transport: &T,
     authenticator: &auth::Authenticator,
@@ -1507,10 +1497,7 @@ pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
 /// see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
 pub(crate) async fn send_messages_to<K, V, P, T, C>(
     messages: &[Message<K, V, P>],
-    transport: &T,
-    codec: &C,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T, C>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) where
@@ -1520,17 +1507,7 @@ pub(crate) async fn send_messages_to<K, V, P, T, C>(
     T: Transport<Addr = SocketAddr> + ?Sized,
     C: Codec,
 {
-    send_messages_paced(
-        messages,
-        transport,
-        codec,
-        authenticator,
-        sender_counter,
-        peer,
-        send_buf,
-        None,
-    )
-    .await
+    send_messages_paced(messages, ports, peer, send_buf, None).await
 }
 
 /// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
@@ -1542,13 +1519,9 @@ pub(crate) async fn send_messages_to<K, V, P, T, C>(
 /// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
 /// reception of every other peer for the duration of the transfer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_messages_paced<K, V, P, T, C>(
     messages: &[Message<K, V, P>],
-    transport: &T,
-    codec: &C,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T, C>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
     rate: Option<usize>,
@@ -1561,22 +1534,23 @@ pub(crate) async fn send_messages_paced<K, V, P, T, C>(
 {
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
-    let max_payload = BUFFER_SIZE - authenticator.overhead();
+    let max_payload = BUFFER_SIZE - ports.authenticator.overhead();
     send_buf.clear();
     // Anchor the pacing schedule once, so it self-corrects rather than drifting per datagram.
     let start = Instant::now();
     let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
-        codec
+        ports
+            .codec
             .encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
             if let Err(err) = send_to_retry(
-                transport,
-                authenticator,
-                sender_counter,
+                ports.transport,
+                ports.authenticator,
+                ports.sender_counter,
                 &send_buf[..last_size],
                 *peer,
             )
@@ -1592,7 +1566,14 @@ pub(crate) async fn send_messages_paced<K, V, P, T, C>(
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    if let Err(err) = send_to_retry(transport, authenticator, sender_counter, send_buf, *peer).await
+    if let Err(err) = send_to_retry(
+        ports.transport,
+        ports.authenticator,
+        ports.sender_counter,
+        send_buf,
+        *peer,
+    )
+    .await
     {
         warn!("failed to send final datagram to {peer}: {err}; continuing");
     } else {
@@ -1924,11 +1905,11 @@ mod causal_stability {
     /// tombstone is otherwise never re-advertised once two replicas agree on it).
     /// Deterministic, socket-free: insert a tombstone, run one round, and inspect the datagram.
     #[tokio::test]
-    async fn reconciliation_round_reacks_held_tombstones() {
+    async fn reconciliation_round_resends_acks_for_held_tombstones() {
         let eng = engine("127.0.0.66").await;
         let live_key = 1;
         let tombstone_key = 2;
-        // A live value must NOT be re-acked; a tombstone must be.
+        // A live value's ack must NOT be resent; a tombstone's must be.
         eng.just_insert(live_key, Entry::present(Timestamp::new(1, 0, 0), 11));
         let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
         let expected_version = version_hash(&tombstone);
@@ -1948,11 +1929,11 @@ mod causal_stability {
 
         assert!(
             acks.contains(&(tombstone_key, expected_version)),
-            "the round must re-ack the held tombstone (key {tombstone_key}); got {acks:?}"
+            "the round must resend the ack for the held tombstone (key {tombstone_key}); got {acks:?}"
         );
         assert!(
             !acks.iter().any(|(k, _)| *k == live_key),
-            "a live value must never be re-acked; got {acks:?}"
+            "a live value's ack must never be resent; got {acks:?}"
         );
     }
 
@@ -2064,7 +2045,7 @@ mod pacing {
     use crate::auth::Authenticator;
     use crate::codec::BincodeCodec;
     use crate::reconcilable::State;
-    use crate::reconcile_engine::{send_messages_paced, Message};
+    use crate::reconcile_engine::{send_messages_paced, Message, SendPorts};
     use crate::transport::UdpTransport;
 
     type Msg = Message<u64, Vec<u8>, State<u8>>;
@@ -2084,20 +2065,16 @@ mod pacing {
         let codec = BincodeCodec::new();
         let authenticator = Authenticator::new(None, false);
         let sender_counter = crate::replay::SenderCounter::new();
+        let ports = SendPorts {
+            transport: &transport,
+            codec: &codec,
+            authenticator: &authenticator,
+            sender_counter: &sender_counter,
+        };
         let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
         let mut send_buf = Vec::new();
         let start = Instant::now();
-        send_messages_paced(
-            messages,
-            &transport,
-            &codec,
-            &authenticator,
-            &sender_counter,
-            &peer,
-            &mut send_buf,
-            rate,
-        )
-        .await;
+        send_messages_paced(messages, &ports, &peer, &mut send_buf, rate).await;
         start.elapsed()
     }
 

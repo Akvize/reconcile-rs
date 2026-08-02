@@ -28,7 +28,7 @@
 //! | `reconcile_send_failures_total` | counter | sends that exhausted all retries |
 //! | `reconcile_datagrams_dropped_total` | counter (`reason` label) | dropped datagrams |
 //! | `reconcile_rounds_total` | counter | reconciliation rounds initiated |
-//! | `reconcile_tombstone_reacks_total` | counter | tombstone re-acknowledgments emitted on rounds |
+//! | `reconcile_tombstone_acks_resent_total` | counter | tombstone acks resent on reconciliation rounds |
 //! | `reconcile_round_duration_seconds` | histogram | `start_reconciliation` wall time |
 //! | `reconcile_handle_messages_duration_seconds` | histogram | `handle_messages` wall time |
 
@@ -48,7 +48,7 @@ mod imp {
     pub(crate) const SEND_FAILURES_TOTAL: &str = "reconcile_send_failures_total";
     pub(crate) const DATAGRAMS_DROPPED_TOTAL: &str = "reconcile_datagrams_dropped_total";
     pub(crate) const ROUNDS_TOTAL: &str = "reconcile_rounds_total";
-    pub(crate) const TOMBSTONE_REACKS_TOTAL: &str = "reconcile_tombstone_reacks_total";
+    pub(crate) const TOMBSTONE_ACKS_RESENT_TOTAL: &str = "reconcile_tombstone_acks_resent_total";
     pub(crate) const ROUND_DURATION_SECONDS: &str = "reconcile_round_duration_seconds";
     pub(crate) const HANDLE_DURATION_SECONDS: &str = "reconcile_handle_messages_duration_seconds";
 
@@ -102,8 +102,8 @@ mod imp {
     }
 
     #[inline]
-    pub(crate) fn record_tombstone_reacks(n: usize) {
-        counter!(TOMBSTONE_REACKS_TOTAL).increment(n as u64);
+    pub(crate) fn record_tombstone_acks_resent(n: usize) {
+        counter!(TOMBSTONE_ACKS_RESENT_TOTAL).increment(n as u64);
     }
 
     #[inline]
@@ -153,9 +153,9 @@ mod imp {
         );
         describe_counter!(ROUNDS_TOTAL, Unit::Count, "Reconciliation rounds initiated");
         describe_counter!(
-            TOMBSTONE_REACKS_TOTAL,
+            TOMBSTONE_ACKS_RESENT_TOTAL,
             Unit::Count,
-            "Tombstone re-acknowledgments emitted on reconciliation rounds"
+            "Tombstone acks resent on reconciliation rounds"
         );
         describe_histogram!(
             ROUND_DURATION_SECONDS,
@@ -204,7 +204,7 @@ mod imp {
     pub(crate) fn record_reconcile_round() {}
 
     #[inline(always)]
-    pub(crate) fn record_tombstone_reacks(_n: usize) {}
+    pub(crate) fn record_tombstone_acks_resent(_n: usize) {}
 
     #[inline(always)]
     pub(crate) fn record_round_duration(_start: Option<Instant>) {}

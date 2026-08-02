@@ -71,7 +71,7 @@ use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
 use crate::reconcilable::{Entry, State};
-use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
+use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, SendPorts};
 use crate::reconcile_store::Config;
 use crate::replay;
 use crate::transport::UdpTransport;
@@ -352,16 +352,15 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     .into_iter()
                     .map(Message::<K, WireDated<V>, State<V>>::ValueComparisonItem)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    &UdpTransport::new(Arc::clone(&self.socket)),
-                    &BincodeCodec::new(),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                let transport = UdpTransport::new(Arc::clone(&self.socket));
+                let codec = BincodeCodec::new();
+                let ports = SendPorts {
+                    transport: &transport,
+                    codec: &codec,
+                    authenticator: &self.authenticator,
+                    sender_counter: &self.sender_counter,
+                };
+                send_messages_to(&messages, &ports, &peer, send_buf).await;
             }
         }
     }
