@@ -18,32 +18,20 @@
 
 ## 1. Objective and relevance vs the SOTA
 
-### 1.1 The stated objective
+### 1.1–1.2 The objective, and the trade-off it actually makes
 
-Per the README: *"a scalable Web service with a non-persistent and eventually consistent key-value
-store [...] avoiding any latency related to using an external store such as Redis. All the data is
-available locally on all instances"*. In other words: **each web-service replica embeds the full
-dataset in memory**, replicas reconcile peer-to-peer, and the user is notified of changes via an
-insertion hook.
+Each web-service replica embeds the full dataset in memory, replicas reconcile peer-to-peer, and the
+application is notified of changes through an insertion hook. The niche is **real but narrow**:
+there is no mature Rust/Tokio equivalent of Hazelcast's *Replicated Map* or Akka/Pekko's
+*Distributed Data* (all JVM), and for a read-heavy service with a moderate working set and rare
+conflicts (feature flags, routing tables, presence, configuration) that is genuinely attractive.
 
-### 1.2 Relevance and real niche
+The "scalable / avoid Redis" framing nevertheless inverts two trade-offs:
 
-The niche is **real but narrow**: there is no mature equivalent in the Rust/Tokio ecosystem of
-Hazelcast's *Replicated Map* or Akka/Pekko's *Distributed Data* (all JVM). For a **read-heavy** Rust
-web service with a moderate working set and rare/benign conflicts (feature flags, routing tables,
-presence, configuration), an in-memory replicated cache with local O(log n) reads and no Redis
-dependency is legitimately attractive.
-
-**But the "scalable / avoid Redis" positioning inverts the real trade-offs:**
-
-- The latency argument only holds for **reads**. Writes are only *eventually* visible on peers;
-  "avoiding Redis latency" actually amounts to **trading a synchronous consistent store for an
-  asynchronous inconsistent one** — a consistency-model change dressed up as a latency optimization.
-- The topology **does not scale by construction**: full dataset on every replica → memory bounded by
-  the smallest node, and **every write is amplified to all nodes** → write throughput *decreases* as
-  replicas are added. This is the documented failure mode of replicated caches (Oracle Coherence,
-  Apache Ignite). Pekko Distributed Data explicitly recommends **not exceeding ~100,000 entries** in
-  full replication — to be compared with the README's "millions of elements" promise.
+| Claim | What is actually traded |
+|---|---|
+| "avoids Redis latency" | Holds for **reads only**. Writes are only *eventually* visible on peers — a synchronous consistent store is swapped for an asynchronous inconsistent one. A consistency-model change dressed as a latency optimisation. |
+| "scalable" | Full replication **does not scale by construction**: memory is bounded by the smallest node, and every write is amplified to all nodes, so write throughput *decreases* as replicas are added. The documented failure mode of replicated caches (Oracle Coherence, Apache Ignite). Pekko Distributed Data recommends **not exceeding ~100 000 entries** under full replication — against the README's "millions of elements". |
 
 ### 1.3 The SOTA of set reconciliation (sourced)
 
@@ -61,63 +49,57 @@ Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP
 (CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
 **Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, RBSR is the **worst
-family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a single
+family on latency** (`O(log n)` sequential RTTs) whereas **Rateless IBLT** finds the diff in a single
 streaming exchange, with no *d* estimation, and with adversarial robustness — it is the **current
 SOTA choice** for this use case.
 
+```mermaid
+flowchart TD
+  q1{"Is the set opaque,<br>or ordered and range-queryable?"}
+  q1 -->|"ordered — partial sync<br>by key range matters"| q2{"Is d known<br>or estimable?"}
+  q1 -->|opaque| q3{"Is d known<br>or estimable?"}
+  q2 -->|"no — self-adapting needed"| rbsr["<b>RBSR</b><br>this crate<br>O(log n) sequential RTTs"]
+  q2 -->|yes| hyb["<b>hybrid</b>: RBSR to localise coarsely<br>+ a sketch to drain leaves in one shot"]
+  q3 -->|no| riblt["<b>Rateless IBLT</b><br>SIGCOMM 2024<br>one streaming exchange"]
+  q3 -->|"yes, with a capacity bound"| mini["<b>minisketch / PinSketch</b><br>optimal bytes, O(d²) decode"]
+```
+
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
-Important panel nuance: **HRTree does NOT belong to the Merkle Search Tree (MST) / prolly-tree
-family**, and that is a point in its favor. MST (Auvolat & Taïani, SRDS 2019) and prolly-trees
-(Dolt/Noms) *need* **insertion-order independence** because they diff by comparing the hashes of the
-tree's **internal nodes**. HRTree, by contrast, diffs **value-defined ranges**: the cumulative
-fingerprint over `[a,b)` is identical on two peers iff the *content* of the range is identical,
-**regardless of each one's B-tree shape**. HRTree therefore obtains the convergence guarantee that
-MST/prolly pay for with history-independence, **without paying for it** — and thereby escapes the MST
-"leading-zeros" attack. The B-tree's order-dependence is therefore **not** a defect here.
+**HRTree does not belong to the Merkle Search Tree / prolly-tree family**, and that is a point in
+its favour: those *need* insertion-order independence because they diff **internal node hashes**,
+whereas HRTree diffs **value-defined ranges** and so needs none. Developed in §2.3 #1.
 
 ### 1.5 The SOTA of consistency and conflict resolution
 
-- **Physical-clock LWW**: a documented anti-pattern (Jepsen/Kingsbury "The trouble with
-  timestamps"; real NTP incidents). The "winner" is the node with the most-advanced clock, not the
-  causally latest write → silent lost update.
-- **Minimal SOTA fix**: **Hybrid Logical Clocks (HLC, Kulkarni 2014)** — 64-bit drop-in, monotonic,
-  respects causality, divergence bounded by ε; adopted by CockroachDB and MongoDB.
-- **Tie-break**: must be a **deterministic total order** (e.g. `(HLC, node_id)`). The current `keep
-  local on equal` is non-convergent.
-- **Tombstone GC**: the safe criterion is **causal stability** (acknowledgment by all replicas), not
-  a wall-clock timer. Even Cassandra's `gc_grace_seconds` (default **10 days**) is safe *only on the
-  condition* that a complete repair covers the window — i.e. no fixed duration, short or long, is
-  sufficient on its own (ScyllaDB makes this explicit with repair-based GC). The pre-fix **60 s**
-  wall-clock purge could not honor that precondition; GC is now gated on causal stability (F4/#109).
+| Question | State of the art |
+|---|---|
+| Physical-clock LWW? | A documented anti-pattern (Kingsbury, *The trouble with timestamps*; real NTP incidents). The "winner" is the node with the most-advanced clock, not the causally latest write → silent lost update. |
+| Minimal fix | **Hybrid Logical Clocks** (Kulkarni 2014): 64-bit drop-in, monotonic, respects causality, divergence bounded by ε. Adopted by CockroachDB and MongoDB. |
+| Tie-break | Must be a **deterministic total order**, e.g. `(HLC, node_id)`. "Keep local on equal" is non-convergent. |
+| Tombstone GC | The safe criterion is **causal stability** (acknowledgment by all replicas), never a wall-clock timer. Even Cassandra's `gc_grace_seconds` (default 10 days) is safe *only if* a complete repair covers the window — no fixed duration suffices on its own, which ScyllaDB makes explicit with repair-based GC. The pre-fix 60 s purge could not honour that precondition (F4/#109). |
 
 ### 1.6 The embedded in-memory data grid (IMDG) use case
 
-Framed as a product rather than an algorithm, reconcile-rs is an **embedded in-memory data grid**:
-the state lives in-process, next to the application, fully replicated across a fleet of equal nodes.
-Its category is the **masterless / AP / gossip** corner of the IMDG space — adjacent to Hazelcast,
-Apache Ignite, Oracle Coherence and Infinispan (all JVM, all a separate cluster to operate), but as
-a single embeddable Rust library. The pitch is "replicated state without standing up Redis/etcd":
+Framed as a product rather than an algorithm, this is an **embedded in-memory data grid** — the
+masterless / AP / gossip corner of the space occupied by Hazelcast, Apache Ignite, Oracle Coherence
+and Infinispan (all JVM, all a separate cluster to operate), as a single embeddable Rust library.
+The pitch is "replicated state without standing up Redis/etcd":
 
-- **Reads are local** — an in-process lookup, no network hop or (de)serialization. This is the one
-  place reconcile-rs is unambiguously faster than a networked store; it is a *read-latency* and
-  *operational-simplicity* play, not a write-path or consistency improvement.
-- **Redundancy, not sharding** — full replication means any surviving node holds the whole dataset,
-  so the grid tolerates losing nodes; the flip side is §1.2's memory / write-amplification ceiling.
-- **Partition tolerance with automatic convergence** — nodes keep serving while partitioned and
-  re-converge by anti-entropy on heal, with no manual conflict resolution (LWW).
+| Property | Consequence |
+|---|---|
+| **Reads are local** | An in-process lookup: no network hop, no (de)serialization. The one place this is unambiguously faster than a networked store — a *read-latency* and *operational-simplicity* play, not a write-path or consistency improvement. |
+| **Redundancy, not sharding** | Any surviving node holds the whole dataset, so the grid tolerates losing nodes. The flip side is §1.1–1.2's memory and write-amplification ceiling. |
+| **Partition tolerance** | Nodes keep serving while partitioned and re-converge by anti-entropy on heal, with no manual conflict resolution. |
 
-**When this is the right tool:** a read-heavy, RAM-resident working set on a fragile/commodity node
-grid where eliminating the store round-trip matters more than write throughput or strong
-consistency, and where losing a node or two must not lose data. **When it is not:** see §1.1–§1.2
-and the LWW caveats in §1.5 — counters, ledgers, strong consistency, datasets beyond one node's RAM,
-or high same-key write contention.
+Right tool for a read-heavy, RAM-resident working set on commodity nodes where eliminating the store
+round-trip matters more than write throughput or strong consistency. Wrong tool per §1.1–1.2 and the
+LWW caveats in §1.5.
 
-**Path to best-of-breed.** Benchmarking against this use case surfaced concrete, tracked work: bulk
-cold-sync throughput and loss recovery (#168, #169), per-entry memory overhead (#170), point-read
-indexing (#171), snapshot cadence (#172), bulk-build throughput (#173), and a comparative benchmark
-suite (#174). Closing these is what moves reconcile-rs from the "real but narrow" niche of §1.2 to a
-credible Rust IMDG.
+**Path to best-of-breed.** Benchmarking surfaced tracked work: cold-sync throughput and loss
+recovery (#168, #169), per-entry memory (#170), point-read indexing (#171), snapshot cadence (#172),
+bulk-build throughput (#173), a comparative suite (#174). Closing these is what moves the crate from
+the narrow niche of §1.1–1.2 to a credible Rust IMDG.
 
 ---
 
@@ -132,6 +114,22 @@ credible Rust IMDG.
 > (arXiv:2603.19820) as the backend that range-based reconciliation (RBSR, Meyer 2023) needs. Its
 > **true peer group** = the other diffable structures; its **true algorithmic competitor** = the
 > other set-reconciliation families.
+
+```mermaid
+flowchart TD
+  root["diffable ordered stores"]
+  root --> node["<b>diff by node identity</b><br>compares internal node hashes<br>⇒ <i>requires</i> history-independence"]
+  root --> range["<b>diff by value-defined range</b><br>compares an aggregate over [a, b)<br>⇒ history-independence <i>not required</i>"]
+  node --> mst["Merkle Search Tree<br>level = hash(key)<br>Bluesky/atproto"]
+  node --> prolly["prolly tree<br>rolling-hash chunks<br>Dolt/Noms"]
+  node --> radix["Merkle radix / SMT<br>prefix bits<br>Ethereum"]
+  node --> fixed["fixed-depth Merkle<br>token ranges<br>Cassandra — over-streams"]
+  range --> rsos["<b>RSOS</b> — B+tree + subtree counts<br>+ composable summary"]
+  rsos --> hr["<b>HRTree</b> (this crate)<br>in-memory"]
+  rsos --> ael["AELMDB, 2026<br>persistent, memory-mapped"]
+  hr:::self
+  classDef self fill:#2da44e,color:#fff,stroke:#2da44e
+```
 
 ### 2.1 Competitors at the "diffable data structure" level
 
