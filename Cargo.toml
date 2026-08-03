@@ -17,6 +17,8 @@ repository = "https://github.com/Akvize/reconcile-rs"
 exclude = [
     "pre-commit",
     "CONTRIBUTING.md",
+    "AGENTS.md",
+    "CLAUDE.md",
     "examples/k8s/",
     "docs/ARCHITECTURE.md",
     "docs/SOTA.md",

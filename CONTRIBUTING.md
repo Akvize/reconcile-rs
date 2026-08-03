@@ -66,6 +66,13 @@ cargo llvm-cov report                              # reuse the previous run
 CI also runs `cargo doc` under `-D warnings`, which catches failures `cargo build` and `cargo
 clippy` do not. Run it locally before pushing.
 
+## Conventions
+
+[`AGENTS.md`](AGENTS.md) holds the working rules — the full CI gate and its two traps, the comment
+and documentation policy, and what to read before touching a public signature or an invariant. It
+is written for coding agents, and it applies to humans identically. `CLAUDE.md` just imports it, so
+there is one copy.
+
 ## Where to read next
 
 [`CONTRACT.md`](docs/CONTRACT.md) for what we promise (read this before changing a public signature, a
