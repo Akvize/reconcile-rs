@@ -1229,7 +1229,7 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                             // stamp comparison decides "would merging change state?" on its own.
                             // Comparing stamps rather than merged values avoids cloning the value
                             // on this hot path and is why `Value` needs no `PartialEq` bound. The
-                            // equivalence holds *only* under LWW — see ARCHITECTURE.md §7 D5.
+                            // equivalence holds *only* under LWW — see docs/ARCHITECTURE.md §7 D5.
                             if remote_v.stamp > local_v.stamp {
                                 to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {

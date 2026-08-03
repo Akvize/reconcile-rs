@@ -10,7 +10,7 @@
 //!
 //! [`start_diff`] and [`diff_round`] are free functions over the concrete [`HRTree`]; they are
 //! the *how* of reconciliation, an implementation detail of the domain, not part of the crate's
-//! public surface (see `ARCHITECTURE.md` §3.7). The whole module is `pub(crate)`, so although the
+//! public surface (see `docs/ARCHITECTURE.md` §3.5). The whole module is `pub(crate)`, so although the
 //! items below are declared `pub`, they are unreachable through the public path — the gated
 //! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-hash
 //! queries the algorithm relies on ([`HRTree::hash`], [`HRTree::insertion_position`],

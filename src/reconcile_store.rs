@@ -201,7 +201,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
     /// which the caller has already done, or does not need to do at all. Two uses motivate this
-    /// seam (`ARCHITECTURE.md` §7 D2):
+    /// seam (`docs/ARCHITECTURE.md` §7 D2):
     ///
     /// - a different datagram transport, e.g. QUIC unreliable datagrams (RFC 9221), whose shape
     ///   fits this trait;
@@ -674,7 +674,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// shows up only as a `warn!` on the send path.
     ///
     /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
-    /// `io::Result` on every write. See invariant 9 and `ARCHITECTURE.md` §7 D3, tracked in
+    /// `io::Result` on every write. See invariant 9 and `docs/ARCHITECTURE.md` §7 D3, tracked in
     /// [issue #230](https://github.com/Akvize/reconcile-rs/issues/230). Keep values well clear of
     /// the ceiling — and well clear of the network MTU, since an IP-fragmented datagram is lost
     /// entirely if any fragment is.

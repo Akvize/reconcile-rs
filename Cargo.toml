@@ -11,15 +11,17 @@ repository = "https://github.com/Akvize/reconcile-rs"
 # package without serving consumers of the crate. (Relative links to these from README and
 # CONTRACT.md still resolve, because crates.io rewrites them to the repository.)
 #
-# CONTRACT.md is deliberately NOT excluded: it states what the crate promises, what it asks of the
-# caller, and what may change without warning. That is exactly what a consumer needs, so it ships.
+# docs/CONTRACT.md and docs/GLOSSARY.md are deliberately NOT excluded. The contract states what the
+# crate promises, what it asks of the caller, and what may change without warning; the glossary
+# defines the vocabulary the API documentation uses. Both are what a consumer needs, so both ship.
 exclude = [
     "pre-commit",
     "CONTRIBUTING.md",
     "examples/k8s/",
-    "ARCHITECTURE.md",
-    "SOTA.md",
-    "PROGRESS.md",
+    "docs/ARCHITECTURE.md",
+    "docs/SOTA.md",
+    "docs/PROGRESS.md",
+    "docs/README.md",
     # MUST NOT ship: it sets `--cfg reconcile_internal_testing`, which gates the test-only
     # `reconcile::testing` seam. Packaging it would let that cfg leak into a consumer's build of the
     # crate, re-exposing internals the move off the Cargo feature was meant to hide.

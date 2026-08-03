@@ -68,7 +68,7 @@ clippy` do not. Run it locally before pushing.
 
 ## Where to read next
 
-[`CONTRACT.md`](./CONTRACT.md) for what we promise (read this before changing a public signature, a
-wire byte or a disk byte) · [`PROGRESS.md`](./PROGRESS.md) for current status ·
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design, invariants and decision ledger ·
-[`GLOSSARY.md`](./GLOSSARY.md) for vocabulary · [`SOTA.md`](./SOTA.md) for the literature.
+[`CONTRACT.md`](docs/CONTRACT.md) for what we promise (read this before changing a public signature, a
+wire byte or a disk byte) · [`PROGRESS.md`](docs/PROGRESS.md) for current status ·
+[`ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design, invariants and decision ledger ·
+[`GLOSSARY.md`](docs/GLOSSARY.md) for vocabulary · [`SOTA.md`](docs/SOTA.md) for the literature.

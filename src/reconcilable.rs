@@ -24,7 +24,7 @@
 /// regardless of when (or on which node) each last wrote it. This is what lets a dateless
 /// [`ReconcileMirror`](crate::mirror::ReconcileMirror) and a dated
 /// [`ReconcileStore`](crate::reconcile_store::ReconcileStore) converge over the shared range-diff
-/// protocol without the mirror ever storing timestamps (invariant #8 in `ARCHITECTURE.md` §5).
+/// protocol without the mirror ever storing timestamps (invariant #8 in `docs/ARCHITECTURE.md` §5).
 ///
 /// A dated [`Entry`] deliberately hashes **with** its stamp (required by the engine's
 /// `version_hash` for the causal-stability acks), while its `State` projection hashes the value
@@ -76,7 +76,7 @@ impl<V> State<V> {
 /// any totally-ordered stamp.
 ///
 /// Its [`Hash`] covers **both** `stamp` and `state`, so `version_hash` distinguishes two tombstones
-/// written at different times (invariant #7 in `ARCHITECTURE.md` §5). Contrast [`State`], whose hash
+/// written at different times (invariant #7 in `docs/ARCHITECTURE.md` §5). Contrast [`State`], whose hash
 /// is value-only.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Entry<T, V> {

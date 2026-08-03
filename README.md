@@ -38,10 +38,10 @@ let hit = store.get(&key);           // in-process read, no network hop
 | Property | Value |
 |---|---|
 | Replication | full (every node holds everything) — redundancy, not sharding |
-| Consistency | [strong eventual](GLOSSARY.md#5-consistency), last-write-wins over a [Hybrid Logical Clock](https://cse.buffalo.edu/tech-reports/2014-04.pdf) |
+| Consistency | [strong eventual](docs/GLOSSARY.md#5-consistency), last-write-wins over a [Hybrid Logical Clock](https://cse.buffalo.edu/tech-reports/2014-04.pdf) |
 | Reads | local, `O(log n)`, no network hop, no deserialization |
 | Reconciliation | RBSR: `O(d log n)` bytes, `⌈log₁₆ n⌉` sequential round trips |
-| Deletion | tombstones, collected once [causally stable](GLOSSARY.md#3-the-protocol) |
+| Deletion | tombstones, collected once [causally stable](docs/GLOSSARY.md#3-the-protocol) |
 | Transport | UDP datagrams, optional per-datagram MAC and AEAD |
 | Durability | pluggable (`Persistence`), in-memory by default |
 | MSRV | 1.85 — a bump is a *minor* version increment |
@@ -49,12 +49,12 @@ let hit = store.get(&key);           // in-process read, no network hop
 | Good fit | Wrong tool |
 |---|---|
 | read-heavy access that must be fast and local | counters, quotas, rate limits — LWW overwrites, it does not sum |
-| a working set that fits in RAM on every node | datasets beyond one node's RAM ([D7](ARCHITECTURE.md#d7--larger-than-ram-datasets-are-permanently-out-of-scope)) |
+| a working set that fits in RAM on every node | datasets beyond one node's RAM ([D7](docs/ARCHITECTURE.md#d7--larger-than-ram-datasets-are-permanently-out-of-scope)) |
 | rare or benign same-key write conflicts | ledgers, transactions, strong consistency |
 | no separate datastore to operate | collaborative text editing — use a sequence CRDT |
 | must keep serving across partitions | high same-key write contention |
 
-Memory and write fan-out grow with the dataset *and* the node count. [`SOTA.md`](SOTA.md) §1.1–1.2
+Memory and write fan-out grow with the dataset *and* the node count. [`SOTA.md`](docs/SOTA.md) §1.1–1.2
 has the ceiling, §1.6 the data-grid positioning.
 
 ## How a write converges
@@ -78,17 +78,19 @@ sequenceDiagram
 
 Equality and emptiness are decided on the range **size**, never on the fingerprint. A non-empty
 range can legitimately fingerprint to zero, so comparing hashes alone would silently lose data
-([invariant 3](ARCHITECTURE.md#5-invariants)).
+([invariant 3](docs/ARCHITECTURE.md#5-invariants)).
 
-## Documentation map
+## Documentation
+
+Full set in [`docs/`](docs/).
 
 | Document | Contents |
 |---|---|
-| [`CONTRACT.md`](CONTRACT.md) | What the crate promises, what it asks of you, what it may change. **Normative.** |
-| [`PROGRESS.md`](PROGRESS.md) | Living status: findings, maturity checklist, roadmap. |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Module map, ports & adapters, invariants, decision ledger. |
-| [`SOTA.md`](SOTA.md) | Field positioning, competitor audit, literature glossary, bibliography. |
-| [`GLOSSARY.md`](GLOSSARY.md) | This project's own vocabulary. |
+| [`CONTRACT.md`](docs/CONTRACT.md) | What the crate promises, what it asks of you, what it may change. **Normative.** |
+| [`PROGRESS.md`](docs/PROGRESS.md) | Living status: findings, maturity checklist, roadmap. |
+| [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Module map, ports & adapters, invariants, decision ledger. |
+| [`SOTA.md`](docs/SOTA.md) | Field positioning, competitor audit, literature glossary, bibliography. |
+| [`GLOSSARY.md`](docs/GLOSSARY.md) | This project's own vocabulary. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release notes and the 0.3.0 break policy. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev container, hooks, coverage. |
 | [docs.rs](https://docs.rs/reconcile/latest/reconcile/) | API reference. |
@@ -116,10 +118,10 @@ let config = Config::default().with_insecure_no_key();          // deliberate ke
 | AEAD | `encryption` | `nonce ‖ ciphertext(hdr ‖ payload) ‖ tag`, [XChaCha20-Poly1305] | 56 B | integrity, authenticity, confidentiality, anti-replay |
 
 `hdr` is the 16-byte per-datagram anti-replay header. Exact byte layouts and the resulting payload
-budgets are in [`CONTRACT.md` §6](CONTRACT.md#6-wire).
+budgets are in [`CONTRACT.md` §6](docs/CONTRACT.md#6-wire).
 
 Every node must share the key **and** be built with the same backend. Datagrams are verified
-*before* deserialization ([invariant 5](ARCHITECTURE.md#5-invariants)). The optional `zeroize`
+*before* deserialization ([invariant 5](docs/ARCHITECTURE.md#5-invariants)). The optional `zeroize`
 feature wipes the key on drop.
 
 Out of scope: per-peer identity, forward secrecy, key rotation. The trust model is one shared
@@ -132,7 +134,7 @@ it. Replay is benign for idempotent LWW reconciliation, and is hardened separate
 ## Persistence
 
 Losing tombstones on restart is a **correctness** hazard, not just a durability one: the node
-rejoins as a fresh replica and can [resurrect](GLOSSARY.md#1-domain-types-and-values) deleted values.
+rejoins as a fresh replica and can [resurrect](docs/GLOSSARY.md#1-domain-types-and-values) deleted values.
 So every store always owns a backend. Only the implementation varies.
 
 | Backend | Survives restart |
@@ -212,7 +214,7 @@ Two properties make that safe by construction:
   traffic, never silent divergence.
 - **Discovery never grants membership.** Membership gates tombstone GC and is earned only by an
   authenticated dated datagram, so an unverified or spoofed address cannot block collection
-  ([invariant 6](ARCHITECTURE.md#5-invariants)). A pod absent from DNS for
+  ([invariant 6](docs/ARCHITECTURE.md#5-invariants)). A pod absent from DNS for
   `discovery_miss_threshold` successful rounds is decommissioned. A DNS *failure* is skipped and
   never counts as a miss.
 
@@ -242,7 +244,7 @@ Each dated node keeps the projection alongside its dated map, so the dated↔dat
 format are untouched. A mirror never acknowledges tombstones and is never admitted to membership, so
 it cannot hold back another node's GC. It is a **sink, not a source**: it always integrates and never
 sends authoritative values. That integration is a plain overwrite, so it is correct **only** under
-last-write-wins ([D9](ARCHITECTURE.md#d9--reconcilemirror-is-documented-as-last-write-wins-only)).
+last-write-wins ([D9](docs/ARCHITECTURE.md#d9--reconcilemirror-is-documented-as-last-write-wins-only)).
 
 ```rust,ignore
 let mirror = ReconcileMirror::<String, String>::new(Config::default()).await?.with_seed(dated_addr);
@@ -292,8 +294,8 @@ finger trees, JFP 2006).
 
 It is **not** a Merkle tree. It diffs value-defined ranges, not node identity, so it needs no
 history-independence and the Merkle-Search-Tree leading-zeros attack does not apply
-([`SOTA.md` §2.3](SOTA.md)). The name is being retired for that reason
-([D1](ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-correctly-named)).
+([`SOTA.md` §2.3](docs/SOTA.md)). The name is being retired for that reason
+([D1](docs/ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-correctly-named)).
 
 <details><summary>Benchmarks (loopback; both axes logarithmic)</summary>
 
@@ -307,7 +309,7 @@ history-independence and the Merkle-Search-Tree leading-zeros attack does not ap
 
 Propagation is flat in `n` because insertions are pushed immediately. Only the full diff protocol
 scales with the collection. **These run on loopback**: a real network dominates every figure above
-(F16 in [`PROGRESS.md`](PROGRESS.md)).
+(F16 in [`PROGRESS.md`](docs/PROGRESS.md)).
 
 </details>
 
@@ -329,7 +331,7 @@ keep it distinct per node.
 
 LWW discards one of two genuinely concurrent writes by design. Recovering both needs version vectors
 or a CRDT, which is out of scope
-([D6](ARCHITECTURE.md#d6--conflict-resolution-stays-hardcoded-last-write-wins)). Background:
+([D6](docs/ARCHITECTURE.md#d6--conflict-resolution-stays-hardcoded-last-write-wins)). Background:
 [Kingsbury, *The trouble with timestamps*](https://aphyr.com/posts/299-the-trouble-with-timestamps)
 and [Kulkarni et al., *Hybrid Logical Clocks*](https://cse.buffalo.edu/tech-reports/2014-04.pdf).
 

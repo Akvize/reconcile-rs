@@ -146,7 +146,7 @@ fn advance(wall_ms: u64, counter: u32) -> (u64, u32) {
 /// the single physical-time read (`HlcClock` is the default adapter, a test adapter can be a
 /// deterministic stub). Pinning the timestamp to [`Timestamp`] — rather than a generic associated type —
 /// keeps the port object-safe and avoids leaking a clock type parameter into the engine, store and
-/// `Config` (`ARCHITECTURE.md` §3.4); the engine therefore holds the port as `Arc<dyn Clock>`.
+/// `Config` (`docs/ARCHITECTURE.md` §3.2); the engine therefore holds the port as `Arc<dyn Clock>`.
 pub trait Clock: Send + Sync + 'static {
     /// Mint a strictly-monotonic local timestamp for a write or an outgoing message.
     fn now(&self) -> Timestamp;

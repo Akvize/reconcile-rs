@@ -7,7 +7,7 @@
 // except according to those terms.
 
 //! The [`Transport`] port — the domain's datagram-I/O boundary — and its default
-//! [`UdpTransport`] adapter (`ARCHITECTURE.md` §3.4).
+//! [`UdpTransport`] adapter (`docs/ARCHITECTURE.md` §3.2).
 //!
 //! The reconciliation engine drives itself over this port instead of calling `tokio::net` directly,
 //! so the socket is a substitutable adapter. A test-only [`InMemoryTransport`] delivers datagrams
@@ -147,7 +147,7 @@ impl Transport for UdpTransport {
 ///
 /// Exposed (not test-gated) so downstream crates can test *their own* application against a
 /// deterministic cluster, which is the second of the two uses that earn `Transport` a public
-/// injection point — see `ARCHITECTURE.md` §7 D2.
+/// injection point — see `docs/ARCHITECTURE.md` §7 D2.
 pub use in_memory::{InMemoryNetwork, InMemoryTransport};
 
 mod in_memory {

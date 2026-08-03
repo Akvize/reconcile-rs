@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Generic-bound bundles (see ARCHITECTURE.md §3.8).
+//! Generic-bound bundles (see docs/ARCHITECTURE.md §3.3).
 //!
 //! The reconciliation machinery repeats the same multi-bound constraints on every key and value
 //! type parameter. [`Key`] and [`Value`] bundle those *data* bounds (Clone/Debug/Hash/…/`'static`)
@@ -16,7 +16,7 @@
 //! These bundles cover only the data bounds. *Entry semantics* (tombstone, timestamp, merge,
 //! projection) are not bounds at all: they are inherent methods on
 //! [`Entry`](crate::reconcilable::Entry) / [`State`](crate::reconcilable::State), so they travel
-//! with the concrete domain type rather than with the `V` bound (see `ARCHITECTURE.md` §3.8).
+//! with the concrete domain type rather than with the `V` bound (see `docs/ARCHITECTURE.md` §3.3).
 //!
 //! The [`Hash`] bound carries a correctness requirement: per-element fingerprints hash the key and
 //! value into one stream with no separator (see [`fingerprint::hash`](crate::fingerprint::hash)),
@@ -56,7 +56,7 @@ impl<T> Key for T where
 ///
 /// It also needs no `PartialEq`. Values are never compared: under last-write-wins the only
 /// question the receive path asks is whether the remote stamp is greater, which `Timestamp: Ord`
-/// answers (see `ARCHITECTURE.md` §7 D5 for why that equivalence holds, and what would break it).
+/// answers (see `docs/ARCHITECTURE.md` §7 D5 for why that equivalence holds, and what would break it).
 pub trait Value:
     Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static
 {
