@@ -306,7 +306,8 @@ surrounding system.
 > Lists **(a)** the competing structures and algorithms cited, **(b)** the acronyms and concepts of
 > distributed systems, cryptography, networking and complexity, and **(c)** the Rust tooling — all
 > **implementation-agnostic**. The repository's own identifiers, types and constants are intentionally
-> not catalogued here (see [§3.1](#g91)). `Fxx` references denote the original audit findings, whose
+> not catalogued here (see [§3.1](#g91)); they live in [`GLOSSARY.md`](./GLOSSARY.md), which
+> complements this section. `Fxx` references denote the original audit findings, whose
 > current status lives in [`PROGRESS.md`](./PROGRESS.md).
 
 <a id="g91"></a>

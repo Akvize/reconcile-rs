@@ -5,8 +5,12 @@
 >
 > - [`SOTA.md`](./SOTA.md) — state-of-the-art positioning, competitor audit, glossary and
 >   bibliography. Durable reference material; not updated as the code evolves.
-> - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the target architecture (hexagonal ports & adapters)
->   and the migration plan.
+> - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the target architecture (hexagonal ports & adapters),
+>   the migration plan, the load-bearing invariants (§5), and the **decision ledger** (§7) recording
+>   product and contract decisions with the reasoning that produced them.
+> - [`GLOSSARY.md`](./GLOSSARY.md) — this project's own vocabulary (domain types, protocol terms,
+>   architectural roles). Complements `SOTA.md` §3, which covers the implementation-agnostic
+>   literature instead.
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
