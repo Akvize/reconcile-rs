@@ -113,6 +113,7 @@ classDiagram
 | Consistency and replication vocabulary | [`SOTA.md` §3.2](./SOTA.md) |
 | Hashing and wire-level terms | [`SOTA.md` §3.3](./SOTA.md) |
 | Bibliography | [`SOTA.md` §4](./SOTA.md) |
+| What the crate promises, and what it asks of you | [`CONTRACT.md`](./CONTRACT.md) |
 | Decisions **D1**–**D12** | [`ARCHITECTURE.md` §7](./ARCHITECTURE.md#7-decision-ledger) |
 | Invariants **1**–**9** | [`ARCHITECTURE.md` §5](./ARCHITECTURE.md#5-invariants) |
 | Findings **Fxx** and current status | [`PROGRESS.md`](./PROGRESS.md) |

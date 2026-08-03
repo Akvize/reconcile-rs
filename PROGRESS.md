@@ -1,9 +1,10 @@
 # Project status — `reconcile-rs`
 
 > **Living document.** Where correctness, security and maturity actually stand, kept current as work
-> lands. Durable material lives elsewhere: positioning in [`SOTA.md`](./SOTA.md); design, invariants
-> and the decision ledger in [`ARCHITECTURE.md`](./ARCHITECTURE.md); vocabulary in
-> [`GLOSSARY.md`](./GLOSSARY.md). Migration execution is tracked in
+> lands. Durable material lives elsewhere: promises in [`CONTRACT.md`](./CONTRACT.md); positioning in
+> [`SOTA.md`](./SOTA.md); design, invariants and the decision ledger in
+> [`ARCHITECTURE.md`](./ARCHITECTURE.md); vocabulary in [`GLOSSARY.md`](./GLOSSARY.md).
+> Migration execution is tracked in
 > [#138](https://github.com/Akvize/reconcile-rs/issues/138).
 
 | | |

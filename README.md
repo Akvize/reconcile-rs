@@ -84,7 +84,8 @@ range can legitimately fingerprint to zero, so comparing hashes alone would sile
 
 | Document | Contents |
 |---|---|
-| [`PROGRESS.md`](PROGRESS.md) | Living status: findings, maturity checklist, roadmap. **Start here.** |
+| [`CONTRACT.md`](CONTRACT.md) | What the crate promises, what it asks of you, what it may change. **Normative.** |
+| [`PROGRESS.md`](PROGRESS.md) | Living status: findings, maturity checklist, roadmap. |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Module map, ports & adapters, invariants, decision ledger. |
 | [`SOTA.md`](SOTA.md) | Field positioning, competitor audit, literature glossary, bibliography. |
 | [`GLOSSARY.md`](GLOSSARY.md) | This project's own vocabulary. |
@@ -108,11 +109,14 @@ let config = Config::default().with_cluster_key(key).with_encryption();  // + co
 let config = Config::default().with_insecure_no_key();          // deliberate keyless: quiets the warning
 ```
 
-| Mode | Feature | Framing | Guarantees |
-|---|---|---|---|
-| keyless (default) | — | plaintext | none; loud startup warning |
-| MAC | `mac-blake3` (default) or `mac-hmac` | `payload ‖ tag` | integrity, authenticity |
-| AEAD | `encryption` | `nonce ‖ ciphertext ‖ tag`, [XChaCha20-Poly1305], +40 B | integrity, authenticity, confidentiality |
+| Mode | Feature | Framing | Overhead | Guarantees |
+|---|---|---|---|---|
+| keyless (default) | — | `payload` | 0 B | none; loud startup warning |
+| MAC | `mac-blake3` (default) or `mac-hmac` | `tag(hdr ‖ payload) ‖ hdr ‖ payload` | 48 B | integrity, authenticity, anti-replay |
+| AEAD | `encryption` | `nonce ‖ ciphertext(hdr ‖ payload) ‖ tag`, [XChaCha20-Poly1305] | 56 B | integrity, authenticity, confidentiality, anti-replay |
+
+`hdr` is the 16-byte per-datagram anti-replay header. Exact byte layouts and the resulting payload
+budgets are in [`CONTRACT.md` §6](CONTRACT.md#6-wire).
 
 Every node must share the key **and** be built with the same backend. Datagrams are verified
 *before* deserialization ([invariant 5](ARCHITECTURE.md#5-invariants)). The optional `zeroize`

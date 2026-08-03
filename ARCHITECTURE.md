@@ -1,7 +1,8 @@
 # reconcile-rs — Architecture
 
-The current architecture and the target: hexagonal, ports and adapters. Status is in
-[`PROGRESS.md`](./PROGRESS.md), field positioning in [`SOTA.md`](./SOTA.md), vocabulary in
+The current architecture and the target: hexagonal, ports and adapters. What the crate actually
+promises is in [`CONTRACT.md`](./CONTRACT.md), which is normative and wins over this file. Status is
+in [`PROGRESS.md`](./PROGRESS.md), field positioning in [`SOTA.md`](./SOTA.md), vocabulary in
 [`GLOSSARY.md`](./GLOSSARY.md).
 
 Published as `reconcile` **0.2.1**. The public API and the wire / on-disk formats are unstable;
