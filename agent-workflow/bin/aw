@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# `aw` — the CLI the bootstrap and exit skills drive.
+#
+# Keeps the skills free of shell plumbing and, more importantly, free of
+# project-specific knowledge: every subcommand probes the repo at runtime.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for cand in "$SCRIPT_DIR/../hooks/lib.sh" "$HOME/.claude/agent-workflow/hooks/lib.sh"; do
+  # shellcheck source=../hooks/lib.sh
+  [ -f "$cand" ] && { . "$cand"; break; }
+done
+command -v aw_state_dir >/dev/null 2>&1 || {
+  echo "aw: cannot locate hooks/lib.sh" >&2
+  exit 1
+}
+
+STATE_DIR="$(aw_state_dir "$PWD")"
+ROOT="$(aw_repo_root "$PWD")"
+
+_sid() {
+  [ -n "${AW_SESSION_ID:-}" ] && { printf '%s' "$AW_SESSION_ID"; return; }
+  [ -f "$STATE_DIR/current-session" ] && { head -1 "$STATE_DIR/current-session"; return; }
+  printf 'unknown'
+}
+_sdir() { aw_session_dir "$(_sid)" "$PWD"; }
+
+usage() {
+  cat <<'EOF'
+aw — agent-workflow session helper
+
+  aw note <kind> <message>   Append evidence to the session journal.
+                             kinds: friction | decision | anomaly | assumption |
+                                    unverified | scope | debt
+  aw journal                 Dump this session's journal.
+  aw diff                    What THIS session changed, vs the bootstrap baseline.
+  aw baseline                Show the recorded baseline.
+  aw verify                  Re-print the detected verification commands.
+  aw conventions             Re-print detected convention/lint sources.
+  aw secrets                 Scan session diff for credential-shaped strings.
+  aw deps                    Show dependency-manifest changes this session.
+  aw handoff <file>          Install <file> as the handoff for the next session.
+  aw done                    Mark the exit review complete (clears the nudge).
+  aw dir                     Print the session state directory.
+EOF
+}
+
+_base_sha() {
+  [ -f "$(_sdir)/baseline.env" ] || return 1
+  # shellcheck disable=SC1090
+  . "$(_sdir)/baseline.env" 2>/dev/null
+  printf '%s' "${base_sha:-}"
+}
+
+cmd="${1:-}"
+shift 2>/dev/null || true
+
+case "$cmd" in
+note)
+  kind="${1:-note}"; shift 2>/dev/null || true
+  aw_journal_append "$(_sdir)" "$kind" "$*"
+  echo "noted [$kind]"
+  ;;
+journal)
+  f="$(_sdir)/journal.jsonl"
+  [ -f "$f" ] && cat "$f" || echo "(no journal entries — bootstrap hook may not be installed)"
+  ;;
+diff)
+  base="$(_base_sha)"
+  if [ -z "$base" ] || [ "$base" = "none" ]; then
+    echo "(no baseline — showing working tree only)"
+    git -C "$ROOT" status --short 2>/dev/null
+    exit 0
+  fi
+  echo "== commits since baseline ${base:0:12} =="
+  git -C "$ROOT" log --oneline "$base..HEAD" 2>/dev/null || echo "(none)"
+  echo
+  echo "== files changed (committed + working tree) =="
+  git -C "$ROOT" diff --stat "$base" 2>/dev/null
+  echo
+  echo "== untracked =="
+  git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null
+  ;;
+baseline)
+  cat "$(_sdir)/baseline.env" 2>/dev/null || echo "(no baseline recorded)"
+  ;;
+verify) aw_detect_verification "$ROOT" ;;
+conventions)
+  echo "== convention sources =="; aw_find_convention_files "$ROOT"
+  echo "== lint/format configs =="; aw_find_lint_configs "$ROOT"
+  echo "== documentation surface =="; aw_doc_surface "$ROOT"
+  ;;
+secrets)
+  base="$(_base_sha)"
+  d="$(git -C "$ROOT" diff "${base:-HEAD}" 2>/dev/null; git -C "$ROOT" diff --cached 2>/dev/null)"
+  hits="$(printf '%s' "$d" | grep -nEi \
+    '(api[_-]?key|secret|passwd|password|token|bearer|private[_-]?key|BEGIN [A-Z ]*PRIVATE KEY|aws_(access|secret)|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,})' \
+    2>/dev/null | grep -E '^\+|:\+' | head -25)"
+  if [ -n "$hits" ]; then
+    echo "POTENTIAL SECRETS in this session's diff — verify each by hand:"
+    printf '%s\n' "$hits"
+  else
+    echo "no credential-shaped strings found in added lines"
+  fi
+  ;;
+deps)
+  base="$(_base_sha)"
+  git -C "$ROOT" diff --stat "${base:-HEAD}" -- \
+    'Cargo.toml' 'Cargo.lock' 'package.json' 'package-lock.json' 'yarn.lock' \
+    'pnpm-lock.yaml' 'pyproject.toml' 'poetry.lock' 'requirements*.txt' 'uv.lock' \
+    'go.mod' 'go.sum' 'Gemfile*' 'pom.xml' 'build.gradle*' 'composer.json' \
+    2>/dev/null || true
+  ;;
+handoff)
+  src="${1:-}"
+  [ -f "$src" ] || { echo "aw handoff: file not found: $src" >&2; exit 1; }
+  cp "$src" "$STATE_DIR/HANDOFF.md" 2>/dev/null && echo "handoff installed -> $STATE_DIR/HANDOFF.md"
+  ;;
+done)
+  touch "$(_sdir)/retro-done" 2>/dev/null
+  rm -f "$STATE_DIR/retro-pending" 2>/dev/null
+  aw_journal_append "$(_sdir)" retro "exit review completed"
+  echo "exit review marked complete"
+  ;;
+dir) _sdir; echo ;;
+"" | -h | --help | help) usage ;;
+*) echo "aw: unknown command '$cmd'" >&2; usage; exit 1 ;;
+esac
