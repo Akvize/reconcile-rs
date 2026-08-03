@@ -49,8 +49,8 @@ dependency is legitimately attractive.
 
 | Family | Comm. | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **XOR RBSR (= reconcile-rs)** | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow, Negentropy |
-| Secure-fingerprint RBSR (≥256-bit) | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod) |
+| XOR RBSR (legacy fingerprint) | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
+| **Secure-fingerprint RBSR (≥256-bit) (= reconcile-rs)** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod) |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
@@ -70,10 +70,10 @@ SOTA choice** for this use case.
 Important panel nuance: **HRTree does NOT belong to the Merkle Search Tree (MST) / prolly-tree
 family**, and that is a point in its favor. MST (Auvolat & Taïani, SRDS 2019) and prolly-trees
 (Dolt/Noms) *need* **insertion-order independence** because they diff by comparing the hashes of the
-tree's **internal nodes**. HRTree, by contrast, diffs **value-defined ranges**: the cumulative XOR
-over `[a,b)` is identical on two peers iff the *content* of the range is identical, **regardless of
-each one's B-tree shape**. HRTree therefore obtains the convergence guarantee that MST/prolly pay
-for with history-independence, **without paying for it** — and thereby escapes the MST
+tree's **internal nodes**. HRTree, by contrast, diffs **value-defined ranges**: the cumulative
+fingerprint over `[a,b)` is identical on two peers iff the *content* of the range is identical,
+**regardless of each one's B-tree shape**. HRTree therefore obtains the convergence guarantee that
+MST/prolly pay for with history-independence, **without paying for it** — and thereby escapes the MST
 "leading-zeros" attack. The B-tree's order-dependence is therefore **not** a defect here.
 
 ### 1.5 The SOTA of consistency and conflict resolution
@@ -127,7 +127,7 @@ credible Rust IMDG.
 > not on the full system. *(All structure/algo names below are defined in the
 > [glossary §3.2](#g92).)* Methodological anchor: the HRTree **is not a [Merkle tree](#g92) in the
 > [MST](#g92)/[prolly](#g92) sense**. It is a *[Range-Summarizable Order-Statistics Store](#g92)*
-> (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (the XOR of hashes)
+> (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (the combined hashes)
 > **+ an order statistic** (the subtree size). This abstraction was formalized in 2026
 > (arXiv:2603.19820) as the backend that range-based reconciliation (RBSR, Meyer 2023) needs. Its
 > **true peer group** = the other diffable structures; its **true algorithmic competitor** = the
@@ -181,19 +181,26 @@ Ethereum (Merkle-Patricia) and SMTs.
 The paper formalizes "**B+-tree augmented with subtree counts + composable summaries**" as the RSOS
 abstraction, proves RBSR's local-cost bounds on this backend, and ships **AELMDB**: a **persistent,
 memory-mapped** LMDB extension, evaluated with Negentropy.
-- **vs HRTree:** **it is the same design**, but (a) **persistent** (LMDB) and (b) with a **secure
-  summary** (Negentropy). HRTree *is* an RSOS — but the in-memory, 64-bit-XOR, non-persistent
-  version. **The structure's SOTA in this niche = "persistent RSOS + secure fingerprint", and the
-  HRTree→SOTA delta reads directly as that gap.**
+- **vs HRTree:** **it is the same design**, but **persistent** (LMDB). HRTree *is* an RSOS, and since
+  F6 it carries the same class of **secure summary**; what remains is the in-memory,
+  non-persistent side. **The structure's SOTA in this niche = "persistent RSOS + secure
+  fingerprint"; the fingerprint half is closed (F6), so the HRTree→SOTA delta is now persistence
+  alone** — and see §7 D7 of [`ARCHITECTURE.md`](./ARCHITECTURE.md) for why that gap is deliberately
+  not being closed.
 
 | Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
 |---|---|---|---|---|---|---|---|
-| **HRTree** | B-tree splits (insertion order) | **No** | **value ranges** | No | No (in-mem) | **Yes** (n/a) | pre-alpha |
+| **HRTree** | B-tree splits (insertion order) | **not required** ¹ | **value ranges** | No | No (in-mem) | **Yes** (n/a) | pre-alpha |
 | MST | level = hash(key) | Yes | nodes | partial | impl-dependent | **No** | mature (Bluesky) |
 | Prolly tree | rolling-hash on content | Yes | chunks | **Yes** (CAS) | **Yes** | Yes | mature (Dolt) |
 | Merkle radix/SMT | prefix bits | Yes | hash paths | partial | yes | Yes | mature (Ethereum) |
 | Fixed-depth Merkle | token range | partial (rebuild) | nodes | no | yes | yes | mature (Cassandra) |
 | **RSOS/AELMDB** | augmented B+-tree | not required | ranges | no | **Yes** (LMDB) | yes | research 2026 |
+
+> ¹ The HRTree is *not* history-independent, and does not need to be: it compares an aggregate over a
+> **value-defined range**, not internal node hashes, so two peers with identical content in `[a, b)`
+> agree regardless of tree shape. Read as "**not applicable**", never as a missing property — see
+> §2.3 #1, where this is argued to be the design's deepest structural advantage.
 
 ### 2.2 Competitors at the "reconciliation algorithm" level
 
@@ -201,16 +208,17 @@ The HRTree implements **RBSR**; its competitors are not tree structures.
 
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **XOR RBSR (HRTree)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Weak** | Earthstar/Willow/Negentropy |
+| **Secure-fingerprint RBSR (HRTree)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** (256-bit additive, F6) | Earthstar/Willow/Negentropy |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
 | Classic IBLT | O(d·(b+log U)) | O(d) | 1 (+estim.) | **Yes** | weak | blockchains |
 
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
-- RBSR is the **worst family on latency**: O(log n) **sequential RTTs** (≈3 for 1M, ≈4 for 1B). On a
-  1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback benchmarks hide
-  (cf. F16).
+- RBSR is the **worst family on latency**: O(log n) **sequential RTTs**. The fan-out in `diff_round`
+  is **16**, so the count is ⌈log₁₆ n⌉ — **≈5 for 1M, ≈7 for 1B** — plus one exchange for the items
+  themselves. On a 1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback
+  benchmarks hide (cf. F16).
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
@@ -218,20 +226,26 @@ The HRTree implements **RBSR**; its competitors are not tree structures.
   what Willow exploits in 3D). Sketches reconcile an *opaque* set.
 - **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a sketch (Rateless IBLT) to
   drain divergent leaves in one shot — would beat pure HRTree on latency without losing
-  adaptiveness.
+  adaptiveness. The 2025 literature converges on the same shape from the other direction:
+  **ConflictSync** (arXiv:2505.01144) is the first *digest-driven* synchronization algorithm for
+  state-based CRDTs and reports up to **18× less** data transferred — i.e. the δ-CRDT line of work
+  moved *toward* what RBSR already does, rather than away from it.
 
 ### 2.3 Real differentiators of the approach (structural strengths)
 
 1. **Value-based range diff ⇒ history-independence is not needed** *(the deepest differentiator)*.
    MST/prolly *must* be history-independent because they compare **internal node hashes** (different
-   tree shapes → false positives). HRTree never compares nodes: it computes the **cumulative XOR
-   over `[a,b)`**, identical on two peers **iff the range content is identical**, regardless of each
-   one's B-tree shape. → Convergence guaranteed **without paying** for history-independence, and
-   **immunity to the MST leading-zeros attack**.
+   tree shapes → false positives). HRTree never compares nodes: it computes the **cumulative
+   fingerprint over `[a,b)`**, identical on two peers **iff the range content is identical**,
+   regardless of each one's B-tree shape. (The combiner is addition mod 2²⁵⁶ with carry, which is
+   *not* GF(2)-linear — so this argument is stronger than it was under the pre-F6 XOR.) →
+   Convergence guaranteed **without paying** for history-independence, and **immunity to the MST
+   leading-zeros attack**. History-independence is therefore a **non-requirement here, not a gap**:
+   comparisons against MST/prolly must not score it as a missing property.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
-3. **Cheap incremental maintenance**: `tree_hash ^= diff_hash` + `tree_size += 1` propagated along
+3. **Cheap incremental maintenance**: `tree_hash += diff_hash` (mod 2²⁵⁶) + `tree_size += 1` along
    the single root→leaf path → O(log n) amortized. The 2-3× factor vs `BTreeMap` is the *expected*
    price of these two invariants, not an anomaly.
 4. **A single structure stores AND reconciles**: no separate Merkle tree to maintain (contrast
@@ -247,22 +261,32 @@ They are described here as durable design goals; which of them `reconcile-rs` ha
 is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to that table).
 
 **P0 — Correctness of the structure itself:**
-1. **Secure and wide fingerprint**: replace the 64-bit XOR with a **≥256-bit, non-GF(2)-linear**
-   combiner (hash-then-add mod 2²⁵⁶, MSet-Mu-Hash/LtHash) or *keyed*. XOR = self-inverse + linear →
-   craftable collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³². The path
-   taken by Negentropy. **This is THE criterion that separates a "toy" structure from a SOTA one.**
-   (cf. F6)
+1. ✅ **Secure and wide fingerprint** — *done (F6)*. The 64-bit XOR was replaced with a **256-bit,
+   non-GF(2)-linear** combiner: per-element BLAKE3 combined by **addition mod 2²⁵⁶ with carry
+   propagation**, the MSet-Add-Hash / LtHash class. XOR = self-inverse + linear → craftable
+   collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³²; none of that applies to
+   the current combiner. The path also taken by Negentropy. **This is THE criterion that separates a
+   "toy" structure from a SOTA one — and it is met.**
 2. **Decouple "empty" from "hash==0"** (`size==0`) — otherwise the structure can claim "converged"
    while having lost data. (cf. F1)
 3. **Stable, versioned hash as a wire contract** (pinned SipHash/xxHash/BLAKE3 + golden-vector).
    (cf. F8)
 
 **P1 — Generality (what makes it a *structure*, not a special case):**
-4. **Generic summary over a monoid**: `HRTree<XOR>` → `RSOS<M: Monoid>` (secure fingerprint, but
-   also sum/min/max/count, sketches). Enables **embedding a sketch in the leaves** (hybrid RBSR +
-   Rateless IBLT) to break the O(log n) RTT cost (§2.2).
+4. **Generic summary over a measure**: `HRTree<Fingerprint>` → `RSOS<M>` (secure fingerprint, but
+   also sum/min/max/count, sketches). Note the required algebra is a **group**, not merely a monoid —
+   the combiner needs *inverses* for range subtraction and incremental maintenance.
 5. **Fully expose the RSOS contract**: **lazy + double-ended** iterators (repo issues #90-92),
    public `rank`/`select`/`seek_lower_bound`/`seek_upper_bound` → a reusable generic building block.
+
+> **Scope ruling (see [`ARCHITECTURE.md`](./ARCHITECTURE.md) §7 D1).** Axes 4 and 5 apply to the
+> **tree as a standalone product**, not to `reconcile-rs`. In `reconcile-rs` the summary is
+> **wire-visible** (it is the `HashSegment` fingerprint), so a generic measure would propagate as a
+> type parameter into the protocol *and* let two nodes configured differently never converge **and
+> never notice** — strictly worse than a hard error. `reconcile-rs` therefore pins exactly one
+> concrete measure (invariant 1). The generality belongs in the tree crate, where the RSOS contract
+> *is* the public API; it is being renamed away from "HRTree" for the same reason §2.3 gives — it is
+> not a Merkle tree, and "hash tree" implies otherwise.
 
 **P2 — Durability & distributed properties carried by the structure:**
 6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
@@ -340,6 +364,8 @@ surrounding system.
 | **BCH codes / Berlekamp-Massey** | Error-correcting codes / decoding algorithm used by PinSketch to reconstruct the characteristic polynomial. |
 | **Strata Estimator** | A stack of sampled IBLTs estimating the difference size *d* without a prior round (Eppstein et al. 2011). |
 | **CertainSync** | arXiv:2504.08314 (SIGMETRICS 2025): rateless reconciliation with **deterministic success** (no estimator or parametrization). |
+| **ConflictSync** | arXiv:2505.01144 (2025, Baquero's group): the first **digest-driven** synchronization algorithm for state-based CRDTs — up to **18× less** data transferred. Evidence that the δ-CRDT line converged toward digest-driven sync, i.e. toward RBSR. |
+| **Rateless Bloom Filters** | arXiv:2510.27614 (2025): rateless digests in the RIBLT lineage; relevant to the §2.2 hybrid conclusion. |
 | **Bloom filter** | Probabilistic membership filter (false positives, no false negatives); a Graphene component. |
 | **Erlay / Graphene / BIP 330** | Bitcoin deployments: Erlay (minisketch + flooding, specified in BIP 330), Graphene (Bloom + IBLT). |
 | **Negentropy** | Production RBSR implementation (Nostr/NIP-77, strfry relay). **Abandoned the naive XOR combiner** for an incremental cryptographic hash — directly relevant to F6. |
@@ -392,8 +418,8 @@ surrounding system.
 | **SipHash** | A fast keyed PRF, 64-bit output; the `DefaultHasher` algorithm. **Not** collision-resistant in the cryptographic sense. |
 | **`DefaultHasher`** | The std hasher (`std::collections::hash_map`), **not stable** across Rust versions/platforms → cross-version non-convergence (F8). |
 | **BLAKE3 / xxHash** | Fast and **stable** hashes recommended as replacements (F8). |
-| **incremental / homomorphic hash** | A set hash updated incrementally and composable. **MSet-XOR-Hash** (weak, = the current approach), **MSet-Mu-Hash** (finite field), **LtHash** (lattice/vector addition) — secure alternatives for F6. |
-| **transitive group** | The minimal algebraic structure required of an RBSR fingerprint (associativity, identity, inverses, transitivity) — XOR satisfies it, hence its convenience *and* its fragility. |
+| **incremental / homomorphic hash** | A set hash updated incrementally and composable. **MSet-XOR-Hash** (weak; the pre-F6 design), **MSet-Mu-Hash** (finite field), **LtHash** (lattice/vector addition). F6 closed this: the fingerprint is now 256-bit BLAKE3 combined by **addition mod 2²⁵⁶ with carry**, i.e. the MSet-Add-Hash / LtHash class. |
+| **transitive group** | The minimal algebraic structure required of an RBSR fingerprint (associativity, identity, inverses, transitivity). XOR satisfies it, hence its convenience *and* its fragility; addition mod 2²⁵⁶ satisfies it too **without** being GF(2)-linear or self-inverse. |
 | **MAC / HMAC / AEAD** | Message Authentication Code; HMAC (hash-based); Authenticated Encryption with Associated Data. The F3 fix. |
 | **TLS / DTLS / Noise / QUIC** | Secure transport layers (DTLS = TLS over datagrams; Noise = a handshake framework; QUIC = encrypted transport over UDP). Options for F3; cf. issue #96. |
 | **spoofing / amplification / reflection / DRDoS** | Forging the source IP (trivial in UDP); a response larger than the request toward a victim; distributed reflection denial of service. The F9 surface. |
@@ -437,6 +463,8 @@ surrounding system.
 - Erlay (Naumenko et al., CCS 2019) — https://arxiv.org/abs/1905.10518
 - E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores* (RSOS / AELMDB), arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820
 - *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
+- P. Fouto, C. Baquero et al., *ConflictSync: Digest-Driven Synchronization for State-Based CRDTs*, arXiv:2505.01144 (2025) — https://arxiv.org/abs/2505.01144 — first digest-driven sync algorithm for state-based CRDTs, up to 18× less data transferred; evidence that the δ-CRDT line of work has converged *toward* digest-driven sync, i.e. toward what RBSR already does (§2.2)
+- *Rateless Bloom Filters*, arXiv:2510.27614 (2025) — https://arxiv.org/abs/2510.27614 — rateless digests in the same lineage; relevant to the §2.2 hybrid conclusion
 
 **Merkle / anti-entropy structures**
 - A. Auvolat, F. Taïani, *Merkle Search Trees*, SRDS 2019 — https://inria.hal.science/hal-02303490 ; crate https://github.com/domodwyer/merkle-search-tree ; Bluesky/atproto usage — https://atproto.com/specs/repository
@@ -473,7 +501,7 @@ surrounding system.
 
 **B** — B-tree / B+-tree [3.5](#g95) · BCH codes [3.2](#g92) · Berlekamp-Massey [3.2](#g92) · bincode [3.6](#g96) · bincode allocation bomb [3.4](#g94) · BIP 330 [3.2](#g92) · birthday bound [3.4](#g94) · BLAKE3 [3.4](#g94) · Bloom filter [3.2](#g92)
 
-**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
+**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · ConflictSync [3.2](#g92) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
 
 **D** — datagram [3.4](#g94) · `DateTime<Utc>` [3.6](#g96) · `DefaultHasher` [3.4](#g94) · Dolt / DoltHub [3.2](#g92) · `DoubleEndedIterator` [3.6](#g96) · DRDoS [3.4](#g94) · DTLS [3.4](#g94) · DVV (Dotted Version Vector) [3.3](#g93) · Dynamo [3.2](#g92)
 
@@ -501,7 +529,7 @@ surrounding system.
 
 **Q** — QUIC [3.4](#g94) · quickcheck [3.6](#g96) · quorum [3.3](#g93)
 
-**R** — rand [3.6](#g96) · range-cmp / `RangeOrdering` [3.6](#g96) · rank / select [3.5](#g95) · Rateless IBLT (RIBLT) [3.2](#g92) · RBSR [3.2](#g92) · read repair [3.3](#g93) · resurrection / zombie [3.3](#g93) · Riak [3.2](#g92) · rolling hash [3.2](#g92) · rumor mongering [3.3](#g93) · `RwLock` [3.6](#g96) · RSOS [3.2](#g92)
+**R** — rand [3.6](#g96) · range-cmp / `RangeOrdering` [3.6](#g96) · rank / select [3.5](#g95) · Rateless Bloom Filters [3.2](#g92) · Rateless IBLT (RIBLT) [3.2](#g92) · RBSR [3.2](#g92) · read repair [3.3](#g93) · resurrection / zombie [3.3](#g93) · Riak [3.2](#g92) · rolling hash [3.2](#g92) · rumor mongering [3.3](#g93) · `RwLock` [3.6](#g96) · RSOS [3.2](#g92)
 
 **S** — ScyllaDB [3.2](#g92) · second-preimage [3.4](#g94) · SEC (Strong Eventual Consistency) [3.3](#g93) · serde [3.6](#g96) · session guarantees [3.3](#g93) · SipHash [3.4](#g94) · SMT (Sparse Merkle Tree) [3.2](#g92) · spoofing [3.4](#g94) · split-brain [3.3](#g93) · Strata Estimator [3.2](#g92) · structural sharing [3.2](#g92) · SWIM [3.3](#g93)
 
