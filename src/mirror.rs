@@ -89,15 +89,11 @@ type WireDated<V> = Entry<Timestamp, V>;
 
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
-/// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
+/// See the [module documentation](crate::mirror) for the design and the causal-stability guarantees.
 ///
-/// # Correct only under last-write-wins
-///
-/// A mirror stores no timestamps, so it cannot resolve a conflict: inbound updates are applied by
-/// plain overwrite. That is correct *only* because the authoritative dated peer already
-/// resolved the conflict under LWW before sending the projection. Under any other resolution
-/// policy, last-writer-by-arrival would be wrong and the mirror would need redesigning — see
-/// `docs/ARCHITECTURE.md` §7 D9, and D6 for why the policy is fixed.
+/// **Correct only under last-write-wins.** Holding no stamps, a mirror cannot resolve a conflict;
+/// it overwrites, trusting that the dated sender already resolved. Any other policy would need a
+/// redesign here (docs/ARCHITECTURE.md §7 D9).
 pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`State`](crate::reconcilable::State)), matching a dated peer's value-only projection.
@@ -241,14 +237,9 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
         guard.keys().cloned().collect()
     }
 
-    /// Integrate inbound value-only updates by plain overwrite (the mirror holds no timestamp to
-    /// compare against — it trusts the authoritative dated peer). Hooks run outside the map lock,
-    /// so a hook may safely call back into the mirror.
-    /// Apply inbound value-only updates by **overwriting** the local entry.
-    ///
-    /// A mirror holds no stamps, so there is nothing to compare and no merge to perform: the
-    /// arriving projection is taken as-is. This is sound only because the dated sender already
-    /// applied last-write-wins — see the type-level note and `docs/ARCHITECTURE.md` §7 D9.
+    /// Integrate inbound value-only updates by plain overwrite: the mirror holds no stamp to compare
+    /// against and trusts the dated sender's resolution (see the type-level note). Hooks run
+    /// outside the map lock, so a hook may call back into the mirror.
     fn integrate(&self, updates: Vec<(K, State<V>)>) {
         if updates.is_empty() {
             return;

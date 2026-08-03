@@ -255,28 +255,16 @@ where
 ///
 /// # Atomic saves
 ///
-/// Saves are **atomic at the file level**: the snapshot is written to a sibling `*.tmp` file,
-/// flushed to the OS page cache (`sync_all` on the file), then renamed over the target path, and
-/// finally the **containing directory** is fsynced so the name binding is durable. This sequence
-/// means a crash after the rename but before the directory fsync may leave the old snapshot in
-/// place (the kernel replays the rename from the journal on most filesystems, but the POSIX
-/// guarantee requires the directory fsync), while a crash before the rename leaves the original
-/// snapshot untouched. In both cases exactly one valid snapshot is recoverable on restart.
-///
-/// A crash after writing the tmp file but before the rename leaves a stale `*.tmp` sibling.
-/// [`FileSnapshot::load`] removes any such stale temporaries on startup so they do not accumulate.
+/// Write to a sibling `*.tmp`, `sync_all`, rename over the target, then fsync the directory so the
+/// name binding is durable. A crash at any point leaves exactly one valid snapshot recoverable;
+/// a stale `*.tmp` is cleaned up on the next load.
 ///
 /// # Fallible load
 ///
-/// [`FileSnapshot::load_checked`] — called by
-/// [`ReconcileStore::with_persistence`](crate::ReconcileStore::with_persistence) — returns a
-/// [`LoadError`] rather than panicking:
-///
-/// - **Corrupt** data (`InvalidData`) is surfaced as [`LoadError::Corrupt`] so the caller can
-///   decide whether to halt or attempt recovery.
-/// - **Transient I/O** errors are retried up to three times with exponential backoff before being
-///   surfaced as [`LoadError::Io`].
-/// - **`NotFound`** (no snapshot yet) is a clean fresh start and returns `Ok(None)`.
+/// [`load_checked`](FileSnapshot::load_checked), used by
+/// [`ReconcileStore::with_persistence`](crate::ReconcileStore::with_persistence), returns
+/// [`LoadError::Corrupt`] for `InvalidData`, [`LoadError::Io`] after three backed-off retries, and
+/// `Ok(None)` for a missing file (a clean fresh start).
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,

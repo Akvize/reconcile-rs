@@ -76,16 +76,11 @@ pub mod transport;
 pub mod prometheus;
 
 pub(crate) mod auth;
-// The `Codec` port is deliberately internal (docs/ARCHITECTURE.md §7 D2). Unlike `Transport` it has
-// generic methods, so it is not object-safe and is carried as a type parameter — exposing it would
-// force a type-changing builder. Its plausible uses are not served by swapping the trait anyway:
-// compression interacts with authenticate-before-decode (invariant 5) and with datagram size
-// accounting, and cross-language interop needs a published wire spec, not a Rust trait. The type
-// parameter is kept, so the seam survives at no public cost.
+// Internal on purpose: not object-safe, so exposing it would force a type-changing builder
+// (docs/ARCHITECTURE.md §7 D2).
 pub(crate) mod codec;
-// Internal reconciliation mechanism. Demoted to `pub(crate)` (docs/ARCHITECTURE.md §3.5): these are
-// implementation details, not part of the supported public surface. The few internals the
-// integration-test oracles need are re-exported through the gated [`testing`] module below.
+// Internal mechanism, not public surface (docs/ARCHITECTURE.md §3.5). What the integration-test
+// oracles need is re-exported through the gated [`testing`] module below.
 pub(crate) mod gen_ip;
 pub(crate) mod hrtree_iter;
 pub(crate) mod observability;
@@ -100,13 +95,9 @@ pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
-// The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
-// method return types, so they must stay publicly reachable. A `pub` type re-exported from a
-// `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).
-// `IterMut` and `ValuesMut` are intentionally omitted (and are themselves `#[cfg(test)]`-only in
-// `hrtree_iter`): they hand out `&mut V` without updating per-element hashes or the cumulative
-// `tree_hash`, so exposing them publicly would silently corrupt fingerprints. The supported
-// mutation path is `HRTree::with_mut`. A correct iterator-based design is future work.
+// These appear in public `HRTree` return types, so they must stay reachable despite the module
+// being `pub(crate)` (else E0446). `IterMut`/`ValuesMut` are deliberately absent: they hand out
+// `&mut V` without updating the fingerprints. Use `HRTree::with_mut`.
 pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, LoadError, PersistedState, Persistence};
@@ -116,14 +107,10 @@ pub use reconcile_store::ReconcileStore;
 /// Internal seam for the external integration-test oracles (`tests/diff.rs`,
 /// `tests/proptest_hrtree.rs`).
 ///
-/// The reconciliation mechanism modules are `pub(crate)` (docs/ARCHITECTURE.md §3.5), but the
-/// integration tests need to reach a handful of their internals to drive the diff protocol. This
-/// module re-exports exactly those symbols so the default public surface stays clean while the
-/// tests can still reach them. It is hidden from docs and only compiled under `cfg(test)` or the
-/// `reconcile_internal_testing` cfg flag (integration tests are separate crates, so `cfg(test)`
-/// does not apply to them — they rely on the flag instead). The flag is **not** a Cargo feature: it
-/// is set by this repository's `.cargo/config.toml` for its own builds/tests and never ships to
-/// consumers of the published crate, so downstream code cannot reach this seam.
+/// Re-exports the `pub(crate)` internals the oracles need to drive the diff protocol. Gated on
+/// `cfg(test)` or the `reconcile_internal_testing` cfg — integration tests are separate crates, so
+/// `cfg(test)` does not reach them. That cfg is set by this repo's `.cargo/config.toml`, which is
+/// not packaged, so the seam never ships (docs/CONTRACT.md §2).
 #[doc(hidden)]
 #[cfg(any(test, reconcile_internal_testing))]
 pub mod testing {

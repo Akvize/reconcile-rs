@@ -196,22 +196,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         ))
     }
 
-    /// Create a `ReconcileStore` over a caller-supplied [`Transport`] adapter instead of the
-    /// default UDP one.
+    /// Create a `ReconcileStore` over a caller-supplied [`Transport`] instead of the default UDP
+    /// one. Infallible: the only fallible step in [`new`](Self::new) is the socket bind.
     ///
-    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
-    /// which the caller has already done, or does not need to do at all. Two uses motivate this
-    /// seam (`docs/ARCHITECTURE.md` §7 D2):
-    ///
-    /// - a different datagram transport, e.g. QUIC unreliable datagrams (RFC 9221), whose shape
-    ///   fits this trait;
-    /// - a lossy, reordering or delaying transport, so convergence can be tested under adversity;
-    ///   [`InMemoryNetwork`](crate::InMemoryNetwork) provides the reliable in-process case.
-    ///
-    /// The protocol already assumes datagrams may be lost, duplicated or reordered, so a transport
-    /// cannot violate an invariant by being unreliable. (The [`Clock`](crate::Clock) port is
-    /// deliberately *not* injectable for the opposite reason: a non-monotonic clock silently breaks
-    /// the causal ordering that tombstone collection depends on.)
+    /// Obligations on a custom transport are in `docs/CONTRACT.md` §5.
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
@@ -265,13 +253,9 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         svc
     }
 
-    /// This node's Hybrid-Logical-Clock identity — the `node_id` component of every
-    /// [`Timestamp`] it mints, and the deterministic tie-break that makes the
-    /// conflict order total.
-    ///
-    /// Set explicitly with [`Config::with_node_id`]; otherwise randomly generated at construction,
-    /// in which case it changes on every restart. Reading it back is useful for diagnostics and for
-    /// asserting that a durable deployment really did pin a stable identity.
+    /// This node's HLC identity: the `node_id` in every [`Timestamp`] it mints, and the tie-break
+    /// that makes the conflict order total. Set with [`Config::with_node_id`], otherwise random
+    /// and therefore different on every restart.
     pub fn node_id(&self) -> u64 {
         self.engine.node_id()
     }
@@ -665,19 +649,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     /// Fully-qualified insert: `just_insert` + async broadcast.
     ///
-    /// # Value-size ceiling
-    ///
-    /// The send path packs protocol messages into datagrams but never **fragments** one, so a
-    /// single encoded `(key, entry)` must fit in `65507 - authentication overhead` bytes. Above
-    /// that ceiling the update is never delivered and **the key never converges on any peer** —
-    /// the local map still holds it, so the failure is silent from this node's point of view and
-    /// shows up only as a `warn!` on the send path.
-    ///
-    /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
-    /// `io::Result` on every write. See invariant 9 and `docs/ARCHITECTURE.md` §7 D3, tracked in
-    /// [issue #230](https://github.com/Akvize/reconcile-rs/issues/230). Keep values well clear of
-    /// the ceiling — and well clear of the network MTU, since an IP-fragmented datagram is lost
-    /// entirely if any fragment is.
+    /// An encoded `(key, entry)` above the datagram ceiling is never sent and the key never
+    /// converges anywhere, silently: the local map still holds it. Budgets in `docs/CONTRACT.md`
+    /// §6, rationale in §7 D3, fix tracked in
+    /// [#230](https://github.com/Akvize/reconcile-rs/issues/230).
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
