@@ -166,6 +166,7 @@ decoding — and is never folded into `Codec` ([invariant 5](#5-invariants)).
 // serde format are already coupled to its shape.
 pub trait Clock: Send + Sync + 'static {
     fn now(&self) -> Timestamp;            // mint a strictly-monotonic local stamp
+    fn node_id(&self) -> u64;              // this node's identity, without ticking the counter
     fn observe(&self, remote: Timestamp);  // advance past a peer's stamp (causality)
 }
 
@@ -205,9 +206,9 @@ pub trait Discovery: Send + Sync + 'static {
 
 | Port | Default adapter | Backed by | Consumer-wireable |
 |---|---|---|---|
-| `Clock` | `HlcClock` (`clock.rs:279,313`) | system time | no — test-gated, deliberately ([D2](#d2--transport-is-consumer-wireable-codec-is-not)) |
-| `Transport` | `UdpTransport(Arc<UdpSocket>)` | tokio / UDP | yes |
-| `Codec` | `BincodeCodec(DefaultOptions)` | bincode | no — `pub(crate)` |
+| `Clock` | `HlcClock` (`clock.rs:284,318`) | system time | no — test-gated, deliberately ([D2](#d2--transport-is-consumer-wireable-codec-is-not)) |
+| `Transport` | `UdpTransport(Arc<UdpSocket>)` | tokio / UDP | yes — `ReconcileStore::new_with_transport` |
+| `Codec` | `BincodeCodec(DefaultOptions)` | bincode | no — `pub(crate)`, kept as a type parameter |
 | `Persistence` | `FileSnapshot`, `InMemory` | file / memory | yes |
 | `Discovery` | `RandomProbe`, `DnsDiscovery` | `gen_ip` / `tokio::net::lookup_host` | yes |
 
@@ -439,8 +440,14 @@ better fixed at its root — chunking. See invariant 9 and
 
 **Decision.** Expose the node identity that `Config::with_node_id` sets.
 
-**Why.** Currently settable but not readable. Needed for diagnostics, and a prerequisite for any
+**Why.** It was settable but not readable. Needed for diagnostics, and a prerequisite for any
 per-replica value state should D6 ever be revisited.
+
+**How.** Sourced through a new `Clock::node_id` rather than cached beside the clock, so the reported
+identity cannot disagree with the one actually stamped onto minted timestamps — and, unlike reading
+it off `now()`, it costs no counter tick. This widens the `Clock` port by one required method, which
+is a break only for a hand-written adapter; the port is not consumer-wireable (D2), so in practice
+only the two in-tree adapters implement it.
 
 ### D5 — `Value: PartialEq` is dropped
 
