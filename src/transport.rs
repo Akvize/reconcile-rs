@@ -48,7 +48,7 @@ pub trait Transport: Send + Sync + 'static {
 
 /// The default [`Transport`] adapter: a tokio UDP socket.
 #[derive(Clone, Debug)]
-pub struct UdpTransport(pub Arc<UdpSocket>);
+pub struct UdpTransport(Arc<UdpSocket>);
 
 impl UdpTransport {
     /// Wrap an already-bound UDP socket.

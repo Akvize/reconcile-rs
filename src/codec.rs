@@ -29,11 +29,7 @@ pub trait Codec: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Append the encoding of `value` to `out`.
-    fn encode<T: Serialize + ?Sized>(
-        &self,
-        value: &T,
-        out: &mut Vec<u8>,
-    ) -> Result<(), Self::Error>;
+    fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> Result<(), Self::Error>;
 
     /// Decode a stream of `T` from `bytes`, stopping at a clean end-of-input or once `max_items`
     /// values have been decoded (whichever comes first).
@@ -66,11 +62,7 @@ impl BincodeCodec {
 impl Codec for BincodeCodec {
     type Error = bincode::Error;
 
-    fn encode<T: Serialize + ?Sized>(
-        &self,
-        value: &T,
-        out: &mut Vec<u8>,
-    ) -> Result<(), Self::Error> {
+    fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> Result<(), Self::Error> {
         use bincode::{DefaultOptions, Serializer};
         value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
     }
