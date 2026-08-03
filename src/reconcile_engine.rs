@@ -328,9 +328,29 @@ impl<K: Key, V: Value> ReconcileEngine<K, V, BincodeCodec> {
         ))
     }
 
-    /// Construct an engine over an injected [`Transport`] (and the default bincode codec + a
-    /// caller-supplied clock). Test-only seam: an in-memory transport makes convergence
-    /// deterministic without real sockets.
+    /// Construct an engine over a caller-supplied [`Transport`], with the default codec and clock.
+    ///
+    /// Infallible: the only fallible step in [`new`](Self::new) is binding the UDP socket, which
+    /// the caller has already done (or does not need to do at all).
+    pub(crate) fn with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        let node_id_is_random = config.node_id.is_none();
+        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        Self::build(
+            config,
+            transport,
+            BincodeCodec::new(),
+            clock,
+            node_id_is_random,
+        )
+    }
+
+    /// As [`with_transport`](Self::with_transport), but over a caller-supplied [`Clock`] too.
+    /// Test-only seam: pairing an in-memory transport with a `ManualClock` makes convergence
+    /// deterministic without real sockets or wall-clock time.
     #[cfg(test)]
     pub(crate) fn new_with_transport(
         config: Config,
@@ -522,6 +542,12 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
     /// Returns `true` when the node id was generated at random (`Config::node_id` was `None`).
     pub(crate) fn node_id_is_random(&self) -> bool {
         self.node_id_is_random
+    }
+
+    /// This node's Hybrid-Logical-Clock identity, read back from the clock adapter so it can never
+    /// disagree with the `node_id` actually stamped onto minted timestamps.
+    pub(crate) fn node_id(&self) -> u64 {
+        self.clock.node_id()
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
@@ -1198,9 +1224,14 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                     self.clock.observe(remote_v.stamp);
                     match guard.get(&k) {
                         Some(local_v) => {
-                            let merged_v = local_v.merge(&remote_v);
-                            if merged_v != *local_v {
-                                to_apply.push((k, merged_v));
+                            // Under last-write-wins, `Entry::merge` returns `other` exactly when
+                            // the remote stamp is strictly greater and `self` otherwise, so the
+                            // stamp comparison decides "would merging change state?" on its own.
+                            // Comparing stamps rather than merged values avoids cloning the value
+                            // on this hot path and is why `Value` needs no `PartialEq` bound. The
+                            // equivalence holds *only* under LWW — see ARCHITECTURE.md §7 D5.
+                            if remote_v.stamp > local_v.stamp {
+                                to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {
                                 // We already hold an equal-or-newer value; still acknowledge it
                                 // if it is the same tombstone, so the peer learns we have it.

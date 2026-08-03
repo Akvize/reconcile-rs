@@ -50,14 +50,19 @@ impl<T> Key for T where
 ///
 /// A blanket impl makes any type that satisfies the listed bounds a `Value` automatically, so this
 /// never has to be implemented by hand. It does not add or remove any concrete bound; it is purely
-/// a shorthand for the repeated `Clone + Debug + Hash + PartialEq + Send + Sync + Serialize +
-/// DeserializeOwned + 'static` list. Note it requires `PartialEq` (not `Ord`), unlike [`Key`].
+/// a shorthand for the repeated `Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned
+/// + 'static` list. Unlike [`Key`] it needs no ordering: values are ordered by the stamp on their
+/// [`Entry`](crate::reconcilable::Entry), never by their own content.
+///
+/// It also needs no `PartialEq`. Values are never compared: under last-write-wins the only
+/// question the receive path asks is whether the remote stamp is greater, which `Timestamp: Ord`
+/// answers (see `ARCHITECTURE.md` §7 D5 for why that equivalence holds, and what would break it).
 pub trait Value:
-    Clone + Debug + Hash + PartialEq + Send + Sync + Serialize + DeserializeOwned + 'static
+    Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 
 impl<T> Value for T where
-    T: Clone + Debug + Hash + PartialEq + Send + Sync + Serialize + DeserializeOwned + 'static
+    T: Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }

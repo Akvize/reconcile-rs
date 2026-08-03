@@ -62,7 +62,6 @@
 
 pub mod bounds;
 pub mod clock;
-pub mod codec;
 pub mod discovery;
 pub mod fingerprint;
 pub mod hrtree;
@@ -77,6 +76,13 @@ pub mod transport;
 pub mod prometheus;
 
 pub(crate) mod auth;
+// The `Codec` port is deliberately internal (ARCHITECTURE.md §7 D2). Unlike `Transport` it has
+// generic methods, so it is not object-safe and is carried as a type parameter — exposing it would
+// force a type-changing builder. Its plausible uses are not served by swapping the trait anyway:
+// compression interacts with authenticate-before-decode (invariant 5) and with datagram size
+// accounting, and cross-language interop needs a published wire spec, not a Rust trait. The type
+// parameter is kept, so the seam survives at no public cost.
+pub(crate) mod codec;
 // Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
 // implementation details, not part of the supported public surface. The few internals the
 // integration-test oracles need are re-exported through the gated [`testing`] module below.
@@ -90,11 +96,10 @@ pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
 pub use clock::{Clock, Timestamp};
-pub use codec::{BincodeCodec, Codec};
 pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
-pub use transport::{Transport, UdpTransport};
+pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
 // The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a
 // `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).

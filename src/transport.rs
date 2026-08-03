@@ -140,14 +140,16 @@ impl Transport for UdpTransport {
     }
 }
 
-/// An in-process [`Transport`] used by tests: datagrams are routed between transports sharing an
+/// An in-process [`Transport`]: datagrams are routed between transports sharing an
 /// [`InMemoryNetwork`], with no real sockets. Delivery is reliable and FIFO per (sender→receiver)
 /// pair, which — under a single-threaded runtime — makes convergence deterministic. A datagram to
 /// an unknown/closed address is dropped, exactly like UDP.
-#[cfg(any(test, reconcile_internal_testing))]
+///
+/// Exposed (not test-gated) so downstream crates can test *their own* application against a
+/// deterministic cluster, which is the second of the two uses that earn `Transport` a public
+/// injection point — see `ARCHITECTURE.md` §7 D2.
 pub use in_memory::{InMemoryNetwork, InMemoryTransport};
 
-#[cfg(any(test, reconcile_internal_testing))]
 mod in_memory {
     use super::*;
     use std::collections::HashMap;

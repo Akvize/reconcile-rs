@@ -77,16 +77,47 @@ frozen bincode `DefaultOptions` config and `Message` tag order are preserved.
 - `Transport` port + `UdpTransport` adapter (`reconcile::{Transport, UdpTransport}`):
   datagram send/recv/local-addr over `Addr = SocketAddr`. `UdpTransport::bind`
   owns the socket bind and `SO_RCVBUF` / `SO_SNDBUF` sizing.
-- `Codec` port + `BincodeCodec` adapter (`reconcile::{Codec, BincodeCodec}`):
-  `encode` to a buffer and `decode_stream` with a `max_items` cap that bounds the
-  datagram-expansion DoS (issue #151).
+- `Codec` port + `BincodeCodec` adapter, both **internal** (`pub(crate)`): it has
+  generic methods, so it is not object-safe and is carried as a type parameter.
+  `decode_stream` takes a `max_items` cap that bounds the datagram-expansion DoS
+  (issue #151). See `ARCHITECTURE.md` §7 D2 for why this port is not exposed while
+  `Transport` is.
 - Authentication stays **ahead of** the codec: the MAC is verified on raw bytes
   before any decode (invariant #5) — the `Codec` never absorbs authentication.
 - The engine is generic over the codec (default `BincodeCodec`) and holds the
-  transport as `Arc<dyn Transport<Addr = SocketAddr>>`, so an in-memory transport
-  makes convergence testable with no real sockets (a deterministic convergence
-  proptest now runs over it). New dependency: `async-trait` (for the `Transport`
-  port) and tokio's `sync` feature (for the in-memory test transport).
+  transport as `Arc<dyn Transport<Addr = SocketAddr>>`. New dependency:
+  `async-trait` (for the `Transport` port) and tokio's `sync` feature.
+
+### Added — `ReconcileStore::new_with_transport` and the in-memory transport
+
+`Transport` is now consumer-wireable (`ARCHITECTURE.md` §7 D2). The new
+constructor takes any `Arc<dyn Transport<Addr = SocketAddr>>` and is **infallible**
+— the only fallible step in `new` is binding the socket, which the caller has
+already done. `InMemoryNetwork` / `InMemoryTransport` are no longer test-gated, so
+downstream crates can drive a deterministic in-process cluster in their own tests.
+
+`Clock` deliberately stays test-only: the protocol already assumes datagrams may be
+lost, duplicated or reordered, so an unreliable transport cannot break an invariant,
+whereas a non-monotonic clock silently breaks the causal ordering tombstone
+collection depends on.
+
+### Added — `ReconcileStore::node_id()`
+
+Reads back the Hybrid-Logical-Clock identity that `Config::with_node_id` sets
+(`ARCHITECTURE.md` §7 D4). Sourced from the clock adapter through the new
+`Clock::node_id`, so it can never disagree with the id actually stamped onto minted
+timestamps. **Breaking for anyone implementing `Clock` by hand** — the trait gains
+one required method.
+
+### Breaking — `Value` no longer requires `PartialEq`
+
+The `Value` bound bundle drops `PartialEq` (`ARCHITECTURE.md` §7 D5). This *relaxes*
+the bound, so no existing `V` stops compiling; it is listed as breaking only because
+`Value` is a public trait whose definition changed. The single site that used it —
+post-merge change detection on the receive path — now compares stamps, which is
+provably equivalent under last-write-wins and avoids cloning the value on a hot
+path. `ReconcileMirror` consequently uses the `Value` bundle directly instead of
+spelling out its own bound set.
 
 ### Changed — MSRV raised to 1.85
 
