@@ -1,12 +1,11 @@
 # reconcile-rs — Architecture
 
-The **current** architecture and the **target** (hexagonal — ports & adapters). Correctness and
-security status live in [`PROGRESS.md`](./PROGRESS.md); field positioning in [`SOTA.md`](./SOTA.md);
-vocabulary in [`GLOSSARY.md`](./GLOSSARY.md).
+The current architecture and the target: hexagonal, ports and adapters. Status is in
+[`PROGRESS.md`](./PROGRESS.md), field positioning in [`SOTA.md`](./SOTA.md), vocabulary in
+[`GLOSSARY.md`](./GLOSSARY.md).
 
 Published as `reconcile` **0.2.1**. The public API and the wire / on-disk formats are unstable;
-breaks ride a minor bump (next: 0.3.0, see `CHANGELOG.md`). Code locations are `file:line` against
-the current tree.
+breaks ride a minor bump (next 0.3.0). `file:line` references are against the current tree.
 
 ---
 
@@ -56,8 +55,8 @@ sequenceDiagram
   end
 ```
 
-Splitting by **rank** rather than by key space is what keeps the 16 sub-ranges balanced, so the
-recursion costs `⌈log₁₆ n⌉` sequential round trips — ≈5 at n = 10⁶, ≈7 at n = 10⁹.
+Splitting by **rank** rather than by key space keeps the 16 sub-ranges balanced. The recursion
+therefore costs `⌈log₁₆ n⌉` sequential round trips: ≈5 at n = 10⁶, ≈7 at n = 10⁹.
 
 ### Tombstone lifecycle
 
@@ -106,9 +105,9 @@ stateDiagram-v2
 
 ### 2.2 Infrastructure coupling
 
-The data structure and the protocol algorithm import **no** infrastructure — no async runtime, no
-socket, no codec, no wall clock (outside `#[cfg(test)]`). That is the hexagon interior, and it
-already exists. What remains coupled:
+The data structure and the protocol algorithm import no infrastructure: no async runtime, no
+socket, no codec, no wall clock outside `#[cfg(test)]`. That is the hexagon interior, and it already
+exists. What is still coupled:
 
 | Module | Imports directly | `file:line` |
 |---|---|---|
@@ -120,10 +119,10 @@ already exists. What remains coupled:
 
 ## 3. Target architecture: ports & adapters
 
-The domain — storage, protocol, causality, conflict resolution, tombstone lifecycle — depends only
-on **ports** it defines itself. **Adapters** implement them against concrete infrastructure. All
-dependency arrows point **inward**. Two rules follow: *ports reveal intent and are part of the
-contract*; *mechanism stays internal* (§3.5).
+The domain (storage, protocol, causality, conflict resolution, tombstone lifecycle) depends only on
+**ports** it defines itself. **Adapters** implement them against concrete infrastructure. Every
+dependency arrow points inward. Two rules follow: ports reveal intent and are part of the contract;
+mechanism stays internal (§3.5).
 
 ### 3.1 The hexagon
 
@@ -154,8 +153,8 @@ flowchart TB
   disc -->|Discovery| domain
 ```
 
-Message authentication sits **ahead of** the codec — the MAC is verified on raw bytes before any
-decoding — and is never folded into `Codec` ([invariant 5](#5-invariants)).
+Message authentication sits **ahead of** the codec: the MAC is verified on raw bytes before any
+decoding. It is never folded into `Codec` ([invariant 5](#5-invariants)).
 
 ### 3.2 Ports
 
@@ -230,14 +229,16 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
 }
 ```
 
-`Entry` carries tombstone, timestamp and merge semantics as a concrete domain type — conflict
-resolution is **domain policy, not a port** ([D6](#d6--conflict-resolution-stays-hardcoded-last-write-wins)).
+`Entry` carries tombstone, timestamp and merge semantics as a concrete domain type. Conflict
+resolution is **domain policy, not a port**
+([D6](#d6--conflict-resolution-stays-hardcoded-last-write-wins)).
+
 `State<V>` doubles as the **projection** that feeds the dateless mirror: `Entry::project()` is
 `self.state.clone()`, and the projection tree is `HRTree<K, State<V>>`. The two hashes must stay
-distinct — `Entry` hashes **with** its stamp (feeding `version_hash`), `State` hashes the value
+distinct. `Entry` hashes **with** its stamp, which feeds `version_hash`; `State` hashes the value
 alone ([invariant 8](#5-invariants)).
 
-The repeated multi-bound constraints are expressed once, so sites read `impl<K: Key, V: Value>`:
+The repeated multi-bound constraints are stated once, so sites read `impl<K: Key, V: Value>`:
 
 ```rust
 pub trait Key:   Clone + Debug + Hash + Ord + Send + Sync + Serialize + DeserializeOwned + 'static {}
@@ -249,8 +250,8 @@ Entry semantics travel with `Entry`, not with the `V` bound. `Value` carries no 
 
 ### 3.4 Crate structure
 
-The layers become a workspace, so the inward dependency direction is enforced by the **compiler**
-rather than by convention — the guarantee a single crate cannot give.
+The layers become a workspace, so the compiler enforces the inward dependency direction instead of
+convention. That is the guarantee a single crate cannot give.
 
 ```mermaid
 flowchart BT
@@ -265,18 +266,18 @@ flowchart BT
   wire --> core
 ```
 
-`Transport` and `Codec` are defined in `reconcile-net`, not the core: they are consumed by the UDP
-driver, the diff/merge domain does no I/O, and this keeps `async_trait` out of the core. The
-chrono-reading `HlcClock` lives in `reconcile`; the `Timestamp` *type* and the pure HLC advance stay
-in the core.
+`Transport` and `Codec` are defined in `reconcile-net`, not the core. The UDP driver consumes them,
+the diff/merge domain does no I/O, and this keeps `async_trait` out of the core. The chrono-reading
+`HlcClock` lives in `reconcile`; the `Timestamp` type and the pure HLC advance stay in the core.
 
 ### 3.5 Internal mechanism
 
-`start_diff`, `diff_round`, `HashSegment` and `DiffRange` are `pub(crate)`; range-hash querying is
-inherent on the concrete `HRTree`. None of it appears on the public surface. **Amended by
-[D1](#d1--hrtree-becomes-its-own-product-correctly-named):** this holds for the anti-entropy
-protocol, but no longer for the *tree*, which graduates to a standalone crate with its own published
-contract.
+`start_diff`, `diff_round`, `HashSegment` and `DiffRange` are `pub(crate)`, and range-hash querying
+is inherent on the concrete `HRTree`. None of it is on the public surface.
+
+[D1](#d1--hrtree-becomes-its-own-product-correctly-named) amends this. It still holds for the
+anti-entropy protocol. It no longer holds for the tree, which becomes a standalone crate with its own
+published contract.
 
 ---
 
@@ -301,7 +302,7 @@ contract.
 
 ## 5. Invariants
 
-Load-bearing properties preserved across any restructuring. They encode the guarantees tracked in
+Load-bearing properties. Any restructuring preserves them; they encode the guarantees tracked in
 [`PROGRESS.md`](./PROGRESS.md).
 
 | # | Invariant | Guarded by |
@@ -320,7 +321,7 @@ Load-bearing properties preserved across any restructuring. They encode the guar
 
 ## 6. Migration sequence
 
-Each step is behaviour-preserving and verified by the existing test suite, except step 4.
+Every step is behaviour-preserving and covered by the existing test suite, except step 4.
 
 ```mermaid
 flowchart LR
@@ -337,16 +338,16 @@ flowchart LR
   classDef todo fill:#6e7781,color:#fff,stroke:#6e7781
 ```
 
-Steps 1–3 are independent of the format change; step 4 is the single format-breaking step; steps
-5–6 complete the boundary extraction and enforce it at the crate level. Live status per step is in
+Steps 1–3 are independent of the format change. Step 4 is the only format-breaking one. Steps 5–6
+complete the boundary extraction and enforce it at the crate level. Per-step status is in
 [`PROGRESS.md`](./PROGRESS.md) §4.
 
 ---
 
 ## 7. Decision ledger
 
-Product and contract decisions taken deliberately, so they are not relitigated. Each states the
-decision, why, and what would overturn it. **Recorded 2026-08-03.**
+Product and contract decisions, with the reasoning that produced them, so they are not relitigated.
+Each says what was decided, why, and what would overturn it. **Recorded 2026-08-03.**
 
 | | Decision |
 |---|---|
@@ -365,10 +366,10 @@ decision, why, and what would overturn it. **Recorded 2026-08-03.**
 
 ### D1 — `HRTree` becomes its own product, correctly named
 
-**Decision.** The tree graduates to a standalone crate with its own published contract, renamed away
-from "Hash-Range Tree".
+The tree graduates to a standalone crate with its own published contract, renamed away from
+"Hash-Range Tree".
 
-**What it actually is.** A **B-tree**, augmented with **order statistics** (per-subtree size ⇒
+**What it actually is.** A B-tree, augmented with **order statistics** (per-subtree size ⇒
 `rank`/`select` in `O(log n)`), augmented with a **composable range measure** (per-subtree summary ⇒
 `Aggregate(l,u)` in `O(log n)`).
 
@@ -376,199 +377,192 @@ from "Hash-Range Tree".
 |---|---|
 | The technique | *measured* / monoidally-annotated tree — Hinze & Paterson, finger trees, JFP 2006 |
 | The measure here | the product `(Fingerprint, +) × (usize, +)` |
-| The summary | an **incremental multiset hash** — Clarke et al., ASIACRYPT 2003 — and an abelian **group**, not merely a monoid: it has inverses, which is what makes range subtraction and `O(log n)` incremental maintenance possible |
+| The summary | an **incremental multiset hash** (Clarke et al., ASIACRYPT 2003), and an abelian **group** rather than a monoid: it has inverses, which is what range subtraction and `O(log n)` incremental maintenance need |
 | The exact contract | **RSOS — Range-Summarizable Order-Statistics Store** (Amparore, arXiv:2603.19820): `size · Aggregate(l,u) · Rank(z) · Select(r) · Enumerate(l,u) · Insert · Delete`. The tree satisfies all of them today |
 
 > In one sentence: **an order-statistic B-tree with a group-valued range measure — an RSOS whose
 > measure is an incremental multiset hash.**
 
-**Why rename.** "Hash-Range Tree" reads as "hash tree" ≡ Merkle tree, precisely the association the
-design does not want: its deepest advantage is that it diffs *value-defined ranges* rather than node
-identity, and therefore needs no history-independence ([`SOTA.md` §2.3](./SOTA.md)).
+**Why rename.** "Hash-Range Tree" reads as "hash tree", i.e. Merkle tree, which is the one
+association the design does not want. Its deepest advantage is that it diffs value-defined ranges
+rather than node identity, so it needs no history-independence ([`SOTA.md` §2.3](./SOTA.md)).
 
-**Why the generality belongs there and not here.** [`SOTA.md` §2.4](./SOTA.md) P1-4 (a generic
-measure) and P1-5 (public `rank`/`select`) are **right for the tree crate** — the RSOS contract *is*
-its API — and **wrong for `reconcile-rs`**, where the summary is **wire-visible**
-(`HashSegment.hash`). A generic measure would propagate as a type parameter into `Message` and
-`ReconcileStore`, and two nodes configured differently would exchange structurally valid segments
-whose fingerprints never match: they would refine forever, never converging **and never noticing** —
-strictly worse than a hard error. `reconcile-rs` therefore pins exactly one concrete measure
-(invariant 1).
+**Why the generality goes there and not here.** [`SOTA.md` §2.4](./SOTA.md) P1-4 (a generic measure)
+and P1-5 (public `rank`/`select`) are right for the tree crate, where the RSOS contract *is* the API.
+They are wrong for `reconcile-rs`, where the summary is **wire-visible** (`HashSegment.hash`). A
+generic measure would propagate as a type parameter into `Message` and `ReconcileStore`, and two
+nodes configured differently would exchange structurally valid segments whose fingerprints never
+match: refining forever, never converging and never noticing. Worse than a hard error. So
+`reconcile-rs` pins one concrete measure (invariant 1).
 
 **Sequencing.** Lands with migration step 6, as a peer crate.
 
 ### D2 — `Transport` is consumer-wireable; `Codec` is not
 
-**Decision.** Add a `Transport` injection point and un-gate the in-memory transport. Demote `Codec`
-and `BincodeCodec` to `pub(crate)`. Leave `Clock` test-gated.
+Add a `Transport` injection point and un-gate the in-memory transport. Demote `Codec` and
+`BincodeCodec` to `pub(crate)`. Leave `Clock` test-gated.
 
 **Why they split.** `Transport` is object-safe and already held as `Arc<dyn Transport<Addr =
-SocketAddr>>`, so a `Persistence`-style injection point costs **zero type parameters**. `Codec` has
-generic methods, is not object-safe, and is carried as a type parameter — exposing it would need a
+SocketAddr>>`, so a `Persistence`-style injection point costs zero type parameters. `Codec` has
+generic methods, is not object-safe, and rides as a type parameter; exposing it would need a
 type-changing builder (`-> ReconcileStore<K, V, C2>`).
 
-**Why `Transport` earns it.** Two concrete uses: a QUIC datagram transport (RFC 9221 unreliable
-datagrams fit this shape) is one route to larger-than-datagram support; and lossy / reordering /
-delaying transports for convergence testing under adversity, which [`SOTA.md` §2.4](./SOTA.md) P3-8
-names as the category standard and which is otherwise impossible. Users need the in-memory transport
-to test their own applications deterministically, hence un-gating it.
+**Why `Transport` earns it.** Two concrete uses. A QUIC datagram transport (RFC 9221 unreliable
+datagrams fit this shape) is one route to larger-than-datagram support. Lossy, reordering or
+delaying transports let convergence be tested under adversity, which [`SOTA.md` §2.4](./SOTA.md) P3-8
+names as the category standard and which is otherwise impossible. Users also need the in-memory
+transport to test their own applications, hence un-gating it.
 
-**Why `Codec` does not.** Its plausible uses are not satisfied by swapping the trait alone.
-Compression interacts with invariant 5's ordering and with datagram size accounting; cross-language
-interop needs a published wire specification, not a Rust trait. The internal type parameter is
-retained, so the seam survives at no public cost.
+**Why `Codec` does not.** Swapping the trait does not deliver its plausible uses. Compression
+interacts with invariant 5's ordering and with datagram size accounting; cross-language interop needs
+a published wire specification, not a Rust trait. Keeping the type parameter keeps the seam at no
+public cost.
 
-**Why `Clock` stays test-gated, deliberately.** A transport that loses, duplicates or reorders
-datagrams is *already assumed* by the protocol. A clock that is not monotonic silently breaks
-invariant 2 and the causal ordering tombstone GC depends on. The asymmetry is intentional, not an
-oversight.
+**Why `Clock` stays test-gated.** The protocol already assumes datagrams are lost, duplicated and
+reordered, so an unreliable transport cannot break an invariant. A non-monotonic clock silently
+breaks invariant 2 and the causal ordering tombstone GC depends on. The asymmetry is intentional.
 
-**Note.** Before this decision only `Persistence` and `Discovery` were actually wireable; three
-ports were ports in name only.
+Before this decision only `Persistence` and `Discovery` were actually wireable. Three ports were
+ports in name only.
 
 ### D3 — The write API stays infallible
 
-**Decision.** `insert` / `insert_bulk` / `remove` keep their signatures. The value-size ceiling is
-documented and exceeding it produces a distinct, alertable signal rather than an `io::Result` on
-every write.
+`insert` / `insert_bulk` / `remove` keep their signatures. The value-size ceiling is documented, and
+exceeding it produces a distinct, alertable signal rather than an `io::Result` on every write.
 
 **Why.** Making the whole write surface fallible is a broad public break to surface one failure mode
-better fixed at its root — chunking. See invariant 9 and
+that is better fixed at its root: chunking. See invariant 9 and
 [#230](https://github.com/Akvize/reconcile-rs/issues/230).
 
 ### D4 — `ReconcileStore::node_id()` is added
 
-**Decision.** Expose the node identity that `Config::with_node_id` sets.
+Expose the node identity that `Config::with_node_id` sets.
 
 **Why.** It was settable but not readable. Needed for diagnostics, and a prerequisite for any
 per-replica value state should D6 ever be revisited.
 
 **How.** Sourced through a new `Clock::node_id` rather than cached beside the clock, so the reported
-identity cannot disagree with the one actually stamped onto minted timestamps — and, unlike reading
-it off `now()`, it costs no counter tick. This widens the `Clock` port by one required method, which
-is a break only for a hand-written adapter; the port is not consumer-wireable (D2), so in practice
-only the two in-tree adapters implement it.
+identity cannot disagree with the one actually stamped — and, unlike reading it off `now()`, it costs
+no counter tick. That widens the `Clock` port by one required method. Only a hand-written adapter
+would notice, and the port is not consumer-wireable anyway (D2).
 
 ### D5 — `Value: PartialEq` is dropped
 
-**Decision.** Remove `PartialEq` from the `Value` bundle; rewrite the single site that used it to
-compare stamps.
+Remove `PartialEq` from the `Value` bundle; rewrite the one site that used it to compare stamps.
 
 **Why it is redundant.** Its only production use was post-merge change detection, `if merged_v !=
-*local_v`. Because `Entry::merge` is `if other.stamp > self.stamp { other } else { self }`, that
+*local_v`. `Entry::merge` is `if other.stamp > self.stamp { other } else { self }`, so that
 expression is *provably equivalent* to `remote_v.stamp > local_v.stamp`: merge returns `other`
-exactly when the stamps differ (so the entries differ) and `self` otherwise (so they are equal).
-The stamp comparison needs only `Timestamp: Ord`, and no bound on `V` at all.
+exactly when the stamps differ, and `self` otherwise. Stamp comparison needs only `Timestamp: Ord`
+and no bound on `V` at all.
 
-**Secondary benefit.** The old formulation cloned the whole value inside `merge`, compared it (a
-value-sized comparison on the receive hot path), then discarded the clone when nothing changed.
+**Bonus.** The old form cloned the whole value inside `merge`, compared it on the receive hot path,
+then threw the clone away when nothing had changed.
 
-**What would overturn it.** The equivalence holds *only* under last-write-wins. Under a CRDT
-resolver the merged stamp must be `max(local, remote)`, so a join can change the payload while the
-stamp equals `local.stamp` — stamp comparison would silently miss it. If D6 is revisited,
-`PartialEq` (or a hash comparison) must be reinstated.
+**What would overturn it.** The equivalence holds only under last-write-wins. Under a CRDT resolver
+the merged stamp must be `max(local, remote)`, so a join can change the payload while the stamp
+equals `local.stamp`, and stamp comparison would miss it. If D6 is revisited, `PartialEq` (or a hash
+comparison) comes back.
 
 ### D6 — Conflict resolution stays hardcoded last-write-wins
 
-**Decision.** No pluggable `Resolve` seam. The open-ended condition is replaced by three named
-triggers; as of this decision none has fired.
+No pluggable `Resolve` seam. The open-ended condition is replaced by three named triggers. None has
+fired.
 
 | Trigger | Status |
 |---|---|
-| **T1** — a converging counter becomes a real requirement | hypothetical. The only genuinely inexpressible gap: concurrent `+1` and `+1` under LWW yields `+1`, and no key encoding recovers it |
-| **T2** — an opaque third-party CRDT document as the value (Automerge / Loro / Yjs bytes) | the strongest case, because such documents carry their causal context internally, so a bare value-level join genuinely suffices. Gate on documents staying well inside one datagram |
-| **T3** — multi-value register | not a policy seam at all. `Timestamp` is a *total* order, so for any two stamps one is greater and concurrency cannot be represented — the information is destroyed at mint time. Would require replacing `Timestamp` with a version vector, detonating invariants 2 and 7. Treat as a separate project |
+| **T1** — a converging counter becomes a real requirement | Hypothetical. The only genuinely inexpressible gap: concurrent `+1` and `+1` under LWW yields `+1`, and no key encoding recovers it. |
+| **T2** — an opaque third-party CRDT document as the value (Automerge / Loro / Yjs bytes) | The strongest case. Such documents carry their causal context internally, so a value-level join really does suffice. Gate on documents staying well inside one datagram. |
+| **T3** — multi-value register | Not a policy seam at all. `Timestamp` is a *total* order, so one of any two stamps is greater and concurrency cannot be represented; the information is destroyed at mint time. Needs a version vector instead of `Timestamp`, detonating invariants 2 and 7. A separate project. |
 
-**Why the deferral is strengthened, not merely maintained:**
+Three repository-specific facts strengthen the deferral rather than merely maintaining it:
 
 1. **Stable Rust offers no cheap opt-in.** `Value` is a blanket impl, so a `merge` with a default
-   body that specific types override requires specialization (nightly). The alternatives are
-   breaking every downstream `V`, or a third public type parameter.
+   body that specific types override needs specialization (nightly). The alternatives are breaking
+   every downstream `V`, or a third public type parameter.
 2. **The datagram ceiling is a correctness cliff.** A single `Update` above the payload budget is
    never fragmented and never delivered (invariant 9). CRDT state grows with cardinality or history,
    so a set-as-value or document-as-value crosses that cliff *as it succeeds*.
 3. **The most-requested CRDT is already free.** An add-wins set is expressible today as
-   `(set_id, element) -> ()` keys, reusing the existing tombstone GC and obtaining *per-element*
-   diffing that a set-as-value cannot. Strictly this is last-op-wins per element, differing from
+   `(set_id, element) -> ()` keys, reusing the existing tombstone GC and getting *per-element*
+   diffing that a set-as-value cannot. Strictly it is last-op-wins per element, which differs from
    add-wins only under a genuinely concurrent add/remove of the same element.
 
-**If a trigger fires, the shape is a concrete facade, not a public type parameter.** Seven of eight
-comparable systems ship a fixed menu of concrete types rather than a pluggable hole; the lone
-exception needs three traits to do it and ships the menu anyway. A public merge trait maximises the
+**If a trigger fires, build a concrete facade, not a public type parameter.** Seven of eight
+comparable systems ship a fixed menu of concrete types rather than a pluggable hole; the exception
+needs three traits to do it and ships the menu anyway. A public merge trait maximises the number of
 ways a user can silently break convergence — non-canonical `Hash`, non-idempotent merge, oversize
-state — while this crate's own test suite stays green.
+state — while our own test suite stays green.
 
-**Related constraint.** Only *state-based* (join-idempotent) payloads are safe on this transport:
+**Related constraint.** Only *state-based* (join-idempotent) payloads are safe on this transport.
 `Update` rides unreliable UDP with retransmission, so a duplicated `increment(+1)` is not idempotent.
 Operation-based deltas are ruled out independently of any seam.
 
 ### D7 — Larger-than-RAM datasets are permanently out of scope
 
-**Decision.** Not pursued; a pluggable storage backend is therefore not built. Closed, not deferred.
+Not pursued, so no pluggable storage backend. Closed, not deferred.
 
 **Why.** Larger-than-RAM and full replication are in direct tension. If the dataset exceeds RAM and
-every node holds everything, every node hits disk on reads — destroying the one unambiguous
-advantage ([`SOTA.md` §1.6](./SOTA.md): reads are local, in-process, no network hop, no
-deserialization). The requirement splits into two different products: a fully-replicated on-disk
-store, whose market is thin and already occupied by persistent range-sync CRDT stores in the same
-language; or sharding, which is a different system, tracked separately as partial replication.
+every node holds everything, every node hits disk on reads, destroying the one unambiguous advantage
+([`SOTA.md` §1.6](./SOTA.md): reads are local, in-process, no network hop, no deserialization). The
+requirement splits into two different products. A fully-replicated on-disk store has a thin market
+already occupied by persistent range-sync CRDT stores in the same language. Sharding is a different
+system, tracked separately as partial replication.
 
 **What people usually mean.** "Can it persist?" is nearly always "survive a restart", already served
-by `Persistence` / `FileSnapshot`. The genuinely differentiated direction is content-addressed
-structural sharing, whose value is versioning, snapshot diff and incremental cold start — not
-capacity.
+by `Persistence` / `FileSnapshot`. The differentiated direction is content-addressed structural
+sharing, whose value is versioning, snapshot diff and incremental cold start — not capacity.
 
-**The cheap capacity win instead.** Reducing per-entry memory raises the effective ceiling by
-roughly 2–3× at zero contract cost.
+**The cheap capacity win instead.** Reducing per-entry memory raises the effective ceiling by roughly
+2–3× at zero contract cost.
 
-**What would overturn it.** Nothing short of adopting partial replication, at which point this
-decision is superseded by that design rather than amended.
+**What would overturn it.** Nothing short of adopting partial replication, at which point that design
+supersedes this decision rather than amending it.
 
 ### D8 — Reconciliation strategy is automatic, never a user-facing choice
 
-**Decision.** If a sketch-based fast path is added, it self-selects and falls back to range-based
-reconciliation. No user-visible strategy knob.
+If a sketch-based fast path is added, it self-selects and falls back to range-based reconciliation.
+No user-visible strategy knob.
 
-**The guard that matters.** Range-based reconciliation remains the **sole authority for the "in
-sync" decision**. An all-zero *difference* sketch does not prove two sets are equal — cells cancel on
-both the key sum and the counter, so two distinct same-size sets can cancel. That is exactly the
-hazard invariant 3 exists to prevent. A sketch may only ever *propose* differences; a stalled or
-empty peel falls through to the range diff untouched.
+**The guard that matters.** Range-based reconciliation stays the sole authority on "are we in sync".
+An all-zero *difference* sketch does not prove two sets are equal: cells cancel on both the key sum
+and the counter, so two distinct same-size sets can cancel. That is exactly the hazard invariant 3
+exists to prevent. A sketch may only *propose* differences; a stalled or empty peel falls through to
+the range diff untouched.
 
-**Choice of sketch.** A *fixed-capacity* sketch is preferred over a rateless one for the steady
-state: a fixed sketch is a monoid and can be maintained incrementally (`O(1)` per in-sync round),
-whereas a rateless encoder must touch every element per session — untenable at a one-second cadence.
+**Choice of sketch.** Prefer a *fixed-capacity* sketch over a rateless one for the steady state: a
+fixed sketch is a monoid and can be maintained incrementally, `O(1)` per in-sync round, whereas a
+rateless encoder must touch every element per session. Untenable at a one-second cadence.
 
 ### D9 — `ReconcileMirror` is documented as last-write-wins only
 
-**Decision.** State the constraint explicitly now.
+State the constraint explicitly now.
 
-**Why.** `integrate` performs a plain overwrite rather than a join, correct *only* because the
-authoritative dated peer already resolved the conflict. Under any non-LWW resolution,
-last-writer-by-arrival is wrong and the mirror would need redesign. Cheap to document now, expensive
-to discover later.
+**Why.** `integrate` overwrites rather than joins, which is correct only because the authoritative
+dated peer already resolved the conflict. Under any other resolution, last-writer-by-arrival is
+wrong and the mirror needs redesigning. Cheap to document now, expensive to discover later.
 
 ### D10 — 0.3.0 is one coordinated break
 
-**Decision.** Wire and on-disk breaks are batched into 0.3.0 rather than dribbled across releases.
-The `Entry` / `State` type and the versioned snapshot header are in; the fingerprint wire-encoding
-fix is folded in, since it is a pure win that never becomes cheaper. Additive, capability-gated
-protocol extensions do not need to ride it.
+Batch the wire and on-disk breaks into 0.3.0 rather than dribbling them across releases. The
+`Entry` / `State` type and the versioned snapshot header are in. The fingerprint wire-encoding fix
+rides along, since it is a pure win that never gets cheaper. Additive, capability-gated protocol
+extensions do not need to ride it.
 
 ### D11 — Phase 1 lands before Phase 2 is retargeted
 
-**Decision.** The Phase-1 stack merges to `main` first; the Phase-2 pull request is then retargeted
-from the Phase-1 tip to `main`.
+The Phase-1 stack merges to `main` first; the Phase-2 pull request is then retargeted from the
+Phase-1 tip to `main`.
 
 **Why.** Phase 2 is stacked so its diff shows only its own commits. Retargeting before Phase 1 lands
 would present the whole train as one review.
 
 ### D12 — Continuous integration is re-enabled
 
-**Decision.** Turn GitHub Actions back on.
+Turn GitHub Actions back on.
 
 **Why.** The repository is public and the workflows use only standard hosted runners, for which
-Actions is free — so the dormancy was a settings or organisation-policy toggle, not a billing
-constraint. An organisation-level restriction overrides the repository setting, so both need
-checking. While it is off, the full matrix must be reproduced locally; note that `cargo doc` under
-`-D warnings` catches failures `cargo build` and `cargo clippy` do not.
+Actions is free. The dormancy was a settings or organisation-policy toggle, not a billing constraint.
+An organisation-level restriction overrides the repository setting, so check both. While it is off,
+reproduce the full matrix locally — and note that `cargo doc` under `-D warnings` catches failures
+`cargo build` and `cargo clippy` do not.

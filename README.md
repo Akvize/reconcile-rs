@@ -54,9 +54,8 @@ let hit = store.get(&key);           // in-process read, no network hop
 | no separate datastore to operate | collaborative text editing — use a sequence CRDT |
 | must keep serving across partitions | high same-key write contention |
 
-Memory and write fan-out grow with both the dataset and the node count. See
-[`SOTA.md` §1.1–1.2](SOTA.md) for the honest ceiling and [`SOTA.md` §1.6](SOTA.md) for the
-data-grid positioning.
+Memory and write fan-out grow with the dataset *and* the node count. [`SOTA.md`](SOTA.md) §1.1–1.2
+has the ceiling, §1.6 the data-grid positioning.
 
 ## How a write converges
 
@@ -77,8 +76,8 @@ sequenceDiagram
   A->>A: Entry::merge — greater stamp wins
 ```
 
-Equality and emptiness are decided on the range **size**, never on the fingerprint: a non-empty range
-can legitimately fingerprint to zero, and hash-only comparison would silently lose data
+Equality and emptiness are decided on the range **size**, never on the fingerprint. A non-empty
+range can legitimately fingerprint to zero, so comparing hashes alone would silently lose data
 ([invariant 3](ARCHITECTURE.md#5-invariants)).
 
 ## Documentation map
@@ -96,11 +95,11 @@ can legitimately fingerprint to zero, and hash-only comparison would silently lo
 ## Security model
 
 > [!WARNING]
-> **The default is unauthenticated and readable by anyone who can reach the port.** A forged
-> datagram — the source address is spoofable — can plant a year-9999 timestamp that wins forever, or
-> a tombstone that deletes a key, and last-write-wins propagates it cluster-wide. Separately,
+> **The default is unauthenticated, and readable by anyone who can reach the port.** UDP source
+> addresses are spoofable. A forged datagram can plant a year-9999 timestamp that wins forever, or a
+> tombstone that deletes a key; last-write-wins then propagates it cluster-wide. Separately,
 > `RandomProbe` discovery answers any host inside a configured CIDR, so a squatter eventually
-> receives the **entire dataset** through the bulk diff dumps. Keyless mode is safe only on a fully
+> receives the **entire dataset** through the bulk diff dumps. Keyless is safe only on a fully
 > trusted underlay.
 
 ```rust,ignore
@@ -116,21 +115,21 @@ let config = Config::default().with_insecure_no_key();          // deliberate ke
 | AEAD | `encryption` | `nonce ‖ ciphertext ‖ tag`, [XChaCha20-Poly1305], +40 B | integrity, authenticity, confidentiality |
 
 Every node must share the key **and** be built with the same backend. Datagrams are verified
-*before* deserialization ([invariant 5](ARCHITECTURE.md#5-invariants)). Optional `zeroize` wipes the
-key on drop.
+*before* deserialization ([invariant 5](ARCHITECTURE.md#5-invariants)). The optional `zeroize`
+feature wipes the key on drop.
 
-**Out of scope:** per-peer identity, forward secrecy, key rotation. The trust model is one shared
-secret; mutual authentication would need a handshake (TLS/Noise) — run over a trusted underlay if
-you need it. Replay is benign for idempotent LWW reconciliation and is separately hardened
-(issue [#199](https://github.com/Akvize/reconcile-rs/issues/199)).
+Out of scope: per-peer identity, forward secrecy, key rotation. The trust model is one shared
+secret. Mutual authentication needs a handshake (TLS/Noise); run over a trusted underlay if you need
+it. Replay is benign for idempotent LWW reconciliation, and is hardened separately
+([#199](https://github.com/Akvize/reconcile-rs/issues/199)).
 
 [XChaCha20-Poly1305]: https://docs.rs/chacha20poly1305
 
 ## Persistence
 
-A restart that loses tombstones is a **correctness** hazard, not just a durability one: the node
+Losing tombstones on restart is a **correctness** hazard, not just a durability one: the node
 rejoins as a fresh replica and can [resurrect](GLOSSARY.md#1-domain-types-and-values) deleted values.
-Every store therefore always owns a backend; only the implementation varies.
+So every store always owns a backend. Only the implementation varies.
 
 | Backend | Survives restart |
 |---|---|
@@ -138,8 +137,8 @@ Every store therefore always owns a backend; only the implementation varies.
 | `FileSnapshot` | yes — one atomically-written snapshot |
 | your `impl Persistence` | redb, sled, S3, … |
 
-State — live values, tombstones, and the causal-stability bookkeeping — is reloaded **before** the
-node rejoins gossip.
+State is reloaded **before** the node rejoins gossip: live values, tombstones, and the
+causal-stability bookkeeping.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -197,26 +196,26 @@ let store = ReconcileStore::<String, String>::new(config).await?
     .with_dns_discovery("reconcile-headless.default.svc.cluster.local", 8080);
 ```
 
-Every knob below is also settable **live** on a running store, so a region can be opened or retired
-without re-binding the socket: `add_net`, `remove_net`, `set_nets`, `set_remote_interval`,
+Every knob is settable **live** on a running store, so you can open or retire a region without
+re-binding the socket: `add_net`, `remove_net`, `set_nets`, `set_remote_interval`,
 `set_remote_fanout`, `set_reconcile_interval`, `set_tombstone_timeout`.
 
-Two properties make this safe by construction:
+Two properties make that safe by construction:
 
 - **Repair is decoupled from net membership.** A peer learned by actual contact is always
-  reconciled; peers matching no declared net land in an `unclassified` bucket repaired on the same
-  throttled cadence. Reshaping the topology can never orphan a peer — the worst case is suboptimal
-  WAN traffic, never silent divergence.
+  reconciled; peers matching no declared net land in an `unclassified` bucket, repaired on the same
+  throttled cadence. Reshaping the topology cannot orphan a peer. Worst case is suboptimal WAN
+  traffic, never silent divergence.
 - **Discovery never grants membership.** Membership gates tombstone GC and is earned only by an
   authenticated dated datagram, so an unverified or spoofed address cannot block collection
   ([invariant 6](ARCHITECTURE.md#5-invariants)). A pod absent from DNS for
-  `discovery_miss_threshold` successful rounds is decommissioned; a DNS *failure* is skipped and
+  `discovery_miss_threshold` successful rounds is decommissioned. A DNS *failure* is skipped and
   never counts as a miss.
 
-Nets are **not** a security boundary — only declare ranges you operate. A peer's net is derived from
-its IP, so the wire format is unchanged and a single-net cluster behaves as before. A turnkey
-Kubernetes example (env-driven node, `StatefulSet`, headless `Service`, `Dockerfile`,
-[kind](https://kind.sigs.k8s.io/) playground) lives in [`examples/k8s/`](examples/k8s/).
+Nets are not a security boundary. Only declare ranges you operate. A peer's net comes from its IP,
+so the wire format is unchanged and a single-net cluster behaves as before. A turnkey Kubernetes
+example — env-driven node, `StatefulSet`, headless `Service`, `Dockerfile`,
+[kind](https://kind.sigs.k8s.io/) playground — is in [`examples/k8s/`](examples/k8s/).
 
 ## Read-only mirror
 
@@ -235,11 +234,11 @@ flowchart LR
   m1 <-. "dated diff channel" .-> other["other dated nodes"]
 ```
 
-Each dated node maintains the projection alongside its dated map, so the dated↔dated path and its
-wire format are untouched. A mirror never acknowledges tombstones and is never admitted to
-membership, so it cannot hold back another node's GC. It is a **sink, not a source**: it always
-integrates and never sends authoritative values — which is a plain overwrite, and therefore correct
-**only** under last-write-wins ([D9](ARCHITECTURE.md#d9--reconcilemirror-is-documented-as-last-write-wins-only)).
+Each dated node keeps the projection alongside its dated map, so the dated↔dated path and its wire
+format are untouched. A mirror never acknowledges tombstones and is never admitted to membership, so
+it cannot hold back another node's GC. It is a **sink, not a source**: it always integrates and never
+sends authoritative values. That integration is a plain overwrite, so it is correct **only** under
+last-write-wins ([D9](ARCHITECTURE.md#d9--reconcilemirror-is-documented-as-last-write-wins-only)).
 
 ```rust,ignore
 let mirror = ReconcileMirror::<String, String>::new(Config::default()).await?.with_seed(dated_addr);
@@ -264,10 +263,11 @@ facade behind opt-in features, compiling to no-ops when off.
 
 ## Operational tuning
 
-The gossip socket requests an 8 MiB send/receive buffer (`Config::recv_buffer_size` /
+The gossip socket asks for an 8 MiB send/receive buffer (`Config::recv_buffer_size` /
 `send_buffer_size`; `None` leaves the OS default). The stock default holds only a handful of
 full-size datagrams, so a cold-sync burst overruns it and the excess is dropped **inside the
-kernel**. The kernel clamps the request to its own ceiling, so raise it:
+kernel**, before the application sees it. The kernel clamps the request to its own ceiling, so raise
+that too:
 
 ```sh
 sysctl -w net.core.rmem_max=8388608   # 8 MiB; match Config::recv_buffer_size
@@ -281,13 +281,15 @@ grep -A1 '^Udp:' /proc/net/snmp       # RcvbufErrors should stay flat
 fingerprint (per-element BLAKE3, combined by addition mod 2²⁵⁶) and a subtree size. Both the
 cumulative fingerprint of any key interval and `rank`/`select` are therefore `O(log n)`.
 
-In the literature this is an **RSOS** — a Range-Summarizable Order-Statistics Store
-([Amparore, arXiv:2603.19820](https://arxiv.org/html/2603.19820)) — or equivalently an
-order-statistic B-tree with a group-valued [measure](https://doi.org/10.1017/S0956796805005769)
-(Hinze & Paterson, finger trees, JFP 2006). It is **not** a Merkle tree: it diffs value-defined
-ranges rather than node identity, which is why it needs no history-independence and escapes the
-Merkle-Search-Tree leading-zeros attack ([`SOTA.md` §2.3](SOTA.md)). The name is being retired for
-exactly that reason ([D1](ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-correctly-named)).
+The literature calls this an **RSOS**, a Range-Summarizable Order-Statistics Store
+([Amparore, arXiv:2603.19820](https://arxiv.org/html/2603.19820)); equivalently, an order-statistic
+B-tree with a group-valued [measure](https://doi.org/10.1017/S0956796805005769) (Hinze & Paterson,
+finger trees, JFP 2006).
+
+It is **not** a Merkle tree. It diffs value-defined ranges, not node identity, so it needs no
+history-independence and the Merkle-Search-Tree leading-zeros attack does not apply
+([`SOTA.md` §2.3](SOTA.md)). The name is being retired for that reason
+([D1](ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-correctly-named)).
 
 <details><summary>Benchmarks (loopback; both axes logarithmic)</summary>
 
@@ -299,9 +301,9 @@ exactly that reason ([D1](ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-cor
 | propagate one insert + one remove | ≈122 µs, flat in n | | ![](img/perf-send.png) |
 | reconcile one difference | 240 µs | 640 µs | ![](img/perf-reconcile.png) |
 
-Propagation is flat in `n` because insertions are pushed immediately; only the full diff protocol
-scales with the collection. **These run on the loopback interface** — a real network dominates every
-figure above (finding F16 in [`PROGRESS.md`](PROGRESS.md)).
+Propagation is flat in `n` because insertions are pushed immediately. Only the full diff protocol
+scales with the collection. **These run on loopback**: a real network dominates every figure above
+(F16 in [`PROGRESS.md`](PROGRESS.md)).
 
 </details>
 
@@ -317,13 +319,15 @@ Physical-clock LWW is unsafe on two counts, and the HLC closes both:
 | clock skew | the fastest clock always wins, silently losing causally-newer writes | on receipt, a node advances its clock past the remote stamp, so a later local write is ordered strictly after everything it has seen |
 | non-commutative tie-break on equal stamps | each replica keeps its own value; fingerprints never match; the pair is re-exchanged forever — **permanent divergence and livelock** | `node_id` makes the order total, so every replica picks the same survivor |
 
-The merge is therefore commutative, associative and idempotent — genuine strong eventual
-consistency. `node_id` is random by default; pin it with `Config::with_node_id` for reproducible
-ordering, and keep it distinct per node. LWW discards one of two *genuinely concurrent* writes by
-design; recovering both needs version vectors or a CRDT, which is out of scope
+The merge is therefore commutative, associative and idempotent: strong eventual consistency.
+`node_id` is random by default; pin it with `Config::with_node_id` for reproducible ordering, and
+keep it distinct per node.
+
+LWW discards one of two genuinely concurrent writes by design. Recovering both needs version vectors
+or a CRDT, which is out of scope
 ([D6](ARCHITECTURE.md#d6--conflict-resolution-stays-hardcoded-last-write-wins)). Background:
-[Kingsbury, *The trouble with timestamps*](https://aphyr.com/posts/299-the-trouble-with-timestamps);
-[Kulkarni et al., *Hybrid Logical Clocks*, 2014](https://cse.buffalo.edu/tech-reports/2014-04.pdf).
+[Kingsbury, *The trouble with timestamps*](https://aphyr.com/posts/299-the-trouble-with-timestamps)
+and [Kulkarni et al., *Hybrid Logical Clocks*](https://cse.buffalo.edu/tech-reports/2014-04.pdf).
 
 ## Testing
 
@@ -332,6 +336,6 @@ cargo test --all                      # unit + integration + doc tests (this REA
 cargo llvm-cov --workspace --html     # coverage, as CI measures it
 ```
 
-`mac-blake3` and `mac-hmac` are mutually exclusive at build time (`mac-blake3` wins if both are on),
-so CI runs a separate `mac-hmac` job with `--no-default-features --features mac-hmac`, plus
-`encryption`, `macos` and MSRV jobs.
+`mac-blake3` and `mac-hmac` are mutually exclusive at build time, and `mac-blake3` wins if both are
+on. CI therefore runs a separate `mac-hmac` job with `--no-default-features --features mac-hmac`,
+plus `encryption`, `macos` and MSRV jobs.

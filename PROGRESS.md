@@ -1,8 +1,8 @@
 # Project status — `reconcile-rs`
 
-> **Living document** — the real-time view of correctness, security and maturity, kept current as
-> work lands. Durable material lives elsewhere: field positioning in [`SOTA.md`](./SOTA.md), target
-> design, invariants and the decision ledger in [`ARCHITECTURE.md`](./ARCHITECTURE.md), vocabulary in
+> **Living document.** Where correctness, security and maturity actually stand, kept current as work
+> lands. Durable material lives elsewhere: positioning in [`SOTA.md`](./SOTA.md); design, invariants
+> and the decision ledger in [`ARCHITECTURE.md`](./ARCHITECTURE.md); vocabulary in
 > [`GLOSSARY.md`](./GLOSSARY.md). Migration execution is tracked in
 > [#138](https://github.com/Akvize/reconcile-rs/issues/138).
 
@@ -16,13 +16,13 @@
 
 ## 1. Headline
 
-The **algorithmic core** (HRTree + range fingerprint + RBSR diff) is correct and SOTA-aligned, and
-every **critical engineering and distributed-design defect** from the original review is fixed:
-collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution, causal-stability tombstone
-GC, malformed-packet hardening, optional per-datagram authentication and payload encryption,
-pluggable persistence, runtime observability, and a dateless read-only mirror.
+The algorithmic core — HRTree, range fingerprint, RBSR diff — is correct and SOTA-aligned. Every
+critical engineering and distributed-design defect from the original review is fixed: 256-bit
+collision-resistant fingerprint, HLC-keyed conflict resolution, causal-stability tombstone GC,
+malformed-packet hardening, optional per-datagram authentication and encryption, pluggable
+persistence, runtime observability, a dateless read-only mirror.
 
-Remaining work is **maturity, scaling, and the confidentiality roadmap**.
+What is left is maturity, scaling, and the confidentiality roadmap.
 
 ---
 
@@ -136,20 +136,21 @@ changes runtime behaviour except step 4 (wire/on-disk format), and all preserve 
 
 ### Remaining gaps to SOTA — [`SOTA.md` §2.4](./SOTA.md)
 
-- **Reconciliation latency.** RBSR costs ⌈log₁₆ n⌉ sequential RTTs; a Rateless-IBLT pass to drain
-  divergent leaves in one shot would cut WAN latency. A design choice, not a defect — and if built,
-  it self-selects rather than becoming a knob ([D8](./ARCHITECTURE.md#d8--reconciliation-strategy-is-automatic-never-a-user-facing-choice)).
+- **Reconciliation latency.** RBSR costs ⌈log₁₆ n⌉ sequential RTTs. A Rateless-IBLT pass draining
+  divergent leaves in one shot would cut WAN latency. A design choice, not a defect; if built, it
+  self-selects rather than becoming a knob
+  ([D8](./ARCHITECTURE.md#d8--reconciliation-strategy-is-automatic-never-a-user-facing-choice)).
 - **API ergonomics.** `Result`-returning constructors ✅ (F13), `pre_insert` outside the write lock
-  ✅ (F14); post-insert hooks still open ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
+  ✅ (F14). Post-insert hooks still open ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
 - **Benchmarking.** Cold-sync throughput and loss recovery (#168, #169), per-entry memory (#170),
   point-read indexing (#171), snapshot cadence (#172), bulk-build throughput (#173), comparative
-  suite (#174). Closing these is what moves the crate from a narrow niche to a credible Rust IMDG.
+  suite (#174). Closing these moves the crate from a narrow niche to a credible Rust IMDG.
 
 ---
 
 ## 5. Maintaining this file
 
-Update on any change that moves a finding's status, ticks a maturity box, or closes a roadmap item:
-bump **Last updated** and **Baseline**, flip the status cell, add the PR/issue, and keep §1 honest.
+Update it whenever a finding moves, a maturity box is ticked, or a roadmap item closes: bump
+**Last updated** and **Baseline**, flip the status cell, add the PR or issue, and keep §1 honest.
 Positioning stays in [`SOTA.md`](./SOTA.md); design, invariants and decisions stay in
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) — do not restate them here, or the two will drift.
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). Do not restate them here, or the two will drift.

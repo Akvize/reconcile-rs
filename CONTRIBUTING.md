@@ -1,7 +1,7 @@
 # Contributing
 
-Two reproducible ways to get a Rust dev environment. Both give the same toolchain and language
-servers (`rust-analyzer`, `taplo`, `marksman`, `dockerfile-language-server-nodejs`).
+Two reproducible ways to get a Rust dev environment. Both give the same toolchain and the same
+language servers: `rust-analyzer`, `taplo`, `marksman`, `dockerfile-language-server-nodejs`.
 
 ```mermaid
 flowchart LR
@@ -20,8 +20,8 @@ make dc-up
 ```
 
 `make dc-up` builds `.devcontainer/Dockerfile.dev`, starts the container as user `dev`, then runs
-`.devcontainer/init.sh create` once and `… start` on each start. Open the workspace with
-**Remote-Containers: Reopen in Container** (VS Code) or **Attach to Dev Container** (JetBrains);
+`.devcontainer/init.sh create` once and `… start` on every start. Open the workspace with
+**Remote-Containers: Reopen in Container** (VS Code) or **Attach to Dev Container** (JetBrains).
 CLI users land in a shell directly.
 
 ## Raw Docker
@@ -31,7 +31,7 @@ make build            # or: docker build --no-cache -f .devcontainer/Dockerfile.
 make dev              # mounts the code at /workspace and drops you into bash
 ```
 
-Any editor can be attached inside the container shell (`nvim .`, `emacs .`, …) to pick up the LSP
+Attach any editor from inside the container shell (`nvim .`, `emacs .`, …) to pick up the LSP
 servers in `/usr/local/bin`.
 
 ## Verify
@@ -51,8 +51,7 @@ command -v rust-analyzer taplo marksman
 ln -sf ./.devcontainer/../pre-commit .git/hooks/pre-commit
 ```
 
-It runs [`./pre-commit`](./pre-commit) before every commit, so lint errors surface as early as
-possible.
+It runs [`./pre-commit`](./pre-commit) before every commit, so lint errors surface early.
 
 ## Tests and coverage
 
@@ -64,8 +63,8 @@ cargo llvm-cov --hide-instantiations --html        # browsable report
 cargo llvm-cov report                              # reuse the previous run
 ```
 
-CI additionally runs `cargo doc` under `-D warnings`, which catches failures `cargo build` and
-`cargo clippy` do not — run it locally before pushing.
+CI also runs `cargo doc` under `-D warnings`, which catches failures `cargo build` and `cargo
+clippy` do not. Run it locally before pushing.
 
 ## Where to read next
 
