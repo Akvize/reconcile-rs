@@ -860,35 +860,22 @@ pub struct Config {
     pub freshness_window: Duration,
     /// Maximum number of distinct remote peers (members) this node will track.
     ///
-    /// When the membership set is at capacity, datagrams from completely unknown senders are
-    /// dropped **before** any per-sender state (membership, gossip-peer record, or replay-filter
-    /// entry) is allocated. Senders that are already tracked are unaffected at cap, and calling
-    /// [`forget_peer`](crate::ReconcileStore::forget_peer) on a member immediately frees its slot.
+    /// At capacity, a datagram from a completely unknown sender is dropped before any per-sender
+    /// state is allocated; already-tracked senders are unaffected, and
+    /// [`forget_peer`](crate::ReconcileStore::forget_peer) frees a slot immediately. Defence in
+    /// depth for unauthenticated deployments, a hard ceiling for authenticated ones. Default 1024
+    /// — see [`with_max_peers`](Config::with_max_peers).
     ///
-    /// The cap is defence-in-depth for unauthenticated deployments (where any spoofed source
-    /// address would otherwise grow the maps without bound), and a hard ceiling for authenticated
-    /// ones. The default of 1024 is generous for most clusters; raise it if your cluster has more
-    /// active members. See [`with_max_peers`](Config::with_max_peers).
-    ///
-    /// The cap applies to *all* unknown senders, including read-only mirrors, which never become
-    /// members themselves: while the membership set is saturated, a newly connecting mirror is
-    /// also rejected and cannot sync until a member slot frees up. Size the cap for members
-    /// *plus* expected mirrors.
+    /// Applies to read-only mirrors too, which never become members: a saturated set also blocks
+    /// new mirrors from syncing. Size for members *plus* expected mirrors.
     pub max_peers: usize,
     /// Maximum number of concurrently active paced bulk dumps across all peers.
     ///
-    /// A paced bulk dump holds a full snapshot `Vec` of the differing range (potentially the
-    /// whole dataset) for the duration of the transfer. Without a global cap, M peers diffing
-    /// simultaneously would each hold such a snapshot — M × dataset memory plus M × egress
-    /// at [`bulk_send_rate`](Self::bulk_send_rate). This field limits the total number of
-    /// in-flight dump tasks regardless of peer count.
-    ///
-    /// When the budget is exhausted a new dump is skipped **before** the snapshot Vec is
-    /// allocated; the protocol is retry-driven, so the requesting peer's next diff round
-    /// re-triggers the dump once a slot is free.
-    ///
-    /// Defaults to 4. Raise if your cluster has many simultaneous cold peers and the host has
-    /// sufficient memory; lower for tighter memory caps. See
+    /// A bulk dump holds a full snapshot `Vec` of the differing range — potentially the whole
+    /// dataset — for the transfer's duration, so M simultaneous cold peers would otherwise cost
+    /// M × dataset memory. Exhausting the budget skips a new dump before the snapshot is
+    /// allocated; the protocol is retry-driven, so the peer's next diff round retries once a slot
+    /// frees. Default 4 — see
     /// [`with_max_concurrent_bulk_dumps`](Config::with_max_concurrent_bulk_dumps).
     pub max_concurrent_bulk_dumps: usize,
 }
@@ -1048,12 +1035,7 @@ impl Config {
         self
     }
 
-    /// Set the maximum number of concurrently active paced bulk dumps (default 4).
-    ///
-    /// When the budget is exhausted a new dump is skipped before allocating its snapshot Vec;
-    /// the protocol is retry-driven, so the peer re-triggers the dump on its next diff round once
-    /// a slot is free.
-    /// See [`max_concurrent_bulk_dumps`](Config::max_concurrent_bulk_dumps) for the full semantics.
+    /// Set [`max_concurrent_bulk_dumps`](Config::max_concurrent_bulk_dumps) (default 4).
     pub fn with_max_concurrent_bulk_dumps(mut self, max: usize) -> Self {
         self.max_concurrent_bulk_dumps = max;
         self

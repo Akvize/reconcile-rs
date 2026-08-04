@@ -726,16 +726,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
                                 let sender = peer.ip();
-                                // Per-peer cap check: if this sender is not yet tracked (not a
-                                // member) and the membership set is at capacity, drop the datagram
-                                // before allocating any per-sender state (replay filter entry,
-                                // peers map slot, or membership slot). Authenticated datagrams are
-                                // verified first (above), so this gate cannot be triggered by a
-                                // forged source address in authenticated mode.
-                                //
-                                // The check is intentionally placed *before* the replay filter so
-                                // that no replay-filter entry is created for a capped-out sender.
-                                // Known senders (already in `members`) bypass the cap.
+                                // If this sender is new and membership is at capacity, drop before
+                                // allocating any per-sender state (replay filter, peers map,
+                                // membership). Placed ahead of the replay filter so a capped-out
+                                // sender never gets an entry there either. Known senders bypass it.
                                 let is_known = self.members.read().contains(&sender);
                                 if !is_known {
                                     let current_len = self.members.read().len();
@@ -951,16 +945,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 let map_guard = self.map.read();
                 let mut guard = self.tombstone_acks.write();
                 for (key, version) in acks {
-                    // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                    // never-existent or non-tombstone keys are dropped here so they cannot
-                    // accumulate in `tombstone_acks` without bound.
-                    //
-                    // Ordering hazard: this gate cannot tell "a key we will never hold" from
-                    // "a key we don't hold YET". In a cluster of three or more nodes an ack
-                    // can arrive before the deletion it acknowledges (the acking peer may have
-                    // learned the deletion via a different gossip edge), and a dropped ack is
-                    // not re-delivered. Any future change to causal-stability GC must account
-                    // for this rather than rely on early acks being retained.
+                    // Only accept an ack for a key we locally hold as a tombstone, so acks for
+                    // never-existent or non-tombstone keys cannot accumulate unbounded. Ordering
+                    // hazard: at three nodes or more an ack can arrive before its deletion (via a
+                    // different gossip edge) and is dropped, not re-delivered — future
+                    // causal-stability GC changes must not assume early acks are retained.
                     let local_tombstone = map_guard.get(&key).filter(|v| v.is_tombstone());
                     let Some(local_v) = local_tombstone else {
                         trace!(
