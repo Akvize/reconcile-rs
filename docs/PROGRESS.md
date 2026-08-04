@@ -9,8 +9,8 @@
 
 | | |
 |---|---|
-| Last updated | 2026-08-03 |
-| Baseline | `claude/priority-issues-review-2lu5e9`, stacked on the Phase-1 stack (`claude/p1-7-hygiene`, pending merge). Carries the [#216](https://github.com/Akvize/reconcile-rs/issues/216) tombstone-GC convergence fix, [#143](https://github.com/Akvize/reconcile-rs/issues/143) (`Entry`/`State`, wire + on-disk break) and [#144](https://github.com/Akvize/reconcile-rs/issues/144) (`Transport`/`Codec` ports) |
+| Last updated | 2026-08-04 |
+| Baseline | `claude/p1-7-hygiene`, the Phase-1 tip (pending merge to `main`). [#229](https://github.com/Akvize/reconcile-rs/pull/229) merged into it on 2026-08-04, bringing the [#216](https://github.com/Akvize/reconcile-rs/issues/216) tombstone-GC convergence fix, [#143](https://github.com/Akvize/reconcile-rs/issues/143) (`Entry`/`State`, wire + on-disk break) and [#144](https://github.com/Akvize/reconcile-rs/issues/144) (`Transport`/`Codec` ports, aligned with D2/D4/D5) |
 | Manifest | `0.2.1` (unpublished; breaking changes ride 0.3.0 — [D10](./ARCHITECTURE.md#d10--030-is-one-coordinated-break), [#204](https://github.com/Akvize/reconcile-rs/issues/204)) |
 
 ---
@@ -131,8 +131,8 @@ changes runtime behaviour except step 4 (wire/on-disk format), and all preserve 
 | 1 — bound bundles & encapsulation | ✅ | [#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155 |
 | 2 — dissolve the diff traits | ✅ | [#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156. `HashRangeQueryable` / `Diffable` removed; range-hash querying inherent on `HRTree`; `start_diff` / `diff_round` free functions in `pub(crate) proto`. Iso-functional; invariants 3–4 byte-for-byte |
 | 3 — `Clock` port | ✅ | [#142](https://github.com/Akvize/reconcile-rs/issues/142), PR #158. `Arc<dyn Clock>` — object-safe, no clock type parameter on the engine/store/`Config`. `ManualClock` makes HLC behaviour reproducible without wall-clock time. Invariant 2 preserved. Naming cleanup alongside: `Hlc`→`Timestamp` (#159), `hlc`→`clock` (#163) |
-| 4 — `Entry` / `State` | ✅ | [#143](https://github.com/Akvize/reconcile-rs/issues/143), PR #229. Also dissolves `Projectable`/`ValueOnly` into `State<V>`; guarded by invariant 8. **Breaks the wire and on-disk formats** |
-| 5 — `Transport` / `Codec` ports | ✅ | [#144](https://github.com/Akvize/reconcile-rs/issues/144), PR #229. The `Codec` port carries a decode cap and `BincodeCodec` sets `with_limit`, partly closing [#151](https://github.com/Akvize/reconcile-rs/issues/151). Per [D2](./ARCHITECTURE.md#d2--transport-is-consumer-wireable-codec-is-not) `Transport` is consumer-wireable (`ReconcileStore::new_with_transport`, `InMemoryNetwork` un-gated) while `Codec` stays `pub(crate)`. Both ports move to `reconcile-net` at step 6 |
+| 4 — `Entry` / `State` | ✅ | [#143](https://github.com/Akvize/reconcile-rs/issues/143), PR #229 (merged). Also dissolves `Projectable`/`ValueOnly` into `State<V>`; guarded by invariant 8. **Breaks the wire and on-disk formats** |
+| 5 — `Transport` / `Codec` ports | ✅ | [#144](https://github.com/Akvize/reconcile-rs/issues/144), PR #229 (merged). The `Codec` port carries a decode cap and `BincodeCodec` sets `with_limit`, partly closing [#151](https://github.com/Akvize/reconcile-rs/issues/151). Per [D2](./ARCHITECTURE.md#d2--transport-is-consumer-wireable-codec-is-not) `Transport` is consumer-wireable (`ReconcileStore::new_with_transport`, `InMemoryNetwork` un-gated) while `Codec` stays `pub(crate)`. Both ports move to `reconcile-net` at step 6 |
 | 6 — workspace split | ◯ | Also lands the tree as a peer crate ([D1](./ARCHITECTURE.md#d1--hrtree-becomes-its-own-product-correctly-named)) |
 
 ### Remaining gaps to SOTA — [`SOTA.md` §2.4](./SOTA.md)
