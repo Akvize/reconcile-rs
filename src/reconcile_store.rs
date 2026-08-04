@@ -594,13 +594,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     }
 
     /// Bulk-insert many entries **locally, without broadcasting** — the one deliberate no-broadcast
-    /// write on the public API.
-    ///
-    /// Each entry is stamped with a fresh Hybrid Logical Clock timestamp and applied to the local
-    /// map (running the pre-insert hook), but nothing is pushed to peers eagerly. The entries
-    /// propagate on the next anti-entropy round instead. Use this to seed a large initial dataset at
-    /// startup without a broadcast storm; for a single propagating write use [`insert`](Self::insert)
-    /// or [`insert_bulk`](Self::insert_bulk).
+    /// write on the public API. Each entry gets a fresh HLC stamp and runs the pre-insert hook, but
+    /// propagates only on the next anti-entropy round; use this to seed a large initial dataset
+    /// without a broadcast storm. For a propagating write see
+    /// [`insert`](Self::insert)/[`insert_bulk`](Self::insert_bulk).
     pub fn load_bulk(&self, key_values: &[(K, V)]) {
         self.engine.just_insert_bulk(
             &key_values

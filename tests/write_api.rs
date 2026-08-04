@@ -45,7 +45,10 @@ async fn update_mutates_present_and_reports_absent() {
     let store = isolated(8310, "127.0.0.210").await;
     store.insert(1, 10);
 
-    assert!(store.update(&1, |v| *v += 5), "update reports the key existed");
+    assert!(
+        store.update(&1, |v| *v += 5),
+        "update reports the key existed"
+    );
     assert_eq!(store.get(&1).as_deref(), Some(&15));
 
     assert!(
@@ -87,7 +90,10 @@ async fn get_or_insert_with_inserts_only_when_absent() {
         7
     });
     assert_eq!(got, 42);
-    assert!(!called.load(Ordering::SeqCst), "closure must not run when present");
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "closure must not run when present"
+    );
 }
 
 // --- Bulk/range/predicate deletes must propagate as tombstones --------------------------------
