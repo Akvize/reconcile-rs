@@ -18,12 +18,9 @@
 //!
 //! # Exposure caveat
 //!
-//! The `/metrics` endpoint is **unauthenticated** and exposes operational information — dataset
-//! size and churn, byte/datagram counters, peer and reconciliation activity — that an observer can
-//! use to fingerprint your deployment. The examples bind `0.0.0.0:9000` for convenience, which
-//! listens on **every** interface. In production, bind it to `127.0.0.1` (or a trusted management
-//! interface) and let your scrape agent reach it locally, and/or restrict it with a firewall or a
-//! Kubernetes `NetworkPolicy`. Do not expose it on an untrusted network.
+//! `/metrics` is unauthenticated (`docs/CONTRACT.md` §4). The examples bind `0.0.0.0:9000` for
+//! convenience; in production bind `127.0.0.1` or a trusted management interface instead, and let
+//! your scrape agent reach it locally.
 //!
 //! # Serving a `/metrics` endpoint
 //!

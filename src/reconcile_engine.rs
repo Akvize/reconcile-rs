@@ -1120,19 +1120,13 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
             let map_guard = self.map.read();
             let mut guard = self.tombstone_acks.write();
             for (key, version) in acks {
-                // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                // never-existent or non-tombstone keys are dropped here so they cannot accumulate
-                // in `tombstone_acks` without bound.
-                //
-                // This gate cannot tell "a key we will never hold" from "a key we don't hold YET":
-                // in a cluster of three or more nodes an ack can arrive before the deletion it
-                // acknowledges (the acking peer learned the deletion via a different gossip edge),
-                // and the dropped ack is not re-delivered by the sender. That is benign because
-                // every node resends the ack for the tombstones it holds on every reconciliation
-                // round (see `start_reconciliation`): once we hold the tombstone, the next round's
-                // ack resend records the peer's acknowledgment. Pairwise reciprocation is no longer
-                // needed — the periodic ack resend is what makes the ack matrix complete across
-                // three or more replicas.
+                // Only accept an ack for a key we locally hold as a tombstone, so acks for
+                // never-existent or non-tombstone keys cannot accumulate unbounded. This gate
+                // cannot tell "will never hold" from "don't hold yet": at three nodes or more an
+                // ack can arrive before its deletion (a different gossip edge) and is dropped, not
+                // re-delivered. Benign because every node resends acks for tombstones it holds
+                // every round (`start_reconciliation`) — once we hold it, the next resend covers
+                // the peer's ack, no pairwise reciprocation needed.
                 if map_guard.get(&key).is_some_and(|v| v.is_tombstone()) {
                     guard.entry(key).or_default().insert(peer_ip, version);
                 } else {

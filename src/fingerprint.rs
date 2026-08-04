@@ -8,39 +8,23 @@
 
 //! Range fingerprint primitive used by the reconciliation protocol.
 //!
-//! The reconciliation protocol compares two collections by exchanging a
-//! *fingerprint* (a combined hash) of the elements in a range of keys. For this
-//! to be correct and safe, the fingerprint must satisfy two properties:
+//! Two properties this combined hash of a key range must satisfy:
 //!
-//! 1. **Algebraically strong combiner.** Fingerprints of sub-ranges are
-//!    combined into the fingerprint of their union, and elements are added and
-//!    removed incrementally as the tree mutates. The naive combiner — a 64-bit
-//!    XOR of per-element hashes — is `GF(2)`-linear and self-inverse: cancelling
-//!    or repeated element hashes vanish, and an adversary can *solve* (Gaussian
-//!    elimination) for crafted elements that make a divergent range collide in
-//!    fingerprint, causing silent missed differences. 64 bits also invites
-//!    accidental birthday collisions (~2³²) over a cluster's lifetime.
+//! 1. **Algebraically strong combiner.** A 64-bit XOR of per-element hashes is `GF(2)`-linear and
+//!    self-inverse, so an adversary can solve (Gaussian elimination) for crafted elements that
+//!    make a divergent range collide, causing silent missed differences — and 64 bits invites
+//!    accidental birthday collisions (~2³²) over a cluster's lifetime. Instead each element hashes
+//!    to 256 bits and fingerprints combine by **addition modulo 2²⁵⁶** with carry propagation: an
+//!    abelian group (`+`/`-`), not `GF(2)`-linear, and the wider word pushes accidental collisions
+//!    to ~2¹²⁸.
+//! 2. **Stable, versioned hash.** The fingerprint is a wire token: two nodes must compute the same
+//!    value forever, across Rust versions, platforms and endianness — which `std`'s
+//!    [`DefaultHasher`](std::collections::hash_map::DefaultHasher) does not guarantee. Pinned to
+//!    **BLAKE3** with fixed little-endian integer feeding; the golden-vector tests below freeze
+//!    the wire format so a breaking change fails CI.
 //!
-//!    Instead we use a **256-bit "hash-then-add" combiner**: each element hashes
-//!    to a 256-bit value and fingerprints combine by **addition modulo 2²⁵⁶**
-//!    (with carry propagation across the whole 256-bit word). This forms an
-//!    abelian group — combine is `+`, remove is `-` — and, unlike XOR, addition
-//!    with carries is *not* `GF(2)`-linear, defeating offline collision crafting.
-//!    The 256-bit width pushes accidental birthday collisions to ~2¹²⁸.
-//!
-//! 2. **Stable, versioned hash function.** The fingerprint is the **wire
-//!    reconciliation token**: two nodes must compute the *same* fingerprint for
-//!    the same data, forever, across Rust versions, platforms (32- vs 64-bit),
-//!    and endianness. `std`'s [`DefaultHasher`](std::collections::hash_map::DefaultHasher)
-//!    is explicitly documented as unspecified and unstable across releases, so
-//!    we pin the element hash to **BLAKE3** and feed integers in fixed
-//!    little-endian width (see the `Blake3Hasher` adapter). The golden-vector tests at the
-//!    bottom of this module freeze the wire format so any change that would
-//!    break interoperability fails CI.
-//!
-//! See: A. Meyer, *Range-Based Set Reconciliation*
-//! (arXiv:2212.13567); Clarke et al., *Incremental Multiset Hash Functions*
-//! (ASIACRYPT 2003).
+//! See: A. Meyer, *Range-Based Set Reconciliation* (arXiv:2212.13567); Clarke et al.,
+//! *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};

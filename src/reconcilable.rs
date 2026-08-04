@@ -19,16 +19,8 @@
 /// marker ([`Tombstone`](State::Tombstone)).
 ///
 /// `State` is *also* the **timestamp-less projection** of an [`Entry`] (see [`Entry::project`]).
-/// Its [`Hash`] is **value-only by construction**: it carries no [`Timestamp`](crate::Timestamp),
-/// so two replicas that agree on the logical value compute the *same* per-element fingerprint
-/// regardless of when (or on which node) each last wrote it. This is what lets a dateless
-/// [`ReconcileMirror`](crate::mirror::ReconcileMirror) and a dated
-/// [`ReconcileStore`](crate::reconcile_store::ReconcileStore) converge over the shared range-diff
-/// protocol without the mirror ever storing timestamps (invariant #8 in `docs/ARCHITECTURE.md` §5).
-///
-/// A dated [`Entry`] deliberately hashes **with** its stamp (required by the engine's
-/// `version_hash` for the causal-stability acks), while its `State` projection hashes the value
-/// alone; the two hashes must stay distinct.
+/// Its [`Hash`] is value-only by construction, unlike `Entry`'s (which hashes with the stamp, for
+/// `version_hash`) — the two must stay distinct; this is invariant 8 in `docs/ARCHITECTURE.md` §5.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum State<V> {
     /// A live value.

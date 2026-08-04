@@ -56,13 +56,11 @@ const LOAD_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 
 /// On-disk snapshot header: a 4-byte magic followed by a little-endian `u32` format version.
 ///
-/// The body is bincode (not self-describing), so a format change — e.g. the `Entry` / `State`
-/// domain-type migration (issue #143), which changed how each cell encodes — would otherwise be
-/// **silently misinterpreted** on load rather than detected. The header lets
-/// [`FileSnapshot::load_checked`] reject any snapshot whose magic or version does not match this
-/// build with a descriptive [`LoadError::Corrupt`], instead of decoding stale bytes into a plausible
-/// but wrong state (which would drop or corrupt tombstones and re-enable resurrection). A pre-header
-/// (0.2.x) snapshot has no such prefix and is rejected the same way.
+/// The body is bincode, not self-describing, so a format change would otherwise be silently
+/// misinterpreted on load instead of detected. [`FileSnapshot::load_checked`] rejects a mismatched
+/// magic or version as [`LoadError::Corrupt`] rather than decoding stale bytes into a plausible but
+/// wrong state — which would drop or corrupt tombstones and re-enable resurrection. A pre-header
+/// (0.2.x) snapshot, having no prefix at all, is rejected the same way.
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RCNL";
 /// Current on-disk snapshot format version. Bump whenever the serialized shape of
 /// [`PersistedState`] changes. Version 1 is the `Entry<Timestamp, V>` / `State<V>` layout (0.3.0).

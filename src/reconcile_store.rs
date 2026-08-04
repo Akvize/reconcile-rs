@@ -75,13 +75,11 @@ const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 /// Floor, in bytes per second, applied to a configured [`Config::bulk_send_rate`]. A non-`None`
 /// rate below this is raised to it (with a warning) when the engine is built.
 ///
-/// A paced bulk dump holds the per-peer in-flight mark for the whole transfer, and `pace()` sleeps
-/// `sent_bytes / rate` between datagrams. A tiny rate turns that sleep into an effectively unbounded
-/// stall that wedges the peer's sync (it is the single in-flight dump for that peer, so no further
-/// reconciliation with it can start). 1 MiB/s keeps even one full-size datagram (`BUFFER_SIZE`,
-/// ~64 KiB) pacing in well under a second (~62 ms), so the in-flight mark always turns over
-/// promptly while still allowing operators to throttle a cold sync hard. `None` (pacing disabled)
-/// is left untouched — it is an explicit choice, not a misconfiguration.
+/// `pace()` sleeps `sent_bytes / rate` between datagrams while holding the per-peer in-flight
+/// mark, so a tiny rate stalls that peer's sync indefinitely — it's the only in-flight dump for
+/// that peer. 1 MiB/s keeps even a full `BUFFER_SIZE` datagram (~64 KiB) pacing under ~62 ms, so
+/// the mark turns over promptly while still letting operators throttle hard. `None` (no pacing) is
+/// left untouched, an explicit choice.
 pub(crate) const MIN_BULK_SEND_RATE: usize = 1024 * 1024;
 
 /// Default size requested for the gossip socket's send/receive buffers (`SO_SNDBUF` / `SO_RCVBUF`),
@@ -1119,11 +1117,9 @@ pub struct Config {
     /// Operator acknowledgment that running without a [`cluster_key`](Self::cluster_key) is
     /// intentional (set via [`with_insecure_no_key`](Self::with_insecure_no_key)).
     ///
-    /// Purely advisory: it changes **nothing** about the protocol — keyless mode is still
-    /// unauthenticated and still leaks the dataset (see [`cluster_key`](Self::cluster_key)). Its only
-    /// effect is to downgrade the loud startup `SECURITY` warning to a single acknowledged-once line,
-    /// so an operator who has accepted the trust model is not nagged on every restart. It is ignored
-    /// when a key *is* set.
+    /// Purely advisory: changes nothing about the protocol, which stays unauthenticated and still
+    /// leaks the dataset. Only downgrades the startup `SECURITY` warning to a single acknowledged
+    /// line. Ignored when a key is set.
     pub acknowledged_no_key: bool,
     /// Identity of this node, used as the deterministic tie-break in the Hybrid Logical
     /// Clock total order. When `None` (the default), a random id is generated at startup.
@@ -1368,17 +1364,9 @@ impl Config {
         self
     }
 
-    /// Explicitly acknowledge running **without** a cluster key.
-    ///
-    /// Keyless mode is the default, but it is unauthenticated *and leaks the entire dataset* to any
-    /// host that can reach the port (see [`cluster_key`](Config::cluster_key) for the concrete
-    /// leak). Calling this is an operator statement that the keyless trust model — a fully trusted
-    /// network underlay — is understood and intended. It is purely advisory: it does **not** change
-    /// the protocol or add any protection. Its only effect is to downgrade the loud startup
-    /// `SECURITY` warning to a single acknowledged line, so a deliberately keyless deployment is not
-    /// nagged on every restart.
-    ///
-    /// Has no effect once [`with_cluster_key`](Config::with_cluster_key) is set; do not call both.
+    /// Set [`acknowledged_no_key`](Config::acknowledged_no_key): an operator statement that the
+    /// keyless trust model (a fully trusted network underlay) is understood and intended. Has no
+    /// effect once [`with_cluster_key`](Config::with_cluster_key) is set.
     pub fn with_insecure_no_key(mut self) -> Self {
         self.acknowledged_no_key = true;
         self

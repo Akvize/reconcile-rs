@@ -1193,15 +1193,10 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
 }
 
 /// Companion to the mesh test, in a line topology (A↔B↔C: the middle node relays; A and C never
-/// communicate directly, so each is a member only of B). End-to-end coverage that GC still
-/// converges when propagation is relayed rather than broadcast from a single origin.
-///
-/// Note: the strict regression guard is the *mesh* test above — that is the configuration in
-/// which the pre-fix ack matrix provably never completes (B and C learn the deletion simultaneously
-/// from A and never exchange acks). A relayed line incidentally completes the matrix through the
-/// existing stale-value ack path during each adjacent node's value→tombstone transition, so it
-/// converges even without the periodic-ack-resend fix; this test simply confirms the fix does not
-/// regress that path.
+/// communicate directly). Confirms GC still converges when propagation is relayed rather than
+/// broadcast from one origin. The *mesh* test above is the strict regression guard — a line
+/// happens to complete the ack matrix even without the periodic-resend fix, via the existing
+/// stale-value ack path during each transition, so this only checks the fix doesn't regress it.
 #[tokio::test(flavor = "multi_thread")]
 async fn tombstone_gc_converges_in_3_node_cluster_line() {
     let port = 8121;
