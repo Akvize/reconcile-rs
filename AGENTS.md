@@ -58,8 +58,24 @@ Say what the code cannot. Everything else is noise that goes stale.
   `docs/SOTA.md` positions · `docs/GLOSSARY.md` defines. Put a change in exactly one.
 - Prefer a diagram or a table to a paragraph. Mermaid renders on GitHub.
 
+## Traps that are not in the code
+
+- **`./pre-commit` is a repo script, not the Python framework.** There is no
+  `.pre-commit-config.yaml`; `pre-commit run --all-files` does nothing. `.devcontainer/init.sh`
+  links it into `.git/hooks/`. It runs `fmt` and `clippy --all` only, so passing it is weaker than
+  the gate above.
+- **shellcheck and markdownlint are editor aids, not gates.** Both ship in the dev image, neither
+  runs in CI, and the existing docs fail their defaults heavily. Don't "fix" docs to satisfy them.
+  Do keep new shell scripts shellcheck-clean.
+- **Anything new at the top level ships to crates.io unless `Cargo.toml`'s `exclude` says
+  otherwise**, and publishing is irreversible. Check with
+  `cargo package --list --allow-dirty | grep <new-path>`.
+
 ## Conventions
 
+- **Commits**: Conventional Commits with an optional scope, as in the log — `feat(clock):`,
+  `fix(timeout_wheel):`, `refactor(...)`, `perf(...)`, `chore:`, `ci:`. Work lands through a pull
+  request; `main` is not committed to directly.
 - `#![forbid(unsafe_code)]`. MSRV 1.85; raising it is a minor version bump.
 - Ports are `Clock`, `Transport`, `Codec`, `Persistence`, `Discovery`. Which are consumer-wireable,
   and what an implementation owes, is [`docs/CONTRACT.md` §5](docs/CONTRACT.md#5-extending-it).
