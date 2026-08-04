@@ -27,17 +27,39 @@
 
 set -u
 
-# Public repo holding the bundle. Change to your own once you relocate it.
+# ---------------------------------------------------------------------------
+# PREREQUISITE: the bundle must already exist at BUNDLE_PATH in BUNDLE_REPO.
+# Copy agent-workflow/ there and push before pasting this script, otherwise it
+# finds nothing and installs nothing.
+# ---------------------------------------------------------------------------
 BUNDLE_REPO="${AW_BUNDLE_REPO:-https://github.com/adriendellagaspera/dotfiles.git}"
 BUNDLE_PATH="${AW_BUNDLE_PATH:-claude/agent-workflow}"
+BUNDLE_REF="${AW_BUNDLE_REF:-}" # optional branch or tag; empty = default branch
 
 TMP="$(mktemp -d)"
-if git clone --depth 1 --quiet "$BUNDLE_REPO" "$TMP/src" 2>/dev/null &&
-  [ -d "$TMP/src/$BUNDLE_PATH" ]; then
-  ( cd "$TMP/src/$BUNDLE_PATH" && ./install.sh ) || true
-  echo "agent-workflow installed from $BUNDLE_REPO"
+CLONE_ARGS="--depth 1 --quiet"
+[ -n "$BUNDLE_REF" ] && CLONE_ARGS="$CLONE_ARGS --branch $BUNDLE_REF"
+
+# shellcheck disable=SC2086
+if git clone $CLONE_ARGS "$BUNDLE_REPO" "$TMP/src" 2>/dev/null; then
+  if [ -d "$TMP/src/$BUNDLE_PATH" ]; then
+    ( cd "$TMP/src/$BUNDLE_PATH" && ./install.sh ) || true
+    echo "agent-workflow: installed from $BUNDLE_REPO/$BUNDLE_PATH"
+  else
+    # Loud, because the silent version of this is a bundle that never installs
+    # and a user who thinks it did.
+    echo "########################################################"
+    echo "# agent-workflow NOT INSTALLED                          "
+    echo "# cloned $BUNDLE_REPO but '$BUNDLE_PATH' does not exist."
+    echo "# Copy agent-workflow/ there and push, then restart a   "
+    echo "# session so this setup script re-runs.                 "
+    echo "########################################################"
+  fi
 else
-  echo "agent-workflow: could not fetch $BUNDLE_REPO/$BUNDLE_PATH — skipping" >&2
+  echo "########################################################"
+  echo "# agent-workflow NOT INSTALLED — could not clone         "
+  echo "# $BUNDLE_REPO"
+  echo "########################################################"
 fi
 rm -rf "$TMP"
 
