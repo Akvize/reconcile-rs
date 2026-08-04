@@ -51,6 +51,19 @@ STATUS_HASH="$(aw_status_hash "$ROOT")"
 printf '%s\n' "$SESSION_ID" >"$STATE_DIR/current-session" 2>/dev/null
 aw_journal_append "$SDIR" session_start "branch=$BRANCH base=$HEAD_SHA dirty=$DIRTY"
 
+# Expose the session's paths to every later Bash command. This is what removes
+# the need for a bespoke CLI: the skills can use plain one-liners against these
+# variables, so there is a single code path whether or not anything else is
+# installed. The values are also printed below, in case the env file is absent.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  {
+    printf 'AW_SESSION_DIR=%s\n' "$SDIR"
+    printf 'AW_JOURNAL=%s\n' "$SDIR/journal.tsv"
+    printf 'AW_BASE_SHA=%s\n' "$HEAD_SHA"
+    printf 'AW_STATE_DIR=%s\n' "$STATE_DIR"
+  } >>"$CLAUDE_ENV_FILE" 2>/dev/null
+fi
+
 CONVENTIONS="$(aw_find_convention_files "$ROOT")"
 LINTERS="$(aw_find_lint_configs "$ROOT")"
 VERIFY="$(aw_detect_verification "$ROOT")"
@@ -59,7 +72,17 @@ DOCS="$(aw_doc_surface "$ROOT")"
 OUT="## Session bootstrap (agent-workflow)
 
 **Baseline** — branch \`$BRANCH\`, HEAD \`${HEAD_SHA:0:12}\`, $DIRTY uncommitted file(s) at start.
-Session state dir: \`$SDIR\`
+
+\`\$AW_BASE_SHA\`, \`\$AW_JOURNAL\`, \`\$AW_SESSION_DIR\` and \`\$AW_STATE_DIR\` are set for
+this session. Record friction the moment it happens — one line, no ceremony:
+
+\`\`\`bash
+printf '%s\\tfriction\\t%s\\n' \"\$(date -u +%FT%TZ)\" \"README documents a flag the binary rejects\" >> \"\$AW_JOURNAL\"
+\`\`\`
+
+Kinds: \`friction\` \`decision\` \`anomaly\` \`assumption\` \`unverified\` \`scope\` \`debt\`.
+Failed tool calls are journalled automatically; record what a hook cannot see.
+Journal: \`$SDIR/journal.tsv\`
 
 ### How this project proves itself
 Run these before claiming anything works. Do not invent commands.

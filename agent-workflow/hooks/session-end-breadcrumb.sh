@@ -28,6 +28,6 @@ aw_journal_append "$SDIR" session_end "reason=${REASON:-other}"
 if [ -f "$SDIR/retro-done" ]; then
   rm -f "$STATE_DIR/retro-pending" 2>/dev/null
 else
-  printf '%s\n' "$SDIR/journal.jsonl" >"$STATE_DIR/retro-pending" 2>/dev/null
+  printf '%s\n' "$SDIR/journal.tsv" >"$STATE_DIR/retro-pending" 2>/dev/null
 fi
 exit 0

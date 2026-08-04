@@ -17,20 +17,11 @@ with a plausible default.
 ## 1. Read the injected facts
 
 The `SessionStart` hook has already probed the repo and injected a bootstrap block
-(verification commands, convention sources, lint configs, doc surface, git
-baseline, previous handoff). If it is present, read it and skip to step 2.
+— verification commands, convention sources, lint configs, doc surface, git
+baseline, previous handoff. If it is present, read it and go to step 2.
 
-```
-aw verify        # how this project proves itself
-aw conventions   # convention sources, lint configs, doc surface
-aw baseline      # recorded git baseline
-```
-
-### Without the `aw` CLI
-
-The hooks are optional. If `aw` is not installed — for instance when this skill
-came from claude.ai rather than the full bundle — do the same probes by hand.
-Everything below still applies; only the automation is missing.
+If it is not, the hooks are not installed. Everything below still applies; only
+the automation is missing. Run the same probes yourself:
 
 ```bash
 git rev-parse --abbrev-ref HEAD && git rev-parse HEAD && git status --porcelain -uall | wc -l
@@ -38,9 +29,10 @@ grep -rhE '^\s+run:\s*\S' .github/workflows 2>/dev/null | sed 's/^\s*run:\s*//' 
 ls CLAUDE.md AGENTS.md CONTRIBUTING.md Makefile justfile package.json .pre-commit-config.yaml 2>/dev/null
 ```
 
-Read CI first — whatever CI runs is what "passing" means in this project, and it
-is frequently the *only* place the real commands are written down. Then record
-the baseline SHA in your own notes, since without the hook nothing else will.
+Read CI first. Whatever CI runs is what "passing" means in this project, and it is
+frequently the *only* place the real commands are written down — `CONTRIBUTING.md`
+often documents the setup and omits the verification. Note the baseline SHA
+yourself, since without the hook nothing else will.
 
 ## 2. Prove the verification loop actually runs — before writing code
 
@@ -53,8 +45,8 @@ You are establishing three things:
 - what a passing baseline looks like, so you can tell your breakage from pre-existing breakage;
 - how long the loop takes, which decides how often you can afford to run it.
 
-If it fails on untouched code, that is a finding, not an obstacle: record it
-(`aw note anomaly "…"`) and tell the user before proceeding. Never silently work
+If it fails on untouched code, that is a finding, not an obstacle: journal it as
+an `anomaly` and tell the user before proceeding. Never silently work
 around a broken baseline — you will otherwise spend the session unable to
 distinguish your own damage from the pre-existing kind.
 
@@ -76,8 +68,8 @@ conflict itself is a finding for the exit review.
 State back to the user, in three or four lines, the conventions you will follow.
 This is cheap and catches misalignment immediately.
 
-If there is no `CLAUDE.md`/`AGENTS.md`, note it (`aw note anomaly "no agent
-instruction file"`). The exit review will propose one seeded from what you learn.
+If there is no `CLAUDE.md`/`AGENTS.md`, journal that as an `anomaly`. The exit
+review will propose one seeded from what you learn today.
 
 ## 4. Pick up unfinished business
 
@@ -95,9 +87,11 @@ Before touching code, write down — to the user, in two or three lines:
 - **Verification:** the exact command(s) that will demonstrate success.
 - **Blast radius:** does this session expect to push, publish, migrate, or delete?
 
-Record it: `aw note scope "<the goal and boundary>"`, or, without the CLI, state
-it explicitly in your reply so it is in the transcript and can be compared
-against later.
+Record it, and state it in your reply either way so it is in the transcript:
+
+```bash
+printf '%s\tscope\t%s\n' "$(date -u +%FT%TZ)" "<goal and boundary>" >> "$AW_JOURNAL"
+```
 
 This costs thirty seconds and is what the exit review's scope-drift gate compares
 against. Without it, "did we ship what was asked?" cannot be answered by anything
@@ -106,22 +100,22 @@ except memory, which is exactly the thing that fails.
 ## 6. Journal as you go
 
 The exit review is only as good as the evidence collected during the session.
-Tool failures are captured automatically. Everything else needs one line from you,
-at the moment it happens — not reconstructed at the end:
+Failed tool calls are captured automatically. Everything else needs one line from
+you, at the moment it happens — not reconstructed at the end:
 
-```
-aw note friction   "README documents --flag; the binary rejects it"
-aw note decision   "chose X over Y because Z"
-aw note anomaly    "tests/ imports from src/internal, which is private by convention"
-aw note assumption "assuming the staging DB schema matches prod — unverified"
-aw note unverified "refactor compiles and unit-tests pass; no integration test covers this path"
-aw note debt       "left the slow path unoptimised; see TODO in parser.rs"
+```bash
+J() { printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$2" >> "$AW_JOURNAL"; }
+
+J friction   "README documents --flag; the binary rejects it"
+J decision   "chose X over Y because Z"
+J anomaly    "tests/ imports from src/internal, which is private by convention"
+J assumption "assuming the staging DB schema matches prod — unverified"
+J unverified "refactor compiles and unit-tests pass; no integration test covers this path"
+J debt       "left the slow path unoptimised; see TODO in parser.rs"
 ```
 
 Rule of thumb: **if it surprised you, journal it.** Surprises are exactly the
-material the retrospective needs, and they are exactly what you will have
-forgotten by the end.
-
-Without the CLI, keep the same list in a scratch file and mention each entry in
-your reply as it happens. The medium matters far less than the habit of writing
-it down at the moment of surprise rather than reconstructing it later.
+material the retrospective needs, and exactly what you will have forgotten by the
+end. If `$AW_JOURNAL` is unset, keep the same list in a scratch file and mention
+each entry in your reply. The medium matters far less than writing it down at the
+moment of surprise rather than reconstructing it later.

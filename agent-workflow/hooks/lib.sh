@@ -126,26 +126,17 @@ aw_session_dir() {
 
 aw_journal_append() {
   # aw_journal_append <session_dir> <kind> <message>
+  #
+  # Tab-separated rather than JSON on purpose: the agent appends to this file
+  # directly with a one-line `printf`, so the format has to be trivial to write
+  # by hand and impossible to corrupt with a quoting mistake.
   local sdir="${1:-}" kind="${2:-note}" msg="${3:-}"
   [ -n "$sdir" ] || return 0
   mkdir -p "$sdir" 2>/dev/null
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-  if command -v python3 >/dev/null 2>&1; then
-    AW_TS="$ts" AW_KIND="$kind" AW_MSG="$msg" python3 -c '
-import json, os, sys
-sys.stdout.write(json.dumps({
-    "ts": os.environ["AW_TS"],
-    "kind": os.environ["AW_KIND"],
-    "message": os.environ["AW_MSG"],
-}) + "\n")
-' >>"$sdir/journal.jsonl" 2>/dev/null
-  else
-    local esc
-    esc=$(printf '%s' "$msg" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
-    printf '{"ts":"%s","kind":"%s","message":"%s"}\n' "$ts" "$kind" "$esc" \
-      >>"$sdir/journal.jsonl" 2>/dev/null
-  fi
+  msg="$(printf '%s' "$msg" | tr '\n\t' '  ')"
+  printf '%s\t%s\t%s\n' "$ts" "$kind" "$msg" >>"$sdir/journal.tsv" 2>/dev/null
 }
 
 # --------------------------------------------------------------------------

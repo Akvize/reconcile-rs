@@ -15,7 +15,6 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 DEST="$CLAUDE_DIR/agent-workflow"
 SKILLS_DIR="$CLAUDE_DIR/skills"
 SETTINGS="$CLAUDE_DIR/settings.json"
-BIN_DIR="${AW_BIN_DIR:-$HOME/.local/bin}"
 
 MODE=install
 case "${1:-}" in
@@ -99,7 +98,6 @@ if [ "$MODE" = "uninstall" ]; then
   merge_settings
   rm -rf "$DEST"
   for s in session-start session-end session-note; do rm -rf "${SKILLS_DIR:?}/$s"; done
-  rm -f "$BIN_DIR/aw"
   echo "uninstalled. session state preserved in ~/.claude/agent-workflow-state"
   exit 0
 fi
@@ -107,33 +105,26 @@ fi
 if [ "$MODE" = "dryrun" ]; then
   echo "would install bundle -> $DEST"
   echo "would install skills -> $SKILLS_DIR/{session-start,session-end,session-note}"
-  echo "would symlink       -> $BIN_DIR/aw"
   echo "resulting settings.json:"
   merge_settings
   exit 0
 fi
 
-mkdir -p "$DEST" "$SKILLS_DIR" "$BIN_DIR"
-cp -R "$SRC/hooks" "$SRC/bin" "$SRC/settings.snippet.json" "$DEST/"
-chmod +x "$DEST"/hooks/*.sh "$DEST"/bin/aw 2>/dev/null || true
+mkdir -p "$DEST" "$SKILLS_DIR"
+cp -R "$SRC/hooks" "$SRC/settings.snippet.json" "$DEST/"
+chmod +x "$DEST"/hooks/*.sh 2>/dev/null || true
 
 for s in session-start session-end session-note; do
   rm -rf "${SKILLS_DIR:?}/$s"
   cp -R "$SRC/skills/$s" "$SKILLS_DIR/$s"
 done
 
-ln -sf "$DEST/bin/aw" "$BIN_DIR/aw"
 merge_settings
 
 echo
 echo "installed:"
 echo "  bundle  $DEST"
 echo "  skills  session-start, session-end, session-note"
-echo "  cli     $BIN_DIR/aw"
 echo "  state   ~/.claude/agent-workflow-state  (never written into your repos)"
-case ":$PATH:" in
-*":$BIN_DIR:"*) ;;
-*) echo; echo "note: $BIN_DIR is not on PATH — add it so the skills can call \`aw\`." ;;
-esac
 echo
 echo "retrospective trigger: \${AW_RETRO_MODE:-nudge}  (nudge | block | off)"
