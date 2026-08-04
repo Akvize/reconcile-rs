@@ -50,8 +50,8 @@ So the bundle **records during, synthesises at exit**:
   This is free, and it is the highest-signal friction data that exists — each one
   is a wrong assumption, a missing dependency, or a command that does not work
   here.
-- The agent adds one line whenever something surprises it: `aw note friction …`,
-  `aw note decision …`, `aw note anomaly …`.
+- The agent appends one line whenever something surprises it:
+  `printf '%s\tfriction\t%s\n' "$(date -u +%FT%TZ)" "…" >> "$AW_JOURNAL"`.
 
 At exit, "what went wrong today?" becomes a reading exercise rather than a memory
 test.
@@ -65,7 +65,7 @@ test.
 ```bash
 ./install.sh              # install or upgrade (idempotent)
 ./install.sh --dry-run    # show the resulting settings.json without writing
-./install.sh --uninstall  # remove hooks, skills and CLI; state is preserved
+./install.sh --uninstall  # remove hooks and skills; state is preserved
 ```
 
 This installs into `~/.claude`, so it applies to **every** project — no per-repo

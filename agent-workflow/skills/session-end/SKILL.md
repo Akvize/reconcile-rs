@@ -69,7 +69,7 @@ Compare what was asked against what shipped. Both directions are failures:
 Reference the `scope` journal entry from bootstrap. If none exists, reconstruct
 the goal from the opening request and say that you are doing so.
 
-Every file in `aw diff` should be traceable to the request. List any that are not.
+Every file in the diff should be traceable to the request. List any that are not.
 
 ## G1 — Verification honesty
 
@@ -102,8 +102,8 @@ because it spends trust that has to be repaid later.
 
 Not "does it lint" — run the linter, but that is the floor.
 
-1. Run the project's actual format/lint/check commands (from `aw verify`) and
-   report real output.
+1. Run the project's actual format/lint/check commands — the ones established at
+   bootstrap, not ones you assume — and report their real output.
 2. Compare the shipped code against the *practised* conventions of the files it
    sits beside: error handling, naming, test placement and naming, module
    boundaries, comment density, public-API surface, commit-message style.
@@ -118,7 +118,7 @@ linter is green.
 Three distinct questions, all of which must be asked:
 
 1. **Stale** — does any doc now describe behaviour that changed this session?
-   Check the doc surface from `aw conventions`, and grep the docs for the
+   Check every doc in the repo's doc surface, and grep them for the
    identifiers, flags, commands, endpoints, and config keys that this session
    touched or renamed.
 2. **Missing** — did this session add behaviour, configuration, or public API
@@ -141,11 +141,11 @@ What did this session do that is hard or impossible to undo?
   Anything that left the machine may be cached, indexed, or already read.
 - **Destructive** — files or branches deleted, history rewritten, migrations run,
   data mutated, infrastructure changed.
-- **Secrets** — run `aw secrets`. Review every hit by hand; the pattern match is
+- **Secrets** — run the credential grep above. Review every hit by hand; the match is
   a prompt to look, not a verdict. Then check the places secrets leak that are
   not source files: commit messages, PR/issue bodies, test fixtures, logs
   committed as artifacts, `.env` files newly tracked, and CI config.
-- **Supply chain** — run `aw deps`. For every added or bumped dependency: is it
+- **Supply chain** — run the manifest diff above. For every added or bumped dependency: is it
   necessary, is the version pinned appropriately, is the licence compatible, and
   was it deliberate or a transitive surprise from a lockfile regeneration?
 
