@@ -131,13 +131,9 @@ pub mod testing {
         tree.hash(range)
     }
 
-    /// Seal a raw payload with the given 32-byte cluster key, sequence number, and wall-clock stamp
-    /// using MAC authentication (not encryption), producing the on-wire datagram bytes.
-    ///
-    /// Exposed so integration tests can craft legitimately-sealed datagrams and inject them via a
-    /// raw UDP socket to exercise the anti-replay pipeline end-to-end.  The output format matches
-    /// what the engine sends in authenticated (non-encrypted) mode:
-    /// `tag(32) || seq(8 LE) || stamp(8 LE) || payload`.
+    /// Seal `payload` with MAC authentication (not encryption): `tag(32) || seq(8 LE) || stamp(8
+    /// LE) || payload`. Lets integration tests craft legitimate datagrams to exercise the
+    /// anti-replay pipeline over a raw UDP socket.
     pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
         crate::auth::Authenticator::new(Some(key), false)
             .seal(seq, stamp, payload)

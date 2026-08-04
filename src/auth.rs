@@ -8,25 +8,18 @@
 
 //! Per-datagram message authentication for the reconciliation protocol.
 //!
-//! The UDP protocol performs no authentication by itself: any host that can send a datagram to the
-//! port can forge an update and poison the whole cluster through last-write-wins (see the
-//! crate-level "Security model" documentation). To close that vector, when a cluster key is
-//! configured (see
-//! [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key)), every outgoing
-//! datagram is framed as `tag || replay_header || payload` where `tag` is a keyed MAC over
-//! `replay_header || payload`, and every incoming datagram is verified **before** any
-//! deserialization.
-//!
-//! The `replay_header` is a 16-byte prefix (`seq || stamp`, each a little-endian `u64`) that is
-//! authenticated together with the payload. It provides the data the receiver needs for
-//! replay-protection checks (see [`crate::replay`]).
+//! Without a cluster key, any host that can reach the port can forge an update and poison the
+//! cluster via last-write-wins (see the crate-level "Security model" docs). With
+//! [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key), every outgoing
+//! datagram is framed as `tag || replay_header || payload`, `tag` a keyed MAC over
+//! `replay_header || payload`; incoming datagrams are verified before any deserialization. The
+//! 16-byte `replay_header` (`seq || stamp`, both little-endian `u64`) feeds the checks in
+//! [`crate::replay`].
 //!
 //! With the `encryption` feature and
-//! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), this keyed mode is
-//! upgraded from authentication-only to **authenticated encryption**: each datagram is framed as
-//! `nonce || ciphertext || tag` using XChaCha20-Poly1305 over the same cluster key, adding
-//! confidentiality on top of the integrity and authenticity the MAC already provides. The replay
-//! header is part of the plaintext that is encrypted.
+//! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), the same keyed
+//! mode upgrades to authenticated encryption: `nonce || ciphertext || tag` via XChaCha20-Poly1305,
+//! the replay header encrypted along with the payload.
 //!
 //! # Wire layout (authenticated modes)
 //!

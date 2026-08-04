@@ -809,15 +809,9 @@ pub struct Config {
     /// Set to `None` to leave the inherited OS default untouched. See
     /// [`with_send_buffer_size`](Config::with_send_buffer_size).
     pub send_buffer_size: Option<usize>,
-    /// Maximum deviation between a datagram's sender wall-clock stamp and local physical time for
-    /// the datagram to be accepted in authenticated modes.
-    ///
-    /// Datagrams whose freshness stamp is more than this far in the past **or** future are
-    /// silently dropped, preventing replay of old authenticated traffic. Only applied in
-    /// authenticated modes (MAC or encrypted); unauthenticated mode ignores this setting.
-    ///
-    /// Defaults to 5 minutes. Increase if nodes have large, legitimate clock skew; decrease for
-    /// tighter replay protection. See [`with_freshness_window`](Config::with_freshness_window).
+    /// Maximum age (past or future) of a datagram's sender wall-clock stamp before it is silently
+    /// dropped as a replay. Authenticated modes only; ignored unkeyed. Default 5 minutes — see
+    /// [`with_freshness_window`](Config::with_freshness_window).
     pub freshness_window: Duration,
 }
 impl Default for Config {
@@ -957,12 +951,8 @@ impl Config {
         self
     }
 
-    /// Set the freshness window for replay protection in authenticated modes (default 5 minutes).
-    ///
-    /// Datagrams whose sender wall-clock stamp deviates from local physical time by more than
-    /// `window` in either direction are silently dropped. A narrower window tightens replay
-    /// protection; a wider one tolerates larger clock skew between nodes. Has no effect in
-    /// unauthenticated mode (no cluster key). See [`freshness_window`](Config::freshness_window).
+    /// Set [`freshness_window`](Config::freshness_window): the max stamp deviation tolerated in
+    /// authenticated modes before a datagram is dropped as a replay. No effect unkeyed.
     pub fn with_freshness_window(mut self, window: Duration) -> Self {
         self.freshness_window = window;
         self

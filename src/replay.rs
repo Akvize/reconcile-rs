@@ -8,91 +8,41 @@
 
 //! Per-peer replay protection for the authenticated protocol modes.
 //!
-//! When a cluster key is configured (MAC or encrypted mode), every outgoing datagram carries a
-//! 16-byte **replay header** — a monotonically increasing `u64` sequence number followed by a
-//! `u64` sender wall-clock stamp (milliseconds since the Unix epoch, little-endian) — that is
-//! included in the authenticated portion of the datagram. The receiver maintains per-peer state
-//! to reject:
+//! When a cluster key is configured, every outgoing datagram carries a 16-byte **replay header**
+//! (`seq: u64` then `stamp: u64`, little-endian, milliseconds since epoch) inside the authenticated
+//! region, first before any protocol messages. The receiver keeps per-peer state to reject a
+//! sequence number already seen or older than the sliding-bitmap window, and a stamp that deviates
+//! from local physical time by more than [`FRESHNESS_WINDOW_DEFAULT`]. Unauthenticated mode carries
+//! no header and is exempt.
 //!
-//! - **Duplicate or stale datagrams**: a sequence number within the backward window that has
-//!   already been seen (sliding-bitmap check), or a sequence number older than the window.
-//! - **Stale freshness stamps**: a sender wall-clock stamp that deviates from the receiver's
-//!   physical clock by more than [`FRESHNESS_WINDOW_DEFAULT`] in either direction.
+//! # Replay state outlives membership
 //!
-//! Only datagrams that carry an authenticated replay header are checked. Unauthenticated mode
-//! (no cluster key) is explicitly exempt — and documented as unprotected.
+//! Decommissioning a peer drops it from `members`/`peers`, but its replay-filter entry is kept: a
+//! captured datagram replayed after decommission would otherwise pass MAC and freshness checks and
+//! re-add the peer to `members`, re-poisoning causal stability. The staleness purge
+//! (`now - stamp_at_max <= window`, opportunistic on every `check_and_record` via `HashMap::retain`)
+//! is sound because no datagram can carry a stamp greater than `stamp_at_max` without either being
+//! accepted (raising it) or triggering `reset`, so once the window has passed no replay can clear
+//! the freshness check regardless of sender skew.
 //!
-//! # Replay state lifetime and staleness purge
+//! # Sequence regression vs. restart
 //!
-//! Per-peer replay state **intentionally outlives membership**. Decommissioning a peer removes it
-//! from `members` and `peers` so it no longer gates tombstone garbage collection or receives gossip
-//! probes, but the replay filter entry is kept. This matters because an adversary who captured a
-//! datagram from the peer while it was active can replay it within the freshness window after
-//! decommission: the replayed datagram passes MAC verification and the freshness check, but hits
-//! the bitmap duplicate check and is rejected. Without this, decommission + replay would re-add
-//! the peer to `members`, re-poisoning causal-stability membership — which is exactly what this
-//! design exists to prevent.
+//! A sender's sequence counter resets to 1 on restart, so every `seq <= max_seq` is checked against
+//! the stamp first: `stamp > stamp_at_max` means a genuine restart (state resets, datagram
+//! accepted); otherwise the bitmap decides. **Residual**: a restart within the same millisecond as
+//! the pre-restart send produces `stamp == stamp_at_max`, fails the strict `>`, and is
+//! indistinguishable from a same-millisecond replay — dropped by design.
 //!
-//! **Staleness purge is sound**: the purge retains only entries where
-//! `now - stamp_at_max <= window`. Any replayable datagram from a peer has a stamp no greater than
-//! `stamp_at_max` (the bitmap path never raises it; a strictly newer stamp triggers `reset` instead
-//! of replay). Once `now - stamp_at_max > window`, the freshness check on any such stamp would fail
-//! even accounting for the maximum allowed sender clock skew, so no replay can pass. The entry is
-//! therefore safe to drop at that point. The purge runs opportunistically on every call to
-//! [`ReplayFilter::check_and_record`] via `HashMap::retain`, which is cheap for the small maps
-//! typical in a gossip cluster.
+//! # Post-restart tail guard
 //!
-//! # Sequence-number regression
-//!
-//! A sender's sequence counter is per-process lifetime, so a restart resets it to 1. The receiver
-//! distinguishes a restart from a replay with the freshness stamp. The rule applies on **any**
-//! sequence regression (`seq <= max_seq`):
-//!
-//! - The stamp is checked **first**: if `stamp > stamp_at_max`, the regression is treated as a
-//!   legitimate restart — per-peer state is reset and the datagram is accepted.
-//! - Otherwise, the bitmap check runs normally: if the sequence is within the out-of-order window
-//!   and has not been seen, it is accepted; otherwise it is rejected.
-//! - If the sequence is beyond the backward window and the stamp is not strictly newer, the
-//!   datagram is unconditionally rejected.
-//!
-//! **Residual**: a restart that happens within the same millisecond as the sender's last
-//! pre-restart send produces `stamp == stamp_at_max`, which does not satisfy `stamp > stamp_at_max`.
-//! Such a restart is indistinguishable from a replay within that millisecond and is dropped. This
-//! is a deliberate trade-off: the alternative (accepting same-stamp regressions) would allow
-//! replays within the same millisecond.
-//!
-//! # Post-restart tail guard (monotone max-stamp)
-//!
-//! After a genuine restart triggers `reset()` to a low `max_seq` with a cleared bitmap, captured
-//! pre-restart datagrams with high sequence numbers (but stamps still inside the freshness window)
-//! would otherwise be re-accepted on the forward path (`seq > max_seq`). To prevent this, each
-//! `PeerState` tracks `max_stamp_seen`: the maximum sender stamp ever accepted from this peer.
-//! `reset()` does **not** rewind `max_stamp_seen`. On the forward path (`seq > max_seq`), any
-//! datagram whose stamp is strictly less than `max_stamp_seen` is rejected.
-//!
-//! The monotonicity premise is enforced at the source: [`SenderCounter::next_stamp`] maintains an
-//! in-process floor (`AtomicU64`) so that each minted stamp is `max(wall_clock_now, floor)`.
-//! Stamps therefore never decrease within a process lifetime, and same-millisecond bursts share a
-//! stamp — hence the guard uses strict `<` (not `<=`) to accept those bursts correctly.
-//!
-//! **Residual**: a sender that *restarts* while its wall clock is still behind its pre-restart
-//! stamps (e.g. after an NTP backward step or VM resume that shrinks wall time) loses the
-//! in-memory floor on restart and re-mints stamps lower than the receiver's recorded
-//! `max_stamp_seen`. Such datagrams are treated as replays and silently dropped until the sender's
-//! clock advances past the old high-water mark — bounded by the size of the clock step. This is the
-//! same family of trade-off as the documented same-millisecond-restart residual.
-//!
-//! # Wire layout (authenticated portion only)
-//!
-//! ```text
-//! seq   (8 bytes, little-endian u64)
-//! stamp (8 bytes, little-endian u64, milliseconds since Unix epoch)
-//! <protocol messages ...>
-//! ```
-//!
-//! This 16-byte header is the **first thing inside** the authenticated or encrypted region, before
-//! any protocol messages. For MAC mode the tag still authenticates the whole payload including the
-//! header; for encryption mode the header is encrypted together with the messages.
+//! A reset clears `max_seq`, so a captured high-`seq` pre-restart datagram would otherwise re-enter
+//! on the forward path. `PeerState::max_stamp_seen` — never rewound by `reset()` — blocks any
+//! forward-path datagram with a strictly lower stamp. [`SenderCounter::next_stamp`] enforces the
+//! monotonicity this relies on via an in-process floor (`max(wall_clock_now, floor)`), which is why
+//! the guard uses strict `<`: same-millisecond bursts share a stamp and must still pass. **Residual**:
+//! a sender restarting with its wall clock behind its own pre-restart stamps (NTP step, VM resume)
+//! loses that floor and is treated as a replay until its clock catches up — bounded by the clock
+//! step, same trade-off family as the regression residual above.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -111,12 +61,8 @@ pub(crate) const REPLAY_HEADER_LEN: usize = 16;
 /// time by more than this value in either direction are rejected.
 pub const FRESHNESS_WINDOW_DEFAULT: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
-/// Number of bits in the out-of-order acceptance bitmap.
-///
-/// A bitmap of 1024 entries allows sequence numbers up to 1024 behind the highest accepted to be
-/// accepted as out-of-order legitimate UDP reordering. Each bit represents whether the
-/// corresponding sequence number (relative to `max_seq`) was received. Anything older than 1024
-/// behind `max_seq` is unconditionally rejected as outside the window.
+/// Size of the out-of-order acceptance bitmap: a `seq` up to this far behind `max_seq` is accepted
+/// as legitimate UDP reordering (one bit per relative sequence number); older is rejected.
 const WINDOW_SIZE: u64 = 1024;
 
 /// The per-peer replay state.
@@ -270,22 +216,11 @@ fn phys_now_ms() -> u64 {
     Utc::now().timestamp_millis().max(0) as u64
 }
 
-/// Sender-side replay state: a monotonically increasing sequence counter and stamp floor.
-///
-/// One instance per node, incremented for every datagram sent in an authenticated mode.
-/// The sequence counter starts at 1; 0 is reserved as "no sequence" (unauthenticated mode).
-///
-/// The stamp floor (`stamp_floor`) guarantees that minted sender stamps never decrease within a
-/// process lifetime. Each call to [`next_stamp`](Self::next_stamp) returns
-/// `max(Utc::now().timestamp_millis(), previous_stamp)`. Concurrent senders sharing a
-/// millisecond will emit equal stamps; the receiver's forward-path guard uses strict `<` precisely
-/// to tolerate same-millisecond bursts.
-///
-/// **Residual**: a sender that *restarts* while its wall clock is still behind its pre-restart
-/// stamps (e.g. after an NTP correction or VM resume that shrinks wall time) re-mints lower stamps
-/// because the in-memory floor is lost on restart. The receiver treats the regressed stamps as a
-/// replayer until the sender's clock catches back up — bounded by the clock-step size. This is the
-/// same family of trade-off as the documented same-millisecond-restart residual.
+/// Sender-side replay state: one per node, incremented for every authenticated-mode datagram.
+/// `seq` starts at 1 (0 means unauthenticated). `stamp_floor` makes minted stamps monotonic within
+/// the process lifetime — [`next_stamp`](Self::next_stamp) returns
+/// `max(Utc::now().timestamp_millis(), previous_stamp)` — which is the guarantee the receiver's
+/// tail guard relies on (module docs). The floor is lost on restart; see the residual there.
 pub(crate) struct SenderCounter {
     seq: AtomicU64,
     stamp_floor: AtomicU64,
