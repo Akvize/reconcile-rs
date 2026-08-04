@@ -726,16 +726,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
                                 let sender = peer.ip();
-                                // Per-peer cap check: if this sender is not yet tracked (not a
-                                // member) and the membership set is at capacity, drop the datagram
-                                // before allocating any per-sender state (replay filter entry,
-                                // peers map slot, or membership slot). Authenticated datagrams are
-                                // verified first (above), so this gate cannot be triggered by a
-                                // forged source address in authenticated mode.
-                                //
-                                // The check is intentionally placed *before* the replay filter so
-                                // that no replay-filter entry is created for a capped-out sender.
-                                // Known senders (already in `members`) bypass the cap.
+                                // If this sender is new and membership is at capacity, drop before
+                                // allocating any per-sender state (replay filter, peers map,
+                                // membership). Placed ahead of the replay filter so a capped-out
+                                // sender never gets an entry there either. Known senders bypass it.
                                 let is_known = self.members.read().contains(&sender);
                                 if !is_known {
                                     let current_len = self.members.read().len();
@@ -951,16 +945,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 let map_guard = self.map.read();
                 let mut guard = self.tombstone_acks.write();
                 for (key, version) in acks {
-                    // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                    // never-existent or non-tombstone keys are dropped here so they cannot
-                    // accumulate in `tombstone_acks` without bound.
-                    //
-                    // Ordering hazard: this gate cannot tell "a key we will never hold" from
-                    // "a key we don't hold YET". In a cluster of three or more nodes an ack
-                    // can arrive before the deletion it acknowledges (the acking peer may have
-                    // learned the deletion via a different gossip edge), and a dropped ack is
-                    // not re-delivered. Any future change to causal-stability GC must account
-                    // for this rather than rely on early acks being retained.
+                    // Only accept an ack for a key we locally hold as a tombstone, so acks for
+                    // never-existent or non-tombstone keys cannot accumulate unbounded. Ordering
+                    // hazard: at three nodes or more an ack can arrive before its deletion (via a
+                    // different gossip edge) and is dropped, not re-delivered — future
+                    // causal-stability GC changes must not assume early acks are retained.
                     let local_tombstone = map_guard.get(&key).filter(|v| v.is_tombstone());
                     let Some(local_v) = local_tombstone else {
                         trace!(
@@ -1217,18 +1206,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         }
     }
 
-    /// Returns `true` when `peer` has at least one tombstone it has not yet acknowledged.
+    /// Returns `true` when `peer` has at least one tombstone it has not yet acknowledged — the
+    /// same per-key test `is_tombstone_stable` blocks on, including a key with no ack entry at
+    /// all (fresh deletion) counting as pending.
     ///
-    /// The predicate iterates the local map (the authoritative domain) looking for tombstone
-    /// entries. For each tombstone it checks whether `peer` has acknowledged the exact current
-    /// version via `tombstone_acks`. A tombstone whose key has NO entry in `tombstone_acks` at
-    /// all (fresh deletion, no ack has arrived yet) is also treated as pending — exactly the
-    /// condition that `is_tombstone_stable` blocks on.
-    ///
-    /// Locks taken: `map` read, then `tombstone_acks` read — the established lock order
-    /// (map before tombstone_acks) so this can be called from the discovery task without
-    /// risk of deadlock. Cost: O(local map entries) — acceptable for the discovery cadence
-    /// (~5 s intervals, only when a member is missing from DNS).
+    /// Locks `map` then `tombstone_acks`, the established order, so this is safe to call from the
+    /// discovery task. `O(local map entries)`, acceptable at the ~5 s discovery cadence.
     pub(crate) fn has_pending_tombstone_acks(&self, peer: IpAddr) -> bool {
         let map = self.map.read();
         let acks = self.tombstone_acks.read();
@@ -1237,9 +1220,6 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 continue;
             }
             let current_version = version_hash(value);
-            // Mirror the per-key ack test that `is_tombstone_stable` uses: the peer must have
-            // acknowledged exactly this version. If the key has no ack entry at all (fresh
-            // deletion, nobody has acked yet), the peer is pending.
             let peer_acked = acks
                 .get(key)
                 .and_then(|key_acks| key_acks.get(&peer))
@@ -1773,17 +1753,9 @@ mod causal_stability {
         assert!(eng.tombstone_acks.read().get(&key).is_none());
     }
 
-    /// Regression: `has_pending_tombstone_acks` must detect a freshly-deleted tombstone that
-    /// has ZERO acks recorded (the `tombstone_acks` map has no entry for that key yet).
-    ///
-    /// The original implementation iterated `tombstone_acks.iter()` — which yields nothing when
-    /// the map is empty — and returned `false` ("no pending acks").  That is wrong: a tombstone
-    /// with no ack entry is the *most* pending of all states.  The fixed implementation iterates
-    /// the local map and treats any tombstone with a missing or mismatched ack as pending.
-    ///
-    /// If this test fails, the old predicate has been restored (see commit history).  The test
-    /// is intentionally self-contained so it can be run against either version of the predicate
-    /// to confirm the regression.
+    /// Regression: a freshly-deleted tombstone with zero acks recorded must count as pending. An
+    /// earlier implementation iterated `tombstone_acks` (empty for a fresh key) and returned
+    /// `false` — the opposite of correct, since no ack is the most pending state there is.
     #[tokio::test]
     async fn fresh_tombstone_with_zero_acks_is_pending() {
         let eng = engine("127.0.0.66").await;
