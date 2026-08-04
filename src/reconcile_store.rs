@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -30,9 +30,10 @@ use crate::fingerprint::Fingerprint;
 use crate::persistence::{
     DatedEntries, InMemoryPersistence, LoadError, PersistedState, Persistence,
 };
-use crate::reconcilable::Projectable;
+use crate::reconcilable::Entry;
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
+use crate::transport::Transport;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
@@ -128,10 +129,9 @@ const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
 pub struct ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
-    (Timestamp, Option<V>): Projectable,
 {
     /// Internal map and hooks container.
-    engine: ReconcileEngine<K, (Timestamp, Option<V>)>,
+    engine: ReconcileEngine<K, V>,
     /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<K>,
     /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
@@ -164,7 +164,6 @@ where
 impl<K, V> Clone for ReconcileStore<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
-    (Timestamp, Option<V>): Projectable,
 {
     /// Allows cloning of the `ReconcileStore` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
@@ -192,22 +191,43 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
-        let engine = ReconcileEngine::<K, (Timestamp, Option<V>)>::new(config).await?;
-        let change_counter = Arc::clone(&engine.change_counter);
-        let svc = ReconcileStore {
-            engine,
-            tombstones: TimeoutWheel::new(),
-            persistence: Arc::new(InMemoryPersistence::default()),
-            discovery: None,
-            discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
-            discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
-            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
-            snapshot_interval: Some(DEFAULT_SNAPSHOT_INTERVAL),
-            snapshot_change_threshold: DEFAULT_SNAPSHOT_CHANGE_THRESHOLD,
-            change_counter,
-        };
-        svc.add_pre_insert(|_, _| {});
-        Ok(svc)
+        Ok(Self::from_engine(
+            ReconcileEngine::<K, V>::new(config).await?,
+        ))
+    }
+
+    /// Create a `ReconcileStore` over a caller-supplied [`Transport`] adapter instead of the
+    /// default UDP one.
+    ///
+    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
+    /// which the caller has already done, or does not need to do at all. Two uses motivate this
+    /// seam (`ARCHITECTURE.md` §7 D2):
+    ///
+    /// - a different datagram transport, e.g. QUIC unreliable datagrams (RFC 9221), whose shape
+    ///   fits this trait;
+    /// - a lossy, reordering or delaying transport, so convergence can be tested under adversity;
+    ///   [`InMemoryNetwork`](crate::InMemoryNetwork) provides the reliable in-process case.
+    ///
+    /// The protocol already assumes datagrams may be lost, duplicated or reordered, so a transport
+    /// cannot violate an invariant by being unreliable. (The [`Clock`](crate::Clock) port is
+    /// deliberately *not* injectable for the opposite reason: a non-monotonic clock silently breaks
+    /// the causal ordering that tombstone collection depends on.)
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use reconcile::{reconcile_store::Config, InMemoryNetwork, ReconcileStore};
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
+    /// let store = ReconcileStore::<String, String>::new_with_transport(
+    ///     Config::default(),
+    ///     transport,
+    /// );
+    /// ```
+    pub fn new_with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        Self::from_engine(ReconcileEngine::<K, V>::with_transport(config, transport))
     }
 
     /// Test-only constructor that accepts an explicit [`Clock`] adapter.
@@ -219,8 +239,15 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {
-        let engine =
-            ReconcileEngine::<K, (Timestamp, Option<V>)>::new_with_clock(config, clock).await?;
+        Ok(Self::from_engine(
+            ReconcileEngine::<K, V>::new_with_clock(config, clock).await?,
+        ))
+    }
+
+    /// Wrap a constructed engine in the store's own bookkeeping (tombstone wheel, persistence,
+    /// discovery and snapshot defaults). The single place those defaults are spelled out, so the
+    /// constructors above cannot drift apart.
+    fn from_engine(engine: ReconcileEngine<K, V>) -> Self {
         let change_counter = Arc::clone(&engine.change_counter);
         let svc = ReconcileStore {
             engine,
@@ -235,7 +262,18 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             change_counter,
         };
         svc.add_pre_insert(|_, _| {});
-        Ok(svc)
+        svc
+    }
+
+    /// This node's Hybrid-Logical-Clock identity — the `node_id` component of every
+    /// [`Timestamp`] it mints, and the deterministic tie-break that makes the
+    /// conflict order total.
+    ///
+    /// Set explicitly with [`Config::with_node_id`]; otherwise randomly generated at construction,
+    /// in which case it changes on every restart. Reading it back is useful for diagnostics and for
+    /// asserting that a durable deployment really did pin a stable identity.
+    pub fn node_id(&self) -> u64 {
+        self.engine.node_id()
     }
 
     /// Plug in a durable persistence backend, **loading any previously saved state first**.
@@ -312,8 +350,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             // far-future clamp protects the clock during live gossip; this restore path is not
             // live gossip. A poisoned stamp that made it into the snapshot is accepted here and
             // consumed where stored stamps are used (e.g. tombstone expiry arithmetic).
-            for (_, (stamp, _)) in &state.entries {
-                self.engine.clock_observe_trusted(*stamp);
+            for (_, entry) in &state.entries {
+                self.engine.clock_observe_trusted(entry.stamp);
             }
             // Replay through the wrapped pre-insert hook so the tombstone wheel is rebuilt with the
             // original deletion timestamps (do NOT route through the public insert helpers, which
@@ -400,7 +438,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         // Cursor: the last key seen in the previous chunk, used to open the next range.
         let mut cursor: Option<K> = None;
         loop {
-            let chunk: Vec<(K, (Timestamp, Option<V>))> = {
+            let chunk: Vec<(K, Entry<Timestamp, V>)> = {
                 let guard = self.engine.map.read();
                 match cursor.take() {
                     None => guard
@@ -569,21 +607,21 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// Hooks are executed outside of the map’s write lock, so calling back into any insert
     /// method from within a hook will not block or deadlock.
-    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &(Timestamp, Option<V>)) + 'static>(
+    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, V>) + 'static>(
         &self,
         pre_insert: F,
     ) {
         let tombstones = self.tombstones.clone();
-        let wrapped_pre_insert = move |k: &K, v: &(Timestamp, Option<V>)| {
+        let wrapped_pre_insert = move |k: &K, v: &Entry<Timestamp, V>| {
             pre_insert(k, v);
-            if v.1.is_some() {
+            if !v.is_tombstone() {
                 tombstones.remove(k);
             } else {
                 // The timeout wheel ages tombstones by wall-clock time; use the HLC's
                 // physical component so all replicas expire a tombstone at the same logical
                 // wall time. GC is in any case gated on causal stability.
-                let when =
-                    DateTime::from_timestamp_millis(v.0.wall_ms() as i64).unwrap_or_else(Utc::now);
+                let when = DateTime::from_timestamp_millis(v.stamp.wall_ms() as i64)
+                    .unwrap_or_else(Utc::now);
                 tombstones.insert(k.clone(), when);
             }
         };
@@ -606,10 +644,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.engine.map.read();
-        RwLockReadGuard::try_map(guard, |map| {
-            map.get(k).and_then(|(_, ref opt)| opt.as_ref())
-        })
-        .ok()
+        RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
     }
 
     /// Insert a single key/value pair, running the pre-insert hook first.
@@ -624,17 +659,31 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
-            .just_insert(key, (self.engine.clock_now(), Some(value)));
-        ret.and_then(|t| t.1)
+            .just_insert(key, Entry::present(self.engine.clock_now(), value));
+        ret.and_then(|e| e.into_value())
     }
 
-    /// Fully-qualified insert: just_insert + async broadcast.
+    /// Fully-qualified insert: `just_insert` + async broadcast.
+    ///
+    /// # Value-size ceiling
+    ///
+    /// The send path packs protocol messages into datagrams but never **fragments** one, so a
+    /// single encoded `(key, entry)` must fit in `65507 - authentication overhead` bytes. Above
+    /// that ceiling the update is never delivered and **the key never converges on any peer** —
+    /// the local map still holds it, so the failure is silent from this node's point of view and
+    /// shows up only as a `warn!` on the send path.
+    ///
+    /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
+    /// `io::Result` on every write. See invariant 9 and `ARCHITECTURE.md` §7 D3, tracked in
+    /// [issue #230](https://github.com/Akvize/reconcile-rs/issues/230). Keep values well clear of
+    /// the ceiling — and well clear of the network MTU, since an IP-fragmented datagram is lost
+    /// entirely if any fragment is.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
-            .insert(key, (self.engine.clock_now(), Some(value)));
-        ret.and_then(|t| t.1)
+            .insert(key, Entry::present(self.engine.clock_now(), value));
+        ret.and_then(|e| e.into_value())
     }
 
     /// Bulk-insert multiple key/value pairs with hook invocation.
@@ -649,7 +698,12 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.just_insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v)| (k.clone(), (self.engine.clock_now(), Some(v.clone()))))
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        Entry::present(self.engine.clock_now(), v.clone()),
+                    )
+                })
                 .collect::<Vec<_>>(),
         );
     }
@@ -661,7 +715,12 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.insert_bulk(
             &key_values
                 .iter()
-                .map(|(k, v)| (k.clone(), (self.engine.clock_now(), Some(v.clone()))))
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        Entry::present(self.engine.clock_now(), v.clone()),
+                    )
+                })
                 .collect::<Vec<_>>(),
         );
     }
@@ -670,16 +729,16 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
-            .just_insert(key.clone(), (self.engine.clock_now(), None));
-        ret.and_then(|t| t.1)
+            .just_insert(key.clone(), Entry::tombstone(self.engine.clock_now()));
+        ret.and_then(|e| e.into_value())
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
         self.change_counter.fetch_add(1, AtomicOrdering::Relaxed);
         let ret = self
             .engine
-            .insert(key.clone(), (self.engine.clock_now(), None));
-        ret.and_then(|t| t.1)
+            .insert(key.clone(), Entry::tombstone(self.engine.clock_now()));
+        ret.and_then(|e| e.into_value())
     }
 
     pub fn just_remove_bulk(&self, keys: &[K]) {
@@ -688,7 +747,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.just_insert_bulk(
             &keys
                 .iter()
-                .map(|k| (k.clone(), (self.engine.clock_now(), None)))
+                .map(|k| (k.clone(), Entry::tombstone(self.engine.clock_now())))
                 .collect::<Vec<_>>(),
         );
     }
@@ -705,7 +764,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.insert_bulk(
             &keys
                 .iter()
-                .map(|k| (k.clone(), (self.engine.clock_now(), None)))
+                .map(|k| (k.clone(), Entry::tombstone(self.engine.clock_now())))
                 .collect::<Vec<_>>(),
         );
     }
@@ -999,18 +1058,17 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// read-modify-write holds the map write lock for the duration of the callback, so it is atomic
     /// against the reconciliation loop.
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
-        use crate::reconcilable::Projectable;
         // Mint the timestamp before taking the map lock, matching the lock order of `insert`
         // (clock, then map → projection).
         let now = self.engine.clock_now();
-        let mut updated: Option<(Timestamp, Option<V>)> = None;
+        let mut updated: Option<Entry<Timestamp, V>> = None;
         let mut guard = self.engine.map.write();
         guard.with_mut(k, |maybe_tv| {
             if let Some(tv) = maybe_tv {
-                callback(tv.1.as_mut());
+                callback(tv.value_mut());
                 // Re-stamp so the edit wins last-write-wins on peers and reconciles; `with_mut`
-                // recomputes the dated fingerprint from the whole (timestamp, value) afterwards.
-                tv.0 = now;
+                // recomputes the dated fingerprint from the whole entry afterwards.
+                tv.stamp = now;
                 updated = Some(tv.clone());
             } else {
                 callback(None);
@@ -1450,6 +1508,71 @@ mod reconcile_store_tests {
         }
     }
 
+    /// D4: the node id is settable through `Config` and readable back off the store, and the
+    /// value reported is the one the clock actually stamps onto minted timestamps.
+    #[tokio::test]
+    async fn node_id_is_readable_and_matches_the_minted_stamp() {
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config().with_node_id(0xABCD))
+            .await
+            .unwrap();
+        assert_eq!(store.node_id(), 0xABCD);
+        store.insert(1, 1);
+        let stamp = store.engine.map.read().get(&1).unwrap().stamp;
+        assert_eq!(stamp.node_id(), store.node_id());
+    }
+
+    /// D2: two stores wired to a caller-supplied `Transport` converge over it, with no UDP socket
+    /// bound anywhere. This is the public seam, exercised exactly as a downstream crate would.
+    #[tokio::test]
+    async fn stores_converge_over_an_injected_transport() {
+        use std::net::SocketAddr;
+        use std::time::Instant;
+
+        use crate::transport::InMemoryNetwork;
+
+        let net = InMemoryNetwork::new();
+        let port = 5100u16;
+        let a_ip: IpAddr = "127.0.0.4".parse().unwrap();
+        let b_ip: IpAddr = "127.0.0.5".parse().unwrap();
+        let cfg = |ip: IpAddr, id: u64| {
+            ephemeral_config()
+                .with_listen_addr(ip)
+                .with_port(port)
+                .with_node_id(id)
+                .with_reconcile_interval(Duration::from_millis(5))
+        };
+        let a = ReconcileStore::<i32, i32>::new_with_transport(
+            cfg(a_ip, 1),
+            Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+        );
+        let b = ReconcileStore::<i32, i32>::new_with_transport(
+            cfg(b_ip, 2),
+            Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+        );
+        // Seed each as the other's gossip peer: the in-memory fabric has no discovery.
+        a.engine.peers.write().insert(b_ip, Instant::now());
+        b.engine.peers.write().insert(a_ip, Instant::now());
+        a.insert(7, 42);
+
+        let ta = tokio::spawn(a.clone().run());
+        let tb = tokio::spawn(b.clone().run());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut converged = false;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if b.get(&7).as_deref() == Some(&42) {
+                converged = true;
+                break;
+            }
+        }
+        ta.abort();
+        tb.abort();
+        assert!(
+            converged,
+            "B never learned A's write over the injected transport"
+        );
+    }
+
     #[tokio::test]
     async fn tombstones_expiration() {
         // A dedicated port (and a singleton /32 net) isolates this test from the integration
@@ -1776,7 +1899,7 @@ mod reconcile_store_tests {
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
             .save(&PersistedState {
-                entries: vec![(42, (persisted_stamp, Some(999)))],
+                entries: vec![(42, crate::Entry::present(persisted_stamp, 999))],
                 members: Default::default(),
                 tombstone_acks: Default::default(),
             })
@@ -1799,7 +1922,7 @@ mod reconcile_store_tests {
             .map
             .read()
             .get(&99)
-            .map(|(ts, _)| *ts)
+            .map(|e| e.stamp)
             .expect("key 99 must be present after insert");
 
         assert!(
@@ -1831,7 +1954,7 @@ mod reconcile_store_tests {
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
             .save(&PersistedState {
-                entries: vec![(7, (tombstone_stamp, None))], // None = tombstone
+                entries: vec![(7, crate::Entry::tombstone(tombstone_stamp))], // tombstone
                 members: Default::default(),
                 tombstone_acks: Default::default(),
             })
@@ -1857,7 +1980,7 @@ mod reconcile_store_tests {
             .map
             .read()
             .get(&7)
-            .map(|(ts, _)| *ts)
+            .map(|e| e.stamp)
             .expect("key 7 must be present after insert");
 
         // The minted stamp must be strictly greater than the tombstone's stamp. Without this,
@@ -2487,7 +2610,7 @@ mod reconcile_store_tests {
         let keys: Vec<i32> = snap_written
             .entries
             .iter()
-            .filter_map(|(k, (_, v))| v.as_ref().map(|_| *k))
+            .filter_map(|(k, e)| e.value().map(|_| *k))
             .collect();
         assert!(
             keys.contains(&10) || keys.contains(&20),

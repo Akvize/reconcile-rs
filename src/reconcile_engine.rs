@@ -20,37 +20,46 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
-use socket2::SockRef;
-use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::auth;
 use crate::bounds::{Key, Value};
-use crate::clock::{Clock, HlcClock, Timestamp, Timestamped};
+use crate::clock::{Clock, HlcClock, Timestamp};
+use crate::codec::{BincodeCodec, Codec};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
 use crate::observability;
 use crate::proto::{self, HashSegment};
-use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
+use crate::reconcilable::{Entry, State};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::replay;
+use crate::transport::{Transport, UdpTransport};
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
+/// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
+/// [`BUFFER_SIZE`] bytes and the smallest message is at least one byte, so it can never legitimately
+/// contain more than this many messages; the cap turns a crafted datagram's decode-expansion into a
+/// bounded operation (issue #151) rather than an unbounded allocation.
+const MAX_MESSAGES_PER_DATAGRAM: usize = BUFFER_SIZE;
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
+/// Byte budget for the tombstone ack resends piggybacked onto each reconciliation datagram.
+/// Kept well under [`BUFFER_SIZE`] so the datagram still fits after authentication framing; when
+/// more tombstones are held than fit in one round, a round-advancing window covers the remainder on
+/// subsequent rounds.
+const TOMBSTONE_ACK_RESEND_BYTE_BUDGET: usize = 8 * 1024;
 
 const MAX_SENDTO_RETRIES: u32 = 4;
 
-type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
+type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &Entry<Timestamp, V>)>;
 
 /// Compute a deterministic, cross-node version token for a value.
 ///
@@ -85,70 +94,35 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
     })
 }
 
-/// Apply the configured `SO_RCVBUF` / `SO_SNDBUF` to the gossip socket.
-///
-/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
-/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
-/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
-/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
-/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
-/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
-/// leaves the inherited OS default untouched.
-///
-/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
-/// honoured request reads back larger than asked.
-fn set_socket_buffers(socket: &UdpSocket, config: &Config) {
-    let sock = SockRef::from(socket);
-    if let Some(size) = config.recv_buffer_size {
-        match sock.set_recv_buffer_size(size) {
-            Ok(()) => match sock.recv_buffer_size() {
-                Ok(actual) => debug!(
-                    "gossip socket SO_RCVBUF: requested {size} B, OS granted {actual} B \
-                     (raise net.core.rmem_max if a larger buffer is needed)"
-                ),
-                Err(e) => debug!("could not read back SO_RCVBUF: {e}"),
-            },
-            Err(e) => warn!("failed to set gossip socket SO_RCVBUF to {size} B: {e}"),
-        }
-    }
-    if let Some(size) = config.send_buffer_size {
-        match sock.set_send_buffer_size(size) {
-            Ok(()) => match sock.send_buffer_size() {
-                Ok(actual) => debug!(
-                    "gossip socket SO_SNDBUF: requested {size} B, OS granted {actual} B \
-                     (raise net.core.wmem_max if a larger buffer is needed)"
-                ),
-                Err(e) => debug!("could not read back SO_SNDBUF: {e}"),
-            },
-            Err(e) => warn!("failed to set gossip socket SO_SNDBUF to {size} B: {e}"),
-        }
-    }
-}
-
 /// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
-pub(crate) struct ReconcileEngine<K, V: Projectable> {
+pub(crate) struct ReconcileEngine<K, V, C = BincodeCodec> {
     /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
     /// shares the same maps, peers, clock, …) is a single refcount bump. Cloning is therefore
     /// cheap and bound-free, and the previously hand-written `Clone` impl reduces to a derive.
     /// Fields are reached transparently through the [`Deref`] impl below, so every existing
     /// `self.field` / `engine.field` access keeps working unchanged.
-    inner: Arc<Inner<K, V>>,
+    inner: Arc<Inner<K, V, C>>,
 }
 
 /// Shared, refcounted state of a [`ReconcileEngine`]; see that struct for the rationale.
-pub(crate) struct Inner<K, V: Projectable> {
-    pub(crate) map: Arc<RwLock<HRTree<K, V>>>,
+pub(crate) struct Inner<K, V, C = BincodeCodec> {
+    pub(crate) map: Arc<RwLock<HRTree<K, Entry<Timestamp, V>>>>,
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
     ///
     /// Its range fingerprints are timestamp-less by construction (see
-    /// [`ValueOnly`](crate::reconcilable::ValueOnly)), which is what lets a dateless mirror
+    /// [`State`](crate::reconcilable::State)), which is what lets a dateless mirror
     /// converge with this dated store over the existing range-diff protocol. It is read-only state
     /// for the dated↔dated path and never touches the causal-stability bookkeeping.
-    pub(crate) projection: Arc<RwLock<HRTree<K, V::Projected>>>,
+    pub(crate) projection: Arc<RwLock<HRTree<K, State<V>>>>,
     port: u16,
-    socket: Arc<UdpSocket>,
+    /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
+    /// only through this, so it never names a concrete socket type.
+    transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    /// The wire-encoding port (default adapter: [`BincodeCodec`]). All (de)serialization of
+    /// protocol messages goes through this, so the engine never calls `bincode` directly.
+    codec: Arc<C>,
     /// The geographical networks the cluster spans, each a CIDR. One random address is
     /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
     /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
@@ -229,6 +203,14 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
+    /// The set of keys this node currently holds as a tombstone, maintained at the single map
+    /// mutation sink ([`map_insert`](ReconcileEngine::map_insert) /
+    /// [`gc_remove`](ReconcileEngine::gc_remove)). It lets the gossip round enumerate held
+    /// tombstones in O(1) (without scanning the map) and re-acknowledge each of them to every
+    /// member every round, so causal-stability acknowledgments keep flowing until a tombstone is
+    /// collected — without which the acknowledgment matrix never completes in a cluster of three or
+    /// more nodes.
+    pub(crate) live_tombstones: Arc<RwLock<HashSet<K>>>,
     /// This node's clock, reached only through the [`Clock`] port so the engine never reads
     /// physical time itself ([`HlcClock`] is the default adapter; a test injects a deterministic
     /// stub via [`new_with_clock`](ReconcileEngine::new_with_clock)). Shared across all clones so
@@ -258,7 +240,7 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) change_counter: Arc<AtomicUsize>,
 }
 
-impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
+impl<K, V, C> Clone for ReconcileEngine<K, V, C> {
     fn clone(&self) -> Self {
         ReconcileEngine {
             inner: Arc::clone(&self.inner),
@@ -266,8 +248,8 @@ impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
     }
 }
 
-impl<K, V: Projectable> std::ops::Deref for ReconcileEngine<K, V> {
-    type Target = Inner<K, V>;
+impl<K, V, C> std::ops::Deref for ReconcileEngine<K, V, C> {
+    type Target = Inner<K, V, C>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
@@ -283,7 +265,7 @@ impl<K, V: Projectable> std::ops::Deref for ReconcileEngine<K, V> {
 /// against that), keeping the protocol backward compatible on a single port.
 ///
 /// `V` is the dated value carried by `Update`; `P` is its timestamp-less
-/// [`Projected`](crate::reconcilable::Projectable::Projected) form carried by `ValueUpdate`.
+/// [`State`](crate::reconcilable::State) projection carried by `ValueUpdate`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// Provides information about a set of keys that allows checking
@@ -305,10 +287,9 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
-impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestamped>
-    ReconcileEngine<K, V>
-{
-    /// Create a new engine, binding the gossip UDP socket.
+impl<K: Key, V: Value> ReconcileEngine<K, V, BincodeCodec> {
+    /// Create a new engine over the default adapters: a [`UdpTransport`] bound to the gossip socket
+    /// and a [`BincodeCodec`].
     ///
     /// # Errors
     ///
@@ -321,27 +302,87 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let node_id_is_random = config.node_id.is_none();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
-        Self::build(config, clock, node_id_is_random).await
+        let transport = Self::bind_udp(&config).await?;
+        Ok(Self::build(
+            config,
+            transport,
+            BincodeCodec::new(),
+            clock,
+            node_id_is_random,
+        ))
     }
 
-    /// Construct an engine over an explicit [`Clock`] adapter. Test-only seam: a deterministic
-    /// clock (`ManualClock`) makes HLC behaviour reproducible without real wall-clock time.
+    /// Construct an engine over an explicit [`Clock`] adapter (default transport/codec). Test-only
+    /// seam: a deterministic clock (`ManualClock`) makes HLC behaviour reproducible.
     #[cfg(test)]
     pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
         // so persistence tests do not trigger the operator warning.
-        Self::build(config, clock, false).await
+        let transport = Self::bind_udp(&config).await?;
+        Ok(Self::build(
+            config,
+            transport,
+            BincodeCodec::new(),
+            clock,
+            false,
+        ))
     }
 
-    async fn build(
+    /// Construct an engine over a caller-supplied [`Transport`], with the default codec and clock.
+    ///
+    /// Infallible: the only fallible step in [`new`](Self::new) is binding the UDP socket, which
+    /// the caller has already done (or does not need to do at all).
+    pub(crate) fn with_transport(
         config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        let node_id_is_random = config.node_id.is_none();
+        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        Self::build(
+            config,
+            transport,
+            BincodeCodec::new(),
+            clock,
+            node_id_is_random,
+        )
+    }
+
+    /// As [`with_transport`](Self::with_transport), but over a caller-supplied [`Clock`] too.
+    /// Test-only seam: pairing an in-memory transport with a `ManualClock` makes convergence
+    /// deterministic without real sockets or wall-clock time.
+    #[cfg(test)]
+    pub(crate) fn new_with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self::build(config, transport, BincodeCodec::new(), clock, false)
+    }
+
+    /// Bind the default [`UdpTransport`] for `config` and log the bound address.
+    async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+        let transport = UdpTransport::bind(
+            SocketAddr::new(config.listen_addr, config.port),
+            config.recv_buffer_size,
+            config.send_buffer_size,
+        )
+        .await?;
+        info!("Listening on: {}", transport.local_addr()?);
+        Ok(Arc::new(transport))
+    }
+}
+
+impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
+    /// Assemble an engine from already-constructed ports (transport, codec) and a clock. Pure
+    /// wiring — no I/O — so it is infallible; the fallible socket bind lives in [`new`](Self::new).
+    fn build(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+        codec: C,
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
-    ) -> io::Result<Self> {
-        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
-        info!("Listening on: {}", socket.local_addr()?);
-        // Size the kernel send/receive buffers before any traffic flows.
-        set_socket_buffers(&socket, &config);
+    ) -> Self {
         // Floor the bulk pacing rate. A non-None rate below the floor would make `pace()` sleep for
         // an effectively unbounded time while holding the per-peer in-flight mark, wedging that
         // peer's sync; raise it (with a warning) so the in-flight mark always turns over promptly.
@@ -382,8 +423,8 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                  this warning)."
             );
         }
-        let map = HRTree::<K, V>::new();
-        let projection = HRTree::<K, V::Projected>::new();
+        let map = HRTree::<K, Entry<Timestamp, V>>::new();
+        let projection = HRTree::<K, State<V>>::new();
         // The geographical networks this cluster spans. With none declared, fall back to the
         // historical flat loopback cluster.
         let mut nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
@@ -399,12 +440,13 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
         let probe: Arc<dyn Discovery> =
             Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
-        Ok(ReconcileEngine {
+        ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
-                socket: Arc::new(socket),
+                transport,
+                codec: Arc::new(codec),
                 nets,
                 local_net: Arc::new(RwLock::new(local_net)),
                 listen_addr: config.listen_addr,
@@ -425,12 +467,13 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 replay_filter: Arc::new(replay::ReplayFilter::new(config.freshness_window)),
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
+                live_tombstones: Arc::new(RwLock::new(HashSet::new())),
                 clock,
                 node_id_is_random,
                 max_peers: config.max_peers,
                 change_counter: Arc::new(AtomicUsize::new(0)),
             }),
-        })
+        }
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
@@ -445,17 +488,36 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         self.projection.read().hash(&range)
     }
 
-    /// Insert into the dated `map` **and** mirror the value-only projection, under a consistent
-    /// lock order (`map` then `projection`) shared by every mutation path so the two trees never
-    /// deadlock against each other. The caller already holds the `map` write guard.
-    fn map_insert(&self, guard: &mut HRTree<K, V>, key: K, value: V) -> Option<V> {
+    /// Insert into the dated `map` **and** mirror the value-only projection (and the live-tombstone
+    /// index), under a consistent lock order (`map` → `live_tombstones` → `projection`) shared by
+    /// every mutation path so the structures never deadlock against each other. The caller already
+    /// holds the `map` write guard.
+    fn map_insert(
+        &self,
+        guard: &mut HRTree<K, Entry<Timestamp, V>>,
+        key: K,
+        value: Entry<Timestamp, V>,
+    ) -> Option<Entry<Timestamp, V>> {
+        // Keep the live-tombstone index in step with the map at its single mutation sink: a
+        // tombstone value adds the key; any live value (a fresh insert, or an LWW overwrite that
+        // resurrects a previously-deleted key) removes it. This index drives the per-round
+        // causal-stability re-acknowledgment in `start_reconciliation`.
+        {
+            let mut live_tombstones = self.live_tombstones.write();
+            if value.is_tombstone() {
+                live_tombstones.insert(key.clone());
+            } else {
+                live_tombstones.remove(&key);
+            }
+        }
         self.projection.write().insert(key.clone(), value.project());
         guard.insert(key, value)
     }
 
     /// Remove a key from the dated `map` and its value-only projection (the GC removal path).
-    pub(crate) fn gc_remove(&self, key: &K) -> Option<V> {
+    pub(crate) fn gc_remove(&self, key: &K) -> Option<Entry<Timestamp, V>> {
         let mut guard = self.map.write();
+        self.live_tombstones.write().remove(key);
         self.projection.write().remove(key);
         let removed = guard.remove(key);
         if removed.is_some() {
@@ -480,6 +542,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Returns `true` when the node id was generated at random (`Config::node_id` was `None`).
     pub(crate) fn node_id_is_random(&self) -> bool {
         self.node_id_is_random
+    }
+
+    /// This node's Hybrid-Logical-Clock identity, read back from the clock adapter so it can never
+    /// disagree with the `node_id` actually stamped onto minted timestamps.
+    pub(crate) fn node_id(&self) -> u64 {
+        self.clock.node_id()
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
@@ -549,7 +617,18 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         guard.keys().cloned().collect()
     }
 
-    pub fn just_insert(&self, key: K, value: V) -> Option<V> {
+    /// Bundle this engine's outbound ports and send state for the batched-message helpers
+    /// ([`send_messages_to`] / [`send_messages_paced`]). See [`SendPorts`].
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>, C> {
+        SendPorts {
+            transport: &*self.transport,
+            codec: &*self.codec,
+            authenticator: &self.authenticator,
+            sender_counter: &self.sender_counter,
+        }
+    }
+
+    pub fn just_insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
         // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
 
@@ -571,25 +650,24 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Spawns a detached task so the calling write path does not block on the network. Shared by
     /// every local-mutation broadcast path (`insert` / `insert_bulk`) so the spawn/loop/send
     /// boilerplate lives in exactly one place.
-    fn broadcast(&self, messages: Vec<Message<K, V, V::Projected>>) {
+    fn broadcast(&self, messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>) {
         let peers = self.get_peers();
         let port = self.port;
-        let socket = Arc::clone(&self.socket);
+        let transport = Arc::clone(&self.transport);
+        let codec = Arc::clone(&self.codec);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         tokio::spawn(async move {
+            let ports = SendPorts {
+                transport: &*transport,
+                codec: &*codec,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&socket),
-                    &authenticator,
-                    &sender_counter,
-                    &peer,
-                    &mut send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &ports, &peer, &mut send_buf).await;
             }
         });
     }
@@ -662,12 +740,13 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     ///    **before** building the snapshot Vec, so a skipped dump allocates nothing.
     fn spawn_paced_send(
         &self,
-        messages: Vec<Message<K, V, V::Projected>>,
+        messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>,
         peer: SocketAddr,
         peer_guard: BulkInFlightGuard,
         global_guard: BulkDumpCountGuard,
     ) {
-        let socket = Arc::clone(&self.socket);
+        let transport = Arc::clone(&self.transport);
+        let codec = Arc::clone(&self.codec);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
@@ -676,34 +755,35 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             // slots on drop, even if this task is aborted or panics.
             let _peer_guard = peer_guard;
             let _global_guard = global_guard;
+            let ports = SendPorts {
+                transport: &*transport,
+                codec: &*codec,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
-            send_messages_paced(
-                &messages,
-                socket,
-                &authenticator,
-                &sender_counter,
-                &peer,
-                &mut send_buf,
-                rate,
-            )
-            .await;
+            send_messages_paced(&messages, &ports, &peer, &mut send_buf, rate).await;
         });
     }
 
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
+    pub fn insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
         let ret = self.just_insert(key.clone(), value.clone());
-        self.broadcast(vec![Message::Update::<K, V, V::Projected>((key, value))]);
+        self.broadcast(vec![Message::Update::<K, Entry<Timestamp, V>, State<V>>((
+            key, value,
+        ))]);
         ret
     }
 
     /// Broadcast a single locally-mutated entry to peers, mirroring [`insert`](Self::insert)'s
     /// propagation. Used by in-place mutation paths (`ReconcileStore::get_mut`) that write the map
     /// directly and must still notify peers so the edit reconciles, without re-applying it locally.
-    pub(crate) fn broadcast_update(&self, key: K, value: V) {
-        self.broadcast(vec![Message::Update::<K, V, V::Projected>((key, value))]);
+    pub(crate) fn broadcast_update(&self, key: K, value: Entry<Timestamp, V>) {
+        self.broadcast(vec![Message::Update::<K, Entry<Timestamp, V>, State<V>>((
+            key, value,
+        ))]);
     }
 
-    pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
+    pub fn just_insert_bulk(&self, key_values: &[(K, Entry<Timestamp, V>)]) {
         // 1) First run all pre-insert hooks outside the map lock
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
@@ -720,11 +800,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         }
     }
 
-    pub fn insert_bulk(&self, key_values: &[(K, V)]) {
+    pub fn insert_bulk(&self, key_values: &[(K, Entry<Timestamp, V>)]) {
         self.just_insert_bulk(key_values);
         let messages: Vec<_> = key_values
             .iter()
-            .map(|kv| Message::Update::<K, V, V::Projected>(kv.clone()))
+            .map(|kv| Message::Update::<K, Entry<Timestamp, V>, State<V>>(kv.clone()))
             .collect();
         self.broadcast(messages);
     }
@@ -744,7 +824,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         loop {
             // Re-read each iteration so the cadence can be retuned at runtime.
             let recv_timeout = *self.reconcile_interval.read();
-            match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
+            match timeout(recv_timeout, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
@@ -858,8 +938,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         };
         send_buf.clear();
         for segment in segments {
-            Message::ComparisonItem::<K, V, V::Projected>(segment)
-                .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+            self.codec
+                .encode(
+                    &Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment),
+                    send_buf,
+                )
                 .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
         // Geography-aware target selection. With a single network this reduces to the
@@ -918,15 +1001,18 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             }
         }
 
+        // Piggyback causal-stability ack resends for the tombstones we hold.
+        self.resend_held_tombstone_acks(send_buf, round);
+
         // initiate the reconciliation protocol with the selected peers and discovery probes
         for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
-                &self.socket,
+                &*self.transport,
                 &self.authenticator,
                 &self.sender_counter,
                 send_buf,
-                (peer, self.port),
+                SocketAddr::new(peer, self.port),
             )
             .await
             {
@@ -934,6 +1020,65 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             }
         }
         observability::record_round_duration(timer);
+    }
+
+    /// Resend a causal-stability acknowledgment (`Message::Ack`) for each tombstone this node
+    /// currently holds onto `send_buf`, returning the number appended.
+    ///
+    /// Acks otherwise only flow back to the node a tombstone was *received* from, so in a cluster of
+    /// three or more nodes two non-originating replicas never learn that the other holds the
+    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Resending the
+    /// ack for every held tombstone every round — riding the broadcast `send_buf` to the same
+    /// geography-throttled targets as the diff itself — makes the ack matrix converge transitively.
+    /// It also dissolves the ack-before-tombstone ordering hazard: a receiver that does not hold the
+    /// tombstone yet drops the ack (the admission gate in `handle_messages`, which records an ack
+    /// only for a locally-held tombstone) and simply records it on a later round.
+    ///
+    /// The datagram is kept bounded: at most [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes of acks are
+    /// appended, and when more tombstones are held than fit, the window start advances with `round`
+    /// so every tombstone's ack is resent within a bounded number of rounds. The keys are sorted so
+    /// the window is deterministic across rounds (`HashSet` iteration order is not).
+    fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
+        let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
+        if keys.is_empty() {
+            return 0;
+        }
+        keys.sort_unstable();
+        let n = keys.len();
+        let budget = send_buf.len() + TOMBSTONE_ACK_RESEND_BYTE_BUDGET;
+        let start = (round as usize) % n;
+        let map_guard = self.map.read();
+        let mut appended = 0;
+        let mut budget_truncated = false;
+        for offset in 0..n {
+            if send_buf.len() >= budget {
+                budget_truncated = true;
+                break;
+            }
+            let key = &keys[(start + offset) % n];
+            // Re-confirm against the map: the tombstone may have been resurrected or GC'd since we
+            // snapshotted the index, and only the live tombstone's version is a valid ack.
+            if let Some(v) = map_guard.get(key).filter(|v| v.is_tombstone()) {
+                self.codec
+                    .encode(
+                        &Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
+                            key.clone(),
+                            version_hash(v),
+                        )),
+                        send_buf,
+                    )
+                    .expect("serializing an Ack into an in-memory buffer cannot fail");
+                appended += 1;
+            }
+        }
+        if budget_truncated {
+            trace!(
+                "resent {appended}/{n} held-tombstone acks this round (datagram byte budget \
+                 reached); the remainder rotates in on subsequent rounds"
+            );
+        }
+        observability::record_tombstone_acks_resent(appended);
+        appended
     }
 
     /// Handle the messages contained in an already-authenticated [`Payload`].
@@ -956,89 +1101,61 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let payload = payload.as_bytes();
         trace!("received {} bytes from {peer}", payload.len());
         let mut in_comparison = Vec::new();
-        let mut updates: Vec<(K, V)> = Vec::new();
+        let mut updates: Vec<(K, Entry<Timestamp, V>)> = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
         let mut value_in_comparison = Vec::new();
-        let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
-        // read messages in buffer
-        loop {
-            match Message::<K, V, V::Projected>::deserialize(&mut deserializer) {
-                Err(ref kind) => {
-                    if let bincode::ErrorKind::Io(err) = kind.as_ref() {
-                        if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                            break;
-                        }
-                    }
-                    // Never panic on network input: a single malformed datagram from any
-                    // host would otherwise kill the receive loop (unauthenticated remote
-                    // DoS). Drop the rest of the datagram and keep the loop alive, just like
-                    // the oversized-datagram case above.
+        // Decode the whole datagram through the `Codec` port. `MAX_MESSAGES_PER_DATAGRAM` bounds the
+        // message count (a datagram can hold no more one-byte messages than its byte length), so a
+        // crafted datagram cannot be expanded without limit. A malformed datagram is dropped whole —
+        // never panicking the receive loop, an unauthenticated remote-DoS hazard.
+        let messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>> =
+            match self.codec.decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
+                Ok(messages) => messages,
+                Err(kind) => {
                     warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
                     observability::record_datagram_dropped("malformed");
-                    break;
+                    return false;
                 }
-                Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
-                Ok(Message::Update(update)) => updates.push(update),
-                Ok(Message::Ack(ack)) => acks.push(ack),
-                Ok(Message::ValueComparisonItem(segment)) => value_in_comparison.push(segment),
+            };
+        for message in messages {
+            match message {
+                Message::ComparisonItem(segment) => in_comparison.push(segment),
+                Message::Update(update) => updates.push(update),
+                Message::Ack(ack) => acks.push(ack),
+                Message::ValueComparisonItem(segment) => value_in_comparison.push(segment),
                 // A dated store is authoritative and never integrates a value-only update; mirrors
                 // are the only consumers of `ValueUpdate`. Ignore it defensively.
-                Ok(Message::ValueUpdate(_)) => {}
+                Message::ValueUpdate(_) => {}
             }
         }
         let spoke_dated = !in_comparison.is_empty() || !updates.is_empty() || !acks.is_empty();
         // record tombstone acknowledgments received from the peer
         if !acks.is_empty() {
             let peer_ip = peer.ip();
-            // Reciprocate acks for tombstones we also hold, so that the deletion originator
-            // (which never receives the tombstone as an inbound update, hence is never acked
-            // by the peer) can still reach causal stability. The `already`-guard bounds this
-            // to at most one extra round-trip and prevents an infinite ack ping-pong.
-            let mut reciprocal_acks = Vec::new();
-            {
-                let map_guard = self.map.read();
-                let mut guard = self.tombstone_acks.write();
-                for (key, version) in acks {
-                    // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                    // never-existent or non-tombstone keys are dropped here so they cannot
-                    // accumulate in `tombstone_acks` without bound.
-                    //
-                    // Ordering hazard: this gate cannot tell "a key we will never hold" from
-                    // "a key we don't hold YET". In a cluster of three or more nodes an ack
-                    // can arrive before the deletion it acknowledges (the acking peer may have
-                    // learned the deletion via a different gossip edge), and a dropped ack is
-                    // not re-delivered. Any future change to causal-stability GC must account
-                    // for this rather than rely on early acks being retained.
-                    let local_tombstone = map_guard.get(&key).filter(|v| v.is_tombstone());
-                    let Some(local_v) = local_tombstone else {
-                        trace!(
-                            "dropped ack from {peer_ip} for key with no local tombstone; \
-                             ignoring to prevent unbounded bookkeeping"
-                        );
-                        continue;
-                    };
-                    let entry = guard.entry(key.clone()).or_default();
-                    let already = entry.get(&peer_ip) == Some(&version);
-                    entry.insert(peer_ip, version);
-                    if !already {
-                        let holds_same_tombstone = version_hash(local_v) == version;
-                        if holds_same_tombstone {
-                            reciprocal_acks
-                                .push(Message::Ack::<K, V, V::Projected>((key, version)));
-                        }
-                    }
+            let map_guard = self.map.read();
+            let mut guard = self.tombstone_acks.write();
+            for (key, version) in acks {
+                // Accept an ack only for a key we locally hold as a tombstone. Acks for
+                // never-existent or non-tombstone keys are dropped here so they cannot accumulate
+                // in `tombstone_acks` without bound.
+                //
+                // This gate cannot tell "a key we will never hold" from "a key we don't hold YET":
+                // in a cluster of three or more nodes an ack can arrive before the deletion it
+                // acknowledges (the acking peer learned the deletion via a different gossip edge),
+                // and the dropped ack is not re-delivered by the sender. That is benign because
+                // every node resends the ack for the tombstones it holds on every reconciliation
+                // round (see `start_reconciliation`): once we hold the tombstone, the next round's
+                // ack resend records the peer's acknowledgment. Pairwise reciprocation is no longer
+                // needed — the periodic ack resend is what makes the ack matrix complete across
+                // three or more replicas.
+                if map_guard.get(&key).is_some_and(|v| v.is_tombstone()) {
+                    guard.entry(key).or_default().insert(peer_ip, version);
+                } else {
+                    trace!(
+                        "dropped ack from {peer_ip} for key with no local tombstone; \
+                         ignoring to prevent unbounded bookkeeping"
+                    );
                 }
-            }
-            if !reciprocal_acks.is_empty() {
-                send_messages_to(
-                    &reciprocal_acks,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
             }
         }
         // handle messages
@@ -1056,17 +1173,9 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 trace!("segments: {out_comparison:?}");
                 let messages: Vec<_> = out_comparison
                     .into_iter()
-                    .map(Message::ComparisonItem::<K, V, V::Projected>)
+                    .map(Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // The differing values are the bulk payload — a cold/empty peer pulls the whole dataset
             // here. Hand them to a rate-paced background task so the burst cannot overrun the
@@ -1078,7 +1187,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 // into a Vec. A skipped dump allocates nothing; the peer re-initiates on its
                 // next diff round once a slot is free.
                 if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
-                    let updates: Vec<Message<K, V, V::Projected>> = {
+                    let updates: Vec<Message<K, Entry<Timestamp, V>, State<V>>> = {
                         let guard = self.map.read();
                         let mut updates = Vec::new();
                         for range in differences {
@@ -1105,26 +1214,33 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             //    NOT run the pre-insert hook here: hooks are contractually executed *outside* the
             //    map's write lock (matching `just_insert`), so a hook that re-inserts cannot
             //    re-enter the lock and deadlock.
-            let mut to_apply: Vec<(K, V)> = Vec::new();
+            let mut to_apply: Vec<(K, Entry<Timestamp, V>)> = Vec::new();
             {
                 let guard = self.map.read();
                 for (k, remote_v) in updates {
                     // Advance our clock past the timestamp carried by the remote value, so a
                     // later local write is ordered after everything we have seen. This is
                     // what prevents lost updates under clock skew.
-                    self.clock.observe(remote_v.timestamp());
+                    self.clock.observe(remote_v.stamp);
                     match guard.get(&k) {
                         Some(local_v) => {
-                            let merged_v = local_v.reconcile(&remote_v);
-                            if merged_v != *local_v {
-                                to_apply.push((k, merged_v));
+                            // Under last-write-wins, `Entry::merge` returns `other` exactly when
+                            // the remote stamp is strictly greater and `self` otherwise, so the
+                            // stamp comparison decides "would merging change state?" on its own.
+                            // Comparing stamps rather than merged values avoids cloning the value
+                            // on this hot path and is why `Value` needs no `PartialEq` bound. The
+                            // equivalence holds *only* under LWW — see ARCHITECTURE.md §7 D5.
+                            if remote_v.stamp > local_v.stamp {
+                                to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {
                                 // We already hold an equal-or-newer value; still acknowledge it
                                 // if it is the same tombstone, so the peer learns we have it.
-                                acks_to_send.push(Message::Ack::<K, V, V::Projected>((
-                                    k,
-                                    version_hash(local_v),
-                                )));
+                                acks_to_send.push(
+                                    Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
+                                        k,
+                                        version_hash(local_v),
+                                    )),
+                                );
                             }
                         }
                         None => to_apply.push((k, remote_v)),
@@ -1146,13 +1262,15 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 let mut guard = self.map.write();
                 for (k, v) in to_apply {
                     let merged_v = match guard.get(&k) {
-                        Some(local_v) => local_v.reconcile(&v),
+                        Some(local_v) => local_v.merge(&v),
                         None => v,
                     };
                     let version = merged_v.is_tombstone().then(|| version_hash(&merged_v));
                     self.map_insert(&mut guard, k.clone(), merged_v);
                     if let Some(version) = version {
-                        acks_to_send.push(Message::Ack::<K, V, V::Projected>((k, version)));
+                        acks_to_send.push(Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
+                            k, version,
+                        )));
                     }
                 }
                 // Count every entry actually written via gossip so the snapshot threshold is met
@@ -1164,15 +1282,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     .fetch_add(apply_count, Ordering::Relaxed);
             }
             if !acks_to_send.is_empty() {
-                send_messages_to(
-                    &acks_to_send,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&acks_to_send, &self.send_ports(), &peer, send_buf).await;
             }
         }
         // Value-only channel: answer a dateless mirror by diffing against the value-only
@@ -1196,23 +1306,15 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             if !out_comparison.is_empty() {
                 let messages: Vec<_> = out_comparison
                     .into_iter()
-                    .map(Message::ValueComparisonItem::<K, V, V::Projected>)
+                    .map(Message::ValueComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
             // background task, exactly like the dated bulk path.
             if !differences.is_empty() {
                 if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
-                    let updates: Vec<Message<K, V, V::Projected>> = {
+                    let updates: Vec<Message<K, Entry<Timestamp, V>, State<V>>> = {
                         let guard = self.projection.read();
                         let mut updates = Vec::new();
                         for range in differences {
@@ -1374,12 +1476,25 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     }
 }
 
-pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
-    socket: &UdpSocket,
+/// Bundles the outbound ports and per-node send state that a batched-message send needs: the
+/// [`Transport`] and [`Codec`] ports, the datagram authenticator, and the per-sender replay
+/// counter. These four pieces always travel together into [`send_messages_to`] and
+/// [`send_messages_paced`] from both call sites (the engine and
+/// [`ReconcileMirror`](crate::mirror::ReconcileMirror)); bundling them into one reference keeps
+/// each helper's signature short instead of repeating the same four parameters everywhere.
+pub(crate) struct SendPorts<'a, T: ?Sized, C> {
+    pub(crate) transport: &'a T,
+    pub(crate) codec: &'a C,
+    pub(crate) authenticator: &'a auth::Authenticator,
+    pub(crate) sender_counter: &'a replay::SenderCounter,
+}
+
+pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
+    transport: &T,
     authenticator: &auth::Authenticator,
     sender_counter: &replay::SenderCounter,
     buf: &[u8],
-    target: A,
+    target: SocketAddr,
 ) -> std::io::Result<usize> {
     // Allocate a sequence number and stamp, then frame the datagram once and reuse it across
     // retries. When authentication is disabled, `seal` returns `None` and the wire bytes are
@@ -1390,7 +1505,7 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
     let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(wire, &target).await;
+        res = transport.send_to(wire, &target).await;
         if res.is_ok() {
             break;
         }
@@ -1411,24 +1526,19 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
 /// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
 /// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead;
 /// see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
-pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
+pub(crate) async fn send_messages_to<K, V, P, T, C>(
     messages: &[Message<K, V, P>],
-    socket: Arc<UdpSocket>,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T, C>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
-) {
-    send_messages_paced(
-        messages,
-        socket,
-        authenticator,
-        sender_counter,
-        peer,
-        send_buf,
-        None,
-    )
-    .await
+) where
+    K: Serialize,
+    V: Serialize,
+    P: Serialize,
+    T: Transport<Addr = SocketAddr> + ?Sized,
+    C: Codec,
+{
+    send_messages_paced(messages, ports, peer, send_buf, None).await
 }
 
 /// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
@@ -1440,35 +1550,40 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
 /// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
 /// reception of every other peer for the duration of the transfer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
-pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize>(
+pub(crate) async fn send_messages_paced<K, V, P, T, C>(
     messages: &[Message<K, V, P>],
-    socket: Arc<UdpSocket>,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T, C>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
     rate: Option<usize>,
-) {
+) where
+    K: Serialize,
+    V: Serialize,
+    P: Serialize,
+    T: Transport<Addr = SocketAddr> + ?Sized,
+    C: Codec,
+{
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
-    let max_payload = BUFFER_SIZE - authenticator.overhead();
+    let max_payload = BUFFER_SIZE - ports.authenticator.overhead();
     send_buf.clear();
     // Anchor the pacing schedule once, so it self-corrects rather than drifting per datagram.
     let start = Instant::now();
     let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
-        message
-            .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+        ports
+            .codec
+            .encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
             if let Err(err) = send_to_retry(
-                &socket,
-                authenticator,
-                sender_counter,
+                ports.transport,
+                ports.authenticator,
+                ports.sender_counter,
                 &send_buf[..last_size],
-                peer,
+                *peer,
             )
             .await
             {
@@ -1482,7 +1597,15 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    if let Err(err) = send_to_retry(&socket, authenticator, sender_counter, send_buf, peer).await {
+    if let Err(err) = send_to_retry(
+        ports.transport,
+        ports.authenticator,
+        ports.sender_counter,
+        send_buf,
+        *peer,
+    )
+    .await
+    {
         warn!("failed to send final datagram to {peer}: {err}; continuing");
     } else {
         trace!("sent last {} bytes to {peer}", send_buf.len());
@@ -1536,7 +1659,7 @@ mod deadlock_regressions {
 
     use crate::auth;
     use crate::clock::Timestamp;
-    use crate::reconcilable::ValueOnly;
+    use crate::reconcilable::{Entry, State};
     use crate::reconcile_engine::ReconcileEngine;
     use crate::{reconcile_store::Config, ReconcileStore};
     use bincode::{DefaultOptions, Serializer};
@@ -1566,10 +1689,10 @@ mod deadlock_regressions {
         // Install a pre-insert hook that itself calls insert on the same Store
         let once = Arc::new(AtomicBool::new(false));
         let guard = once.clone();
-        svc.add_pre_insert(move |&k, &v| {
+        svc.add_pre_insert(move |&k, v| {
             // inner insert should no longer deadlock
             if !guard.swap(true, Ordering::SeqCst) {
-                let _ = hook_svc.just_insert(k + 100, v.1.unwrap_or_default() + 100);
+                let _ = hook_svc.just_insert(k + 100, v.value().copied().unwrap_or_default() + 100);
                 // TODO Check vs Utc::now()
             }
             flag2.store(true, Ordering::SeqCst);
@@ -1586,8 +1709,8 @@ mod deadlock_regressions {
     /// Serialize an `Update` so it can be fed straight into the engine's network ingest path
     /// (`handle_messages`), exactly as a peer's datagram would arrive once the (disabled)
     /// authentication gate has been cleared.
-    fn update_message_bytes(key: i32, value: (Timestamp, Option<u8>)) -> Vec<u8> {
-        let message = Message::Update::<i32, (Timestamp, Option<u8>), ValueOnly<u8>>((key, value));
+    fn update_message_bytes(key: i32, value: Entry<Timestamp, u8>) -> Vec<u8> {
+        let message = Message::Update::<i32, Entry<Timestamp, u8>, State<u8>>((key, value));
         let mut buf = Vec::new();
         message
             .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
@@ -1618,7 +1741,7 @@ mod deadlock_regressions {
                 let config = Config::default()
                     .with_port(8083)
                     .with_listen_addr("127.0.0.50".parse().unwrap());
-                let engine = ReconcileEngine::<i32, (Timestamp, Option<u8>)>::new(config)
+                let engine = ReconcileEngine::<i32, u8>::new(config)
                     .await
                     .expect("bind failed");
 
@@ -1629,20 +1752,20 @@ mod deadlock_regressions {
                 let hook_engine = engine.clone();
                 let once = Arc::new(AtomicBool::new(false));
                 let guard = once.clone();
-                *engine.pre_insert.write() =
-                    Box::new(move |&k: &i32, v: &(Timestamp, Option<u8>)| {
-                        if !guard.swap(true, Ordering::SeqCst) {
-                            let inner = (
-                                Timestamp::new(u64::MAX, 1, 0),
-                                Some(v.1.unwrap_or_default() + 100),
-                            );
-                            let _ = hook_engine.just_insert(k + 100, inner);
-                        }
-                    });
+                *engine.pre_insert.write() = Box::new(move |&k: &i32, v: &Entry<Timestamp, u8>| {
+                    if !guard.swap(true, Ordering::SeqCst) {
+                        let inner = Entry::present(
+                            Timestamp::new(u64::MAX, 1, 0),
+                            v.value().copied().unwrap_or_default() + 100,
+                        );
+                        let _ = hook_engine.just_insert(k + 100, inner);
+                    }
+                });
 
                 // Feed an `Update` (future timestamp, so it is integrated) through the real network
                 // ingest path. No cluster key, so `open` clears the bytes unchanged into a `Payload`.
-                let bytes = update_message_bytes(42, (Timestamp::new(u64::MAX, 0, 0), Some(99)));
+                let bytes =
+                    update_message_bytes(42, Entry::present(Timestamp::new(u64::MAX, 0, 0), 99));
                 let payload = auth::Authenticator::new(None, false)
                     .open(&bytes)
                     .expect("unauthenticated mode clears any datagram");
@@ -1653,7 +1776,7 @@ mod deadlock_regressions {
                 // Read back the value the re-entrant hook inserted from the network path. The read
                 // guard is dropped explicitly so it does not outlive `engine` at the block's end.
                 let map_guard = engine.map.read();
-                let reinserted = map_guard.get(&142).and_then(|(_, v)| *v);
+                let reinserted = map_guard.get(&142).and_then(|e| e.value().copied());
                 drop(map_guard);
                 reinserted
             });
@@ -1693,9 +1816,12 @@ mod auth_attack {
         let far_future = Timestamp::new(u64::MAX, 0, 0);
         let message = Message::Update::<
             i32,
-            (Timestamp, Option<String>),
-            crate::reconcilable::ValueOnly<String>,
-        >((0, (far_future, Some("evil".to_string()))));
+            crate::reconcilable::Entry<Timestamp, String>,
+            crate::reconcilable::State<String>,
+        >((
+            0,
+            crate::reconcilable::Entry::present(far_future, "evil".to_string()),
+        ));
         let mut buf = Vec::new();
         message
             .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
@@ -1746,13 +1872,17 @@ mod auth_attack {
 mod causal_stability {
     use std::net::IpAddr;
 
+    use bincode::{DefaultOptions, Deserializer};
+    use serde::Deserialize;
+
     use crate::clock::Timestamp;
-    use crate::reconcile_engine::{version_hash, ReconcileEngine};
+    use crate::reconcilable::{Entry, State};
+    use crate::reconcile_engine::{version_hash, Message, ReconcileEngine};
     use crate::reconcile_store::Config;
 
-    type Tombstoned = (Timestamp, Option<i32>);
+    type Tombstoned = Entry<Timestamp, i32>;
 
-    async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
+    async fn engine(addr: &str) -> ReconcileEngine<i32, i32> {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr(addr.parse().unwrap());
@@ -1765,7 +1895,7 @@ mod causal_stability {
         let peer_a: IpAddr = "127.0.0.61".parse().unwrap();
         let peer_b: IpAddr = "127.0.0.62".parse().unwrap();
         let key = 7;
-        let tombstone: Tombstoned = (Timestamp::new(1, 0, 0), None);
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
         let version = version_hash(&tombstone);
 
         // No member known yet: nothing could resurrect the value, so GC is allowed.
@@ -1801,13 +1931,50 @@ mod causal_stability {
         assert!(eng.is_tombstone_stable(&key, version));
     }
 
+    /// Every reconciliation round must re-emit an `Ack` for each tombstone the node currently holds,
+    /// so the causal-stability ack matrix keeps converging at three or more nodes (where a held
+    /// tombstone is otherwise never re-advertised once two replicas agree on it).
+    /// Deterministic, socket-free: insert a tombstone, run one round, and inspect the datagram.
+    #[tokio::test]
+    async fn reconciliation_round_resends_acks_for_held_tombstones() {
+        let eng = engine("127.0.0.66").await;
+        let live_key = 1;
+        let tombstone_key = 2;
+        // A live value's ack must NOT be resent; a tombstone's must be.
+        eng.just_insert(live_key, Entry::present(Timestamp::new(1, 0, 0), 11));
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
+        let expected_version = version_hash(&tombstone);
+        eng.just_insert(tombstone_key, tombstone);
+
+        let mut buf = Vec::new();
+        eng.start_reconciliation(&mut buf).await;
+
+        // Decode every message in the datagram and collect the acks.
+        let mut acks: Vec<(i32, u64)> = Vec::new();
+        let mut de = Deserializer::from_slice(&buf, DefaultOptions::new());
+        while let Ok(msg) = Message::<i32, Tombstoned, State<i32>>::deserialize(&mut de) {
+            if let Message::Ack(ack) = msg {
+                acks.push(ack);
+            }
+        }
+
+        assert!(
+            acks.contains(&(tombstone_key, expected_version)),
+            "the round must resend the ack for the held tombstone (key {tombstone_key}); got {acks:?}"
+        );
+        assert!(
+            !acks.iter().any(|(k, _)| *k == live_key),
+            "a live value's ack must never be resent; got {acks:?}"
+        );
+    }
+
     #[tokio::test]
     async fn decommission_releases_a_silent_peer() {
         let eng = engine("127.0.0.63").await;
         let live: IpAddr = "127.0.0.64".parse().unwrap();
         let gone: IpAddr = "127.0.0.65".parse().unwrap();
         let key = 9;
-        let tombstone: Tombstoned = (Timestamp::new(1, 0, 0), None);
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
         let version = version_hash(&tombstone);
 
         eng.members.write().insert(live);
@@ -1845,7 +2012,7 @@ mod causal_stability {
         let eng = engine("127.0.0.66").await;
         let peer: IpAddr = "127.0.0.67".parse().unwrap();
         let key = 11i32;
-        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
 
         // B is a known member — gates tombstone GC.
         eng.members.write().insert(peer);
@@ -1889,10 +2056,9 @@ mod clock_port {
             .with_port(8080)
             .with_listen_addr("127.0.0.70".parse().unwrap());
         let clock = Arc::new(ManualClock::new(42));
-        let eng: ReconcileEngine<i32, (Timestamp, Option<i32>)> =
-            ReconcileEngine::new_with_clock(config, clock)
-                .await
-                .expect("bind failed");
+        let eng: ReconcileEngine<i32, i32> = ReconcileEngine::new_with_clock(config, clock)
+            .await
+            .expect("bind failed");
 
         assert_eq!(eng.clock_now(), Timestamp::new(0, 1, 42));
         assert_eq!(eng.clock_now(), Timestamp::new(0, 2, 42));
@@ -1908,10 +2074,12 @@ mod pacing {
     use tokio::net::UdpSocket;
 
     use crate::auth::Authenticator;
-    use crate::reconcilable::ValueOnly;
-    use crate::reconcile_engine::{send_messages_paced, Message};
+    use crate::codec::BincodeCodec;
+    use crate::reconcilable::State;
+    use crate::reconcile_engine::{send_messages_paced, Message, SendPorts};
+    use crate::transport::UdpTransport;
 
-    type Msg = Message<u64, Vec<u8>, ValueOnly<u8>>;
+    type Msg = Message<u64, Vec<u8>, State<u8>>;
 
     /// `n` Update messages with `value_len`-byte values — enough to span several 64 KiB datagrams.
     fn bulk_updates(n: u64, value_len: usize) -> Vec<Msg> {
@@ -1924,21 +2092,20 @@ mod pacing {
     /// unconnected UDP socket) at `rate` and return how long it took.
     async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let transport = UdpTransport::new(socket);
+        let codec = BincodeCodec::new();
         let authenticator = Authenticator::new(None, false);
         let sender_counter = crate::replay::SenderCounter::new();
+        let ports = SendPorts {
+            transport: &transport,
+            codec: &codec,
+            authenticator: &authenticator,
+            sender_counter: &sender_counter,
+        };
         let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
         let mut send_buf = Vec::new();
         let start = Instant::now();
-        send_messages_paced(
-            messages,
-            socket,
-            &authenticator,
-            &sender_counter,
-            &peer,
-            &mut send_buf,
-            rate,
-        )
-        .await;
+        send_messages_paced(messages, &ports, &peer, &mut send_buf, rate).await;
         start.elapsed()
     }
 
@@ -1979,11 +2146,8 @@ mod pacing {
     /// disabled) is an explicit choice and stays untouched.
     #[tokio::test]
     async fn sub_floor_bulk_send_rate_is_clamped_at_construction() {
-        use crate::clock::Timestamp;
         use crate::reconcile_engine::ReconcileEngine;
         use crate::reconcile_store::{Config, MIN_BULK_SEND_RATE};
-
-        type Tombstoned = (Timestamp, Option<i32>);
 
         // Each case binds a distinct loopback address on an ephemeral port (port 0), so the sockets
         // never collide while a prior engine is still in scope.
@@ -1994,21 +2158,20 @@ mod pacing {
         };
 
         // A 1 B/s rate is far below the floor and is raised to it.
-        let eng: ReconcileEngine<i32, Tombstoned> =
-            ReconcileEngine::new(make("127.0.0.71", Some(1)))
-                .await
-                .expect("bind failed");
+        let eng: ReconcileEngine<i32, i32> = ReconcileEngine::new(make("127.0.0.71", Some(1)))
+            .await
+            .expect("bind failed");
         assert_eq!(eng.bulk_send_rate, Some(MIN_BULK_SEND_RATE));
 
         // A rate at or above the floor is preserved verbatim.
-        let eng: ReconcileEngine<i32, Tombstoned> =
+        let eng: ReconcileEngine<i32, i32> =
             ReconcileEngine::new(make("127.0.0.72", Some(MIN_BULK_SEND_RATE * 4)))
                 .await
                 .expect("bind failed");
         assert_eq!(eng.bulk_send_rate, Some(MIN_BULK_SEND_RATE * 4));
 
         // None disables pacing and is left untouched.
-        let eng: ReconcileEngine<i32, Tombstoned> = ReconcileEngine::new(make("127.0.0.73", None))
+        let eng: ReconcileEngine<i32, i32> = ReconcileEngine::new(make("127.0.0.73", None))
             .await
             .expect("bind failed");
         assert_eq!(eng.bulk_send_rate, None);
@@ -2019,57 +2182,41 @@ mod pacing {
 mod socket_buffers {
     use socket2::SockRef;
 
-    use crate::clock::Timestamp;
-    use crate::reconcile_engine::ReconcileEngine;
-    use crate::reconcile_store::Config;
+    use crate::transport::UdpTransport;
 
-    type Tombstoned = (Timestamp, Option<i32>);
-
-    async fn engine(addr: &str, config: Config) -> ReconcileEngine<i32, Tombstoned> {
-        ReconcileEngine::new(config.with_listen_addr(addr.parse().unwrap()))
+    async fn bound(addr: &str, recv: Option<usize>, send: Option<usize>) -> UdpTransport {
+        UdpTransport::bind(addr.parse().unwrap(), recv, send)
             .await
             .expect("bind failed")
     }
 
     /// The receive-buffer knob must actually size the gossip socket. Asserting an
     /// absolute byte count would be flaky — the kernel clamps `SO_RCVBUF` to `net.core.rmem_max`,
-    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: the multi-MiB
-    /// default must yield a strictly larger buffer than an explicitly tiny request. That holds for
+    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: a multi-MiB
+    /// request must yield a strictly larger buffer than an explicitly tiny one. That holds for
     /// any `rmem_max` above a few KiB, which is true on every realistic host.
     #[tokio::test]
     async fn recv_buffer_size_is_configurable() {
-        // Default config requests the multi-MiB DEFAULT_SOCKET_BUFFER_SIZE.
-        let big = engine("127.0.0.90", Config::default()).await;
+        let big = bound("127.0.0.90:0", Some(4 * 1024 * 1024), None).await;
         // An explicit, tiny request — well below any plausible rmem_max, so it is honoured as-is.
-        let small = engine(
-            "127.0.0.91",
-            Config::default().with_recv_buffer_size(8 * 1024),
-        )
-        .await;
+        let small = bound("127.0.0.91:0", Some(8 * 1024), None).await;
 
-        let big_buf = SockRef::from(&*big.socket).recv_buffer_size().unwrap();
-        let small_buf = SockRef::from(&*small.socket).recv_buffer_size().unwrap();
+        let big_buf = SockRef::from(big.socket()).recv_buffer_size().unwrap();
+        let small_buf = SockRef::from(small.socket()).recv_buffer_size().unwrap();
 
         assert!(
             big_buf > small_buf,
-            "the multi-MiB default ({big_buf} B) should exceed an explicitly tiny buffer \
+            "the multi-MiB request ({big_buf} B) should exceed an explicitly tiny buffer \
              ({small_buf} B)"
         );
     }
 
-    /// `None` opts out of the tuning entirely, leaving the inherited OS default. Combined with the
-    /// test above (the default is large), this pins down both ends of the knob: a tiny explicit
-    /// request shrinks the buffer below the large default.
+    /// `None` opts out of the tuning entirely, leaving the inherited OS default: the call path does
+    /// not panic and the socket has a positive receive buffer.
     #[tokio::test]
     async fn recv_buffer_size_none_leaves_os_default() {
-        let config = Config {
-            recv_buffer_size: None,
-            ..Config::default()
-        };
-        let eng = engine("127.0.0.92", config).await;
-        // Just assert it builds and the socket is usable; the OS default is host-dependent, so we
-        // only check the call path does not panic and yields a positive buffer.
-        let buf = SockRef::from(&*eng.socket).recv_buffer_size().unwrap();
+        let t = bound("127.0.0.92:0", None, None).await;
+        let buf = SockRef::from(t.socket()).recv_buffer_size().unwrap();
         assert!(buf > 0, "a socket always has a positive receive buffer");
     }
 }
@@ -2084,12 +2231,13 @@ mod tombstone_ack_bounds {
     use super::Message;
     use crate::auth;
     use crate::clock::Timestamp;
+    use crate::reconcilable::{Entry, State};
     use crate::reconcile_engine::{version_hash, ReconcileEngine};
     use crate::reconcile_store::Config;
 
-    type Tombstoned = (Timestamp, Option<i32>);
+    type Tombstoned = Entry<Timestamp, i32>;
 
-    async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
+    async fn engine(addr: &str) -> ReconcileEngine<i32, i32> {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
             .with_port(0)
@@ -2098,8 +2246,7 @@ mod tombstone_ack_bounds {
     }
 
     fn ack_bytes(key: i32, version: u64) -> Vec<u8> {
-        let msg =
-            Message::Ack::<i32, Tombstoned, crate::reconcilable::ValueOnly<i32>>((key, version));
+        let msg = Message::Ack::<i32, Tombstoned, State<i32>>((key, version));
         let mut buf = Vec::new();
         msg.serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
             .unwrap();
@@ -2135,7 +2282,7 @@ mod tombstone_ack_bounds {
         let eng = engine("127.0.0.95").await;
         let key = 10;
         // Insert a live value (Some(_) = not a tombstone).
-        eng.just_insert(key, (Timestamp::new(1, 0, 0), Some(42)));
+        eng.just_insert(key, Entry::present(Timestamp::new(1, 0, 0), 42));
 
         let peer: SocketAddr = "127.0.0.96:9000".parse().unwrap();
         let bytes = ack_bytes(key, 123);
@@ -2158,7 +2305,7 @@ mod tombstone_ack_bounds {
     async fn ack_for_local_tombstone_is_recorded() {
         let eng = engine("127.0.0.97").await;
         let key = 20;
-        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
         let version = version_hash(&tombstone);
         eng.just_insert(key, tombstone);
 
@@ -2213,16 +2360,13 @@ mod dump_budget {
     /// After the first slot is dropped its count returns to zero and a fresh claim succeeds.
     #[tokio::test]
     async fn budget_guard_limits_and_releases_slots() {
-        use crate::clock::Timestamp;
         use crate::reconcile_engine::ReconcileEngine;
-
-        type Tombstoned = (Timestamp, Option<i32>);
 
         let config = Config::default()
             .with_port(0)
             .with_listen_addr("127.0.0.99".parse().unwrap())
             .with_max_concurrent_bulk_dumps(1);
-        let eng = ReconcileEngine::<i32, Tombstoned>::new(config)
+        let eng = ReconcileEngine::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
@@ -2250,5 +2394,97 @@ mod dump_budget {
             "slot must be available after release"
         );
         drop(slot_b_retry);
+    }
+}
+
+#[cfg(test)]
+mod in_memory_convergence {
+    //! Deterministic convergence over the [`InMemoryTransport`](crate::transport::InMemoryTransport):
+    //! two engines exchange datagrams entirely in-process — no real sockets — so the anti-entropy
+    //! protocol is exercised without any network flakiness. The engine reaches its I/O only through
+    //! the `Transport` / `Codec` ports, which is what makes this substitution possible.
+    use std::collections::BTreeMap;
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use proptest::prelude::*;
+
+    use crate::clock::ManualClock;
+    use crate::reconcilable::Entry;
+    use crate::reconcile_engine::ReconcileEngine;
+    use crate::reconcile_store::Config;
+    use crate::transport::InMemoryNetwork;
+
+    /// Live (value-only) view of an engine's map, for comparing convergence regardless of stamps.
+    fn live_view(eng: &ReconcileEngine<u32, u32>) -> BTreeMap<u32, u32> {
+        eng.map
+            .read()
+            .iter()
+            .filter_map(|(k, e)| e.value().map(|v| (*k, *v)))
+            .collect()
+    }
+
+    /// Load `entries` into engine A and drive both engines over an in-memory network until B's live
+    /// view matches A's (or a short deadline elapses). Returns whether they converged.
+    async fn converges(entries: &[(u32, u32)]) -> bool {
+        let net = InMemoryNetwork::new();
+        let port = 5000u16;
+        let a_ip: IpAddr = "127.0.0.2".parse().unwrap();
+        let b_ip: IpAddr = "127.0.0.3".parse().unwrap();
+        let cfg = |ip: IpAddr| {
+            Config::default()
+                .with_listen_addr(ip)
+                .with_port(port)
+                .with_reconcile_interval(Duration::from_millis(5))
+        };
+        let a: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+            cfg(a_ip),
+            Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+            Arc::new(ManualClock::new(1)),
+        );
+        let b: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+            cfg(b_ip),
+            Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+            Arc::new(ManualClock::new(2)),
+        );
+        // Seed each as the other's known gossip peer (no real discovery over the in-memory fabric).
+        a.peers.write().insert(b_ip, Instant::now());
+        b.peers.write().insert(a_ip, Instant::now());
+        // Load A only; B must learn every entry purely through anti-entropy.
+        for (k, v) in entries {
+            a.just_insert(*k, Entry::present(a.clock_now(), *v));
+        }
+        let want = live_view(&a);
+
+        let ta = tokio::spawn(a.clone().run());
+        let tb = tokio::spawn(b.clone().run());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut converged = false;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if live_view(&b) == want {
+                converged = true;
+                break;
+            }
+        }
+        ta.abort();
+        tb.abort();
+        converged
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(12))]
+
+        /// For any small map, a cold replica converges to it over the in-memory transport.
+        #[test]
+        fn cold_replica_converges_over_in_memory_transport(
+            entries in prop::collection::vec((0u32..64, 0u32..1000), 0..24)
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let ok = rt.block_on(converges(&entries));
+            prop_assert!(ok, "B did not converge to A's {} entries over the in-memory transport", entries.len());
+        }
     }
 }

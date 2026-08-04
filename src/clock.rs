@@ -150,6 +150,13 @@ fn advance(wall_ms: u64, counter: u32) -> (u64, u32) {
 pub trait Clock: Send + Sync + 'static {
     /// Mint a strictly-monotonic local timestamp for a write or an outgoing message.
     fn now(&self) -> Timestamp;
+    /// This node's identity — the `node_id` component the adapter stamps onto every timestamp it
+    /// mints, and the deterministic tie-break that makes the conflict order total.
+    ///
+    /// Reading it here rather than caching it elsewhere means the reported identity can never
+    /// disagree with the one actually stamped, and — unlike calling [`now`](Clock::now) for it —
+    /// costs no counter tick.
+    fn node_id(&self) -> u64;
     /// Advance the clock past a timestamp received from a peer, so that a subsequent
     /// [`now`](Clock::now) is ordered after it (this is what prevents lost updates under skew).
     ///
@@ -276,6 +283,10 @@ impl Clock for HlcClock {
     ///
     /// The returned timestamp is strictly greater than every timestamp previously produced
     /// or observed by this clock, ensuring local monotonicity.
+    fn node_id(&self) -> u64 {
+        self.node_id
+    }
+
     fn now(&self) -> Timestamp {
         let pt = phys_now_ms();
         let mut last = self.last.lock();
@@ -351,21 +362,6 @@ impl Clock for HlcClock {
     }
 }
 
-/// A value that carries a [`Timestamp`].
-///
-/// Lets the reconciliation engine read the timestamp of a stored value (to advance its
-/// clock on receipt) without knowing the concrete value type.
-pub trait Timestamped {
-    /// The Hybrid Logical Clock timestamp attached to this value.
-    fn timestamp(&self) -> Timestamp;
-}
-
-impl<V> Timestamped for (Timestamp, V) {
-    fn timestamp(&self) -> Timestamp {
-        self.0
-    }
-}
-
 /// Deterministic [`Clock`] adapter for tests: no physical-time read at all.
 ///
 /// [`now`](Clock::now) bumps the logical counter; [`observe`](Clock::observe) jumps to a strictly
@@ -390,6 +386,10 @@ impl ManualClock {
 
 #[cfg(test)]
 impl Clock for ManualClock {
+    fn node_id(&self) -> u64 {
+        self.node_id
+    }
+
     fn now(&self) -> Timestamp {
         let mut last = self.last.lock();
         let next = Timestamp::new(last.wall_ms(), last.counter() + 1, self.node_id);
