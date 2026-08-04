@@ -16,6 +16,7 @@ exclude = [
     "ARCHITECTURE.md",
     "SOTA.md",
     "PROGRESS.md",
+    "agent-workflow/",
 ]
 
 [profile.release]
