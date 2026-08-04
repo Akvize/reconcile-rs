@@ -53,7 +53,37 @@ distinguish your own damage from the pre-existing kind.
 If no verification command could be detected at all, **ask the user**. Do not
 invent one.
 
-## 3. Internalise the conventions, then state them back
+## 3. Find out what is already in flight
+
+The default branch is not always where a project actually is. Before planning
+anything, look at what is open:
+
+```bash
+git branch -r --sort=-committerdate | head -20
+gh pr list --limit 30 --json number,title,headRefName,baseRefName   # or the API
+```
+
+Read the **base** of each open PR, not just its title. A chain where PR B is
+based on PR A's branch rather than on the default branch means the project's
+real tip is that chain's head, and the default branch is a lagging snapshot.
+Work planned against the snapshot can be obsolete before it is written.
+
+Three questions to answer before you plan:
+
+- **Does the file I am about to create already exist somewhere in flight?** A
+  better version of it may be sitting in an open PR, along with the reasoning
+  you are about to re-derive.
+- **Does an open PR rewrite the files I am about to touch?** If so, your edits
+  will be dropped on merge, however correct they are.
+- **Is a fact I am about to write down being deliberately changed?** A
+  convention that holds on the default branch can be one an in-flight branch is
+  removing on purpose. Documenting it then actively works against the change.
+
+If any answer is yes, say so and ask the user which base to work from. This is
+one of the few genuinely blocking questions in this skill: picking the wrong
+base does not produce worse work, it produces discarded work.
+
+## 4. Internalise the conventions, then state them back
 
 Read the convention sources that exist (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`,
 lint configs, `.editorconfig`). Then do the thing documents cannot do for you:
@@ -71,14 +101,14 @@ This is cheap and catches misalignment immediately.
 If there is no `CLAUDE.md`/`AGENTS.md`, journal that as an `anomaly`. The exit
 review will propose one seeded from what you learn today.
 
-## 4. Pick up unfinished business
+## 5. Pick up unfinished business
 
 If a previous handoff was injected, read it and confirm with the user what carries
 over. If the bootstrap reported a *pending retrospective* from a session that
 ended without one, offer to run `/session-end` over its preserved journal first —
 those findings are still valid and still unbanked.
 
-## 5. Fix the intent in writing
+## 6. Fix the intent in writing
 
 Before touching code, write down — to the user, in two or three lines:
 
@@ -97,7 +127,7 @@ This costs thirty seconds and is what the exit review's scope-drift gate compare
 against. Without it, "did we ship what was asked?" cannot be answered by anything
 except memory, which is exactly the thing that fails.
 
-## 6. Journal as you go
+## 7. Journal as you go
 
 The exit review is only as good as the evidence collected during the session.
 Failed tool calls are captured automatically. Everything else needs one line from

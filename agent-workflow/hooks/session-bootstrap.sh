@@ -64,6 +64,13 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   } >>"$CLAUDE_ENV_FILE" 2>/dev/null
 fi
 
+# Recently-touched remote branches. The default branch is often a lagging
+# snapshot of a project whose real tip sits at the head of a stacked chain, and
+# planning against the snapshot produces discarded work.
+INFLIGHT="$(git -C "$ROOT" for-each-ref --sort=-committerdate --count=12 \
+  --format='  %(refname:short)  (%(committerdate:relative))' refs/remotes/origin 2>/dev/null |
+  grep -v 'origin/HEAD')"
+
 CONVENTIONS="$(aw_find_convention_files "$ROOT")"
 LINTERS="$(aw_find_lint_configs "$ROOT")"
 VERIFY="$(aw_detect_verification "$ROOT")"
@@ -87,6 +94,12 @@ Journal: \`$SDIR/journal.tsv\`
 ### How this project proves itself
 Run these before claiming anything works. Do not invent commands.
 ${VERIFY:-  (none detected — ASK the user how to build/test/lint before writing code)}
+
+### Recently-touched remote branches
+Check what is in flight before planning. If work is stacked (a branch based on
+another branch rather than on the default), the project's real tip is that
+chain's head, not the default branch.
+${INFLIGHT:-  (none)}
 
 ### Convention sources
 ${CONVENTIONS:-  (none found)}

@@ -109,7 +109,7 @@ capture, the baseline and the nudge, but nothing in the gates depends on them.
 
 | | |
 |---|---|
-| `/session-start` | Bootstrap: prove the verification loop runs, internalise conventions, pick up the previous handoff, fix the intent in writing. |
+| `/session-start` | Bootstrap: prove the verification loop runs, check what is in flight, internalise conventions, pick up the previous handoff, fix the intent in writing. |
 | `/session-end` | Eight-gate exit review (below). |
 | `/session-note` | One-line journalling during the session. |
 
