@@ -36,6 +36,27 @@ If the journal is empty and the session was substantial, that is itself the firs
 finding: this session flew blind and the retrospective below will be weaker for it.
 Say so rather than compensating with invention.
 
+### Without the `aw` CLI
+
+The hooks are optional; the gates are not. If `aw` is unavailable — for instance
+when this skill came from claude.ai rather than the full bundle — gather the same
+evidence by hand and rely on the transcript in place of the journal:
+
+```bash
+git log --oneline <baseline-sha>..HEAD          # or: git log --oneline -20
+git diff --stat <baseline-sha>                  # what changed
+git status --porcelain -uall                    # including untracked
+git diff <baseline-sha> | grep -nEi '(api[_-]?key|secret|password|token|BEGIN [A-Z ]*PRIVATE KEY)' | grep '^\+'
+git diff --stat <baseline-sha> -- Cargo.toml package.json pyproject.toml go.mod requirements*.txt
+```
+
+Use `-uall`: without it git collapses a new untracked directory into a single
+entry, so a session that created a whole tree looks like it changed one thing.
+
+When the journal is missing, reconstruct bumps by re-reading the transcript for
+failed commands and corrections rather than recalling them — and say in the
+report that the retrospective was reconstructed, not recorded.
+
 ---
 
 ## G0 — Scope drift
@@ -233,6 +254,10 @@ Install it so the next bootstrap picks it up automatically:
 aw handoff <file>
 ```
 
+Without the CLI, put the handoff where the next session will actually see it —
+the end of your final reply at minimum, or a file the user commits if the work
+spans sessions. A handoff nobody reads is the same as no handoff.
+
 The decision log matters more than it looks: undocumented decisions get
 re-litigated by the next session, which burns context re-deriving a conclusion
 that was already reached — and sometimes reaches the opposite one.
@@ -248,7 +273,7 @@ that was already reached — and sometimes reaches the opposite one.
    from G5, as exact text, applied only with the user's agreement. This is the
    flywheel: each session's friction becomes next session's guardrail, and the
    instructions converge on the repo's real behaviour instead of its imagined one.
-3. **Mark it done**: `aw done`
+3. **Mark it done**: `aw done` (no-op without the CLI — the review still counts).
 
 Report the review faithfully. A gate that failed, failed. A check that was skipped,
 was skipped — say which and why. An exit review that always passes is not a gate,

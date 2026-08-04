@@ -36,3 +36,10 @@ against a retrospective that is either evidence-based or fiction.
 Tool failures are journalled automatically by the `PostToolUseFailure` hook — do
 not duplicate them. Note the things a hook cannot see: wrong assumptions,
 misleading documentation, conventions discovered too late, decisions taken.
+
+## Without the `aw` CLI
+
+If `aw` is unavailable, keep the same entries in a scratch file, or simply state
+each one in your reply as it happens so it lands in the transcript. The exit
+review reads whichever exists. The habit is the point, not the mechanism:
+written at the moment of surprise beats reconstructed at the end, every time.

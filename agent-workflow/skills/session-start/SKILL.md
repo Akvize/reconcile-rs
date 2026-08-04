@@ -18,14 +18,29 @@ with a plausible default.
 
 The `SessionStart` hook has already probed the repo and injected a bootstrap block
 (verification commands, convention sources, lint configs, doc surface, git
-baseline, previous handoff). If it is absent, the hooks are not installed — run
-the probes yourself:
+baseline, previous handoff). If it is present, read it and skip to step 2.
 
 ```
 aw verify        # how this project proves itself
 aw conventions   # convention sources, lint configs, doc surface
 aw baseline      # recorded git baseline
 ```
+
+### Without the `aw` CLI
+
+The hooks are optional. If `aw` is not installed — for instance when this skill
+came from claude.ai rather than the full bundle — do the same probes by hand.
+Everything below still applies; only the automation is missing.
+
+```bash
+git rev-parse --abbrev-ref HEAD && git rev-parse HEAD && git status --porcelain -uall | wc -l
+grep -rhE '^\s+run:\s*\S' .github/workflows 2>/dev/null | sed 's/^\s*run:\s*//' | sort -u | head -15
+ls CLAUDE.md AGENTS.md CONTRIBUTING.md Makefile justfile package.json .pre-commit-config.yaml 2>/dev/null
+```
+
+Read CI first — whatever CI runs is what "passing" means in this project, and it
+is frequently the *only* place the real commands are written down. Then record
+the baseline SHA in your own notes, since without the hook nothing else will.
 
 ## 2. Prove the verification loop actually runs — before writing code
 
@@ -80,7 +95,9 @@ Before touching code, write down — to the user, in two or three lines:
 - **Verification:** the exact command(s) that will demonstrate success.
 - **Blast radius:** does this session expect to push, publish, migrate, or delete?
 
-Record it: `aw note scope "<the goal and boundary>"`.
+Record it: `aw note scope "<the goal and boundary>"`, or, without the CLI, state
+it explicitly in your reply so it is in the transcript and can be compared
+against later.
 
 This costs thirty seconds and is what the exit review's scope-drift gate compares
 against. Without it, "did we ship what was asked?" cannot be answered by anything
@@ -104,3 +121,7 @@ aw note debt       "left the slow path unoptimised; see TODO in parser.rs"
 Rule of thumb: **if it surprised you, journal it.** Surprises are exactly the
 material the retrospective needs, and they are exactly what you will have
 forgotten by the end.
+
+Without the CLI, keep the same list in a scratch file and mention each entry in
+your reply as it happens. The medium matters far less than the habit of writing
+it down at the moment of surprise rather than reconstructing it later.
