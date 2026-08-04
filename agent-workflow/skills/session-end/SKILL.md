@@ -23,39 +23,35 @@ says so. The value of this review is entirely in its willingness to report badly
 Do this before reasoning about any gate. Never run this review from memory —
 memory is precisely what has degraded over a long session.
 
-```
-aw diff        # what THIS session changed, against the bootstrap baseline
-aw journal     # friction, decisions, anomalies, assumptions recorded as they happened
-aw baseline    # where the session started
-aw secrets     # credential-shaped strings in added lines
-aw deps        # dependency manifest changes
-aw conventions # convention sources, lint configs, doc surface
-```
-
-If the journal is empty and the session was substantial, that is itself the first
-finding: this session flew blind and the retrospective below will be weaker for it.
-Say so rather than compensating with invention.
-
-### Without the `aw` CLI
-
-The hooks are optional; the gates are not. If `aw` is unavailable — for instance
-when this skill came from claude.ai rather than the full bundle — gather the same
-evidence by hand and rely on the transcript in place of the journal:
+`$AW_BASE_SHA` and `$AW_JOURNAL` are set by the bootstrap hook. Substitute the
+session's starting commit by hand if they are unset.
 
 ```bash
-git log --oneline <baseline-sha>..HEAD          # or: git log --oneline -20
-git diff --stat <baseline-sha>                  # what changed
-git status --porcelain -uall                    # including untracked
-git diff <baseline-sha> | grep -nEi '(api[_-]?key|secret|password|token|BEGIN [A-Z ]*PRIVATE KEY)' | grep '^\+'
-git diff --stat <baseline-sha> -- Cargo.toml package.json pyproject.toml go.mod requirements*.txt
+cat "$AW_JOURNAL"                                  # friction recorded as it happened
+git log --oneline "$AW_BASE_SHA"..HEAD             # what landed
+git diff --stat "$AW_BASE_SHA"                     # what changed
+git status --porcelain -uall                       # including untracked
+git ls-files --others --exclude-standard           # new files
+
+# credential-shaped strings in ADDED lines only
+git diff "$AW_BASE_SHA" | grep -nEi \
+  '^\+.*(api[_-]?key|secret|passwd|password|token|bearer|private[_-]?key|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,})'
+
+# dependency manifest changes
+git diff --stat "$AW_BASE_SHA" -- Cargo.toml Cargo.lock package.json package-lock.json \
+  pnpm-lock.yaml pyproject.toml poetry.lock 'requirements*.txt' uv.lock go.mod go.sum \
+  Gemfile.lock pom.xml 'build.gradle*' composer.json
 ```
 
-Use `-uall`: without it git collapses a new untracked directory into a single
+Use `-uall`. Without it git collapses a new untracked directory into a **single**
 entry, so a session that created a whole tree looks like it changed one thing.
 
-When the journal is missing, reconstruct bumps by re-reading the transcript for
-failed commands and corrections rather than recalling them — and say in the
-report that the retrospective was reconstructed, not recorded.
+If the journal is empty and the session was substantial, that is itself the first
+finding: this session flew blind and the retrospective below will be weaker for
+it. Reconstruct bumps by re-reading the transcript for failed commands and
+corrections rather than recalling them, and say in the report that the
+retrospective was reconstructed rather than recorded. Never compensate with
+invention.
 
 ---
 
@@ -248,15 +244,15 @@ to be read.
 <the single most useful next action>
 ```
 
-Install it so the next bootstrap picks it up automatically:
+Install it so the next session's bootstrap picks it up automatically, and put it
+in your final reply as well:
 
-```
-aw handoff <file>
+```bash
+cp <handoff-file> "$AW_STATE_DIR/HANDOFF.md"
 ```
 
-Without the CLI, put the handoff where the next session will actually see it —
-the end of your final reply at minimum, or a file the user commits if the work
-spans sessions. A handoff nobody reads is the same as no handoff.
+If `$AW_STATE_DIR` is unset, the reply is the handoff — or a file the user commits
+if the work spans sessions. A handoff nobody reads is the same as no handoff.
 
 The decision log matters more than it looks: undocumented decisions get
 re-litigated by the next session, which burns context re-deriving a conclusion
@@ -273,7 +269,11 @@ that was already reached — and sometimes reaches the opposite one.
    from G5, as exact text, applied only with the user's agreement. This is the
    flywheel: each session's friction becomes next session's guardrail, and the
    instructions converge on the repo's real behaviour instead of its imagined one.
-3. **Mark it done**: `aw done` (no-op without the CLI — the review still counts).
+3. **Mark it done**, which clears the exit nudge and the pending-review breadcrumb:
+
+   ```bash
+   touch "$AW_SESSION_DIR/retro-done" && rm -f "$AW_STATE_DIR/retro-pending"
+   ```
 
 Report the review faithfully. A gate that failed, failed. A check that was skipped,
 was skipped — say which and why. An exit review that always passes is not a gate,

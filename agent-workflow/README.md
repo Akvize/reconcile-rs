@@ -99,9 +99,9 @@ That user-settings layer being read inside the VM is verified, not assumed: a
 both fired. What does not carry over is your *local* `~/.claude`, because it is
 never uploaded — a transport gap rather than a policy block.
 
-The skills work standalone. Each one carries a **Without the `aw` CLI** section
-with plain-git equivalents, so the claude.ai-only install is fully usable and the
-hooks are a genuine upgrade rather than a prerequisite.
+The skills work standalone. They drive plain `git` and `printf`, so the
+claude.ai-only install is fully usable on its own — the hooks add the automatic
+capture, the baseline and the nudge, but nothing in the gates depends on them.
 
 ---
 
@@ -112,7 +112,18 @@ hooks are a genuine upgrade rather than a prerequisite.
 | `/session-start` | Bootstrap: prove the verification loop runs, internalise conventions, pick up the previous handoff, fix the intent in writing. |
 | `/session-end` | Eight-gate exit review (below). |
 | `/session-note` | One-line journalling during the session. |
-| `aw` | The CLI the skills drive — `note`, `journal`, `diff`, `secrets`, `deps`, `handoff`, `done`. |
+
+There is no CLI. The bootstrap hook exports `$AW_JOURNAL`, `$AW_BASE_SHA`,
+`$AW_SESSION_DIR` and `$AW_STATE_DIR` through `$CLAUDE_ENV_FILE`, and the skills
+use plain `git` and `printf` against them. That keeps one code path whether or
+not the hooks are installed, instead of a command that may or may not exist.
+
+Tab-separated, so reading a journal yourself between sessions needs nothing
+beyond `cat`:
+
+```bash
+cat ~/.claude/agent-workflow-state/*/sessions/*/journal.tsv
+```
 
 ### The eight exit gates
 
@@ -172,8 +183,8 @@ Nothing in it needs editing after the move.
 ```
 agent-workflow/
   install.sh                       idempotent installer / uninstaller
+  cloud-setup-script.sh            paste into a cloud environment's Setup script
   settings.snippet.json            the four hook registrations
-  bin/aw                           session CLI driven by the skills
   hooks/
     lib.sh                         shared probing + journal library
     session-bootstrap.sh           SessionStart  → inject repo facts

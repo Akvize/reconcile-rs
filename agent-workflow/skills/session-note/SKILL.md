@@ -7,9 +7,13 @@ description: Record a friction point, decision, assumption, anomaly, unverified 
 
 One line, at the moment it happens. The end-of-session review reads these back.
 
+```bash
+printf '%s\t<kind>\t%s\n' "$(date -u +%FT%TZ)" "<one sentence>" >> "$AW_JOURNAL"
 ```
-aw note <kind> "<one sentence>"
-```
+
+`$AW_JOURNAL` is set by the bootstrap hook. If it is unset, the hooks are not
+installed: write to a scratch file and say where, or simply state the entry in
+your reply so it lands in the transcript. The exit review reads whichever exists.
 
 ## Kinds
 
@@ -33,13 +37,6 @@ gaps get filled with plausible-sounding bumps that never happened. A journal tur
 The bar is low on purpose: **if it surprised you, note it.** Ten seconds now,
 against a retrospective that is either evidence-based or fiction.
 
-Tool failures are journalled automatically by the `PostToolUseFailure` hook — do
-not duplicate them. Note the things a hook cannot see: wrong assumptions,
+Failed tool calls are journalled automatically by the `PostToolUseFailure` hook —
+do not duplicate them. Note the things a hook cannot see: wrong assumptions,
 misleading documentation, conventions discovered too late, decisions taken.
-
-## Without the `aw` CLI
-
-If `aw` is unavailable, keep the same entries in a scratch file, or simply state
-each one in your reply as it happens so it lands in the transcript. The exit
-review reads whichever exists. The habit is the point, not the mechanism:
-written at the moment of surprise beats reconstructed at the end, every time.

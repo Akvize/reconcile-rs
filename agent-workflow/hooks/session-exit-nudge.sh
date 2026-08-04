@@ -58,7 +58,7 @@ Before this session ends, run the \`session-end\` skill (\`/session-end\`). It g
 doc consistency, convention conformance, scope drift, verification honesty,
 blast radius + secret sweep, agent retrospective, repo retrospective, handoff.
 
-Journal evidence: \`$SDIR/journal.jsonl\`. Do not synthesise the retrospective from memory.
+Journal evidence: \`$SDIR/journal.tsv\`. Do not synthesise the retrospective from memory.
 If the user is clearly mid-task, finish the task first — this is a reminder, not an interrupt."
 
 if [ "$MODE" = "block" ]; then
