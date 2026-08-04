@@ -36,10 +36,15 @@ const SIZES: &[usize] = &[10, 100, 1_000, 10_000, 100_000];
 
 /// Deterministic `(key, value)` corpus: sequential keys keep every backend's layout comparable.
 fn corpus(n: usize) -> Vec<(u32, u32)> {
-    (0..n as u32).map(|k| (k, k.wrapping_mul(2_654_435_761))).collect()
+    (0..n as u32)
+        .map(|k| (k, k.wrapping_mul(2_654_435_761)))
+        .collect()
 }
 
-fn log_group<'a>(c: &'a mut Criterion, name: &str) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
+fn log_group<'a>(
+    c: &'a mut Criterion,
+    name: &str,
+) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
     let mut group = c.benchmark_group(name);
     group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group
