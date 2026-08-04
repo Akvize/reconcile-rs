@@ -48,7 +48,7 @@
 
 use std::borrow::Cow;
 
-use crate::replay::REPLAY_HEADER_LEN;
+use crate::replay::{Seq, Stamp, REPLAY_HEADER_LEN};
 
 /// Length in bytes of the authentication tag prepended to every datagram.
 pub(crate) const TAG_LEN: usize = 32;
@@ -114,11 +114,12 @@ impl Tag {
 /// captures both without forcing an allocation on the common path.
 pub(crate) struct Payload<'a> {
     bytes: Cow<'a, [u8]>,
-    /// Sender sequence number extracted from the replay header, or 0 in unauthenticated mode.
-    pub(crate) seq: u64,
-    /// Sender wall-clock stamp (ms since epoch) from the replay header, or 0 in unauthenticated
+    /// Sender sequence number extracted from the replay header, or [`Seq::NONE`] in
+    /// unauthenticated mode.
+    pub(crate) seq: Seq,
+    /// Sender wall-clock stamp from the replay header, or [`Stamp::NONE`] in unauthenticated
     /// mode.
-    pub(crate) stamp: u64,
+    pub(crate) stamp: Stamp,
 }
 
 impl Payload<'_> {
@@ -128,7 +129,7 @@ impl Payload<'_> {
 }
 
 /// Build a replay header: `seq (8 bytes LE) || stamp (8 bytes LE)`.
-fn encode_replay_header(seq: u64, stamp: u64) -> [u8; REPLAY_HEADER_LEN] {
+fn encode_replay_header(seq: Seq, stamp: Stamp) -> [u8; REPLAY_HEADER_LEN] {
     let mut header = [0u8; REPLAY_HEADER_LEN];
     header[..8].copy_from_slice(&seq.to_le_bytes());
     header[8..].copy_from_slice(&stamp.to_le_bytes());
@@ -138,12 +139,12 @@ fn encode_replay_header(seq: u64, stamp: u64) -> [u8; REPLAY_HEADER_LEN] {
 /// Parse a replay header from the front of a byte slice.
 ///
 /// Returns `(seq, stamp, rest)` or `None` if the slice is shorter than the header.
-fn decode_replay_header(data: &[u8]) -> Option<(u64, u64, &[u8])> {
+fn decode_replay_header(data: &[u8]) -> Option<(Seq, Stamp, &[u8])> {
     if data.len() < REPLAY_HEADER_LEN {
         return None;
     }
-    let seq = u64::from_le_bytes(data[..8].try_into().unwrap());
-    let stamp = u64::from_le_bytes(data[8..16].try_into().unwrap());
+    let seq = Seq::from_le_bytes(data[..8].try_into().unwrap());
+    let stamp = Stamp::from_le_bytes(data[8..16].try_into().unwrap());
     Some((seq, stamp, &data[REPLAY_HEADER_LEN..]))
 }
 
@@ -290,7 +291,7 @@ impl Authenticator {
     ///
     /// Returns `Some(framed)` when enabled/encrypted, or `None` when disabled (the caller then
     /// sends `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
-    pub(crate) fn seal(&self, seq: u64, stamp: u64, payload: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Option<Vec<u8>> {
         match self {
             Authenticator::Disabled => None,
             Authenticator::Enabled(key) => {
@@ -331,8 +332,8 @@ impl Authenticator {
         match self {
             Authenticator::Disabled => Some(Payload {
                 bytes: Cow::Borrowed(datagram),
-                seq: 0,
-                stamp: 0,
+                seq: Seq::NONE,
+                stamp: Stamp::NONE,
             }),
             Authenticator::Enabled(key) => {
                 if datagram.len() < TAG_LEN + REPLAY_HEADER_LEN {
@@ -450,13 +451,15 @@ mod tests {
     fn seal_open_roundtrip() {
         let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
         let payload = b"some serialized message";
-        let sealed = auth.seal(1, 12345, payload).expect("enabled");
+        let sealed = auth
+            .seal(Seq::new(1), Stamp::new(12345), payload)
+            .expect("enabled");
         // MAC overhead + replay header + payload
         assert_eq!(sealed.len(), TAG_LEN + REPLAY_HEADER_LEN + payload.len());
         let p = auth.open(&sealed).expect("should open");
         assert_eq!(p.as_bytes(), payload);
-        assert_eq!(p.seq, 1);
-        assert_eq!(p.stamp, 12345);
+        assert_eq!(p.seq, Seq::new(1));
+        assert_eq!(p.stamp, Stamp::new(12345));
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
     #[test]
     fn open_wrong_key() {
         let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false)
-            .seal(1, 99, b"payload")
+            .seal(Seq::new(1), Stamp::new(99), b"payload")
             .expect("enabled");
         assert!(Authenticator::new(Some([0x22; KEY_LEN]), false)
             .open(&sealed)
@@ -484,14 +487,14 @@ mod tests {
         assert!(!auth.is_enabled());
         assert!(!auth.is_encrypted());
         assert_eq!(auth.overhead(), 0);
-        assert!(auth.seal(0, 0, b"payload").is_none());
+        assert!(auth.seal(Seq::new(0), Stamp::new(0), b"payload").is_none());
         // Any datagram clears the gate unchanged in unauthenticated mode; seq/stamp are 0.
         let p = auth
             .open(b"raw bytes")
             .expect("unauthenticated always clears");
         assert_eq!(p.as_bytes(), b"raw bytes");
-        assert_eq!(p.seq, 0);
-        assert_eq!(p.stamp, 0);
+        assert_eq!(p.seq, Seq::new(0));
+        assert_eq!(p.stamp, Stamp::new(0));
     }
 
     /// Replay: the same sealed datagram must be accepted by `open` (the auth gate does not do
@@ -500,10 +503,12 @@ mod tests {
     fn replay_header_round_trips_seq_and_stamp() {
         let auth = Authenticator::new(Some([0xAB; KEY_LEN]), false);
         let payload = b"hello";
-        let sealed = auth.seal(42, 9999, payload).expect("enabled");
+        let sealed = auth
+            .seal(Seq::new(42), Stamp::new(9999), payload)
+            .expect("enabled");
         let p = auth.open(&sealed).expect("valid tag");
-        assert_eq!(p.seq, 42);
-        assert_eq!(p.stamp, 9999);
+        assert_eq!(p.seq, Seq::new(42));
+        assert_eq!(p.stamp, Stamp::new(9999));
         assert_eq!(p.as_bytes(), payload);
     }
 
@@ -526,7 +531,9 @@ mod tests {
             );
 
             let payload = b"some serialized message";
-            let sealed = auth.seal(1, 555, payload).expect("encrypted");
+            let sealed = auth
+                .seal(Seq::new(1), Stamp::new(555), payload)
+                .expect("encrypted");
             // nonce + replay_header + payload + AEAD tag
             assert_eq!(
                 sealed.len(),
@@ -534,14 +541,16 @@ mod tests {
             );
             let p = auth.open(&sealed).expect("should decrypt");
             assert_eq!(p.as_bytes(), payload);
-            assert_eq!(p.seq, 1);
-            assert_eq!(p.stamp, 555);
+            assert_eq!(p.seq, Seq::new(1));
+            assert_eq!(p.stamp, Stamp::new(555));
         }
 
         #[test]
         fn ciphertext_hides_plaintext() {
             let payload = b"the quick brown fox jumps over the lazy dog";
-            let sealed = encryptor(0x11).seal(1, 0, payload).expect("encrypted");
+            let sealed = encryptor(0x11)
+                .seal(Seq::new(1), Stamp::new(0), payload)
+                .expect("encrypted");
             // The plaintext must not appear anywhere in the framed datagram.
             assert!(!sealed
                 .windows(payload.len())
@@ -555,15 +564,19 @@ mod tests {
             let auth = encryptor(0x11);
             let payload = b"identical payload";
             assert_ne!(
-                auth.seal(1, 0, payload).expect("encrypted"),
-                auth.seal(2, 0, payload).expect("encrypted")
+                auth.seal(Seq::new(1), Stamp::new(0), payload)
+                    .expect("encrypted"),
+                auth.seal(Seq::new(2), Stamp::new(0), payload)
+                    .expect("encrypted")
             );
         }
 
         #[test]
         fn tamper_is_rejected() {
             let auth = encryptor(0x11);
-            let mut sealed = auth.seal(1, 0, b"payload").expect("encrypted");
+            let mut sealed = auth
+                .seal(Seq::new(1), Stamp::new(0), b"payload")
+                .expect("encrypted");
             // Flip a ciphertext byte (past the nonce): authentication must fail.
             let last = sealed.len() - 1;
             sealed[last] ^= 0x01;
@@ -572,7 +585,9 @@ mod tests {
 
         #[test]
         fn wrong_key_is_rejected() {
-            let sealed = encryptor(0x11).seal(1, 0, b"payload").expect("encrypted");
+            let sealed = encryptor(0x11)
+                .seal(Seq::new(1), Stamp::new(0), b"payload")
+                .expect("encrypted");
             assert!(encryptor(0x22).open(&sealed).is_none());
         }
 
@@ -589,10 +604,12 @@ mod tests {
         #[test]
         fn replay_header_survives_encryption() {
             let auth = encryptor(0x33);
-            let sealed = auth.seal(77, 888888, b"data").expect("encrypted");
+            let sealed = auth
+                .seal(Seq::new(77), Stamp::new(888888), b"data")
+                .expect("encrypted");
             let p = auth.open(&sealed).expect("should decrypt");
-            assert_eq!(p.seq, 77);
-            assert_eq!(p.stamp, 888888);
+            assert_eq!(p.seq, Seq::new(77));
+            assert_eq!(p.stamp, Stamp::new(888888));
             assert_eq!(p.as_bytes(), b"data");
         }
     }

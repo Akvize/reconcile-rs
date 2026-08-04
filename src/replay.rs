@@ -45,7 +45,9 @@
 //! step, same trade-off family as the regression residual above.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::net::IpAddr;
+use std::ops::Sub;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -65,6 +67,103 @@ pub const FRESHNESS_WINDOW_DEFAULT: Duration = Duration::from_secs(5 * 60); // 5
 /// as legitimate UDP reordering (one bit per relative sequence number); older is rejected.
 const WINDOW_SIZE: u64 = 1024;
 
+/// A per-sender monotonic sequence number carried in the replay header.
+///
+/// This module is the sole owner of `seq`'s semantics — its wire encoding
+/// ([`to_le_bytes`](Seq::to_le_bytes)/[`from_le_bytes`](Seq::from_le_bytes)) and the ordering used
+/// to detect replays and restarts live here rather than being reconstructed from a bare `u64` at
+/// each call site (see `AGENTS.md`, "entities own their own validation").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Seq(u64);
+
+impl Seq {
+    /// The first sequence number a [`SenderCounter`] issues in authenticated mode.
+    pub(crate) const FIRST: Seq = Seq(1);
+    /// Sentinel carried on a [`crate::auth::Payload`] produced in unauthenticated mode, where no
+    /// replay header exists.
+    pub(crate) const NONE: Seq = Seq(0);
+
+    #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
+    pub(crate) const fn new(value: u64) -> Seq {
+        Seq(value)
+    }
+
+    pub(crate) fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    pub(crate) fn from_le_bytes(bytes: [u8; 8]) -> Seq {
+        Seq(u64::from_le_bytes(bytes))
+    }
+}
+
+impl fmt::Display for Seq {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// Number of sequence numbers between two `Seq`s. Only meaningful (and only used) where the
+/// caller already knows `self >= rhs`, mirroring the raw `u64` subtraction it replaces.
+impl Sub for Seq {
+    type Output = u64;
+
+    fn sub(self, rhs: Seq) -> u64 {
+        self.0 - rhs.0
+    }
+}
+
+/// A sender wall-clock stamp (milliseconds since the Unix epoch) carried in the replay header.
+///
+/// This module is the sole owner of `stamp`'s semantics: its wire encoding and the freshness
+/// check ([`is_fresh`](Stamp::is_fresh)) that decides whether a stamp is acceptable both live here,
+/// rather than [`ReplayFilter`] reaching into a bare `u64` to redo that arithmetic itself (see
+/// `AGENTS.md`, "entities own their own validation").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Stamp(u64);
+
+impl Stamp {
+    /// Sentinel carried on a [`crate::auth::Payload`] produced in unauthenticated mode, where no
+    /// replay header exists.
+    pub(crate) const NONE: Stamp = Stamp(0);
+
+    #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
+    pub(crate) const fn new(value: u64) -> Stamp {
+        Stamp(value)
+    }
+
+    pub(crate) fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    pub(crate) fn from_le_bytes(bytes: [u8; 8]) -> Stamp {
+        Stamp(u64::from_le_bytes(bytes))
+    }
+
+    /// Read local physical time as a `Stamp` (ms since the Unix epoch, clamped to non-negative).
+    fn now() -> Stamp {
+        Stamp(phys_now_ms())
+    }
+
+    /// Whether `self` deviates from `now` by no more than `window` in either direction — the
+    /// freshness check applied to every incoming replay header.
+    fn is_fresh(self, now: Stamp, window: Duration) -> bool {
+        let window_ms = window.as_millis() as u64;
+        self.age_relative_to(now) <= window_ms && now.age_relative_to(self) <= window_ms
+    }
+
+    /// How far behind `now` this stamp is, saturating at 0 if `self` is not older than `now`.
+    fn age_relative_to(self, now: Stamp) -> u64 {
+        now.0.saturating_sub(self.0)
+    }
+}
+
+impl fmt::Display for Stamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 /// The per-peer replay state.
 ///
 /// Tracks the highest sequence number seen from a peer, the sender stamp at which that maximum was
@@ -72,15 +171,15 @@ const WINDOW_SIZE: u64 = 1024;
 /// mark of sender stamps (used for the post-restart tail guard).
 struct PeerState {
     /// Highest sequence number accepted from this peer.
-    max_seq: u64,
-    /// Sender wall-clock stamp (ms since epoch) that was present on the datagram carrying `max_seq`.
+    max_seq: Seq,
+    /// Sender wall-clock stamp that was present on the datagram carrying `max_seq`.
     /// Used for restart detection: if a new datagram has a higher stamp and a lower seq, the peer
     /// has restarted.
-    stamp_at_max: u64,
+    stamp_at_max: Stamp,
     /// Monotonically non-decreasing high-water mark of all sender stamps ever accepted from this
     /// peer. Never reset by `reset()`. Used on the forward path to reject captured pre-restart
     /// datagrams whose stamp predates the restart stamp.
-    max_stamp_seen: u64,
+    max_stamp_seen: Stamp,
     /// Sliding bitmap. Bit `i` represents whether sequence number `max_seq - i` was already
     /// accepted. `bitmap & 1` is always `1` (max_seq itself was accepted). Bits beyond
     /// `WINDOW_SIZE` are not tracked (always treated as seen/rejected if below window).
@@ -90,7 +189,7 @@ struct PeerState {
 }
 
 impl PeerState {
-    fn new(first_seq: u64, first_stamp: u64) -> Self {
+    fn new(first_seq: Seq, first_stamp: Stamp) -> Self {
         let mut bitmap = [0u64; (WINDOW_SIZE / 64) as usize];
         // Mark the first sequence as seen (bit 0 of word 0).
         bitmap[0] = 1;
@@ -103,7 +202,7 @@ impl PeerState {
     }
 
     /// Return the sender stamp at the highest accepted sequence number (used for staleness purge).
-    fn stamp_at_max(&self) -> u64 {
+    fn stamp_at_max(&self) -> Stamp {
         self.stamp_at_max
     }
 
@@ -112,7 +211,7 @@ impl PeerState {
     /// Returns `true` if the datagram is fresh (not a replay), `false` if it should be rejected.
     ///
     /// Side effect on success: updates the bitmap and `max_seq`/`stamp_at_max` as appropriate.
-    fn accept(&mut self, seq: u64, stamp: u64) -> bool {
+    fn accept(&mut self, seq: Seq, stamp: Stamp) -> bool {
         if seq > self.max_seq {
             // Forward path: new high-water sequence.
             // Post-restart tail guard: reject pre-restart captured datagrams. A genuinely
@@ -201,7 +300,7 @@ impl PeerState {
     ///
     /// `max_stamp_seen` is intentionally NOT reset — it is a monotone high-water mark that
     /// persists across restarts to guard against replays of captured pre-restart datagrams.
-    fn reset(&mut self, new_seq: u64, new_stamp: u64) {
+    fn reset(&mut self, new_seq: Seq, new_stamp: Stamp) {
         self.max_seq = new_seq;
         self.stamp_at_max = new_stamp;
         // max_stamp_seen is never rewound — keep the monotone high-water mark.
@@ -229,31 +328,31 @@ pub(crate) struct SenderCounter {
 impl SenderCounter {
     pub(crate) fn new() -> Self {
         SenderCounter {
-            seq: AtomicU64::new(1),
+            seq: AtomicU64::new(Seq::FIRST.0),
             stamp_floor: AtomicU64::new(0),
         }
     }
 
     /// Allocate the next sequence number (strictly increasing).
-    pub(crate) fn next_seq(&self) -> u64 {
-        self.seq.fetch_add(1, Ordering::Relaxed)
+    pub(crate) fn next_seq(&self) -> Seq {
+        Seq(self.seq.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Mint a monotonically non-decreasing sender stamp (milliseconds since Unix epoch).
+    /// Mint a monotonically non-decreasing sender stamp.
     ///
     /// Each call returns `max(Utc::now().timestamp_millis().max(0), floor)` and advances the
     /// internal floor so subsequent calls never return a smaller value.
-    pub(crate) fn next_stamp(&self) -> u64 {
+    pub(crate) fn next_stamp(&self) -> Stamp {
         self.next_stamp_at(phys_now_ms())
     }
 
     /// Inner implementation with an injectable `now_ms` for unit-testing backward clock steps.
-    pub(crate) fn next_stamp_at(&self, now_ms: u64) -> u64 {
+    pub(crate) fn next_stamp_at(&self, now_ms: u64) -> Stamp {
         // `fetch_max` atomically sets floor = max(floor, now_ms) and returns the OLD value.
         // The stamp we return is the maximum of the returned old floor and now_ms, which equals
         // the new floor value after the update.
         let prev = self.stamp_floor.fetch_max(now_ms, Ordering::Relaxed);
-        prev.max(now_ms)
+        Stamp(prev.max(now_ms))
     }
 }
 
@@ -281,18 +380,18 @@ impl ReplayFilter {
     /// Returns `true` when the datagram is fresh and unique — the caller may proceed to process it.
     /// Returns `false` when the datagram is a replay (duplicate, too old within the window, or
     /// outside the freshness window) — the caller should drop it silently.
-    pub(crate) fn check_and_record(&self, sender: IpAddr, seq: u64, stamp: u64) -> bool {
-        self.check_and_record_at(sender, seq, stamp, phys_now_ms())
+    pub(crate) fn check_and_record(&self, sender: IpAddr, seq: Seq, stamp: Stamp) -> bool {
+        self.check_and_record_at(sender, seq, stamp, Stamp::now())
     }
 
-    /// Inner implementation with an injectable `now_ms` (milliseconds since epoch).
+    /// Inner implementation with an injectable `now` (as a [`Stamp`]).
     ///
     /// Separating the clock source allows unit tests to exercise time-dependent logic
     /// (staleness purge, skew-positive scenarios) without sleeping.
-    fn check_and_record_at(&self, sender: IpAddr, seq: u64, stamp: u64, now: u64) -> bool {
-        // Freshness window check: reject stamps that are too far in the past or future.
-        let window_ms = self.freshness_window.as_millis() as u64;
-        if now.saturating_sub(stamp) > window_ms || stamp.saturating_sub(now) > window_ms {
+    fn check_and_record_at(&self, sender: IpAddr, seq: Seq, stamp: Stamp, now: Stamp) -> bool {
+        // Freshness window check: reject stamps that are too far in the past or future. `Stamp`
+        // owns this check, not the filter (see the `Stamp` doc comment).
+        if !stamp.is_fresh(now, self.freshness_window) {
             return false;
         }
 
@@ -301,7 +400,8 @@ impl ReplayFilter {
         // Opportunistic staleness purge: entries whose stamp_at_max is older than the freshness
         // window cannot produce any accepted datagrams (any replayable stamp ≤ stamp_at_max would
         // fail the freshness check above), so it is safe to drop them.
-        map.retain(|_, s| now.saturating_sub(s.stamp_at_max()) <= window_ms);
+        let window = self.freshness_window;
+        map.retain(|_, s| s.stamp_at_max().age_relative_to(now) <= window.as_millis() as u64);
 
         match map.get_mut(&sender) {
             None => {
@@ -332,9 +432,9 @@ mod tests {
     #[test]
     fn sender_counter_starts_at_1_and_increments() {
         let c = SenderCounter::new();
-        assert_eq!(c.next_seq(), 1);
-        assert_eq!(c.next_seq(), 2);
-        assert_eq!(c.next_seq(), 3);
+        assert_eq!(c.next_seq(), Seq::new(1));
+        assert_eq!(c.next_seq(), Seq::new(2));
+        assert_eq!(c.next_seq(), Seq::new(3));
     }
 
     /// The stamp mint must be monotonically non-decreasing even when the wall clock steps backward.
@@ -349,15 +449,19 @@ mod tests {
         let t2 = t1 + 50;
         let t3 = t2 + 50;
 
-        assert_eq!(c.next_stamp_at(t1), t1, "first stamp equals wall clock");
+        assert_eq!(
+            c.next_stamp_at(t1),
+            Stamp::new(t1),
+            "first stamp equals wall clock"
+        );
         assert_eq!(
             c.next_stamp_at(t2),
-            t2,
+            Stamp::new(t2),
             "second stamp equals advancing wall clock"
         );
         assert_eq!(
             c.next_stamp_at(t3),
-            t3,
+            Stamp::new(t3),
             "third stamp equals advancing wall clock"
         );
 
@@ -365,18 +469,19 @@ mod tests {
         let t_regressed = t3 - 500;
         let s_after_regression = c.next_stamp_at(t_regressed);
         assert_eq!(
-            s_after_regression, t3,
+            s_after_regression,
+            Stamp::new(t3),
             "stamp after backward step must equal the floor (t3), not the regressed wall clock"
         );
         assert!(
-            s_after_regression >= t3,
+            s_after_regression >= Stamp::new(t3),
             "stamp must not decrease after backward clock step"
         );
 
         // Verify the floor is sticky: a second regressed call still yields t3.
         assert_eq!(
             c.next_stamp_at(t_regressed),
-            t3,
+            Stamp::new(t3),
             "floor remains at t3 for further backward clock values"
         );
 
@@ -384,7 +489,7 @@ mod tests {
         let t_recovered = t3 + 1;
         assert_eq!(
             c.next_stamp_at(t_recovered),
-            t_recovered,
+            Stamp::new(t_recovered),
             "stamps advance normally once wall clock passes the floor"
         );
     }
@@ -393,55 +498,58 @@ mod tests {
 
     #[test]
     fn bitmap_shift_by_1() {
-        let mut state = PeerState::new(10, 1000);
+        let mut state = PeerState::new(Seq::new(10), Stamp::new(1000));
         // max_seq = 10, bit 0 set
-        assert!(!state.accept(10, 1000)); // already seen
-                                          // out of order: seq 9
-        assert!(state.accept(9, 999));
+        assert!(!state.accept(Seq::new(10), Stamp::new(1000))); // already seen
+                                                                // out of order: seq 9
+        assert!(state.accept(Seq::new(9), Stamp::new(999)));
         // seq 9 accepted, now bitmap has bit 0 (=10) and bit 1 (=9) set
-        assert!(!state.accept(9, 999)); // already seen
+        assert!(!state.accept(Seq::new(9), Stamp::new(999))); // already seen
     }
 
     #[test]
     fn bitmap_advance_and_reuse() {
-        let mut state = PeerState::new(10, 1000);
+        let mut state = PeerState::new(Seq::new(10), Stamp::new(1000));
         // advance max_seq to 20
-        assert!(state.accept(20, 1000));
+        assert!(state.accept(Seq::new(20), Stamp::new(1000)));
         // seq 10 was already accepted when state was created: must be rejected as duplicate
-        assert!(!state.accept(10, 1000));
+        assert!(!state.accept(Seq::new(10), Stamp::new(1000)));
         // seq 15 (mid-window, never seen before) must be accepted
-        assert!(state.accept(15, 1000));
+        assert!(state.accept(Seq::new(15), Stamp::new(1000)));
         // seq 15 again: rejected
-        assert!(!state.accept(15, 1000));
+        assert!(!state.accept(Seq::new(15), Stamp::new(1000)));
     }
 
     #[test]
     fn bitmap_outside_window_is_rejected() {
-        let mut state = PeerState::new(1024, 1000);
+        let mut state = PeerState::new(Seq::new(1024), Stamp::new(1000));
         // advance max to 2048; seq 1 is 2047 behind, outside window
-        assert!(state.accept(2048, 1000));
-        assert!(!state.accept(1, 1000));
+        assert!(state.accept(Seq::new(2048), Stamp::new(1000)));
+        assert!(!state.accept(Seq::new(1), Stamp::new(1000)));
     }
 
     #[test]
     fn bitmap_large_jump_clears_window() {
-        let mut state = PeerState::new(10, 1000);
+        let mut state = PeerState::new(Seq::new(10), Stamp::new(1000));
         // Jump so big the whole window rolls over
-        assert!(state.accept(10 + WINDOW_SIZE + 5, 1000));
+        assert!(state.accept(Seq::new(10 + WINDOW_SIZE + 5), Stamp::new(1000)));
         // seq 10 is now (WINDOW_SIZE + 5) behind, outside the window
-        assert!(!state.accept(10, 1000));
+        assert!(!state.accept(Seq::new(10), Stamp::new(1000)));
     }
 
     #[test]
     fn in_order_sequence_all_accepted_once() {
-        let mut state = PeerState::new(1, 1000);
+        let mut state = PeerState::new(Seq::new(1), Stamp::new(1000));
         for seq in 2..=100 {
-            assert!(state.accept(seq, 1000), "seq {seq} should be accepted");
+            assert!(
+                state.accept(Seq::new(seq), Stamp::new(1000)),
+                "seq {seq} should be accepted"
+            );
         }
         // All previously accepted seqs rejected on replay
         for seq in 1..=100 {
             assert!(
-                !state.accept(seq, 1000),
+                !state.accept(Seq::new(seq), Stamp::new(1000)),
                 "seq {seq} should be rejected as duplicate"
             );
         }
@@ -455,7 +563,7 @@ mod tests {
 
     /// Helper: call check_and_record_at with a caller-supplied `now`.
     fn check_at(filter: &ReplayFilter, peer: IpAddr, seq: u64, stamp: u64, now: u64) -> bool {
-        filter.check_and_record_at(peer, seq, stamp, now)
+        filter.check_and_record_at(peer, Seq::new(seq), Stamp::new(stamp), Stamp::new(now))
     }
 
     #[test]
@@ -463,7 +571,7 @@ mod tests {
         let filter = filter_5min();
         let peer: IpAddr = "127.0.0.1".parse().unwrap();
         let now = phys_now_ms();
-        assert!(filter.check_and_record(peer, 1, now));
+        assert!(filter.check_and_record(peer, Seq::new(1), Stamp::new(now)));
     }
 
     #[test]
@@ -471,8 +579,8 @@ mod tests {
         let filter = filter_5min();
         let peer: IpAddr = "127.0.0.2".parse().unwrap();
         let now = phys_now_ms();
-        assert!(filter.check_and_record(peer, 1, now));
-        assert!(!filter.check_and_record(peer, 1, now));
+        assert!(filter.check_and_record(peer, Seq::new(1), Stamp::new(now)));
+        assert!(!filter.check_and_record(peer, Seq::new(1), Stamp::new(now)));
     }
 
     #[test]
@@ -481,7 +589,7 @@ mod tests {
         let peer: IpAddr = "127.0.0.3".parse().unwrap();
         // Stamp 10 minutes in the past — beyond the 5-minute window.
         let old_stamp = phys_now_ms().saturating_sub(10 * 60 * 1000 + 1);
-        assert!(!filter.check_and_record(peer, 1, old_stamp));
+        assert!(!filter.check_and_record(peer, Seq::new(1), Stamp::new(old_stamp)));
     }
 
     #[test]
@@ -490,7 +598,7 @@ mod tests {
         let peer: IpAddr = "127.0.0.4".parse().unwrap();
         // Stamp 10 minutes in the future.
         let future_stamp = phys_now_ms() + 10 * 60 * 1000 + 1;
-        assert!(!filter.check_and_record(peer, 1, future_stamp));
+        assert!(!filter.check_and_record(peer, Seq::new(1), Stamp::new(future_stamp)));
     }
 
     #[test]
@@ -499,11 +607,11 @@ mod tests {
         let peer: IpAddr = "127.0.0.5".parse().unwrap();
         let now = phys_now_ms();
         // Accept seq 5 first, then 3 (out of order but within window).
-        assert!(filter.check_and_record(peer, 5, now));
-        assert!(filter.check_and_record(peer, 3, now));
+        assert!(filter.check_and_record(peer, Seq::new(5), Stamp::new(now)));
+        assert!(filter.check_and_record(peer, Seq::new(3), Stamp::new(now)));
         // Both must be rejected on replay.
-        assert!(!filter.check_and_record(peer, 5, now));
-        assert!(!filter.check_and_record(peer, 3, now));
+        assert!(!filter.check_and_record(peer, Seq::new(5), Stamp::new(now)));
+        assert!(!filter.check_and_record(peer, Seq::new(3), Stamp::new(now)));
     }
 
     #[test]
@@ -513,18 +621,18 @@ mod tests {
         let now = phys_now_ms();
         // Advance to a seq well beyond WINDOW_SIZE so a restart lands outside the bitmap.
         let high_seq = WINDOW_SIZE + 100;
-        assert!(filter.check_and_record(peer, high_seq, now));
+        assert!(filter.check_and_record(peer, Seq::new(high_seq), Stamp::new(now)));
         // Simulated restart: seq resets to 1 (outside the backward window) with a newer stamp.
         let newer = now + 1000;
         assert!(
-            filter.check_and_record(peer, 1, newer),
+            filter.check_and_record(peer, Seq::new(1), Stamp::new(newer)),
             "a seq regression outside the window with a strictly newer stamp must be accepted as a restart"
         );
         // After reset the new state has max_seq=1, stamp_at_max=newer.
         // A further seq=2 with the new stamp must be accepted normally.
-        assert!(filter.check_and_record(peer, 2, newer));
+        assert!(filter.check_and_record(peer, Seq::new(2), Stamp::new(newer)));
         // Replaying seq=1 with the new stamp is rejected (already seen after restart).
-        assert!(!filter.check_and_record(peer, 1, newer));
+        assert!(!filter.check_and_record(peer, Seq::new(1), Stamp::new(newer)));
     }
 
     #[test]
@@ -533,10 +641,10 @@ mod tests {
         let peer: IpAddr = "127.0.0.7".parse().unwrap();
         let now = phys_now_ms();
         let high_seq = WINDOW_SIZE + 100;
-        assert!(filter.check_and_record(peer, high_seq, now));
+        assert!(filter.check_and_record(peer, Seq::new(high_seq), Stamp::new(now)));
         // Lower seq outside the window with the SAME stamp: not a restart, must be rejected.
         assert!(
-            !filter.check_and_record(peer, 1, now),
+            !filter.check_and_record(peer, Seq::new(1), Stamp::new(now)),
             "seq regression outside the window with same stamp must be rejected as replay"
         );
     }
@@ -546,10 +654,10 @@ mod tests {
         let filter = filter_5min();
         let peer: IpAddr = "127.0.0.8".parse().unwrap();
         let now = phys_now_ms();
-        assert!(filter.check_and_record(peer, 10, now));
+        assert!(filter.check_and_record(peer, Seq::new(10), Stamp::new(now)));
         // After eviction the peer state is gone; any new datagram is accepted.
         filter.evict(peer);
-        assert!(filter.check_and_record(peer, 1, now));
+        assert!(filter.check_and_record(peer, Seq::new(1), Stamp::new(now)));
     }
 
     /// Test 3 (updated): staleness purge uses sender `stamp_at_max`, not receiver clock.
@@ -610,7 +718,7 @@ mod tests {
         // Accept seqs 1..=5 with stamp `now`.
         for seq in 1u64..=5 {
             assert!(
-                filter.check_and_record(peer, seq, now),
+                filter.check_and_record(peer, Seq::new(seq), Stamp::new(now)),
                 "seq {seq} should be accepted"
             );
         }
@@ -620,18 +728,18 @@ mod tests {
         // and reject it as a duplicate. The new code checks stamp FIRST.
         let newer = now + 1000;
         assert!(
-            filter.check_and_record(peer, 1, newer),
+            filter.check_and_record(peer, Seq::new(1), Stamp::new(newer)),
             "seq regression inside the window with strictly newer stamp must be accepted as restart"
         );
 
         // After reset: max_seq=1, stamp_at_max=newer. seq=2 with newer stamp is accepted.
-        assert!(filter.check_and_record(peer, 2, newer));
+        assert!(filter.check_and_record(peer, Seq::new(2), Stamp::new(newer)));
 
         // A replay of the old (seq=1, old stamp) pair must be rejected — stamp is not strictly
         // newer than stamp_at_max (now < newer), so restart check fails, then bitmap check:
         // bit 0 is set (seq=1 was the reset), so rejected as duplicate.
         assert!(
-            !filter.check_and_record(peer, 1, now),
+            !filter.check_and_record(peer, Seq::new(1), Stamp::new(now)),
             "replay of old (seq=1, old stamp) after restart must be rejected"
         );
     }

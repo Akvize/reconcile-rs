@@ -136,7 +136,11 @@ pub mod testing {
     /// anti-replay pipeline over a raw UDP socket.
     pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
         crate::auth::Authenticator::new(Some(key), false)
-            .seal(seq, stamp, payload)
+            .seal(
+                crate::replay::Seq::new(seq),
+                crate::replay::Stamp::new(stamp),
+                payload,
+            )
             .expect("Enabled authenticator always seals")
     }
 
