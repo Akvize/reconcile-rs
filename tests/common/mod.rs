@@ -29,13 +29,10 @@ fn time_multiplier() -> u32 {
     })
 }
 
-/// Wait for a while until the provided predicate becomes true.
-///
-/// Returns `true` if the predicate became true within the budget, or `false`
-/// if it timed out.  The budget is `base_iters` × 10 ms by default, scaled by
-/// `RECONCILE_TEST_TIME_MULTIPLIER`.  Most callers pass 100; test files that
-/// already used a larger base (e.g. 200 for discovery tests) pass their
-/// original value so relative timing is preserved.
+/// Poll `f` every 10 ms for up to `base_iters` × 10 ms (scaled by
+/// `RECONCILE_TEST_TIME_MULTIPLIER`), returning `true` as soon as it does, `false` on timeout.
+/// Callers with heavier scenarios (e.g. discovery's multi-round decommission tests) pass a larger
+/// `base_iters` than the default 100.
 pub async fn wait_until_with_budget<F: FnMut() -> bool>(mut f: F, base_iters: u32) -> bool {
     let iters = base_iters.saturating_mul(time_multiplier());
     for _ in 0..iters {
@@ -47,11 +44,7 @@ pub async fn wait_until_with_budget<F: FnMut() -> bool>(mut f: F, base_iters: u3
     false
 }
 
-/// Wait for a while until the provided predicate becomes true.
-///
-/// Returns `true` if the predicate became true within the budget, or `false`
-/// if it timed out.  The budget is 100 × 10 ms by default, scaled by
-/// `RECONCILE_TEST_TIME_MULTIPLIER`.
+/// [`wait_until_with_budget`] with the default 100-iteration budget.
 #[allow(dead_code)] // used by service.rs; not every test file that includes this module uses it
 pub async fn wait_until<F: FnMut() -> bool>(f: F) -> bool {
     wait_until_with_budget(f, 100).await
