@@ -60,6 +60,8 @@ test.
 
 ## Install
 
+### Locally (terminal sessions)
+
 ```bash
 ./install.sh              # install or upgrade (idempotent)
 ./install.sh --dry-run    # show the resulting settings.json without writing
@@ -72,6 +74,34 @@ setup, nothing committed into your repositories. Existing hooks in your
 
 Session state lives in `~/.claude/agent-workflow-state/<repo-key>/`, keyed by git
 remote so clones and worktrees of the same project share it. Your repos stay clean.
+
+### Everywhere else (Claude web, mobile, routines)
+
+Cloud sessions never see your laptop's `~/.claude`, so the two halves install
+differently:
+
+**Skills — enable them on claude.ai.** Cloud and Cowork sessions load the skills
+enabled for your claude.ai account, synced at session start. Add
+`session-start`, `session-end` and `session-note` there once and they are
+available in every session on every surface, with no repo and no setup script.
+This is the bulk of the value, and it costs one upload.
+
+**Hooks — one setup script per cloud environment.** Paste
+[`cloud-setup-script.sh`](./cloud-setup-script.sh) into the **Setup script**
+field of your environment at claude.ai/code (cloud icon above the message box →
+environment → gear). It runs as root before Claude Code launches, installs the
+bundle into the VM's `~/.claude`, and is snapshotted, so it runs once rather than
+per session. Every session in that environment then gets the automatic
+journalling, baseline and exit nudge, whatever repo is attached.
+
+That user-settings layer being read inside the VM is verified, not assumed: a
+`Setup` and a `SessionStart` hook written to the VM's `~/.claude/settings.json`
+both fired. What does not carry over is your *local* `~/.claude`, because it is
+never uploaded — a transport gap rather than a policy block.
+
+The skills work standalone. Each one carries a **Without the `aw` CLI** section
+with plain-git equivalents, so the claude.ai-only install is fully usable and the
+hooks are a genuine upgrade rather than a prerequisite.
 
 ---
 
