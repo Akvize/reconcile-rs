@@ -132,7 +132,7 @@ cat ~/.claude/agent-workflow-state/*/sessions/*/journal.tsv
 | **G0** Scope drift | Did we ship what was asked — no less (silent narrowing) and no more (unrequested extras)? |
 | **G1** Verification honesty | Is every "this works" traceable to a command that actually ran? Unverified claims are named as unverified. |
 | **G2** Conventions | Linters pass *and* the code matches what neighbouring files actually practise. |
-| **G3** Docs | Nothing stale, nothing missing, nothing newly discovered to be already wrong. |
+| **G3** Docs | Nothing stale, nothing missing, nothing newly discovered to be already wrong, nothing stated twice. |
 | **G4** Blast radius | What cannot be walked back — pushed, published, migrated, deleted — plus a secret sweep and dependency delta. |
 | **G5** Agent retro | Each bump → root cause → prevention lane: human practice, instruction change, tooling, or accept. |
 | **G6** Repo retro | Undocumented structural anomalies, scored criticality × remediation cost, with a routing matrix. |

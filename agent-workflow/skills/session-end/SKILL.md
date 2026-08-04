@@ -115,7 +115,7 @@ linter is green.
 
 ## G3 — Documentation consistency
 
-Three distinct questions, all of which must be asked:
+Four distinct questions, all of which must be asked:
 
 1. **Stale** — does any doc now describe behaviour that changed this session?
    Check every doc in the repo's doc surface, and grep them for the
@@ -126,6 +126,21 @@ Three distinct questions, all of which must be asked:
 3. **Contradicted** — did this session *discover* that existing docs were already
    wrong, independent of the change? Fixing that is in scope for the review even
    though it predates the session; at minimum it must be reported.
+4. **Duplicated** — is any fact this session wrote now stated in more than one
+   place? Grep the repo for it; check against docs that already existed, and
+   against the other files this session touched.
+
+   Duplication is deferred staleness. Two copies agree today, one of them will
+   lie later, and it will be the copy nobody remembered to update. This is
+   easiest to introduce precisely when you are being thorough — writing a new
+   document while also editing an existing one, where the two feel like
+   different audiences but carry the same facts.
+
+   For each duplicated fact, name **one** file as the source of truth and
+   reduce the others to a pointer. Keep a second copy only where a lookup has a
+   real cost — a command that must be runnable without opening another file, for
+   instance — and when you do, say in the text that it is a summary and where the
+   reference lives. An unmarked copy is the one that drifts.
 
 Also check the doc-adjacent artifacts that rot silently: README examples that no
 longer run, changelog entries for user-visible changes, generated API docs,
