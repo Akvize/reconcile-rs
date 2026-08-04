@@ -76,20 +76,12 @@ pub struct PersistedState<K, V> {
 }
 
 /// Classifies why [`FileSnapshot::load`] failed, so callers can act differently on corruption
-/// versus transient I/O problems.
+/// versus transient I/O.
 ///
-/// # Operator guidance
-///
-/// - **Corrupt** — the snapshot file exists but cannot be decoded. The safe choices are to delete
-///   the file (accepts data loss: the node starts empty) or to restore from a backup. **Do not
-///   silently start empty**, as that drops tombstones, enabling resurrection of previously deleted
-///   values. The store exposes this as a distinct error so the calling application can log a clear
-///   message and halt (recommended) or attempt recovery.
-///
-/// - **Io** — a transient I/O error persisted across all retry attempts (e.g. a filesystem still
-///   mounting, a volume remount in progress). Retrying after a longer delay or restarting the
-///   process is appropriate. The error is surfaced rather than causing a panic so the caller can
-///   choose a graceful shutdown path.
+/// - **Corrupt** — undecodable. Delete the file (accepts data loss) or restore from backup; do
+///   **not** silently start empty, since that drops tombstones and re-enables resurrection.
+/// - **Io** — a transient error survived every retry (e.g. a volume still mounting). Retry later
+///   or shut down gracefully rather than panic.
 #[derive(Debug)]
 pub enum LoadError {
     /// The snapshot file exists but its contents could not be decoded. Data corruption or
@@ -184,30 +176,16 @@ where
 
 /// A durable, file-based [`Persistence`] backend storing a single bincode-encoded snapshot.
 ///
-/// # Atomic saves
-///
-/// Saves are **atomic at the file level**: the snapshot is written to a sibling `*.tmp` file,
-/// flushed to the OS page cache (`sync_all` on the file), then renamed over the target path, and
-/// finally the **containing directory** is fsynced so the name binding is durable. This sequence
-/// means a crash after the rename but before the directory fsync may leave the old snapshot in
-/// place (the kernel replays the rename from the journal on most filesystems, but the POSIX
-/// guarantee requires the directory fsync), while a crash before the rename leaves the original
-/// snapshot untouched. In both cases exactly one valid snapshot is recoverable on restart.
-///
-/// A crash after writing the tmp file but before the rename leaves a stale `*.tmp` sibling.
-/// [`FileSnapshot::load`] removes any such stale temporaries on startup so they do not accumulate.
+/// Write to a sibling `*.tmp`, `sync_all`, rename over the target, then fsync the directory so the
+/// name binding is durable. A crash at any point leaves exactly one valid snapshot recoverable; a
+/// stale `*.tmp` is cleaned up on the next load.
 ///
 /// # Fallible load
 ///
-/// [`FileSnapshot::load_checked`] — called by
-/// [`ReconcileStore::with_persistence`](crate::ReconcileStore::with_persistence) — returns a
-/// [`LoadError`] rather than panicking:
-///
-/// - **Corrupt** data (`InvalidData`) is surfaced as [`LoadError::Corrupt`] so the caller can
-///   decide whether to halt or attempt recovery.
-/// - **Transient I/O** errors are retried up to three times with exponential backoff before being
-///   surfaced as [`LoadError::Io`].
-/// - **`NotFound`** (no snapshot yet) is a clean fresh start and returns `Ok(None)`.
+/// [`load_checked`](FileSnapshot::load_checked), used by
+/// [`ReconcileStore::with_persistence`](crate::ReconcileStore::with_persistence), returns
+/// [`LoadError::Corrupt`] for `InvalidData`, [`LoadError::Io`] after three backed-off retries, and
+/// `Ok(None)` for a missing file (a clean fresh start).
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,
@@ -308,16 +286,10 @@ where
             file.sync_all()?;
         }
         fs::rename(&tmp, &self.path)?;
-        // fsync the parent directory so the name binding (the rename) is durable. Without this,
-        // a crash after the rename but before the OS flushes the directory journal may leave the
-        // old snapshot in place on some filesystems. The directory fsync is a no-op on journalling
-        // filesystems that replay the rename on recovery, but it is required for the POSIX
-        // durability guarantee.
-        //
-        // Note: directory fsync durability cannot be unit-tested in-process — the guarantee is
-        // that the kernel persists the rename to storage; verifying that requires a real crash or
-        // raw block-device inspection. The call is tested indirectly by the save/load round-trip
-        // tests; its presence is verified by code inspection.
+        // Durable name binding for the rename (POSIX requires the directory fsync, even though
+        // most journalling filesystems replay it on recovery anyway). Not unit-testable — the
+        // guarantee is about what the kernel persisted to storage — so this is covered only by
+        // the save/load round-trip and by inspection.
         if let Some(parent) = self.path.parent() {
             // Silently skip if the parent is empty (unlikely, but handle gracefully).
             if !parent.as_os_str().is_empty() {

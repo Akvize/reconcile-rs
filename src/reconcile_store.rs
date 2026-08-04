@@ -46,15 +46,11 @@ const DEFAULT_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 /// snapshot even when the store is idle (every tick, regardless of changes).
 const DEFAULT_SNAPSHOT_CHANGE_THRESHOLD: usize = 1;
 
-/// Number of map entries collected per lock acquisition during a chunked snapshot.
-///
-/// This bounds the maximum time a single snapshot pass holds the map read lock: the lock is
-/// released after each chunk and re-acquired for the next, so writers are only blocked for the
-/// time it takes to clone at most this many entries. The resulting snapshot is **fuzzy** — entries
-/// are captured at slightly different instants across chunks — but every entry is individually
-/// valid LWW state: a restart followed by reconciliation with peers pulls any delta that changed
-/// between chunks. The fuzziness is equivalent to the store having briefly paused writes for a
-/// fraction of the snapshot window, which the LWW reconciliation protocol already handles.
+/// Number of map entries collected per lock acquisition during a chunked snapshot: the lock is
+/// released and re-acquired between chunks, so writers are blocked only for the time to clone this
+/// many entries. The resulting snapshot is fuzzy — entries are captured at slightly different
+/// instants — but every entry is individually valid LWW state, and reconciliation on restart picks
+/// up any delta that changed between chunks, exactly as it would after a brief write pause.
 const SNAPSHOT_CHUNK_SIZE: usize = 1024;
 
 /// Default cadence of the dynamic-discovery task (see [`ReconcileStore::with_discovery_interval`]).
@@ -240,16 +236,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// # Errors
     ///
-    /// Returns a [`LoadError`] when the backend cannot load:
-    ///
-    /// - [`LoadError::Corrupt`] — the snapshot file exists but could not be decoded. **Do not
-    ///   silently start empty**: that drops tombstones and enables resurrection of previously
-    ///   deleted values. The recommended action is to log the error, alert an operator, and halt.
-    ///   If data loss is acceptable, delete the snapshot and restart.
-    /// - [`LoadError::Io`] — a transient I/O error persisted across all retries (e.g. a volume
-    ///   still mounting). Retrying after a short delay is appropriate.
-    ///
-    /// `NotFound` (no snapshot yet) is a clean fresh start and does not produce an error.
+    /// Returns [`LoadError`] when the backend cannot load — see its docs for how to handle each
+    /// variant. A missing snapshot is a clean fresh start, not an error.
     pub fn with_persistence(
         mut self,
         backend: Arc<dyn Persistence<K, V>>,
@@ -312,30 +300,17 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         Ok(self)
     }
 
-    /// Set how often the background task writes a snapshot to the persistence backend
-    /// (default 5 s).
-    ///
-    /// Pass `None` to disable time-based snapshots entirely — snapshots will then only fire when
-    /// the change threshold is crossed and the caller explicitly triggers one (future on-demand
-    /// API), or not at all. When time-based snapshots are disabled and no on-demand mechanism is
-    /// in place, persistence is effectively write-only (saves never happen automatically).
-    ///
-    /// An incremental/segmented snapshot format (write amplification proportional to change
-    /// volume, not dataset size) is deferred to future work.
+    /// Set how often the background task writes a snapshot (default 5 s). `None` disables
+    /// time-based snapshots: with no on-demand trigger in place, persistence becomes write-only
+    /// (saves never happen automatically).
     pub fn with_snapshot_interval(mut self, interval: impl Into<Option<Duration>>) -> Self {
         self.snapshot_interval = interval.into();
         self
     }
 
-    /// Set the minimum number of changes (inserts, removes, and reconciled applies) since the
-    /// last snapshot before the next timed tick actually writes to the backend (default 1).
-    ///
-    /// - `0` — snapshot every tick unconditionally, even when the store is idle.
-    /// - `N > 0` — skip the tick if fewer than `N` changes have occurred since the last snapshot.
-    ///   Steady-state idle ⇒ zero snapshot I/O.
-    ///
-    /// The change counter is reset to zero after every snapshot write, so the threshold applies
-    /// to the *interval* between snapshots, not to the total lifetime change count.
+    /// Set the minimum changes since the last snapshot before a timed tick actually writes
+    /// (default 1; `0` writes every tick unconditionally). The counter resets after every
+    /// snapshot, so this gates the interval between writes, not the lifetime total.
     pub fn with_snapshot_change_threshold(mut self, threshold: usize) -> Self {
         self.snapshot_change_threshold = threshold;
         self
@@ -343,19 +318,9 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 
     /// Capture the store state and hand it to the persistence backend.
     ///
-    /// # Chunked (fuzzy) snapshot
-    ///
-    /// The map is iterated in key-order chunks of [`SNAPSHOT_CHUNK_SIZE`] entries. The read lock
-    /// is **released between chunks**, so writers (inserts, removes, reconciliation applies) are
-    /// only blocked for the time it takes to clone one chunk — bounded independently of dataset
-    /// size. The resulting snapshot is **fuzzy**: entries captured in different chunks may reflect
-    /// slightly different instants. Every captured entry is individually valid LWW state, and a
-    /// restart followed by reconciliation with peers will pull any delta that changed between
-    /// chunks. This trade-off is equivalent to briefly pausing writes for a fraction of the
-    /// snapshot window, which the LWW protocol already handles.
-    ///
-    /// After the snapshot write the change counter is reset to zero so the threshold logic in
-    /// [`snapshot_periodically`] starts a fresh accounting window.
+    /// Iterated in chunks of [`SNAPSHOT_CHUNK_SIZE`] with the read lock released between them —
+    /// see that constant for why the resulting fuzziness is safe. The change counter resets to
+    /// zero afterward, starting a fresh accounting window for [`snapshot_periodically`].
     fn snapshot(&self) {
         // Capture the counter BEFORE collecting entries so that any changes that arrive during the
         // (potentially multi-chunk) collection are still counted in the next snapshot window.
@@ -2176,14 +2141,9 @@ mod reconcile_store_tests {
 
     // ── Chunked-snapshot stall-bound test ──────────────────────────────────────
 
-    /// Verify that the chunked snapshot path holds the read lock for at most
-    /// `SNAPSHOT_CHUNK_SIZE` entries per acquisition, regardless of total map size.
-    ///
-    /// Rather than asserting wall-clock latency (which is flaky in CI), we instrument
-    /// `collect_entries_chunked` indirectly: insert 3× the chunk size entries, run the chunked
-    /// collector, and verify that we get all entries back. The structural property — at most
-    /// SNAPSHOT_CHUNK_SIZE entries per lock hold — is guaranteed by the implementation; this test
-    /// confirms correct end-to-end assembly of the chunks.
+    /// Insert 3× `SNAPSHOT_CHUNK_SIZE` entries and confirm the chunked collector returns all of
+    /// them. The per-chunk lock bound is guaranteed by the implementation; this checks the chunks
+    /// reassemble correctly rather than asserting flaky wall-clock lock-hold timing.
     #[tokio::test]
     async fn chunked_snapshot_collects_all_entries() {
         let n = super::SNAPSHOT_CHUNK_SIZE * 3 + 7; // straddle chunk boundaries
@@ -2337,19 +2297,9 @@ mod reconcile_store_tests {
 
     // ── Regression tests for the gossip-path change counter bug ──────────────
 
-    /// **Gossip-durability regression**: a replica that receives entries ONLY via gossip (never
-    /// writes locally) must still snapshot, because the engine-side change counter is now bumped
-    /// by the gossip apply path.
-    ///
-    /// Two-node setup:
-    ///   - Node A writes two entries locally and runs the reconcile loop.
-    ///   - Node B has FileSnapshot + short interval + default threshold=1, but inserts NOTHING
-    ///     itself; it only receives updates via gossip.
-    ///
-    /// Expected: B's snapshot file is written (and contains the entries) within a bounded wait.
-    ///
-    /// This test FAILS against the unfixed code (B's counter stays 0 → no snapshot ever) and
-    /// PASSES with the fix.
+    /// Regression: a replica that only ever receives entries via gossip (node B, never inserting
+    /// locally) must still snapshot, since the gossip apply path now bumps the change counter too.
+    /// Fails against the unfixed code, where B's counter stays 0 and it never snapshots.
     #[tokio::test(flavor = "multi_thread")]
     async fn gossip_only_replica_snapshots() {
         use crate::persistence::Persistence;
@@ -2441,13 +2391,9 @@ mod reconcile_store_tests {
         task_b.abort();
     }
 
-    /// **Counter-capture regression**: a change that arrives **during** the save — after the
-    /// counter was captured, before the subtraction — must still be pending afterwards
-    /// (fetch_sub of the captured amount, not store-0, which would wipe it).
-    ///
-    /// The mid-save write is injected deterministically: the persistence backend's `save`
-    /// bumps the live change counter before returning, exactly like a concurrent writer
-    /// landing while the snapshot is on disk.
+    /// Regression: a change arriving during the save (after the counter is captured, before the
+    /// subtraction) must remain pending — `fetch_sub` of the captured amount, not store-0, which
+    /// would wipe it. Injected deterministically: `save` bumps the live counter before returning.
     #[tokio::test]
     async fn snapshot_counter_capture_preserves_mid_snapshot_changes() {
         use crate::persistence::{InMemoryPersistence, PersistedState};
