@@ -104,7 +104,9 @@ aw_status_count() {
 }
 
 aw_state_dir() {
-  local d="$AW_STATE_ROOT/$(aw_repo_key "${1:-$PWD}")"
+  local key d
+  key="$(aw_repo_key "${1:-$PWD}")"
+  d="$AW_STATE_ROOT/$key"
   mkdir -p "$d" 2>/dev/null
   printf '%s' "$d"
 }
