@@ -146,16 +146,12 @@ fn advance(wall_ms: u64, counter: u32) -> (u64, u32) {
 /// the single physical-time read (`HlcClock` is the default adapter, a test adapter can be a
 /// deterministic stub). Pinning the timestamp to [`Timestamp`] — rather than a generic associated type —
 /// keeps the port object-safe and avoids leaking a clock type parameter into the engine, store and
-/// `Config` (`ARCHITECTURE.md` §3.4); the engine therefore holds the port as `Arc<dyn Clock>`.
+/// `Config` (`docs/ARCHITECTURE.md` §3.2); the engine therefore holds the port as `Arc<dyn Clock>`.
 pub trait Clock: Send + Sync + 'static {
     /// Mint a strictly-monotonic local timestamp for a write or an outgoing message.
     fn now(&self) -> Timestamp;
-    /// This node's identity — the `node_id` component the adapter stamps onto every timestamp it
-    /// mints, and the deterministic tie-break that makes the conflict order total.
-    ///
-    /// Reading it here rather than caching it elsewhere means the reported identity can never
-    /// disagree with the one actually stamped, and — unlike calling [`now`](Clock::now) for it —
-    /// costs no counter tick.
+    /// This node's identity: the `node_id` stamped onto every timestamp this adapter mints. On the
+    /// port so it cannot drift from what is actually stamped, and so reading it costs no tick.
     fn node_id(&self) -> u64;
     /// Advance the clock past a timestamp received from a peer, so that a subsequent
     /// [`now`](Clock::now) is ordered after it (this is what prevents lost updates under skew).

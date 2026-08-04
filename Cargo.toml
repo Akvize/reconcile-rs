@@ -6,17 +6,24 @@ rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
-# Keep the published crate to the library proper. Everything below is repository-only material —
-# turnkey Kubernetes example/deployment scaffolding and long-form design docs — that bloats the
-# package without serving consumers of the crate. (Relative links to these from README still
-# resolve, because crates.io rewrites them to the repository.)
+# Keep the published crate to the library proper. Everything below is repository-only material
+# (turnkey Kubernetes example/deployment scaffolding and long-form design docs) that bloats the
+# package without serving consumers of the crate. (Relative links to these from README and
+# CONTRACT.md still resolve, because crates.io rewrites them to the repository.)
+#
+# docs/CONTRACT.md and docs/GLOSSARY.md are deliberately NOT excluded. The contract states what the
+# crate promises, what it asks of the caller, and what may change without warning; the glossary
+# defines the vocabulary the API documentation uses. Both are what a consumer needs, so both ship.
 exclude = [
     "pre-commit",
     "CONTRIBUTING.md",
+    "AGENTS.md",
+    "CLAUDE.md",
     "examples/k8s/",
-    "ARCHITECTURE.md",
-    "SOTA.md",
-    "PROGRESS.md",
+    "docs/ARCHITECTURE.md",
+    "docs/SOTA.md",
+    "docs/PROGRESS.md",
+    "docs/README.md",
     # MUST NOT ship: it sets `--cfg reconcile_internal_testing`, which gates the test-only
     # `reconcile::testing` seam. Packaging it would let that cfg leak into a consumer's build of the
     # crate, re-exposing internals the move off the Cargo feature was meant to hide.

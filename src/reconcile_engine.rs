@@ -718,26 +718,16 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
 
     /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task.
     ///
-    /// This is the cold/bulk anti-entropy path: when a peer differs over a whole range it must
-    /// receive every value in that range (most starkly, a cold/empty peer pulling the whole
-    /// dataset). Dumping them back-to-back inline on the receive loop would (a) overrun the
-    /// receiver's socket buffer — datagrams dropped in the kernel — and (b) hold the receive loop for
-    /// the whole transfer, so no other peer is served meanwhile.
+    /// The cold-sync path. Dumping inline would overrun the receiver's socket buffer and hold the
+    /// receive loop for the whole transfer. Three mechanisms bound it:
     ///
-    /// Two cooperating mechanisms fix the cold-sync amplification:
-    ///
-    /// 1. **Pacing** to [`bulk_send_rate`](Inner::bulk_send_rate) bytes/sec, on a spawned task, keeps
-    ///    the burst below the receiver's overrun threshold and off the receive loop.
-    /// 2. A **single-dump-per-peer guard**: while a dump is in flight to a peer, a second is not
-    ///    started. The receiver applies updates *silently* (an `Update` triggers no reply), so the
-    ///    holder's own reconcile timer sees a lull and re-initiates — without this guard it would
-    ///    re-dump ranges still in transit, which is the byte amplification we are removing. Anything
-    ///    genuinely still missing (e.g. a dropped datagram) is picked up by the next reconcile round
-    ///    once the current dump finishes.
-    /// 3. A **global concurrent-dump budget** (`max_concurrent_bulk_dumps`): even with the per-peer
-    ///    guard, M peers diffing simultaneously would each hold a full snapshot Vec. This cap limits
-    ///    total in-flight dump tasks. The caller checks the budget via [`try_claim_dump_slot`](Self::try_claim_dump_slot)
-    ///    **before** building the snapshot Vec, so a skipped dump allocates nothing.
+    /// 1. **Pacing** to [`bulk_send_rate`](Inner::bulk_send_rate) B/s on a spawned task.
+    /// 2. **One dump per peer.** `Update` triggers no reply, so the sender's timer sees a lull and
+    ///    would otherwise re-dump ranges still in transit. Whatever is genuinely missing is caught
+    ///    by the next round.
+    /// 3. **A global dump budget.** Claimed via
+    ///    [`try_claim_dump_slot`](Self::try_claim_dump_slot) *before* building the snapshot, so a
+    ///    skipped dump allocates nothing.
     fn spawn_paced_send(
         &self,
         messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>,
@@ -1025,19 +1015,14 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
     /// Resend a causal-stability acknowledgment (`Message::Ack`) for each tombstone this node
     /// currently holds onto `send_buf`, returning the number appended.
     ///
-    /// Acks otherwise only flow back to the node a tombstone was *received* from, so in a cluster of
-    /// three or more nodes two non-originating replicas never learn that the other holds the
-    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Resending the
-    /// ack for every held tombstone every round — riding the broadcast `send_buf` to the same
-    /// geography-throttled targets as the diff itself — makes the ack matrix converge transitively.
-    /// It also dissolves the ack-before-tombstone ordering hazard: a receiver that does not hold the
-    /// tombstone yet drops the ack (the admission gate in `handle_messages`, which records an ack
-    /// only for a locally-held tombstone) and simply records it on a later round.
+    /// Acks otherwise only flow back to the node a tombstone came *from*, so at three nodes or more
+    /// two non-originating replicas never learn the other holds the deletion and
+    /// [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Resending every round
+    /// makes the matrix converge transitively, and also absorbs an ack arriving before its
+    /// tombstone: the receiver drops it and records it on a later round.
     ///
-    /// The datagram is kept bounded: at most [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes of acks are
-    /// appended, and when more tombstones are held than fit, the window start advances with `round`
-    /// so every tombstone's ack is resent within a bounded number of rounds. The keys are sorted so
-    /// the window is deterministic across rounds (`HashSet` iteration order is not).
+    /// Bounded to [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes; the window start advances with
+    /// `round` over sorted keys, so every tombstone is covered within a bounded number of rounds.
     fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
         let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
         if keys.is_empty() {
@@ -1224,12 +1209,9 @@ impl<K: Key, V: Value, C: Codec> ReconcileEngine<K, V, C> {
                     self.clock.observe(remote_v.stamp);
                     match guard.get(&k) {
                         Some(local_v) => {
-                            // Under last-write-wins, `Entry::merge` returns `other` exactly when
-                            // the remote stamp is strictly greater and `self` otherwise, so the
-                            // stamp comparison decides "would merging change state?" on its own.
-                            // Comparing stamps rather than merged values avoids cloning the value
-                            // on this hot path and is why `Value` needs no `PartialEq` bound. The
-                            // equivalence holds *only* under LWW — see ARCHITECTURE.md §7 D5.
+                            // Equivalent to `merge(..) != local` under LWW, without cloning the
+                            // value on this hot path. Holds only under LWW
+                            // (docs/ARCHITECTURE.md §7 D5).
                             if remote_v.stamp > local_v.stamp {
                                 to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {

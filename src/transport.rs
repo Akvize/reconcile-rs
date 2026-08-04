@@ -6,13 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The [`Transport`] port — the domain's datagram-I/O boundary — and its default
-//! [`UdpTransport`] adapter (`ARCHITECTURE.md` §3.4).
-//!
-//! The reconciliation engine drives itself over this port instead of calling `tokio::net` directly,
-//! so the socket is a substitutable adapter. A test-only [`InMemoryTransport`] delivers datagrams
-//! between engines in-process (no real sockets), which is what makes convergence tests
-//! deterministic.
+//! The [`Transport`] port and its [`UdpTransport`] adapter (docs/ARCHITECTURE.md §3.2).
+//! [`InMemoryTransport`] substitutes it in-process, which is what makes convergence tests
+//! deterministic. Obligations on a custom adapter: docs/CONTRACT.md §5.
 
 use std::hash::Hash;
 use std::io;
@@ -81,16 +77,10 @@ impl UdpTransport {
 
 /// Apply the requested `SO_RCVBUF` / `SO_SNDBUF` sizes to a gossip socket.
 ///
-/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
-/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
-/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
-/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
-/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
-/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
-/// leaves the inherited OS default untouched.
-///
-/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
-/// honoured request reads back larger than asked.
+/// The kernel clamps each request to its own maximum rather than erroring, so clamping is expected
+/// on an untuned host and is logged at `debug`, not `warn`. `None` leaves the OS default. On Linux
+/// the read-back is doubled (bookkeeping overhead), so a fully honoured request reads back larger
+/// than asked.
 fn set_socket_buffers(
     socket: &UdpSocket,
     recv_buffer_size: Option<usize>,
@@ -140,14 +130,12 @@ impl Transport for UdpTransport {
     }
 }
 
-/// An in-process [`Transport`]: datagrams are routed between transports sharing an
-/// [`InMemoryNetwork`], with no real sockets. Delivery is reliable and FIFO per (sender→receiver)
-/// pair, which — under a single-threaded runtime — makes convergence deterministic. A datagram to
-/// an unknown/closed address is dropped, exactly like UDP.
+/// An in-process [`Transport`]: no real sockets, delivery reliable and FIFO per sender→receiver
+/// pair, so convergence is deterministic on a single-threaded runtime. A datagram to an unbound
+/// address is dropped, like UDP.
 ///
-/// Exposed (not test-gated) so downstream crates can test *their own* application against a
-/// deterministic cluster, which is the second of the two uses that earn `Transport` a public
-/// injection point — see `ARCHITECTURE.md` §7 D2.
+/// Public, not test-gated, so downstream crates can test their own application against a
+/// deterministic cluster (docs/ARCHITECTURE.md §7 D2).
 pub use in_memory::{InMemoryNetwork, InMemoryTransport};
 
 mod in_memory {

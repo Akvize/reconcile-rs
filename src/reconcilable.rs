@@ -24,7 +24,7 @@
 /// regardless of when (or on which node) each last wrote it. This is what lets a dateless
 /// [`ReconcileMirror`](crate::mirror::ReconcileMirror) and a dated
 /// [`ReconcileStore`](crate::reconcile_store::ReconcileStore) converge over the shared range-diff
-/// protocol without the mirror ever storing timestamps (invariant #8 in `ARCHITECTURE.md` §5).
+/// protocol without the mirror ever storing timestamps (invariant #8 in `docs/ARCHITECTURE.md` §5).
 ///
 /// A dated [`Entry`] deliberately hashes **with** its stamp (required by the engine's
 /// `version_hash` for the causal-stability acks), while its `State` projection hashes the value
@@ -76,7 +76,7 @@ impl<V> State<V> {
 /// any totally-ordered stamp.
 ///
 /// Its [`Hash`] covers **both** `stamp` and `state`, so `version_hash` distinguishes two tombstones
-/// written at different times (invariant #7 in `ARCHITECTURE.md` §5). Contrast [`State`], whose hash
+/// written at different times (invariant #7 in `docs/ARCHITECTURE.md` §5). Contrast [`State`], whose hash
 /// is value-only.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Entry<T, V> {
@@ -149,18 +149,10 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
     /// distinct writes from the *same* node never share a `Timestamp` (the node bumps the counter);
     /// two writes from *different* nodes are kept apart by `node_id`, the deterministic tie-break.
     ///
-    /// That tie-break is only as unique as `node_id` itself. The `node_id` is a random 64-bit value
-    /// (see [`Config::node_id`](crate::reconcile_store::Config::node_id)), so distinctness is
-    /// **probabilistic, not guaranteed**: by the birthday bound, the probability that any two of `n`
-    /// nodes draw the same id is roughly `n² / 2^65` (≈ 3e-14 at 1000 nodes, ≈ 3e-10 at 100 000). If
-    /// two live nodes *do* collide, two genuinely different values can share a full `Timestamp`; the
-    /// equal-stamp branch then keeps the local value on each side, so the two replicas can diverge
-    /// permanently for that key. There is no collision detection: a `node_id` rides inside every
-    /// `Timestamp` on the wire, but nothing asserts ownership of an id, so there is no identity
-    /// handshake by which a node could notice another claiming its id (out of scope). Pin a stable,
-    /// distinct id per node via [`Config::with_node_id`](crate::reconcile_store::Config::with_node_id)
-    /// when you need a guarantee rather than an overwhelming probability. See the
-    /// [`clock`](crate::clock) module for why the previous physical-clock scheme was unsafe.
+    /// The tie-break is only as unique as `node_id`, which is random by default: distinctness is
+    /// probabilistic (birthday bound ≈ `n² / 2^65`), and colliding ids let two replicas diverge
+    /// permanently on a key, undetected. Pin one per node with
+    /// [`Config::with_node_id`](crate::reconcile_store::Config::with_node_id) for a guarantee.
     pub fn merge(&self, other: &Self) -> Self {
         if other.stamp > self.stamp {
             other.clone()
