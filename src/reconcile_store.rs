@@ -24,7 +24,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
-use crate::discovery::{Discovery, DnsDiscovery};
+use crate::discovery::{Discovery, DiscoveryKind, DnsDiscovery};
 use crate::fingerprint::Fingerprint;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcilable::Projectable;
@@ -278,12 +278,12 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// gating garbage collection. See [`with_dns_discovery`](Self::with_dns_discovery) for the
     /// Kubernetes-native default.
     ///
-    /// The source must be [authoritative](crate::Discovery::is_authoritative): an absence is read as
-    /// a vanished peer and drives decommissioning. A speculative source like
+    /// The source must be [`Authoritative`](crate::DiscoveryKind::Authoritative): an absence is read
+    /// as a vanished peer and drives decommissioning. A speculative source like
     /// [`RandomProbe`](crate::RandomProbe) belongs in the engine's per-round probe, not here.
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
         debug_assert!(
-            discovery.is_authoritative(),
+            matches!(discovery.kind(), DiscoveryKind::Authoritative),
             "with_discovery expects an authoritative source; a speculative prober would be seeded \
              as permanent known peers and its absences would wrongly decommission members"
         );

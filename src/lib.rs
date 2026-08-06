@@ -88,7 +88,7 @@ pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
 pub use clock::{Clock, Timestamp};
-pub use discovery::{DiscoverFuture, Discovery, DnsDiscovery, RandomProbe};
+pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
 // The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
