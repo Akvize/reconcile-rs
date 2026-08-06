@@ -17,7 +17,7 @@ DOMAIN_FILES=(
     src/hrtree.rs
     src/hrtree_iter.rs
     src/fingerprint.rs
-    src/reconcilable.rs
+    src/entry.rs
     src/bounds.rs
     src/proto.rs
 )
