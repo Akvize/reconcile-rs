@@ -664,28 +664,25 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                // In authenticated modes, perform the replay check *after*
-                                // authentication (so forgeries cannot poison the per-peer state)
-                                // and *before* message processing. In unauthenticated mode
-                                // seq/stamp are both 0 and `is_enabled()` is false, so the check
-                                // is skipped entirely.
-                                if self.authenticator.is_enabled() {
-                                    let sender = peer.ip();
-                                    if !self.replay_filter.check_and_record(
-                                        sender,
-                                        payload.seq,
-                                        payload.stamp,
-                                    ) {
-                                        trace!(
-                                            "dropped replayed or stale datagram from {peer}: \
-                                             seq={} stamp={}",
-                                            payload.seq,
-                                            payload.stamp
-                                        );
-                                        observability::record_datagram_dropped("replay");
-                                        continue;
-                                    }
-                                }
+                                // `Payload<Authenticated>::verify_replay` is the only way to reach
+                                // a `Payload<Verified>`, which is the only state
+                                // `handle_messages` accepts — the compiler, not call-site
+                                // discipline, enforces that replay-checking happens before message
+                                // processing (see `auth` module docs). In unauthenticated mode the
+                                // check is a no-op (`is_enabled()` is false).
+                                let (seq, stamp) = (payload.seq, payload.stamp);
+                                let Some(payload) = payload.verify_replay(
+                                    &self.authenticator,
+                                    &self.replay_filter,
+                                    peer.ip(),
+                                ) else {
+                                    trace!(
+                                        "dropped replayed or stale datagram from {peer}: \
+                                         seq={seq} stamp={stamp}"
+                                    );
+                                    observability::record_datagram_dropped("replay");
+                                    continue;
+                                };
                                 let spoke_dated =
                                     self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Only record senders whose datagram was accepted. With
@@ -805,10 +802,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         observability::record_round_duration(timer);
     }
 
-    /// Handle the messages contained in an already-authenticated [`Payload`].
+    /// Handle the messages contained in an already-authenticated, replay-checked [`Payload`].
     ///
-    /// Taking a [`auth::Payload`] rather than raw bytes makes it structurally impossible to
-    /// process a datagram that has not cleared the authentication gate.
+    /// Taking a [`auth::Payload<auth::Verified>`](auth::Payload) rather than raw bytes makes it
+    /// structurally impossible to process a datagram that has not cleared both the authentication
+    /// gate and the anti-replay filter.
     ///
     /// Returns `true` if the datagram contained at least one **dated** protocol message
     /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
@@ -817,7 +815,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
         &self,
-        payload: auth::Payload<'_>,
+        payload: auth::Payload<'_, auth::Verified>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) -> bool {
@@ -1393,6 +1391,9 @@ mod deadlock_regressions {
                     .open(&bytes)
                     .expect("unauthenticated mode clears any datagram");
                 let peer: SocketAddr = "127.0.0.51:8083".parse().unwrap();
+                let payload = payload
+                    .verify_replay(&engine.authenticator, &engine.replay_filter, peer.ip())
+                    .expect("unauthenticated mode is exempt from the replay check");
                 let mut send_buf = Vec::new();
                 engine.handle_messages(payload, peer, &mut send_buf).await;
 

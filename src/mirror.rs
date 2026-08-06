@@ -287,7 +287,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
 
     async fn handle_messages(
         &self,
-        payload: auth::Payload<'_>,
+        payload: auth::Payload<'_, auth::Verified>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) {
@@ -382,22 +382,18 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                if self.authenticator.is_enabled() {
-                                    let sender = peer.ip();
-                                    if !self.replay_filter.check_and_record(
-                                        sender,
-                                        payload.seq,
-                                        payload.stamp,
-                                    ) {
-                                        trace!(
-                                            "mirror dropped replayed datagram from {peer}: \
-                                             seq={} stamp={}",
-                                            payload.seq,
-                                            payload.stamp
-                                        );
-                                        continue;
-                                    }
-                                }
+                                let (seq, stamp) = (payload.seq, payload.stamp);
+                                let Some(payload) = payload.verify_replay(
+                                    &self.authenticator,
+                                    &self.replay_filter,
+                                    peer.ip(),
+                                ) else {
+                                    trace!(
+                                        "mirror dropped replayed datagram from {peer}: \
+                                         seq={seq} stamp={stamp}"
+                                    );
+                                    continue;
+                                };
                                 self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Record the sender so we keep gossiping value-only diffs to it.
                                 self.peers.write().insert(peer.ip(), Instant::now());
