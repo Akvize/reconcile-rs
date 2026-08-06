@@ -265,30 +265,36 @@ must stay distinct — the dated `Entry` hashes **with** its stamp (for `version
 and a `State::Present(v)` do not encode to the same bytes, this step also breaks the value-only wire
 format, alongside the dated wire and on-disk formats (acceptable while the formats are unstable).
 
-### 3.6.1 Other state-typing candidates (audit, 2026-08)
+### 3.6.1 Other state-typing candidates (audit, 2026-08; updated after #214)
 
 A follow-up sweep of the whole tree for the same primitive-obsession pattern — a finite,
 named set of states expressed as `Option`/`bool`/an untyped tuple instead of an enum — found
-one item beyond `Entry`/`State` worth carrying into the target design, plus two lower-priority
-ones noted for later:
+one item beyond `Entry`/`State` worth carrying into the target design, plus one lower-priority
+one noted for later. A third item from the original sweep has since landed.
 
-- **`Authenticator` boolean helpers** (`auth.rs:215-229`; called from `reconcile_engine.rs:310-312`,
-  `mirror.rs:147`). The `Authenticator` enum (`Disabled` / `Enabled` / `Encrypted`) is itself already
-  a well-typed state; the smell is downstream — `is_enabled()` / `is_encrypted()` re-derive booleans
-  from it via `matches!`, and call sites branch on those booleans instead of matching the enum
-  directly (`reconcile_engine.rs:310-312` chains `if is_encrypted() { .. } else if is_enabled() { .. }`,
-  reconstructing a 3-way match out of two booleans). Target: call sites `match` on `&Authenticator`
-  (or a `.mode()`-style accessor returning a small enum) and the two boolean helpers are dropped.
-  No format change, no port change — purely an internal call-site cleanup, independent of the
-  `Entry`/`State` step.
-- **`Discovery::is_authoritative() -> bool`** (`discovery.rs:62-72,101-103`) — stands in for a named
-  two-state distinction (`Authoritative` DNS vs `Speculative` RandomProbe) already spelled out in its
-  own doc comment. Lower priority than the two items above; revisit if a third `Discovery` adapter is
+- **`Authenticator` boolean helpers** (`auth.rs:310-316`; called from `reconcile_engine.rs:319-322`,
+  `mirror.rs:152`) — **still open**. The `Authenticator` enum (`Disabled` / `Enabled` / `Encrypted`) is
+  itself already a well-typed state; the smell is downstream — `is_enabled()` / `is_encrypted()`
+  re-derive booleans from it via `matches!`, and call sites branch on those booleans instead of
+  matching the enum directly (`reconcile_engine.rs:319-322` chains `if is_encrypted() { .. } else if
+  is_enabled() { .. }`, reconstructing a 3-way match out of two booleans). Target: call sites `match`
+  on `&Authenticator` (or a `.mode()`-style accessor returning a small enum) and the two boolean
+  helpers are dropped. No format change, no port change — purely an internal call-site cleanup,
+  independent of the `Entry`/`State` step. Note `d8b0ee0` already removed one such call site
+  (`Payload::verify_replay` no longer takes `&Authenticator`/a bool — `ReplayFilter` now carries that
+  decision as a construction-time property) — the two remaining call sites above are what's left.
+- **`Discovery::is_authoritative() -> bool`** (`discovery.rs:70-72,101-103`) — **still open**, low
+  priority. Stands in for a named two-state distinction (`Authoritative` DNS vs `Speculative`
+  RandomProbe) already spelled out in its own doc comment. Revisit if a third `Discovery` adapter is
   added.
-- **`HashSegment.range: (Bound<K>, Bound<K>)`** (`proto.rs:30-34,78-105`) — the wire protocol only ever
-  emits 2 of the 4 shapes `Bound` admits; a narrower range type would remove the ~25 lines that
-  defensively drop the other two at decode time. Touches the wire format, so it should ride along with
-  (not ahead of) the `Entry`/`State` step (§6 step 4), not be scheduled separately.
+- ~~`HashSegment.range: (Bound<K>, Bound<K>)`~~ — **done** (PR #214, commit `eed5f44`). The wire type is
+  now `StartBound<K>` (`Included`/`Unbounded`) / `EndBound<K>` (`Excluded`/`Unbounded`); a peer sending
+  the other two `Bound` shapes now fails to deserialize instead of reaching `diff_round`. The
+  inverted-range check became a fallible constructor, `BoundedRange::parse -> Result<_, InvertedRange>`.
+  The same PR also added a second, independent example of the target pattern: `Payload<Authenticated>`
+  / `Payload<Verified>` typestate (`auth.rs`) makes "replay-checked before use" a compile-time property
+  of `handle_messages`'s signature rather than call-site discipline — worth using as a second reference
+  alongside `Entry`/`State` when those two remaining items above are picked up.
 
 These are recorded here as scope for **when their surrounding step is picked up**, not as new
 work to start now: `Entry`/`State` is migration step 4 (§6, already in progress); the
