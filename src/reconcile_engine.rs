@@ -64,6 +64,32 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
     hasher.finish()
 }
 
+/// Hard cap on the number of distinct tracked peers a receive loop admits.
+///
+/// Owns the single admission rule shared by the dated engine and the dateless mirror: a datagram
+/// from a sender is admitted while that sender is already known, or while the tracked-peer count
+/// is under the cap. Centralizing the rule here means it is defined exactly once instead of being
+/// re-derived (and risking drift) at each receive loop. Sourced from
+/// [`Config::max_peers`](crate::reconcile_store::Config::max_peers).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PeerCap(usize);
+
+impl PeerCap {
+    pub(crate) fn new(max_peers: usize) -> Self {
+        PeerCap(max_peers)
+    }
+
+    /// Whether a datagram from a sender should be admitted, given whether the sender is already
+    /// tracked and how many distinct peers are currently tracked.
+    pub(crate) fn admits(self, known: bool, current_len: usize) -> bool {
+        known || current_len < self.0
+    }
+
+    pub(crate) fn max(self) -> usize {
+        self.0
+    }
+}
+
 /// Derive a node's **local network** from the declared `nets` and its `listen_addr`.
 ///
 /// The local network is whichever declared net contains the listen address — the one a node
@@ -239,7 +265,7 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) node_id_is_random: bool,
     /// Hard cap on the number of tracked remote peers. Datagrams from unknown senders are dropped
     /// before any per-sender state is allocated when the membership set reaches this size.
-    max_peers: usize,
+    max_peers: PeerCap,
 }
 
 impl<K, V: Projectable> Clone for ReconcileEngine<K, V> {
@@ -393,7 +419,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
                 clock,
                 node_id_is_random,
-                max_peers: config.max_peers,
+                max_peers: PeerCap::new(config.max_peers),
             }),
         })
     }
@@ -740,17 +766,15 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                                 // membership). Placed ahead of the replay filter so a capped-out
                                 // sender never gets an entry there either. Known senders bypass it.
                                 let is_known = self.members.read().contains(&sender);
-                                if !is_known {
-                                    let current_len = self.members.read().len();
-                                    if current_len >= self.max_peers {
-                                        trace!(
-                                            "dropped datagram from {peer}: peer cap reached \
-                                             ({current_len}/{})",
-                                            self.max_peers
-                                        );
-                                        observability::record_datagram_dropped("peer_cap");
-                                        continue;
-                                    }
+                                let current_len = self.members.read().len();
+                                if !self.max_peers.admits(is_known, current_len) {
+                                    trace!(
+                                        "dropped datagram from {peer}: peer cap reached \
+                                         ({current_len}/{})",
+                                        self.max_peers.max()
+                                    );
+                                    observability::record_datagram_dropped("peer_cap");
+                                    continue;
                                 }
                                 // `Payload<Authenticated>::verify_replay` is the only way to reach
                                 // a `Payload<Verified>`, which is the only state

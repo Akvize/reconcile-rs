@@ -70,7 +70,7 @@ use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
 use crate::reconcilable::ValueOnly;
-use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
+use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap};
 use crate::reconcile_store::Config;
 use crate::replay;
 use crate::HRTree;
@@ -111,7 +111,7 @@ pub struct ReconcileMirror<K, V> {
     /// Hard cap on the number of dated-cluster peers the mirror tracks. Datagrams from unknown
     /// senders are dropped before any per-sender state is allocated when the peers map reaches
     /// this size. Sourced from [`Config::max_peers`].
-    max_peers: usize,
+    max_peers: PeerCap,
 }
 
 impl<K, V> Clone for ReconcileMirror<K, V> {
@@ -181,7 +181,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                 authenticator_enabled,
             )),
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
-            max_peers: config.max_peers,
+            max_peers: PeerCap::new(config.max_peers),
         })
     }
 
@@ -398,13 +398,13 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                                 // allocated (peers slot or replay-filter entry).
                                 {
                                     let guard = self.peers.read();
-                                    if !guard.contains_key(&sender) && guard.len() >= self.max_peers
-                                    {
+                                    let (known, current_len) =
+                                        (guard.contains_key(&sender), guard.len());
+                                    if !self.max_peers.admits(known, current_len) {
                                         trace!(
                                             "mirror dropped datagram from {peer}: peer cap \
-                                             reached ({}/{})",
-                                            guard.len(),
-                                            self.max_peers
+                                             reached ({current_len}/{})",
+                                            self.max_peers.max()
                                         );
                                         continue;
                                     }
