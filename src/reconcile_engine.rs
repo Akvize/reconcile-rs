@@ -316,19 +316,24 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Size the kernel send/receive buffers before any traffic flows.
         set_socket_buffers(&socket, &config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
-        let authenticator_enabled = authenticator.is_enabled();
-        if authenticator.is_encrypted() {
-            debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
-        } else if authenticator.is_enabled() {
-            debug!("per-datagram MAC authentication ENABLED");
-        } else {
-            warn!(
-                "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any host \
-                 that can send UDP to this port can forge updates and poison the cluster via \
-                 last-write-wins. Set Config::with_cluster_key on every node, or restrict the \
-                 network to a trusted underlay. See REVIEW.md F3."
-            );
+        match &authenticator {
+            #[cfg(feature = "encryption")]
+            auth::Authenticator::Encrypted(_) => {
+                debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
+            }
+            auth::Authenticator::Enabled(_) => {
+                debug!("per-datagram MAC authentication ENABLED");
+            }
+            auth::Authenticator::Disabled => {
+                warn!(
+                    "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any \
+                     host that can send UDP to this port can forge updates and poison the \
+                     cluster via last-write-wins. Set Config::with_cluster_key on every node, or \
+                     restrict the network to a trusted underlay. See REVIEW.md F3."
+                );
+            }
         }
+        let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
         let map = HRTree::<K, V>::new();
         let projection = HRTree::<K, V::Projected>::new();
         // The geographical networks this cluster spans. With none declared, fall back to the
