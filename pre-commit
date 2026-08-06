@@ -16,3 +16,6 @@ echo "Running cargo fmt"
 (cd $TEMPDIR; cargo fmt --check)
 echo "Running cargo clippy"
 (cd $TEMPDIR; cargo clippy --all -- --deny warnings)
+
+echo "Running domain-purity check"
+(cd $TEMPDIR; ./scripts/check-domain-purity.sh)
