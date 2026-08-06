@@ -812,6 +812,12 @@ pub struct Config {
     /// Maximum age (past or future) of a datagram's sender wall-clock stamp before it is silently
     /// dropped as a replay. Authenticated modes only; ignored unkeyed. Default 5 minutes — see
     /// [`with_freshness_window`](Config::with_freshness_window).
+    ///
+    /// Must tolerate normal clock skew and network jitter between peers, or legitimate traffic is
+    /// silently dropped: [`Duration::ZERO`] accepts only a stamp bit-for-bit equal to the
+    /// receiver's local clock, which real network latency alone makes unlikely to ever pass. This
+    /// is a self-inflicted footgun, not a security hole — no validation rejects it — because it
+    /// only ever makes the filter *stricter*, never unsafe.
     pub freshness_window: Duration,
 }
 impl Default for Config {
@@ -952,7 +958,9 @@ impl Config {
     }
 
     /// Set [`freshness_window`](Config::freshness_window): the max stamp deviation tolerated in
-    /// authenticated modes before a datagram is dropped as a replay. No effect unkeyed.
+    /// authenticated modes before a datagram is dropped as a replay. No effect unkeyed. See the
+    /// field doc for why an unrealistically small window is a footgun, not something this setter
+    /// rejects.
     pub fn with_freshness_window(mut self, window: Duration) -> Self {
         self.freshness_window = window;
         self

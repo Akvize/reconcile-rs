@@ -164,6 +164,87 @@ impl fmt::Display for Stamp {
     }
 }
 
+/// Fixed-size out-of-order acceptance window: bit `i` records whether the sequence number
+/// `high_water - i` has already been accepted, for `i` in `0..WINDOW_SIZE`; bits beyond that are
+/// not tracked (always treated as outside the window). Bit 0 — "the current high-water sequence
+/// itself was accepted" — is an invariant every constructor/mutator here maintains, so
+/// [`PeerState`] never has to remember to set it by hand at each of its call sites (the bug class
+/// this type exists to close: three call sites independently poking the same bit, one of which
+/// forgets).
+///
+/// Stored as a fixed-size array of `u64` words; `WINDOW_SIZE / 64 = 16`.
+struct SlidingBitmap([u64; (WINDOW_SIZE / 64) as usize]);
+
+impl SlidingBitmap {
+    /// A fresh window with only the high-water sequence itself marked.
+    fn new() -> Self {
+        let mut bitmap = SlidingBitmap([0u64; (WINDOW_SIZE / 64) as usize]);
+        bitmap.mark(0);
+        bitmap
+    }
+
+    /// Mark `offset` (sequence numbers behind the current high-water mark) as seen.
+    ///
+    /// Only meaningful for `offset < WINDOW_SIZE`; callers already check that before reaching
+    /// here (a wider offset is unconditionally out of window, never marked or tested).
+    fn mark(&mut self, offset: u64) {
+        let word = (offset / 64) as usize;
+        let bit = offset % 64;
+        self.0[word] |= 1 << bit;
+    }
+
+    /// Whether `offset` has already been marked seen. Same `offset < WINDOW_SIZE` precondition as
+    /// [`mark`](Self::mark).
+    fn is_marked(&self, offset: u64) -> bool {
+        let word = (offset / 64) as usize;
+        let bit = offset % 64;
+        self.0[word] & (1 << bit) != 0
+    }
+
+    /// Advance the high-water mark by `delta` positions (oldest bits fall off the window) and
+    /// mark the new high-water sequence as seen.
+    ///
+    /// A shift of 1 means the high-water sequence moved up by 1; the former bit 0 becomes bit 1,
+    /// etc. Bits that shift past position `WINDOW_SIZE - 1` are discarded.
+    fn advance(&mut self, delta: u64) {
+        if delta >= WINDOW_SIZE {
+            // The whole window falls off — start fresh.
+            *self = Self::new();
+            return;
+        }
+        let word_shift = (delta / 64) as usize;
+        let bit_shift = (delta % 64) as u32;
+        let words = (WINDOW_SIZE / 64) as usize;
+
+        if bit_shift == 0 {
+            // Whole-word shift only.
+            for i in (0..words).rev() {
+                self.0[i] = if i >= word_shift {
+                    self.0[i - word_shift]
+                } else {
+                    0
+                };
+            }
+        } else {
+            // Combined word + bit shift.
+            for i in (0..words).rev() {
+                let lo = if i >= word_shift {
+                    self.0[i - word_shift] << bit_shift
+                } else {
+                    0
+                };
+                let hi = if i > word_shift {
+                    self.0[i - word_shift - 1] >> (64 - bit_shift)
+                } else {
+                    0
+                };
+                self.0[i] = lo | hi;
+            }
+        }
+        self.mark(0);
+    }
+}
+
 /// The per-peer replay state.
 ///
 /// Tracks the highest sequence number seen from a peer, the sender stamp at which that maximum was
@@ -180,24 +261,17 @@ struct PeerState {
     /// peer. Never reset by `reset()`. Used on the forward path to reject captured pre-restart
     /// datagrams whose stamp predates the restart stamp.
     max_stamp_seen: Stamp,
-    /// Sliding bitmap. Bit `i` represents whether sequence number `max_seq - i` was already
-    /// accepted. `bitmap & 1` is always `1` (max_seq itself was accepted). Bits beyond
-    /// `WINDOW_SIZE` are not tracked (always treated as seen/rejected if below window).
-    ///
-    /// Stored as a fixed-size array of `u64` words; `WINDOW_SIZE / 64 = 16`.
-    bitmap: [u64; (WINDOW_SIZE / 64) as usize],
+    /// Sliding out-of-order acceptance window, relative to `max_seq`. See [`SlidingBitmap`].
+    bitmap: SlidingBitmap,
 }
 
 impl PeerState {
     fn new(first_seq: Seq, first_stamp: Stamp) -> Self {
-        let mut bitmap = [0u64; (WINDOW_SIZE / 64) as usize];
-        // Mark the first sequence as seen (bit 0 of word 0).
-        bitmap[0] = 1;
         PeerState {
             max_seq: first_seq,
             stamp_at_max: first_stamp,
             max_stamp_seen: first_stamp,
-            bitmap,
+            bitmap: SlidingBitmap::new(),
         }
     }
 
@@ -220,14 +294,13 @@ impl PeerState {
             if stamp < self.max_stamp_seen {
                 return false;
             }
-            // Advance the window. Shift the bitmap forward by (seq - max_seq) positions.
+            // Advance the window by (seq - max_seq) positions; `advance` marks the new
+            // high-water sequence itself as seen.
             let delta = seq - self.max_seq;
-            self.shift_bitmap(delta);
+            self.bitmap.advance(delta);
             self.max_seq = seq;
             self.stamp_at_max = stamp;
             self.max_stamp_seen = self.max_stamp_seen.max(stamp);
-            // Mark the new max as seen (bit 0).
-            self.bitmap[0] |= 1;
             true
         } else {
             // seq <= max_seq: check stamp FIRST for restart detection.
@@ -243,56 +316,13 @@ impl PeerState {
                 // Outside the window: unconditionally reject.
                 return false;
             }
-            let word = (behind / 64) as usize;
-            let bit = behind % 64;
-            if self.bitmap[word] & (1 << bit) != 0 {
+            if self.bitmap.is_marked(behind) {
                 // Already seen: duplicate.
                 return false;
             }
             // First time in window: accept and mark.
-            self.bitmap[word] |= 1 << bit;
+            self.bitmap.mark(behind);
             true
-        }
-    }
-
-    /// Shift the bitmap forward by `delta` positions (oldest bits fall off).
-    ///
-    /// A shift of 1 means `max_seq` moved up by 1; the former bit 0 becomes bit 1, etc.
-    /// Bits that shift past position `WINDOW_SIZE - 1` are discarded.
-    fn shift_bitmap(&mut self, delta: u64) {
-        if delta >= WINDOW_SIZE {
-            // The whole bitmap falls off — start fresh.
-            self.bitmap = [0u64; (WINDOW_SIZE / 64) as usize];
-            return;
-        }
-        let word_shift = (delta / 64) as usize;
-        let bit_shift = (delta % 64) as u32;
-        let words = (WINDOW_SIZE / 64) as usize;
-
-        if bit_shift == 0 {
-            // Whole-word shift only.
-            for i in (0..words).rev() {
-                self.bitmap[i] = if i >= word_shift {
-                    self.bitmap[i - word_shift]
-                } else {
-                    0
-                };
-            }
-        } else {
-            // Combined word + bit shift.
-            for i in (0..words).rev() {
-                let lo = if i >= word_shift {
-                    self.bitmap[i - word_shift] << bit_shift
-                } else {
-                    0
-                };
-                let hi = if i > word_shift {
-                    self.bitmap[i - word_shift - 1] >> (64 - bit_shift)
-                } else {
-                    0
-                };
-                self.bitmap[i] = lo | hi;
-            }
         }
     }
 
@@ -305,8 +335,7 @@ impl PeerState {
         self.stamp_at_max = new_stamp;
         // max_stamp_seen is never rewound — keep the monotone high-water mark.
         self.max_stamp_seen = self.max_stamp_seen.max(new_stamp);
-        self.bitmap = [0u64; (WINDOW_SIZE / 64) as usize];
-        self.bitmap[0] = 1;
+        self.bitmap = SlidingBitmap::new();
     }
 }
 
