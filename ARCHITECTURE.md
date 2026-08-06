@@ -265,6 +265,35 @@ must stay distinct — the dated `Entry` hashes **with** its stamp (for `version
 and a `State::Present(v)` do not encode to the same bytes, this step also breaks the value-only wire
 format, alongside the dated wire and on-disk formats (acceptable while the formats are unstable).
 
+### 3.6.1 Other state-typing candidates (audit, 2026-08)
+
+A follow-up sweep of the whole tree for the same primitive-obsession pattern — a finite,
+named set of states expressed as `Option`/`bool`/an untyped tuple instead of an enum — found
+one item beyond `Entry`/`State` worth carrying into the target design, plus two lower-priority
+ones noted for later:
+
+- **`Authenticator` boolean helpers** (`auth.rs:215-229`; called from `reconcile_engine.rs:310-312`,
+  `mirror.rs:147`). The `Authenticator` enum (`Disabled` / `Enabled` / `Encrypted`) is itself already
+  a well-typed state; the smell is downstream — `is_enabled()` / `is_encrypted()` re-derive booleans
+  from it via `matches!`, and call sites branch on those booleans instead of matching the enum
+  directly (`reconcile_engine.rs:310-312` chains `if is_encrypted() { .. } else if is_enabled() { .. }`,
+  reconstructing a 3-way match out of two booleans). Target: call sites `match` on `&Authenticator`
+  (or a `.mode()`-style accessor returning a small enum) and the two boolean helpers are dropped.
+  No format change, no port change — purely an internal call-site cleanup, independent of the
+  `Entry`/`State` step.
+- **`Discovery::is_authoritative() -> bool`** (`discovery.rs:62-72,101-103`) — stands in for a named
+  two-state distinction (`Authoritative` DNS vs `Speculative` RandomProbe) already spelled out in its
+  own doc comment. Lower priority than the two items above; revisit if a third `Discovery` adapter is
+  added.
+- **`HashSegment.range: (Bound<K>, Bound<K>)`** (`proto.rs:30-34,78-105`) — the wire protocol only ever
+  emits 2 of the 4 shapes `Bound` admits; a narrower range type would remove the ~25 lines that
+  defensively drop the other two at decode time. Touches the wire format, so it should ride along with
+  (not ahead of) the `Entry`/`State` step (§6 step 4), not be scheduled separately.
+
+These are recorded here as scope for **when their surrounding step is picked up**, not as new
+work to start now: `Entry`/`State` is migration step 4 (§6, already in progress); the
+`Authenticator` cleanup can land independently, in any step, since it changes no format.
+
 ### 3.7 Internal mechanism
 
 The anti-entropy mechanism is not a port. `HashRangeQueryable` and `Diffable` are removed as traits:
