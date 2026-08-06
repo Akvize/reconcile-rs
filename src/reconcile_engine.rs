@@ -765,8 +765,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                                 // allocating any per-sender state (replay filter, peers map,
                                 // membership). Placed ahead of the replay filter so a capped-out
                                 // sender never gets an entry there either. Known senders bypass it.
-                                let is_known = self.members.read().contains(&sender);
-                                let current_len = self.members.read().len();
+                                let (is_known, current_len) = {
+                                    let guard = self.members.read();
+                                    (guard.contains(&sender), guard.len())
+                                };
                                 if !self.max_peers.admits(is_known, current_len) {
                                     trace!(
                                         "dropped datagram from {peer}: peer cap reached \
