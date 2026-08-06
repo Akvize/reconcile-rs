@@ -153,9 +153,9 @@ impl<'a> Payload<'a, Authenticated> {
     ///
     /// No longer takes `&Authenticator`: whether replay-checking even applies is
     /// [`ReplayFilter`]'s own concern, fixed once at construction from the authenticator's mode
-    /// (see its doc comment) rather than re-derived from `is_enabled()` on every datagram. A
-    /// disabled filter accepts unconditionally, so this always behaves correctly regardless of
-    /// mode — there is no `bool` left for a caller to get backwards.
+    /// (see its doc comment) rather than re-derived on every datagram. A disabled filter accepts
+    /// unconditionally, so this always behaves correctly regardless of mode — there is no `bool`
+    /// left for a caller to get backwards.
     ///
     /// Returns `None` when the datagram is a replay, a duplicate, or outside the freshness window;
     /// the caller drops it silently, same as an authentication failure.
@@ -303,24 +303,6 @@ impl Authenticator {
                 "reconcile: encryption requested but the crate was built without the \
                  `encryption` feature"
             ),
-        }
-    }
-
-    /// Whether datagrams are authenticated (MAC or AEAD), as opposed to running unauthenticated.
-    pub(crate) fn is_enabled(&self) -> bool {
-        !matches!(self, Authenticator::Disabled)
-    }
-
-    /// Whether payloads are encrypted (not just authenticated). Always `false` without the
-    /// `encryption` feature.
-    pub(crate) fn is_encrypted(&self) -> bool {
-        #[cfg(feature = "encryption")]
-        {
-            matches!(self, Authenticator::Encrypted(_))
-        }
-        #[cfg(not(feature = "encryption"))]
-        {
-            false
         }
     }
 
@@ -558,8 +540,7 @@ mod tests {
     #[test]
     fn disabled_passes_through_and_does_not_seal() {
         let auth = Authenticator::new(None, false);
-        assert!(!auth.is_enabled());
-        assert!(!auth.is_encrypted());
+        assert!(matches!(auth, Authenticator::Disabled));
         assert_eq!(auth.overhead(), 0);
         assert!(auth.seal(Seq::new(0), Stamp::new(0), b"payload").is_none());
         // Any datagram clears the gate unchanged in unauthenticated mode; seq/stamp are 0.
@@ -598,8 +579,7 @@ mod tests {
         #[test]
         fn roundtrip_and_overhead() {
             let auth = encryptor(0x11);
-            assert!(auth.is_enabled());
-            assert!(auth.is_encrypted());
+            assert!(matches!(auth, Authenticator::Encrypted(_)));
             assert_eq!(
                 auth.overhead(),
                 super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + super::AEAD_TAG_LEN

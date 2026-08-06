@@ -149,13 +149,13 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
         debug!("ReconcileMirror listening on: {}", socket.local_addr()?);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
-        let authenticator_enabled = authenticator.is_enabled();
-        if !authenticator_enabled {
+        if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
                 "SECURITY: no cluster key set — the lightweight mirror accepts UNAUTHENTICATED \
                  datagrams. Set Config::with_cluster_key to match the dated cluster."
             );
         }
+        let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
         // A mirror tracks a single network: the one containing its listen address, else the first
         // declared network, else the historical loopback default.
         let nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
