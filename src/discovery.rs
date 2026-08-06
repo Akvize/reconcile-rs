@@ -15,7 +15,7 @@
 //!   each round ([`Config::with_net`](crate::reconcile_store::Config::with_net)). The probed address
 //!   might not be a live peer, so it is only used as a one-shot reconciliation target and is **not**
 //!   added to the known-peer set. This is what auto-discovers peers on a flat or geographically
-//!   partitioned CIDR. It is [non-authoritative](Discovery::is_authoritative).
+//!   partitioned CIDR. Its [`kind`](Discovery::kind) is [`Speculative`](DiscoveryKind::Speculative).
 //! - [`DnsDiscovery`] — an **authoritative** source for Kubernetes: it resolves a **headless
 //!   Service** DNS name (one address record per ready pod), so a single lookup yields the real,
 //!   current peer set, with no API client and no RBAC. Random probing does not fit Kubernetes, where
@@ -48,27 +48,43 @@ use crate::gen_ip::probe_targets;
 pub type DiscoverFuture<'a> =
     Pin<Box<dyn Future<Output = std::io::Result<Vec<IpAddr>>> + Send + 'a>>;
 
+/// Whether a [`Discovery`] source's result is the current truth or merely a hint.
+///
+/// See [`Discovery::kind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoveryKind {
+    /// `discover`'s result is a snapshot of the peers that should exist right now: each address
+    /// refreshes the corresponding known peer, and a previously-seen member that is *absent* is
+    /// counted toward grace-period decommissioning.
+    Authoritative,
+    /// `discover`'s result is speculative — only the current round's targets, never seeded as
+    /// known peers.
+    Speculative,
+}
+
 /// A source of candidate peer addresses for the reconciliation engine.
 ///
 /// [`discover`](Self::discover) is called once per discovery round. The result is interpreted
-/// according to [`is_authoritative`](Self::is_authoritative):
+/// according to [`kind`](Self::kind):
 ///
-/// - `Ok(addrs)` from an **authoritative** source is a snapshot of the peers that should exist right
-///   now: each address refreshes the corresponding known peer, and a previously-seen member that is
-///   *absent* is counted toward grace-period decommissioning. From a **non-authoritative** source it
-///   is speculative — only the current round's targets, never seeded as known peers.
+/// - `Ok(addrs)` from an [`Authoritative`](DiscoveryKind::Authoritative) source is a snapshot of the
+///   peers that should exist right now: each address refreshes the corresponding known peer, and a
+///   previously-seen member that is *absent* is counted toward grace-period decommissioning. From a
+///   [`Speculative`](DiscoveryKind::Speculative) source it is only the current round's targets,
+///   never seeded as known peers.
 /// - `Err(_)` is a **transient failure** (e.g. a DNS blip). It MUST NOT be read as "no peers": the
 ///   store skips the round entirely, so a momentary resolver hiccup never decommissions anyone.
 pub trait Discovery: Send + Sync + 'static {
     /// Resolve the current candidate peer set.
     fn discover(&self) -> DiscoverFuture<'_>;
 
-    /// Whether [`discover`](Self::discover) returns the *authoritative* current peer set (so an
-    /// absence drives decommissioning), or merely *speculative* probe targets.
+    /// Whether [`discover`](Self::discover) returns the current peer set or merely speculative
+    /// probe targets.
     ///
-    /// Defaults to `true`; the speculative [`RandomProbe`] overrides it to `false`.
-    fn is_authoritative(&self) -> bool {
-        true
+    /// Defaults to [`Authoritative`](DiscoveryKind::Authoritative); the speculative [`RandomProbe`]
+    /// overrides it to [`Speculative`](DiscoveryKind::Speculative).
+    fn kind(&self) -> DiscoveryKind {
+        DiscoveryKind::Authoritative
     }
 }
 
@@ -98,8 +114,8 @@ impl Discovery for RandomProbe {
         Box::pin(async move { Ok(targets) })
     }
 
-    fn is_authoritative(&self) -> bool {
-        false
+    fn kind(&self) -> DiscoveryKind {
+        DiscoveryKind::Speculative
     }
 }
 
@@ -166,7 +182,10 @@ mod tests {
 
     #[test]
     fn dns_discovery_is_authoritative() {
-        assert!(DnsDiscovery::new("svc", 0).is_authoritative());
+        assert_eq!(
+            DnsDiscovery::new("svc", 0).kind(),
+            DiscoveryKind::Authoritative
+        );
     }
 
     #[tokio::test]
@@ -178,7 +197,7 @@ mod tests {
             Arc::new(RwLock::new(StdRng::seed_from_u64(42))),
         );
         // Speculative: an absence must never decommission a peer.
-        assert!(!probe.is_authoritative());
+        assert_eq!(probe.kind(), DiscoveryKind::Speculative);
         // One probe per declared network, each within that network.
         let addrs = probe.discover().await.unwrap();
         assert_eq!(addrs.len(), 1);
