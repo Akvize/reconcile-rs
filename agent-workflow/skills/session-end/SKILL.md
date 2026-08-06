@@ -92,6 +92,16 @@ Rules, applied strictly:
 - Reproduction counts: a bug fix without a failing-then-passing observation is
   UNVERIFIED, however obvious the fix looks.
 - Passing a subset is a subset. Say which subset.
+- **An empty result is not a passing result.** Before reading anything into a
+  command's output, confirm it actually produced data: a non-zero count, an exit
+  code you inspected, a field you expected to be present. A grep that matched
+  nothing, an API call that returned an error body, a test binary that ran zero
+  tests, and a genuinely clean run all look identical if you only check for the
+  absence of complaints.
+
+  This failure mode is worth naming because it is both silent *and* optimistic —
+  it does not report "I don't know", it reports "all good", which is the one
+  answer you will not go back and check.
 
 **Report every UNVERIFIED claim explicitly to the user.** Never let one be
 silently upgraded by omission. This gate is the single highest-value item in the
