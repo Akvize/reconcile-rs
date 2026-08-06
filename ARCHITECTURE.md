@@ -41,7 +41,7 @@ converge. The design rests on five mechanisms:
 | `hrtree.rs`, `hrtree_iter.rs` | Ordered map + range-fingerprint data structure and its iterators. |
 | `fingerprint.rs` | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
 | `diff.rs` | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types. |
-| `reconcilable.rs` | Value/tombstone semantics and the conflict-resolution policy. |
+| `entry.rs` | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
 | `auth.rs` | Per-datagram message authentication (MAC). |
 | `persistence.rs` | Durability boundary: load/save a snapshot of the dated map. |
@@ -56,7 +56,7 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 
 | Module | Infrastructure imported |
 |---|---|
-| `hrtree.rs`, `hrtree_iter.rs`, `fingerprint.rs`, `diff.rs`, `reconcilable.rs` | none |
+| `hrtree.rs`, `hrtree_iter.rs`, `fingerprint.rs`, `diff.rs`, `entry.rs` | none |
 
 This is, in effect, the interior of the hexagon and it exists today.
 
@@ -88,19 +88,18 @@ Seven traits exist. They fall into three groups:
   whose associated types are always the same concrete types; `HashRangeQueryable` has a single
   real implementation (`HRTree`). They are exposed through `pub mod diff` (`lib.rs:30`), placing the
   protocol mechanism on the crate's public surface.
-- **Value-shape helpers (4).** `MaybeTombstone` (`reconcilable.rs:43`), `Reconcilable`
-  (`reconcilable.rs:27`) and `Timestamped` (`clock.rs:171`) each carry a single implementation over a
-  tuple — the stored cell is represented as `(Timestamp, Option<V>)`. `Mac` (`auth.rs:92`) selects a MAC
-  backend chosen at compile time.
+- **Value-shape helpers — dissolved (migration step 4, done).** `MaybeTombstone`, `Reconcilable` and
+  `Timestamped` used to each carry a single implementation over the untyped `(Timestamp, Option<V>)`
+  tuple that represented the stored cell. They have been replaced by the `Entry<Timestamp, V>` /
+  `State<V>` domain type (`entry.rs`, §3.6): `Entry::is_tombstone` / `Entry::value` replace
+  `MaybeTombstone`, `Entry::merge` replaces `Reconcilable`, and direct `.stamp` field access replaces
+  `Timestamped`. `Mac` (`auth.rs:92`) selects a MAC backend chosen at compile time.
 
-Two consequences of the value-shape representation:
+Consequence of the (now-superseded) tuple representation, addressed by the same step:
 
-- The internal tuple `(Timestamp, Option<V>)` leaks onto the public surface — into the
-  `add_pre_insert` hook (`reconcile_store.rs:171`) and into `PersistedState` (`persistence.rs:51`).
-- The generic constraints are spelled out in full at every implementation site (a nine-bound key
-  constraint and an eleven-bound value constraint, e.g. `reconcile_engine.rs:122-135`,
-  `reconcile_store.rs:75`), with the entry-semantics bounds attached to the *value* parameter rather
-  than to the entry.
+- The internal tuple used to leak onto the public surface — into the `add_pre_insert` hook and into
+  `PersistedState`. Both now carry `Entry<Timestamp, V>` directly (`reconcile_store.rs`,
+  `persistence.rs`).
 
 ---
 
@@ -318,10 +317,10 @@ without a compile error — the guarantee a single crate cannot provide.
 
 | Current | Target |
 |---|---|
-| `(Timestamp, Option<V>)` tuple | `Entry<Timestamp, V>` + `State<V>` domain type |
-| `MaybeTombstone`, `Timestamped` | inherent `Entry` methods / field access |
-| `Reconcilable` (LWW over tuple) | `Entry::merge` (LWW), optional `Resolve` policy seam |
-| `Projectable` / `ValueOnly<V>` (dateless mirror) | `Entry::project` → `State<V>` (the projection cell *is* `State`) |
+| `(Timestamp, Option<V>)` tuple | ✅ `Entry<Timestamp, V>` + `State<V>` domain type (`entry.rs`) |
+| `MaybeTombstone`, `Timestamped` | ✅ inherent `Entry` methods / field access |
+| `Reconcilable` (LWW over tuple) | ✅ `Entry::merge` (LWW); no `Resolve` seam needed yet |
+| `Projectable` / `ValueOnly<V>` (dateless mirror) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `HRTree` methods + `pub(crate)` diff functions |
 | `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
 | `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
@@ -367,20 +366,24 @@ The path from the current structure to the target is ordered by dependency. Each
 behaviour-preserving and verified by the existing test suite, except the `Entry` step, which changes
 the wire and on-disk formats (acceptable while the formats are unstable).
 
-1. **Bound bundles & encapsulation** — introduce `Key` / `Value`; demote the protocol mechanism and
+1. ✅ **Bound bundles & encapsulation** — introduce `Key` / `Value`; demote the protocol mechanism and
    other internals from `pub` to `pub(crate)`.
-2. **Dissolve the diff traits** — remove `HashRangeQueryable` / `Diffable`; move `start_diff` /
+2. ✅ **Dissolve the diff traits** — remove `HashRangeQueryable` / `Diffable`; move `start_diff` /
    `diff_round` verbatim to `pub(crate)` functions over `HRTree`.
-3. **`Clock` port** — extract `Clock`; `HlcClock` becomes its adapter and holds the physical-time
+3. ✅ **`Clock` port** — extract `Clock`; `HlcClock` becomes its adapter and holds the physical-time
    read; the domain becomes time-source-free.
-4. **`Entry` / `State` domain type** — replace `(Timestamp, Option<V>)`; dissolve `MaybeTombstone` /
-   `Timestamped`; fold `Reconcilable` into `Entry::merge`; update the public hook and
-   `PersistedState`. *Changes the wire and on-disk formats.*
+4. ✅ **`Entry` / `State` domain type** (done) — replace `(Timestamp, Option<V>)` with
+   `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); dissolve `MaybeTombstone` / `Timestamped` /
+   `Reconcilable` / `Projectable` / `ValueOnly<V>`; `reconcile_engine.rs` and `reconcile_store.rs`
+   now parameterize the engine over the plain `V` and construct `Entry<Timestamp, V>` /
+   `State<V>` internally; `add_pre_insert`, `ReconcileMirror::add_on_update` and `PersistedState`
+   carry `Entry<Timestamp, V>` / `State<V>` directly. *Changed the wire and on-disk formats*, as
+   anticipated — acceptable pre-1.0.
 5. **`Transport` & `Codec` ports** — extract both; `UdpTransport` / `BincodeCodec` adapters; the
    engine becomes a thin driver over the ports, with authentication ahead of the codec.
 6. **Workspace split** — promote the layers to `reconcile-core` / `reconcile-net` /
    `reconcile-store` / `reconcile`; ports defined in the core; the core carries no infrastructure
    dependency.
 
-Steps 1–3 are independent of the format change; step 4 is the single format-breaking step; steps 5–6
-complete the boundary extraction and enforce it at the crate level.
+Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
+done); steps 5–6 complete the boundary extraction and enforce it at the crate level.

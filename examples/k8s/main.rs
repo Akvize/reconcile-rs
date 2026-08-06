@@ -145,8 +145,8 @@ async fn main() {
     {
         let seen = seen.clone();
         store.add_pre_insert(move |key: &String, value| {
-            // `value.1` is `None` for a tombstone (a delete); only announce live keys.
-            if value.1.is_some() && seen.lock().unwrap().insert(key.clone()) {
+            // `value.value()` is `None` for a tombstone (a delete); only announce live keys.
+            if value.value().is_some() && seen.lock().unwrap().insert(key.clone()) {
                 info!(%key, "store now holds this key (local write or reconciled from a peer)");
             }
         });

@@ -63,11 +63,11 @@
 pub mod bounds;
 pub mod clock;
 pub mod discovery;
+pub mod entry;
 pub mod fingerprint;
 pub mod hrtree;
 pub mod mirror;
 pub mod persistence;
-pub mod reconcilable;
 pub mod reconcile_store;
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
@@ -89,6 +89,7 @@ pub(crate) mod timeout_wheel;
 pub use bounds::{Key, Value};
 pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
+pub use entry::{Entry, State};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
 // The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
@@ -101,7 +102,6 @@ pub use hrtree::HRTree;
 pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
-pub use reconcilable::{Projectable, ValueOnly};
 pub use reconcile_store::ReconcileStore;
 
 /// Internal seam for the external integration-test oracles (`tests/diff.rs`,

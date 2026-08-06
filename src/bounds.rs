@@ -13,9 +13,11 @@
 //! once, with blanket impls, so implementation sites can read `impl<K: Key, V: Value>` instead of
 //! spelling the full list out each time.
 //!
-//! These bundles cover only the data bounds; *entry-semantics* bounds (such as
-//! [`Projectable`](crate::reconcilable::Projectable)) are not bundled here and travel as extra
-//! bounds alongside `V: Value` where required.
+//! These bundles cover only the data bounds. Entry semantics (tombstone/live state, last-write-wins
+//! merge, the timestamp-less projection) travel with [`Entry`](crate::entry::Entry) /
+//! [`State`](crate::entry::State), not with the `V` bound: `V` is always the plain value type, and
+//! the reconciliation machinery wraps it in `Entry<Timestamp, V>` (or projects it to `State<V>`)
+//! internally.
 
 use std::fmt::Debug;
 use std::hash::Hash;

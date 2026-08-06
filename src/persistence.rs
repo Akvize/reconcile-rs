@@ -24,8 +24,10 @@
 //!
 //! # What is persisted
 //!
-//! - **All map entries**, live values *and* tombstones (the map stores `(timestamp, Option<V>)`,
-//!   and tombstones are `(timestamp, None)` retained until causal-stability-gated GC).
+//! - **All map entries**, live values *and* tombstones (the map stores
+//!   [`Entry<Timestamp, V>`](crate::entry::Entry), and a tombstone is an entry whose
+//!   [`state`](crate::entry::Entry::state) is [`State::Tombstone`](crate::entry::State::Tombstone),
+//!   retained until causal-stability-gated GC).
 //! - The **causal-stability state**: the membership set and the per-tombstone
 //!   acknowledgments, so a restarted node still holds back GC until every replica has seen a
 //!   deletion.
@@ -45,16 +47,18 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::clock::Timestamp;
+use crate::entry::Entry;
 
-/// The store's keyed entries in their internal dated, tombstone-aware form: each key maps to a
-/// `(timestamp, Option<V>)`, where a `None` payload is a tombstone.
-pub type DatedEntries<K, V> = Vec<(K, (Timestamp, Option<V>))>;
+/// The store's keyed entries in their internal dated, tombstone-aware form: each key maps to an
+/// [`Entry<Timestamp, V>`], whose [`State::Tombstone`](crate::entry::State::Tombstone) marks a
+/// deletion.
+pub type DatedEntries<K, V> = Vec<(K, Entry<Timestamp, V>)>;
 
 /// A snapshot of everything a [`ReconcileStore`](crate::ReconcileStore) needs to durably survive a
 /// restart without behaving like a fresh replica.
 ///
 /// `V` is the user value type; entries store the internal dated, tombstone-aware representation
-/// `(Timestamp, Option<V>)`.
+/// `Entry<Timestamp, V>`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(bound(
     serialize = "K: Serialize, V: Serialize",
@@ -194,8 +198,11 @@ mod tests {
 
         PersistedState {
             entries: vec![
-                (1, (Timestamp::new(1_000, 0, 7), Some("alive".to_string()))),
-                (2, (Timestamp::new(2_000, 1, 7), None)), // tombstone
+                (
+                    1,
+                    Entry::present(Timestamp::new(1_000, 0, 7), "alive".to_string()),
+                ),
+                (2, Entry::tombstone(Timestamp::new(2_000, 1, 7))), // tombstone
             ],
             members,
             tombstone_acks: acks,
@@ -231,15 +238,21 @@ mod tests {
         let backend = InMemoryPersistence::<i32, String>::new();
 
         let mut first = sample_state();
-        first.entries = vec![(1, (Timestamp::new(1, 0, 0), Some("first".to_string())))];
+        first.entries = vec![(
+            1,
+            Entry::present(Timestamp::new(1, 0, 0), "first".to_string()),
+        )];
         backend.save(&first).unwrap();
 
         let mut second = sample_state();
-        second.entries = vec![(1, (Timestamp::new(2, 0, 0), Some("second".to_string())))];
+        second.entries = vec![(
+            1,
+            Entry::present(Timestamp::new(2, 0, 0), "second".to_string()),
+        )];
         backend.save(&second).unwrap();
 
         let loaded = backend.load().unwrap().unwrap();
-        assert_eq!(loaded.entries[0].1 .1, Some("second".to_string()));
+        assert_eq!(loaded.entries[0].1.value(), Some(&"second".to_string()));
     }
 
     #[test]
@@ -267,16 +280,22 @@ mod tests {
         let backend = FileSnapshot::new(dir.path().join("snapshot.bin"));
 
         let mut first = sample_state();
-        first.entries = vec![(1, (Timestamp::new(1, 0, 0), Some("first".to_string())))];
+        first.entries = vec![(
+            1,
+            Entry::present(Timestamp::new(1, 0, 0), "first".to_string()),
+        )];
         Persistence::<i32, String>::save(&backend, &first).unwrap();
 
         let mut second = sample_state();
-        second.entries = vec![(1, (Timestamp::new(2, 0, 0), Some("second".to_string())))];
+        second.entries = vec![(
+            1,
+            Entry::present(Timestamp::new(2, 0, 0), "second".to_string()),
+        )];
         Persistence::<i32, String>::save(&backend, &second).unwrap();
 
         // No leftover temporary file, and the latest snapshot wins.
         assert!(!dir.path().join("snapshot.bin.tmp").exists());
         let loaded = Persistence::<i32, String>::load(&backend).unwrap().unwrap();
-        assert_eq!(loaded.entries[0].1 .1, Some("second".to_string()));
+        assert_eq!(loaded.entries[0].1.value(), Some(&"second".to_string()));
     }
 }
