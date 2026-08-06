@@ -1942,12 +1942,13 @@ mod tombstone_ack_bounds {
     use super::Message;
     use crate::auth;
     use crate::clock::Timestamp;
+    use crate::entry::{Entry, State};
     use crate::reconcile_engine::{version_hash, ReconcileEngine};
     use crate::reconcile_store::Config;
 
-    type Tombstoned = (Timestamp, Option<i32>);
+    type Tombstoned = Entry<Timestamp, i32>;
 
-    async fn engine(addr: &str) -> ReconcileEngine<i32, Tombstoned> {
+    async fn engine(addr: &str) -> ReconcileEngine<i32, i32> {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
             .with_port(0)
@@ -1956,8 +1957,7 @@ mod tombstone_ack_bounds {
     }
 
     fn ack_bytes(key: i32, version: u64) -> Vec<u8> {
-        let msg =
-            Message::Ack::<i32, Tombstoned, crate::reconcilable::ValueOnly<i32>>((key, version));
+        let msg = Message::Ack::<i32, Tombstoned, State<i32>>((key, version));
         let mut buf = Vec::new();
         msg.serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
             .unwrap();
@@ -1995,8 +1995,8 @@ mod tombstone_ack_bounds {
     async fn ack_for_live_key_does_not_grow_tombstone_acks() {
         let eng = engine("127.0.0.95").await;
         let key = 10;
-        // Insert a live value (Some(_) = not a tombstone).
-        eng.just_insert(key, (Timestamp::new(1, 0, 0), Some(42)));
+        // Insert a live value (not a tombstone).
+        eng.just_insert(key, Entry::present(Timestamp::new(1, 0, 0), 42));
 
         let peer: SocketAddr = "127.0.0.96:9000".parse().unwrap();
         let bytes = ack_bytes(key, 123);
@@ -2022,7 +2022,7 @@ mod tombstone_ack_bounds {
     async fn ack_for_local_tombstone_is_recorded() {
         let eng = engine("127.0.0.97").await;
         let key = 20;
-        let tombstone: Tombstoned = (Timestamp::new(2, 0, 0), None);
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
         let version = version_hash(&tombstone);
         eng.just_insert(key, tombstone);
 
@@ -2080,16 +2080,13 @@ mod dump_budget {
     /// After the first slot is dropped its count returns to zero and a fresh claim succeeds.
     #[tokio::test]
     async fn budget_guard_limits_and_releases_slots() {
-        use crate::clock::Timestamp;
         use crate::reconcile_engine::ReconcileEngine;
-
-        type Tombstoned = (Timestamp, Option<i32>);
 
         let config = Config::default()
             .with_port(0)
             .with_listen_addr("127.0.0.99".parse().unwrap())
             .with_max_concurrent_bulk_dumps(1);
-        let eng = ReconcileEngine::<i32, Tombstoned>::new(config)
+        let eng = ReconcileEngine::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
