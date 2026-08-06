@@ -362,16 +362,25 @@ impl SenderCounter {
 /// opportunistically once `now - stamp_at_max > window`: at that point any replayable datagram
 /// (stamp ≤ `stamp_at_max`) would fail the freshness check, so no replay can pass and the entry is
 /// safe to drop, reclaiming memory automatically.
+///
+/// `enabled` mirrors the owning [`crate::auth::Authenticator`]'s mode, fixed for the filter's
+/// whole lifetime (the authenticator's mode never changes after startup). Baking it in here — a
+/// one-time decision at construction — means [`check_and_record`](Self::check_and_record) itself
+/// never has to ask another object whether replay-checking even applies; a disabled filter simply
+/// accepts everything ("parse, don't validate": the filter owns the answer to "is this datagram
+/// fresh", including the degenerate case where the question doesn't apply).
 pub(crate) struct ReplayFilter {
     peers: Mutex<HashMap<IpAddr, PeerState>>,
     freshness_window: Duration,
+    enabled: bool,
 }
 
 impl ReplayFilter {
-    pub(crate) fn new(freshness_window: Duration) -> Self {
+    pub(crate) fn new(freshness_window: Duration, enabled: bool) -> Self {
         ReplayFilter {
             peers: Mutex::new(HashMap::new()),
             freshness_window,
+            enabled,
         }
     }
 
@@ -380,7 +389,13 @@ impl ReplayFilter {
     /// Returns `true` when the datagram is fresh and unique — the caller may proceed to process it.
     /// Returns `false` when the datagram is a replay (duplicate, too old within the window, or
     /// outside the freshness window) — the caller should drop it silently.
+    ///
+    /// Always `true` when the filter is disabled (unauthenticated mode carries no replay header
+    /// to check) — the caller does not need to ask separately.
     pub(crate) fn check_and_record(&self, sender: IpAddr, seq: Seq, stamp: Stamp) -> bool {
+        if !self.enabled {
+            return true;
+        }
         self.check_and_record_at(sender, seq, stamp, Stamp::now())
     }
 
@@ -558,7 +573,7 @@ mod tests {
     // ── ReplayFilter freshness check ──────────────────────────────────────────
 
     fn filter_5min() -> ReplayFilter {
-        ReplayFilter::new(FRESHNESS_WINDOW_DEFAULT)
+        ReplayFilter::new(FRESHNESS_WINDOW_DEFAULT, true)
     }
 
     /// Helper: call check_and_record_at with a caller-supplied `now`.
@@ -572,6 +587,18 @@ mod tests {
         let peer: IpAddr = "127.0.0.1".parse().unwrap();
         let now = phys_now_ms();
         assert!(filter.check_and_record(peer, Seq::new(1), Stamp::new(now)));
+    }
+
+    /// A disabled filter (unauthenticated mode) accepts everything unconditionally, including a
+    /// stamp that would fail the freshness window on an enabled filter — it never even reaches
+    /// that check.
+    #[test]
+    fn disabled_filter_always_accepts() {
+        let filter = ReplayFilter::new(FRESHNESS_WINDOW_DEFAULT, false);
+        let peer: IpAddr = "127.0.0.9".parse().unwrap();
+        assert!(filter.check_and_record(peer, Seq::NONE, Stamp::NONE));
+        // A stamp that would fail freshness on an enabled filter must still be accepted.
+        assert!(filter.check_and_record(peer, Seq::new(1), Stamp::new(0)));
     }
 
     #[test]

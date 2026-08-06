@@ -316,6 +316,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Size the kernel send/receive buffers before any traffic flows.
         set_socket_buffers(&socket, &config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
+        let authenticator_enabled = authenticator.is_enabled();
         if authenticator.is_encrypted() {
             debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
         } else if authenticator.is_enabled() {
@@ -366,7 +367,10 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
                 authenticator,
                 sender_counter: Arc::new(replay::SenderCounter::new()),
-                replay_filter: Arc::new(replay::ReplayFilter::new(config.freshness_window)),
+                replay_filter: Arc::new(replay::ReplayFilter::new(
+                    config.freshness_window,
+                    authenticator_enabled,
+                )),
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
                 clock,
@@ -668,14 +672,12 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                                 // a `Payload<Verified>`, which is the only state
                                 // `handle_messages` accepts — the compiler, not call-site
                                 // discipline, enforces that replay-checking happens before message
-                                // processing (see `auth` module docs). In unauthenticated mode the
-                                // check is a no-op (`is_enabled()` is false).
+                                // processing (see `auth` module docs). In unauthenticated mode
+                                // `replay_filter` was built disabled, so the check is a no-op.
                                 let (seq, stamp) = (payload.seq, payload.stamp);
-                                let Some(payload) = payload.verify_replay(
-                                    &self.authenticator,
-                                    &self.replay_filter,
-                                    peer.ip(),
-                                ) else {
+                                let Some(payload) =
+                                    payload.verify_replay(&self.replay_filter, peer.ip())
+                                else {
                                     trace!(
                                         "dropped replayed or stale datagram from {peer}: \
                                          seq={seq} stamp={stamp}"
@@ -1392,7 +1394,7 @@ mod deadlock_regressions {
                     .expect("unauthenticated mode clears any datagram");
                 let peer: SocketAddr = "127.0.0.51:8083".parse().unwrap();
                 let payload = payload
-                    .verify_replay(&engine.authenticator, &engine.replay_filter, peer.ip())
+                    .verify_replay(&engine.replay_filter, peer.ip())
                     .expect("unauthenticated mode is exempt from the replay check");
                 let mut send_buf = Vec::new();
                 engine.handle_messages(payload, peer, &mut send_buf).await;

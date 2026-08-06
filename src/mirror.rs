@@ -149,7 +149,8 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
         debug!("ReconcileMirror listening on: {}", socket.local_addr()?);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
-        if !authenticator.is_enabled() {
+        let authenticator_enabled = authenticator.is_enabled();
+        if !authenticator_enabled {
             warn!(
                 "SECURITY: no cluster key set — the lightweight mirror accepts UNAUTHENTICATED \
                  datagrams. Set Config::with_cluster_key to match the dated cluster."
@@ -170,7 +171,10 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
             sender_counter: Arc::new(replay::SenderCounter::new()),
-            replay_filter: Arc::new(replay::ReplayFilter::new(config.freshness_window)),
+            replay_filter: Arc::new(replay::ReplayFilter::new(
+                config.freshness_window,
+                authenticator_enabled,
+            )),
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         })
     }
@@ -383,11 +387,9 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
                                 let (seq, stamp) = (payload.seq, payload.stamp);
-                                let Some(payload) = payload.verify_replay(
-                                    &self.authenticator,
-                                    &self.replay_filter,
-                                    peer.ip(),
-                                ) else {
+                                let Some(payload) =
+                                    payload.verify_replay(&self.replay_filter, peer.ip())
+                                else {
                                     trace!(
                                         "mirror dropped replayed datagram from {peer}: \
                                          seq={seq} stamp={stamp}"

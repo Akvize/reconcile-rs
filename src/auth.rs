@@ -148,24 +148,23 @@ pub(crate) struct Payload<'a, State = Authenticated> {
 }
 
 impl<'a> Payload<'a, Authenticated> {
-    /// The sole path from [`Authenticated`] to [`Verified`]: run the replay check (or skip it, in
-    /// unauthenticated mode) and, on success, return a payload message handling can consume.
+    /// The sole path from [`Authenticated`] to [`Verified`]: run the replay check and, on
+    /// success, return a payload message handling can consume.
     ///
-    /// Takes `&Authenticator` rather than a plain `bool` so the caller never has to remember the
-    /// `is_enabled()` branch itself — get it wrong here (e.g. skip the check while authenticated)
-    /// and a replayed datagram could re-poison membership; get it wrong the other way (check while
-    /// disabled) and every unauthenticated datagram would be dropped, since unauthenticated
-    /// `seq`/`stamp` are always [`Seq::NONE`]/[`Stamp::NONE`] and would never pass freshness.
+    /// No longer takes `&Authenticator`: whether replay-checking even applies is
+    /// [`ReplayFilter`]'s own concern, fixed once at construction from the authenticator's mode
+    /// (see its doc comment) rather than re-derived from `is_enabled()` on every datagram. A
+    /// disabled filter accepts unconditionally, so this always behaves correctly regardless of
+    /// mode — there is no `bool` left for a caller to get backwards.
     ///
     /// Returns `None` when the datagram is a replay, a duplicate, or outside the freshness window;
     /// the caller drops it silently, same as an authentication failure.
     pub(crate) fn verify_replay(
         self,
-        auth: &Authenticator,
         filter: &ReplayFilter,
         sender: IpAddr,
     ) -> Option<Payload<'a, Verified>> {
-        if auth.is_enabled() && !filter.check_and_record(sender, self.seq, self.stamp) {
+        if !filter.check_and_record(sender, self.seq, self.stamp) {
             return None;
         }
         Some(Payload {
@@ -484,14 +483,11 @@ mod tests {
     /// semantics (covered separately in `replay::tests`), so any fresh datagram must pass. The
     /// window must be huge, not just generous: these tests seal fixed, near-epoch stamps (e.g.
     /// `12345`), not real "now" values, so it must cover the gap to actual wall-clock time.
-    fn verify<'a>(
-        auth: &Authenticator,
-        payload: Payload<'a, Authenticated>,
-    ) -> Payload<'a, Verified> {
-        let filter = ReplayFilter::new(Duration::from_secs(200 * 365 * 24 * 3600));
+    fn verify(payload: Payload<'_, Authenticated>) -> Payload<'_, Verified> {
+        let filter = ReplayFilter::new(Duration::from_secs(200 * 365 * 24 * 3600), true);
         let sender: IpAddr = "127.0.0.1".parse().unwrap();
         payload
-            .verify_replay(auth, &filter, sender)
+            .verify_replay(&filter, sender)
             .expect("a freshly-sealed datagram must clear the replay check")
     }
 
@@ -534,7 +530,7 @@ mod tests {
             .expect("enabled");
         // MAC overhead + replay header + payload
         assert_eq!(sealed.len(), TAG_LEN + REPLAY_HEADER_LEN + payload.len());
-        let p = verify(&auth, auth.open(&sealed).expect("should open"));
+        let p = verify(auth.open(&sealed).expect("should open"));
         assert_eq!(p.as_bytes(), payload);
         assert_eq!(p.seq, Seq::new(1));
         assert_eq!(p.stamp, Stamp::new(12345));
@@ -568,7 +564,6 @@ mod tests {
         assert!(auth.seal(Seq::new(0), Stamp::new(0), b"payload").is_none());
         // Any datagram clears the gate unchanged in unauthenticated mode; seq/stamp are 0.
         let p = verify(
-            &auth,
             auth.open(b"raw bytes")
                 .expect("unauthenticated always clears"),
         );
@@ -586,7 +581,7 @@ mod tests {
         let sealed = auth
             .seal(Seq::new(42), Stamp::new(9999), payload)
             .expect("enabled");
-        let p = verify(&auth, auth.open(&sealed).expect("valid tag"));
+        let p = verify(auth.open(&sealed).expect("valid tag"));
         assert_eq!(p.seq, Seq::new(42));
         assert_eq!(p.stamp, Stamp::new(9999));
         assert_eq!(p.as_bytes(), payload);
@@ -619,7 +614,7 @@ mod tests {
                 sealed.len(),
                 super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + payload.len() + super::AEAD_TAG_LEN
             );
-            let p = verify(&auth, auth.open(&sealed).expect("should decrypt"));
+            let p = verify(auth.open(&sealed).expect("should decrypt"));
             assert_eq!(p.as_bytes(), payload);
             assert_eq!(p.seq, Seq::new(1));
             assert_eq!(p.stamp, Stamp::new(555));
@@ -687,7 +682,7 @@ mod tests {
             let sealed = auth
                 .seal(Seq::new(77), Stamp::new(888888), b"data")
                 .expect("encrypted");
-            let p = verify(&auth, auth.open(&sealed).expect("should decrypt"));
+            let p = verify(auth.open(&sealed).expect("should decrypt"));
             assert_eq!(p.seq, Seq::new(77));
             assert_eq!(p.stamp, Stamp::new(888888));
             assert_eq!(p.as_bytes(), b"data");
