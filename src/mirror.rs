@@ -72,6 +72,7 @@ use crate::proto;
 use crate::reconcilable::ValueOnly;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message};
 use crate::reconcile_store::Config;
+use crate::replay;
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
@@ -103,6 +104,8 @@ pub struct ReconcileMirror<K, V> {
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
     authenticator: auth::Authenticator,
+    sender_counter: Arc<replay::SenderCounter>,
+    replay_filter: Arc<replay::ReplayFilter>,
     /// Invoked just before each inbound value is integrated, so callers can be notified of changes.
     on_update: Arc<RwLock<OnUpdateCallback<K, V>>>,
 }
@@ -117,6 +120,8 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
             rng: self.rng.clone(),
             peers: self.peers.clone(),
             authenticator: self.authenticator.clone(),
+            sender_counter: self.sender_counter.clone(),
+            replay_filter: self.replay_filter.clone(),
             on_update: self.on_update.clone(),
         }
     }
@@ -144,7 +149,8 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
         debug!("ReconcileMirror listening on: {}", socket.local_addr()?);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
-        if !authenticator.is_enabled() {
+        let authenticator_enabled = authenticator.is_enabled();
+        if !authenticator_enabled {
             warn!(
                 "SECURITY: no cluster key set — the lightweight mirror accepts UNAUTHENTICATED \
                  datagrams. Set Config::with_cluster_key to match the dated cluster."
@@ -164,6 +170,11 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
             authenticator,
+            sender_counter: Arc::new(replay::SenderCounter::new()),
+            replay_filter: Arc::new(replay::ReplayFilter::new(
+                config.freshness_window,
+                authenticator_enabled,
+            )),
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
         })
     }
@@ -265,6 +276,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
             if let Err(err) = send_to_retry(
                 &self.socket,
                 &self.authenticator,
+                &self.sender_counter,
                 send_buf,
                 (peer, self.port),
             )
@@ -279,7 +291,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
 
     async fn handle_messages(
         &self,
-        payload: auth::Payload<'_>,
+        payload: auth::Payload<'_, auth::Verified>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) {
@@ -340,6 +352,7 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     &messages,
                     Arc::clone(&self.socket),
                     &self.authenticator,
+                    &self.sender_counter,
                     &peer,
                     send_buf,
                 )
@@ -373,6 +386,16 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
+                                let (seq, stamp) = (payload.seq, payload.stamp);
+                                let Some(payload) =
+                                    payload.verify_replay(&self.replay_filter, peer.ip())
+                                else {
+                                    trace!(
+                                        "mirror dropped replayed datagram from {peer}: \
+                                         seq={seq} stamp={stamp}"
+                                    );
+                                    continue;
+                                };
                                 self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Record the sender so we keep gossiping value-only diffs to it.
                                 self.peers.write().insert(peer.ip(), Instant::now());

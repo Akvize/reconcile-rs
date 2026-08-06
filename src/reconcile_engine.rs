@@ -42,6 +42,7 @@ use crate::observability;
 use crate::proto::{self, HashSegment};
 use crate::reconcilable::{MaybeTombstone, Projectable, Reconcilable};
 use crate::reconcile_store::{Config, MAX_NETS};
+use crate::replay;
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
@@ -195,6 +196,14 @@ pub(crate) struct Inner<K, V: Projectable> {
     pub(crate) pre_insert: Arc<RwLock<PreInsertCallback<K, V>>>,
     /// Per-datagram authentication policy; carries the cluster key when enabled.
     authenticator: auth::Authenticator,
+    /// Sender-side replay counter: a monotonically increasing sequence number stamped onto every
+    /// outgoing datagram in authenticated modes. Shared across all clones so that parallel send
+    /// paths draw from a single strictly-increasing sequence.
+    sender_counter: Arc<replay::SenderCounter>,
+    /// Receiver-side per-peer replay filter. Enforces the sequence-number window and freshness
+    /// window for all inbound datagrams in authenticated modes. Shared across clones (the same
+    /// receive loop instance holds the only clone that calls `check_and_record`).
+    replay_filter: Arc<replay::ReplayFilter>,
     /// Monotonic set of every peer this node has ever exchanged messages with.
     ///
     /// Unlike [`peers`](Self::peers), entries are never expired automatically: a tombstone
@@ -307,6 +316,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         // Size the kernel send/receive buffers before any traffic flows.
         set_socket_buffers(&socket, &config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
+        let authenticator_enabled = authenticator.is_enabled();
         if authenticator.is_encrypted() {
             debug!("per-datagram authenticated encryption (XChaCha20-Poly1305) ENABLED");
         } else if authenticator.is_enabled() {
@@ -356,6 +366,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 peers: Arc::new(RwLock::new(HashMap::new())),
                 pre_insert: Arc::new(RwLock::new(Box::new(|_, _| {}))),
                 authenticator,
+                sender_counter: Arc::new(replay::SenderCounter::new()),
+                replay_filter: Arc::new(replay::ReplayFilter::new(
+                    config.freshness_window,
+                    authenticator_enabled,
+                )),
                 members: Arc::new(RwLock::new(HashSet::new())),
                 tombstone_acks: Arc::new(RwLock::new(HashMap::new())),
                 clock,
@@ -503,6 +518,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         let port = self.port;
         let socket = Arc::clone(&self.socket);
         let authenticator = self.authenticator.clone();
+        let sender_counter = Arc::clone(&self.sender_counter);
         tokio::spawn(async move {
             let mut send_buf = Vec::new();
             for addr in peers {
@@ -511,6 +527,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &messages,
                     Arc::clone(&socket),
                     &authenticator,
+                    &sender_counter,
                     &peer,
                     &mut send_buf,
                 )
@@ -550,6 +567,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         };
         let socket = Arc::clone(&self.socket);
         let authenticator = self.authenticator.clone();
+        let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
         tokio::spawn(async move {
             let _guard = guard;
@@ -558,6 +576,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                 &messages,
                 socket,
                 &authenticator,
+                &sender_counter,
                 &peer,
                 &mut send_buf,
                 rate,
@@ -649,6 +668,23 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
+                                // `Payload<Authenticated>::verify_replay` is the only way to reach
+                                // a `Payload<Verified>`, which is the only state
+                                // `handle_messages` accepts — the compiler, not call-site
+                                // discipline, enforces that replay-checking happens before message
+                                // processing (see `auth` module docs). In unauthenticated mode
+                                // `replay_filter` was built disabled, so the check is a no-op.
+                                let (seq, stamp) = (payload.seq, payload.stamp);
+                                let Some(payload) =
+                                    payload.verify_replay(&self.replay_filter, peer.ip())
+                                else {
+                                    trace!(
+                                        "dropped replayed or stale datagram from {peer}: \
+                                         seq={seq} stamp={stamp}"
+                                    );
+                                    observability::record_datagram_dropped("replay");
+                                    continue;
+                                };
                                 let spoke_dated =
                                     self.handle_messages(payload, peer, &mut send_buf).await;
                                 // Only record senders whose datagram was accepted. With
@@ -756,6 +792,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
             if let Err(err) = send_to_retry(
                 &self.socket,
                 &self.authenticator,
+                &self.sender_counter,
                 send_buf,
                 (peer, self.port),
             )
@@ -767,10 +804,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
         observability::record_round_duration(timer);
     }
 
-    /// Handle the messages contained in an already-authenticated [`Payload`].
+    /// Handle the messages contained in an already-authenticated, replay-checked [`Payload`].
     ///
-    /// Taking a [`auth::Payload`] rather than raw bytes makes it structurally impossible to
-    /// process a datagram that has not cleared the authentication gate.
+    /// Taking a [`auth::Payload<auth::Verified>`](auth::Payload) rather than raw bytes makes it
+    /// structurally impossible to process a datagram that has not cleared both the authentication
+    /// gate and the anti-replay filter.
     ///
     /// Returns `true` if the datagram contained at least one **dated** protocol message
     /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
@@ -779,7 +817,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
         &self,
-        payload: auth::Payload<'_>,
+        payload: auth::Payload<'_, auth::Verified>,
         peer: SocketAddr,
         send_buf: &mut Vec<u8>,
     ) -> bool {
@@ -849,6 +887,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &reciprocal_acks,
                     Arc::clone(&self.socket),
                     &self.authenticator,
+                    &self.sender_counter,
                     &peer,
                     send_buf,
                 )
@@ -876,6 +915,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &messages,
                     Arc::clone(&self.socket),
                     &self.authenticator,
+                    &self.sender_counter,
                     &peer,
                     send_buf,
                 )
@@ -967,6 +1007,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &acks_to_send,
                     Arc::clone(&self.socket),
                     &self.authenticator,
+                    &self.sender_counter,
                     &peer,
                     send_buf,
                 )
@@ -1000,6 +1041,7 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
                     &messages,
                     Arc::clone(&self.socket),
                     &self.authenticator,
+                    &self.sender_counter,
                     &peer,
                     send_buf,
                 )
@@ -1055,6 +1097,11 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
     /// Permanently remove a peer from the membership set so that tombstones are no longer held
     /// back waiting for its acknowledgment. Use when a replica is decommissioned or will never
     /// return. Also clears any acknowledgments it had recorded.
+    ///
+    /// Per-peer replay state is intentionally **not** evicted: a replay attacker who captured a
+    /// datagram from this peer while it was active and replays it within the freshness window
+    /// would otherwise bypass the bitmap duplicate check (the entry was removed) and re-add the
+    /// peer to membership. Keeping the replay state lets the bitmap reject the captured datagram.
     pub(crate) fn decommission_peer(&self, peer: IpAddr) {
         self.members.write().remove(&peer);
         for key_acks in self.tombstone_acks.write().values_mut() {
@@ -1089,12 +1136,16 @@ impl<K: Key, V: Value + MaybeTombstone + Projectable + Reconcilable + Timestampe
 pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
     socket: &UdpSocket,
     authenticator: &auth::Authenticator,
+    sender_counter: &replay::SenderCounter,
     buf: &[u8],
     target: A,
 ) -> std::io::Result<usize> {
-    // Frame the datagram once and reuse it across retries. When authentication is disabled,
-    // `seal` returns `None` and the wire bytes are identical to the unauthenticated behavior.
-    let framed = authenticator.seal(buf);
+    // Allocate a sequence number and stamp, then frame the datagram once and reuse it across
+    // retries. When authentication is disabled, `seal` returns `None` and the wire bytes are
+    // identical to the unauthenticated behavior.
+    let seq = sender_counter.next_seq();
+    let stamp = sender_counter.next_stamp();
+    let framed = authenticator.seal(seq, stamp, buf);
     let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
@@ -1123,10 +1174,20 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
     messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,
     authenticator: &auth::Authenticator,
+    sender_counter: &replay::SenderCounter,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
 ) {
-    send_messages_paced(messages, socket, authenticator, peer, send_buf, None).await
+    send_messages_paced(
+        messages,
+        socket,
+        authenticator,
+        sender_counter,
+        peer,
+        send_buf,
+        None,
+    )
+    .await
 }
 
 /// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
@@ -1142,6 +1203,7 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
     messages: &[Message<K, V, P>],
     socket: Arc<UdpSocket>,
     authenticator: &auth::Authenticator,
+    sender_counter: &replay::SenderCounter,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
     rate: Option<usize>,
@@ -1160,8 +1222,14 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
-            if let Err(err) =
-                send_to_retry(&socket, authenticator, &send_buf[..last_size], peer).await
+            if let Err(err) = send_to_retry(
+                &socket,
+                authenticator,
+                sender_counter,
+                &send_buf[..last_size],
+                peer,
+            )
+            .await
             {
                 warn!("failed to send datagram to {peer}: {err}; continuing");
             } else {
@@ -1173,7 +1241,7 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    if let Err(err) = send_to_retry(&socket, authenticator, send_buf, peer).await {
+    if let Err(err) = send_to_retry(&socket, authenticator, sender_counter, send_buf, peer).await {
         warn!("failed to send final datagram to {peer}: {err}; continuing");
     } else {
         trace!("sent last {} bytes to {peer}", send_buf.len());
@@ -1325,6 +1393,9 @@ mod deadlock_regressions {
                     .open(&bytes)
                     .expect("unauthenticated mode clears any datagram");
                 let peer: SocketAddr = "127.0.0.51:8083".parse().unwrap();
+                let payload = payload
+                    .verify_replay(&engine.replay_filter, peer.ip())
+                    .expect("unauthenticated mode is exempt from the replay check");
                 let mut send_buf = Vec::new();
                 engine.handle_messages(payload, peer, &mut send_buf).await;
 
@@ -1357,6 +1428,7 @@ mod auth_attack {
     use std::time::Duration;
 
     use bincode::{DefaultOptions, Serializer};
+    use chrono::Utc;
     use serde::Serialize;
     use tokio::net::UdpSocket;
 
@@ -1405,7 +1477,11 @@ mod auth_attack {
         attacker.send_to(&forged, &target).await.unwrap();
         // (b) forged update sealed with the WRONG key
         let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false)
-            .seal(&forged)
+            .seal(
+                crate::replay::Seq::new(1),
+                crate::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
+                &forged,
+            )
             .expect("enabled");
         attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
 
@@ -1560,10 +1636,20 @@ mod pacing {
     async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let authenticator = Authenticator::new(None, false);
+        let sender_counter = crate::replay::SenderCounter::new();
         let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
         let mut send_buf = Vec::new();
         let start = Instant::now();
-        send_messages_paced(messages, socket, &authenticator, &peer, &mut send_buf, rate).await;
+        send_messages_paced(
+            messages,
+            socket,
+            &authenticator,
+            &sender_counter,
+            &peer,
+            &mut send_buf,
+            rate,
+        )
+        .await;
         start.elapsed()
     }
 

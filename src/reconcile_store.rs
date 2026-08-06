@@ -478,6 +478,16 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         self.engine.decommission_peer(peer);
     }
 
+    /// Return the current membership set.
+    ///
+    /// Exposed for integration-test assertions under the `internal-testing` feature gate. Members
+    /// are peers that have sent at least one dated, authenticated datagram and gate tombstone
+    /// garbage collection via causal stability.
+    #[cfg(any(test, feature = "internal-testing"))]
+    pub fn members_snapshot(&self) -> std::collections::HashSet<std::net::IpAddr> {
+        self.engine.members_snapshot()
+    }
+
     /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
     /// recreating the node**. The local network is re-derived automatically (whichever new net
     /// contains the listen address). See [`Config::nets`].
@@ -799,7 +809,16 @@ pub struct Config {
     /// Set to `None` to leave the inherited OS default untouched. See
     /// [`with_send_buffer_size`](Config::with_send_buffer_size).
     pub send_buffer_size: Option<usize>,
-    // may include other options in the future: tombstone_ttl, metrics, etc.
+    /// Maximum age (past or future) of a datagram's sender wall-clock stamp before it is silently
+    /// dropped as a replay. Authenticated modes only; ignored unkeyed. Default 5 minutes — see
+    /// [`with_freshness_window`](Config::with_freshness_window).
+    ///
+    /// Must tolerate normal clock skew and network jitter between peers, or legitimate traffic is
+    /// silently dropped: [`Duration::ZERO`] accepts only a stamp bit-for-bit equal to the
+    /// receiver's local clock, which real network latency alone makes unlikely to ever pass. This
+    /// is a self-inflicted footgun, not a security hole — no validation rejects it — because it
+    /// only ever makes the filter *stricter*, never unsafe.
+    pub freshness_window: Duration,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -816,6 +835,7 @@ impl Default for Config {
             bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
+            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
         }
     }
 }
@@ -937,6 +957,15 @@ impl Config {
         self
     }
 
+    /// Set [`freshness_window`](Config::freshness_window): the max stamp deviation tolerated in
+    /// authenticated modes before a datagram is dropped as a replay. No effect unkeyed. See the
+    /// field doc for why an unrealistically small window is a footgun, not something this setter
+    /// rejects.
+    pub fn with_freshness_window(mut self, window: Duration) -> Self {
+        self.freshness_window = window;
+        self
+    }
+
     /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
     /// authentication-only to authenticated **encryption**.
     ///
@@ -988,6 +1017,7 @@ mod reconcile_store_tests {
             bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
+            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
         }
     }
 
