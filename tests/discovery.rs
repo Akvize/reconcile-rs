@@ -83,7 +83,11 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
         .with_tombstone_timeout(Duration::from_millis(50))
         .with_discovery(Arc::new(discovery.clone()))
         .with_discovery_interval(Duration::from_millis(20))
-        .with_discovery_miss_threshold(3);
+        .with_discovery_miss_threshold(3)
+        // store2's tombstone ack is pending (it was partitioned before it could send one), so
+        // decommissioning takes the wall-time-floor path, not the miss-threshold fast path; keep
+        // the floor short so the test still runs quickly.
+        .with_discovery_decommission_floor(Duration::from_millis(50));
     let store2 = ReconcileStore::<i32, i32>::new(cfg2)
         .await
         .expect("bind failed")
@@ -112,8 +116,9 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
         "tombstone collected while the peer was still reported present (resurrection hazard)"
     );
 
-    // The peer now disappears from discovery: after the grace period it is decommissioned and the
-    // tombstone becomes causally stable, so GC proceeds.
+    // The peer now disappears from discovery: after clearing both the miss threshold and the
+    // wall-time floor (since its tombstone ack is pending) it is decommissioned, and the tombstone
+    // becomes causally stable, so GC proceeds.
     discovery.set(vec![]);
     assert_until!(store1.fingerprint(..) != hash_with_tombstone);
 

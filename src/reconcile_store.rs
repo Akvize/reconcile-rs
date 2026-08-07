@@ -43,6 +43,13 @@ const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// decommissioned (see [`ReconcileStore::with_discovery_miss_threshold`]).
 const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
+/// Default wall-time floor a member with pending unacknowledged tombstones must be continuously
+/// absent for before it is decommissioned (see
+/// [`ReconcileStore::with_discovery_decommission_floor`]). Ten minutes is far above any DNS blip or
+/// readiness-probe flap, so it only ever engages against a resolver that is wrong for a sustained
+/// period.
+const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
+
 /// Default rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
 /// peer is metered (see [`Config::bulk_send_rate`]). 32 MiB/s keeps a cold-sync fast
 /// while spacing datagrams (~2 ms apart at the 64 KiB datagram size) so the burst cannot overrun the
@@ -99,8 +106,76 @@ where
     discovery: Option<Arc<dyn Discovery>>,
     /// How often the discovery task resolves the peer set.
     discovery_interval: Duration,
-    /// Consecutive missed discovery rounds before a vanished member is decommissioned.
+    /// Consecutive missed discovery rounds before a vanished member with no pending unacknowledged
+    /// tombstones is decommissioned (the fast path).
     discovery_miss_threshold: u32,
+    /// Minimum continuous wall-time absence a member with pending unacknowledged tombstones must
+    /// additionally clear before it is decommissioned (see
+    /// [`with_discovery_decommission_floor`](Self::with_discovery_decommission_floor)).
+    discovery_decommission_floor: Duration,
+}
+
+/// Per-member discovery-absence tracking for [`ReconcileStore::discover_periodically`].
+///
+/// A member starts (implicitly, by having no entry yet) present. Missing from a discovery round
+/// moves it to [`Absent`](Self::Absent), which owns the round-miss counter and the wall-clock
+/// instant the absence began as a single atomic unit; reappearing ([`mark_seen`](Self::mark_seen))
+/// drops it straight back to [`Present`](Self::Present). Bundling `since` and `misses` into one
+/// state — rather than two parallel maps threaded through the discovery loop by hand — makes them
+/// desyncing structurally impossible: there is exactly one absence lifetime per member, and it is
+/// created and cleared atomically with the state transition.
+#[derive(Clone, Copy, Debug, Default)]
+enum MemberPresence {
+    #[default]
+    Present,
+    Absent {
+        since: Instant,
+        misses: u32,
+    },
+}
+
+impl MemberPresence {
+    /// Record that this member was present in the current discovery round.
+    fn mark_seen(&mut self) {
+        *self = MemberPresence::Present;
+    }
+
+    /// Record that this member was missing from the current discovery round, starting the absence
+    /// clock on the first miss and incrementing the counter on every subsequent one.
+    fn mark_missed(&mut self) {
+        *self = match *self {
+            MemberPresence::Present => MemberPresence::Absent {
+                since: Instant::now(),
+                misses: 1,
+            },
+            MemberPresence::Absent { since, misses } => MemberPresence::Absent {
+                since,
+                misses: misses + 1,
+            },
+        };
+    }
+
+    /// Whether this absence now warrants decommissioning.
+    ///
+    /// Below `miss_threshold` consecutive misses: never. At or above it: immediately when the
+    /// member has no pending unacknowledged tombstone (the fast path) — otherwise only once the
+    /// absence has *also* lasted at least `floor`, the wall-time floor that keeps a spoofed or
+    /// flaky resolver from letting causal-stability GC collect a tombstone the member never acked
+    /// (see `has_pending_tombstone_acks`).
+    fn eligible_for_decommission(
+        &self,
+        miss_threshold: u32,
+        floor: Duration,
+        pending_tombstone_acks: bool,
+    ) -> bool {
+        let MemberPresence::Absent { since, misses } = *self else {
+            return false;
+        };
+        if misses < miss_threshold {
+            return false;
+        }
+        !pending_tombstone_acks || since.elapsed() >= floor
+    }
 }
 
 impl<K, V> Clone for ReconcileStore<K, V>
@@ -116,6 +191,7 @@ where
             discovery: self.discovery.clone(),
             discovery_interval: self.discovery_interval,
             discovery_miss_threshold: self.discovery_miss_threshold,
+            discovery_decommission_floor: self.discovery_decommission_floor,
         }
     }
 }
@@ -136,6 +212,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
+            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -157,6 +234,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery: None,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
+            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
         svc.add_pre_insert(|_, _| {});
         Ok(svc)
@@ -323,6 +401,22 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// restarts at the cost of holding tombstones (and their GC gate) longer.
     pub fn with_discovery_miss_threshold(mut self, threshold: u32) -> Self {
         self.discovery_miss_threshold = threshold;
+        self
+    }
+
+    /// Set the wall-time floor a member **with pending unacknowledged tombstones** must be
+    /// continuously absent for before it is decommissioned (default 10 minutes).
+    ///
+    /// A member absent from DNS with no pending unacked tombstones still decommissions after
+    /// [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) rounds regardless of this
+    /// setting (the fast path is unaffected). This floor exists so that a spoofed resolver, flaky
+    /// cluster DNS, or a readiness-probe blip cannot let causal-stability tombstone GC collect a
+    /// tombstone a healthy member never acknowledged — which would let that member resurrect the
+    /// deleted value on its return. Raising it further bounds a DNS-spoofing attacker at the cost of
+    /// holding tombstones (and their GC gate) longer during a genuine, sustained outage; lowering it
+    /// trades that residual attack surface for faster GC.
+    pub fn with_discovery_decommission_floor(mut self, floor: Duration) -> Self {
+        self.discovery_decommission_floor = floor;
         self
     }
 
@@ -637,9 +731,13 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// - On a **successful** resolution, every returned address (except this node's own) is seeded
     ///   as a known peer, re-arming its expiration and feeding it to the next gossip round.
-    /// - A previously-seen **member** that is now absent has its miss count incremented; once it
-    ///   reaches [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) it is
-    ///   decommissioned, releasing the causal-stability gate it held on tombstone GC.
+    /// - A previously-seen **member** that is now absent has its [`MemberPresence`] miss count
+    ///   incremented. Once it reaches [`discovery_miss_threshold`](Self::with_discovery_miss_threshold)
+    ///   it is decommissioned — immediately if it holds no pending unacknowledged tombstone, or once
+    ///   it has *also* been continuously absent for
+    ///   [`discovery_decommission_floor`](Self::with_discovery_decommission_floor) if it does (see
+    ///   [`MemberPresence::eligible_for_decommission`]). Decommissioning releases the
+    ///   causal-stability gate the member held on tombstone GC.
     /// - A **failed** resolution (DNS blip) is skipped entirely — it never counts as a miss — so a
     ///   transient resolver hiccup cannot decommission a healthy peer.
     ///
@@ -651,17 +749,15 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             return; // no discovery source: leave peer-finding to the engine's per-net probing
         };
         let own_addr = self.engine.listen_addr();
-        // Consecutive missed rounds per member, and the set of addresses discovery has ever
-        // reported (so we only grace-decommission members we actually discovered, never peers
-        // learned by other means).
-        let mut miss_counts: HashMap<IpAddr, u32> = HashMap::new();
-        let mut seen_ever: HashSet<IpAddr> = HashSet::new();
+        // Presence state per address discovery has ever reported (so we only grace-decommission
+        // members we actually discovered, never peers learned by other means).
+        let mut presence: HashMap<IpAddr, MemberPresence> = HashMap::new();
         loop {
             tokio::time::sleep(self.discovery_interval).await;
             let resolved = match discovery.discover().await {
                 Ok(addrs) => addrs,
                 Err(err) => {
-                    // Transient failure: do not touch miss counts, do not decommission anyone.
+                    // Transient failure: do not touch presence state, do not decommission anyone.
                     debug!("discovery round failed, skipping: {err}");
                     continue;
                 }
@@ -672,22 +768,30 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
                 .collect();
             // 1) Refresh every currently-present peer.
             for addr in &current {
-                seen_ever.insert(*addr);
+                presence.entry(*addr).or_default().mark_seen();
                 self.engine.seed_peer(*addr);
-                miss_counts.remove(addr);
             }
             // 2) Grace-account members that were discovered before but are now absent.
             for member in self.engine.members_snapshot() {
-                if member == own_addr || current.contains(&member) || !seen_ever.contains(&member) {
+                if member == own_addr || current.contains(&member) {
                     continue;
                 }
-                let misses = miss_counts.entry(member).or_insert(0);
-                *misses += 1;
-                if *misses >= self.discovery_miss_threshold {
-                    info!("decommissioning vanished peer {member} after {misses} missed discovery rounds");
+                let Some(state) = presence.get_mut(&member) else {
+                    continue; // never discovered by this source: not ours to decommission
+                };
+                state.mark_missed();
+                let pending = self.engine.has_pending_tombstone_acks(member);
+                if state.eligible_for_decommission(
+                    self.discovery_miss_threshold,
+                    self.discovery_decommission_floor,
+                    pending,
+                ) {
+                    info!(
+                        "decommissioning vanished peer {member} \
+                         (pending_tombstone_acks={pending})"
+                    );
                     self.engine.decommission_peer(member);
-                    miss_counts.remove(&member);
-                    seen_ever.remove(&member);
+                    presence.remove(&member);
                 }
             }
         }
@@ -1083,7 +1187,7 @@ mod reconcile_store_tests {
     use crate::persistence::Persistence;
     use crate::reconcile_engine::version_hash;
     use crate::{
-        reconcile_store::{Config, MAX_NETS},
+        reconcile_store::{Config, MemberPresence, MAX_NETS},
         FileSnapshot, ReconcileStore,
     };
 
@@ -1398,6 +1502,131 @@ mod reconcile_store_tests {
         assert!(
             !store.engine.members.read().contains(&member),
             "member was not decommissioned once it genuinely vanished"
+        );
+
+        handle.abort();
+    }
+
+    #[test]
+    fn member_presence_starts_present_and_requires_the_miss_threshold() {
+        let mut state = MemberPresence::default();
+        assert!(!state.eligible_for_decommission(1, Duration::ZERO, false));
+        state.mark_missed();
+        assert!(state.eligible_for_decommission(1, Duration::ZERO, false));
+    }
+
+    #[test]
+    fn member_presence_reappearance_resets_the_absence_clock_and_counter() {
+        let mut state = MemberPresence::default();
+        state.mark_missed();
+        state.mark_missed();
+        state.mark_seen();
+        // A single miss after reappearing must not already clear a 2-miss threshold.
+        state.mark_missed();
+        assert!(!state.eligible_for_decommission(2, Duration::ZERO, false));
+    }
+
+    #[test]
+    fn member_presence_pending_tombstone_acks_require_the_wall_time_floor() {
+        let mut state = MemberPresence::default();
+        state.mark_missed();
+        state.mark_missed();
+        // Below miss_threshold: never eligible, regardless of pending acks or floor.
+        assert!(!state.eligible_for_decommission(3, Duration::ZERO, true));
+
+        state.mark_missed();
+        // At the threshold, pending acks, and a floor nowhere near elapsed: held back.
+        assert!(!state.eligible_for_decommission(3, Duration::from_secs(3600), true));
+        // Same absence with no pending acks: the fast path is unaffected by the floor.
+        assert!(state.eligible_for_decommission(3, Duration::from_secs(3600), false));
+        // A zero floor is cleared instantly even with pending acks.
+        assert!(state.eligible_for_decommission(3, Duration::ZERO, true));
+    }
+
+    /// A member with an unacknowledged tombstone must survive past `miss_threshold` and only be
+    /// decommissioned once its absence clears the wall-time floor — the guard this PR adds against
+    /// a spoofed/flaky resolver letting GC collect a tombstone the member never acked
+    /// (invariant 6: no resurrection).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_tombstone_acks_hold_decommission_past_the_miss_threshold() {
+        let member: IpAddr = "127.0.0.210".parse().unwrap();
+
+        let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
+        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+            .await
+            .expect("bind failed")
+            .with_discovery(Arc::new(fake.clone()))
+            .with_discovery_interval(Duration::from_millis(15))
+            .with_discovery_miss_threshold(2)
+            .with_discovery_decommission_floor(Duration::from_millis(300));
+        store.engine.members.write().insert(member);
+
+        // A local tombstone this member has never acknowledged.
+        store.just_insert(1, 11);
+        store.just_remove(&1);
+
+        let loop_store = store.clone();
+        let handle = tokio::spawn(async move { loop_store.discover_periodically().await });
+
+        // Let the member be observed present at least once, so it is registered as discovered by
+        // this source (and thus eligible for grace-decommissioning) before it vanishes.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // The member vanishes. It must clear the miss threshold quickly but stay a member — the
+        // floor has not elapsed yet.
+        fake.set(FakeResp::Present(vec![]));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(
+            store.engine.members.read().contains(&member),
+            "member with a pending tombstone ack was decommissioned before the wall-time floor \
+             elapsed"
+        );
+
+        // Once the floor elapses, decommissioning proceeds.
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        assert!(
+            !store.engine.members.read().contains(&member),
+            "member was never decommissioned even after the wall-time floor elapsed"
+        );
+
+        handle.abort();
+    }
+
+    /// Reappearing before the floor elapses resets the absence clock: a brief DNS blip followed by
+    /// recovery must never decommission the member, however close to the floor the first absence
+    /// got.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reappearance_resets_the_floor_for_a_member_with_pending_acks() {
+        let member: IpAddr = "127.0.0.211".parse().unwrap();
+
+        let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
+        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+            .await
+            .expect("bind failed")
+            .with_discovery(Arc::new(fake.clone()))
+            .with_discovery_interval(Duration::from_millis(15))
+            .with_discovery_miss_threshold(2)
+            .with_discovery_decommission_floor(Duration::from_millis(300));
+        store.engine.members.write().insert(member);
+        store.just_insert(1, 11);
+        store.just_remove(&1);
+
+        let loop_store = store.clone();
+        let handle = tokio::spawn(async move { loop_store.discover_periodically().await });
+
+        // Absent for a while (well past miss_threshold, short of the floor), then returns.
+        fake.set(FakeResp::Present(vec![]));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        fake.set(FakeResp::Present(vec![member]));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // Vanishes again; if the clock had not reset, the combined absence would already exceed
+        // the floor.
+        fake.set(FakeResp::Present(vec![]));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            store.engine.members.read().contains(&member),
+            "reappearance did not reset the wall-time floor's absence clock"
         );
 
         handle.abort();

@@ -103,8 +103,10 @@ all but one High resolved or mitigated.
   `set_remote_fanout`, `set_reconcile_interval`, `set_tombstone_timeout` (auto-derived local net;
   anti-entropy repair decoupled from net membership, so topology changes cannot cause divergence).
 - ◐ Membership / discovery: `Discovery` port with a `DnsDiscovery` adapter gives a Kubernetes-native
-  path (headless-Service DNS + grace-period decommission of vanished pods) that sidesteps the random
-  IP-scan; bounded-fan-out membership (SWIM/HyParView) still open
+  path (headless-Service DNS + grace-period decommission of vanished pods, with a wall-time floor
+  that holds decommissioning of a member with pending unacknowledged tombstones — closing the
+  DNS-driven resurrection hazard, [#201](https://github.com/Akvize/reconcile-rs/issues/201)) that
+  sidesteps the random IP-scan; bounded-fan-out membership (SWIM/HyParView) still open
   (F10 — [#147](https://github.com/Akvize/reconcile-rs/issues/147)).
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
   (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).

@@ -349,9 +349,15 @@ While `run()`ning, a background task resolves the name every `with_discovery_int
 garbage collection) is **never** granted by DNS — it is still earned through a genuine authenticated
 datagram — so an unverified or spoofable address can never block GC. When a pod is deleted it
 disappears from DNS; after `with_discovery_miss_threshold` consecutive successful rounds with the
-peer absent (default 3, i.e. ~15 s), it is **decommissioned** so its tombstones stop gating GC. A
-transient DNS failure is skipped entirely and never counts as a miss, so a resolver blip cannot
-decommission a healthy peer. This works alongside the geography-aware gossip above: declared
+peer absent (default 3, i.e. ~15 s), it is **decommissioned** so its tombstones stop gating GC — but
+only immediately if the peer holds no pending, unacknowledged tombstone. If it does, decommissioning
+additionally requires the peer to have been continuously absent for
+`with_discovery_decommission_floor` (default 10 minutes) — far above any DNS blip or readiness-probe
+flap. This closes a resurrection hazard: without the floor, a spoofed resolver or flaky cluster DNS
+could decommission a healthy peer, let GC collect a tombstone that peer never acked, and have the
+returning peer push the deleted value back. A transient DNS failure is skipped entirely and never
+counts as a miss, so a resolver blip cannot decommission a healthy peer. This works alongside the
+geography-aware gossip above: declared
 networks (if any) still steer the engine's own probing and the local/remote throttle, while DNS
 feeds exact peer IPs into the always-reconciled set.
 
