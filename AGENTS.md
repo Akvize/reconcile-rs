@@ -138,7 +138,22 @@ required-file-pairs, and structural invariants almost always are.
 
 ## 11. Publishing
 
-`cargo publish --allow-dirty --dry-run` runs in CI to catch packaging breakage (see `Cargo.toml`'s
+`cargo package -p rsos --allow-dirty` runs in CI to catch packaging breakage (see `Cargo.toml`'s
 `exclude` list — repo-only docs and `examples/k8s/` are excluded from the published crate). Actual
 publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run `cargo publish`
 outside that flow.
+
+The check covers the **leaf crates only**, not the top-level `reconcile` package: since the
+workspace split, `reconcile` depends on `rsos` by path, and cargo refuses a path dependency
+carrying no version requirement until that dependency is itself on crates.io. Whether and how to
+publish a multi-crate workspace is an open policy question (#204) — until it is settled, do
+**not** "fix" this by inventing version requirements for the internal crates or by publishing them
+ad hoc. The internal crates carry `publish = false` deliberately; `cargo package` is used rather
+than `cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
+packaged crate. Extend the CI step to each new leaf crate as the split proceeds.
+
+**Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
+tag today, for the same path-dependency reason — loudly, at release time, not silently. That is
+deliberate: resolving it means deciding what the workspace publishes (one facade crate with the
+internals vendored? every crate, versioned in lockstep? only some?), which is #204's question, not
+something to patch around here.
