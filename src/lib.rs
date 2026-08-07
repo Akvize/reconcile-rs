@@ -76,11 +76,13 @@ pub mod transport;
 pub mod prometheus;
 
 pub(crate) mod auth;
-// `BincodeCodec` (`codec.rs`) is a concrete wire-encoding adapter, not a port: unlike `Transport`
+// `bincode.rs` holds the crate's wire-encoding functions, not a port: unlike `Transport`
 // (`ARCHITECTURE.md` §3.4/§3.5) there is a single implementation and no plausible swap (compression
 // interacts with authenticate-before-decode; cross-language interop needs a published wire spec,
-// not a Rust trait) — see the module doc comment for the full reasoning.
-pub(crate) mod codec;
+// not a Rust trait) — see the module doc comment for the full reasoning. Named after the external
+// `bincode` crate it wraps, since there is no abstraction left to name; references to the crate
+// itself from inside (or near) this module use `::bincode::…` to disambiguate.
+pub(crate) mod bincode;
 // Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
 // implementation details, not part of the supported public surface. The few internals the
 // integration-test oracles need are re-exported through the gated [`testing`] module below.

@@ -64,7 +64,6 @@ use tracing::{debug, trace, warn};
 use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
-use crate::codec::BincodeCodec;
 use crate::entry::{Entry, State};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
@@ -360,10 +359,8 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
                     .map(Message::<K, WireDated<V>, State<V>>::ValueComparisonItem)
                     .collect();
                 let transport = UdpTransport::new(Arc::clone(&self.socket));
-                let codec = BincodeCodec::new();
                 let ports = SendPorts {
                     transport: &transport,
-                    codec: &codec,
                     authenticator: &self.authenticator,
                     sender_counter: &self.sender_counter,
                 };

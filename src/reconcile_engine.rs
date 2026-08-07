@@ -32,7 +32,6 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::{Clock, HlcClock, Timestamp};
-use crate::codec::BincodeCodec;
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::fingerprint::Fingerprint;
@@ -129,7 +128,7 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
 ///
 /// The datagram-I/O [`Transport`] port is carried as `Arc<dyn Transport<Addr = SocketAddr>>` inside
 /// [`Inner`], since it is always reached behind a trait object. Wire encoding goes through the
-/// concrete [`BincodeCodec`] (not a port, see `codec.rs`), so the engine names no codec type
+/// free functions in [`crate::bincode`] (not a port), so the engine names no codec type
 /// parameter.
 pub(crate) struct ReconcileEngine<K, V> {
     /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
@@ -154,10 +153,6 @@ pub(crate) struct Inner<K, V> {
     /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
     /// only through this, so it never names a concrete socket type.
     transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    /// The wire-encoding adapter. All (de)serialization of protocol messages goes through this, so
-    /// only this field and `codec.rs` ever call `bincode` directly. Zero-sized and `Copy`, so it is
-    /// held by value rather than behind an `Arc`.
-    codec: BincodeCodec,
     /// The geographical networks the cluster spans, each a CIDR. One random address is
     /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
     /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
@@ -309,7 +304,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
 
 impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// Create a new engine over the default transport adapter: a [`UdpTransport`] bound to the
-    /// gossip socket. Wire encoding always uses [`BincodeCodec`].
+    /// gossip socket. Wire encoding always goes through [`crate::bincode`].
     ///
     /// # Errors
     ///
@@ -323,16 +318,10 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let node_id = config.node_id.unwrap_or_else(rand::random);
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
         let transport = Self::bind_udp(&config).await?;
-        Ok(Self::build(
-            config,
-            transport,
-            BincodeCodec::new(),
-            clock,
-            node_id_is_random,
-        ))
+        Ok(Self::build(config, transport, clock, node_id_is_random))
     }
 
-    /// Construct an engine over an explicit [`Clock`] adapter (default transport/codec). Test-only
+    /// Construct an engine over an explicit [`Clock`] adapter (default transport). Test-only
     /// seam: a deterministic clock (`ManualClock`) makes HLC behaviour reproducible without real
     /// wall-clock time.
     #[cfg(test)]
@@ -340,16 +329,10 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
         // so persistence tests do not trigger the operator warning.
         let transport = Self::bind_udp(&config).await?;
-        Ok(Self::build(
-            config,
-            transport,
-            BincodeCodec::new(),
-            clock,
-            false,
-        ))
+        Ok(Self::build(config, transport, clock, false))
     }
 
-    /// Construct an engine over a caller-supplied [`Transport`], with the default codec and clock.
+    /// Construct an engine over a caller-supplied [`Transport`], with the default clock.
     ///
     /// Infallible: the only fallible step in [`new`](Self::new) is binding the UDP socket, which
     /// the caller has already done (or does not need to do at all).
@@ -360,13 +343,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let node_id_is_random = config.node_id.is_none();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
-        Self::build(
-            config,
-            transport,
-            BincodeCodec::new(),
-            clock,
-            node_id_is_random,
-        )
+        Self::build(config, transport, clock, node_id_is_random)
     }
 
     /// As [`with_transport`](Self::with_transport), but over a caller-supplied [`Clock`] too.
@@ -378,7 +355,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         transport: Arc<dyn Transport<Addr = SocketAddr>>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        Self::build(config, transport, BincodeCodec::new(), clock, false)
+        Self::build(config, transport, clock, false)
     }
 
     /// Bind the default [`UdpTransport`] for `config` and log the bound address.
@@ -400,7 +377,6 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     fn build(
         config: Config,
         transport: Arc<dyn Transport<Addr = SocketAddr>>,
-        codec: BincodeCodec,
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
     ) -> Self {
@@ -446,7 +422,6 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
                 transport,
-                codec,
                 nets,
                 local_net: Arc::new(RwLock::new(local_net)),
                 listen_addr: config.listen_addr,
@@ -621,7 +596,6 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
         SendPorts {
             transport: &*self.transport,
-            codec: &self.codec,
             authenticator: &self.authenticator,
             sender_counter: &self.sender_counter,
         }
@@ -653,13 +627,11 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let peers = self.get_peers();
         let port = self.port;
         let transport = Arc::clone(&self.transport);
-        let codec = self.codec;
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         tokio::spawn(async move {
             let ports = SendPorts {
                 transport: &*transport,
-                codec: &codec,
                 authenticator: &authenticator,
                 sender_counter: &sender_counter,
             };
@@ -745,7 +717,6 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         global_guard: BulkDumpCountGuard,
     ) {
         let transport = Arc::clone(&self.transport);
-        let codec = self.codec;
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
@@ -756,7 +727,6 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             let _global_guard = global_guard;
             let ports = SendPorts {
                 transport: &*transport,
-                codec: &codec,
                 authenticator: &authenticator,
                 sender_counter: &sender_counter,
             };
@@ -927,12 +897,11 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         };
         send_buf.clear();
         for segment in segments {
-            self.codec
-                .encode(
-                    &Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment),
-                    send_buf,
-                )
-                .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
+            crate::bincode::encode(
+                &Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment),
+                send_buf,
+            )
+            .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
         // Geography-aware target selection. With a single network this reduces to the
         // historical behaviour: every known peer is local, so all of them are contacted each round,
@@ -1049,15 +1018,14 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             // Re-confirm against the map: the tombstone may have been resurrected or GC'd since
             // we snapshotted the index, and only the live tombstone's version is a valid ack.
             if let Some(v) = map_guard.get(key).filter(|v| v.is_tombstone()) {
-                self.codec
-                    .encode(
-                        &Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
-                            key.clone(),
-                            version_hash(v),
-                        )),
-                        send_buf,
-                    )
-                    .expect("serializing an Ack into an in-memory buffer cannot fail");
+                crate::bincode::encode(
+                    &Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
+                        key.clone(),
+                        version_hash(v),
+                    )),
+                    send_buf,
+                )
+                .expect("serializing an Ack into an in-memory buffer cannot fail");
                 appended += 1;
             }
         }
@@ -1095,12 +1063,12 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let mut updates: Vec<(K, Entry<Timestamp, V>)> = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
         let mut value_in_comparison = Vec::new();
-        // Decode the whole datagram through `BincodeCodec`. `MAX_MESSAGES_PER_DATAGRAM` bounds the
+        // Decode the whole datagram through `crate::bincode`. `MAX_MESSAGES_PER_DATAGRAM` bounds the
         // message count (a datagram can hold no more one-byte messages than its byte length), so a
         // crafted datagram cannot be expanded without limit. A malformed datagram is dropped whole —
         // never panicking the receive loop, an unauthenticated remote-DoS hazard.
         let messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>> =
-            match self.codec.decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
+            match crate::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
                 Ok(messages) => messages,
                 Err(kind) => {
                     warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
@@ -1439,14 +1407,14 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
 }
 
 /// Bundles the outbound [`Transport`] port and per-node send state that a batched-message send
-/// needs: the transport, the [`BincodeCodec`] wire adapter, the datagram authenticator, and the
-/// per-sender replay counter. These four pieces always travel together into [`send_messages_to`]
-/// and [`send_messages_paced`] from both call sites (the engine and
+/// needs: the transport, the datagram authenticator, and the per-sender replay counter. Wire
+/// encoding itself goes through the free functions in [`crate::bincode`], which need no state to
+/// bundle here. These three pieces always travel together into [`send_messages_to`] and
+/// [`send_messages_paced`] from both call sites (the engine and
 /// [`ReconcileMirror`](crate::mirror::ReconcileMirror)); bundling them into one reference keeps
-/// each helper's signature short instead of repeating the same four parameters everywhere.
+/// each helper's signature short instead of repeating the same three parameters everywhere.
 pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) transport: &'a T,
-    pub(crate) codec: &'a BincodeCodec,
     pub(crate) authenticator: &'a auth::Authenticator,
     pub(crate) sender_counter: &'a replay::SenderCounter,
 }
@@ -1532,9 +1500,7 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
     let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
-        ports
-            .codec
-            .encode(message, send_buf)
+        crate::bincode::encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
@@ -2052,7 +2018,6 @@ mod pacing {
     use tokio::net::UdpSocket;
 
     use crate::auth::Authenticator;
-    use crate::codec::BincodeCodec;
     use crate::entry::State;
     use crate::reconcile_engine::{send_messages_paced, Message, SendPorts};
     use crate::transport::UdpTransport;
@@ -2071,12 +2036,10 @@ mod pacing {
     async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let transport = UdpTransport::new(socket);
-        let codec = BincodeCodec::new();
         let authenticator = Authenticator::new(None, false);
         let sender_counter = crate::replay::SenderCounter::new();
         let ports = SendPorts {
             transport: &transport,
-            codec: &codec,
             authenticator: &authenticator,
             sender_counter: &sender_counter,
         };

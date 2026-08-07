@@ -46,8 +46,8 @@ converge. The design rests on five mechanisms:
 | `auth.rs` | Per-datagram message authentication (MAC). |
 | `persistence.rs` | Durability boundary: load/save a snapshot of the dated map. |
 | `transport.rs` | The `Transport` port (datagram I/O) and its `UdpTransport` / `InMemoryTransport` adapters (migration step 5, done). |
-| `reconcile_engine.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `BincodeCodec` wire adapter. |
-| `codec.rs` | `BincodeCodec`: the concrete wire-encoding adapter (`pub(crate)`, no trait — migration step 5, done; see §2.4). |
+| `reconcile_engine.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `bincode` wire-encoding functions. |
+| `bincode.rs` | The crate's wire-encoding functions (`pub(crate)`, no adapter type — migration step 5, done; see §2.4). |
 | `reconcile_store.rs` | Public facade tying the engine, the map, and timeouts together. |
 | `timeout_wheel.rs` | Acknowledgement timeout tracking. |
 
@@ -64,25 +64,25 @@ This is, in effect, the interior of the hexagon and it exists today.
 
 ### 2.3 Infrastructure coupling
 
-Migration step 5 (§6) extracted the `Transport` port and the `BincodeCodec` wire-encoding adapter, so
+Migration step 5 (§6) extracted the `Transport` port and the `bincode.rs` wire-encoding functions, so
 `reconcile_engine.rs` no longer imports `tokio::net` or `bincode` directly — it drives the gossip
-protocol purely over `Transport` (default adapter `UdpTransport`) and `BincodeCodec`. The remaining
-infrastructure dependencies:
+protocol purely over `Transport` (default adapter `UdpTransport`) and `crate::bincode::{encode,
+decode_stream}`. The remaining infrastructure dependencies:
 
 | Module | Infrastructure imported directly | Notes |
 |---|---|---|
 | `clock.rs` | `chrono::Utc` — physical time read inside the domain | Behind the `Clock` port (`HlcClock` adapter); not yet extracted to a separate adapter module (§3.9 target, not yet split into a workspace). |
 | `transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
-| `codec.rs` | `bincode` | `BincodeCodec`'s implementation — likewise intended; not a port (§2.4). |
+| `bincode.rs` | `bincode` | The crate's wire-encoding functions — likewise intended; not a port (§2.4). |
 | `reconcile_engine.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
 | `reconcile_store.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
-| `mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `ReconcileMirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport`/`BincodeCodec` per send), but the mirror was never given its own injectable `Transport` — out of scope for step 5, left for a future pass. |
+| `mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `ReconcileMirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport` and go through `crate::bincode::encode` per send), but the mirror was never given its own injectable `Transport` — out of scope for step 5, left for a future pass. |
 
 There is no longer an abstraction boundary missing between the dated engine and the transport: it is
 a substitutable adapter, and the in-memory `Transport` (`InMemoryNetwork`/`InMemoryTransport`) paired
-with the concrete `BincodeCodec` makes the engine's gossip protocol exercisable with no real sockets.
-Wire encoding itself has a single implementation and is not behind a port (§2.4). The wall-clock time
-source (`clock.rs`) and the mirror's socket stack remain the open items.
+with the `bincode.rs` wire-encoding functions makes the engine's gossip protocol exercisable with no
+real sockets. Wire encoding itself has a single implementation and is not behind a port (§2.4). The
+wall-clock time source (`clock.rs`) and the mirror's socket stack remain the open items.
 
 ### 2.4 Trait landscape
 
@@ -108,10 +108,14 @@ under issue #144): it had exactly one implementation (`BincodeCodec`), its metho
 was never object-safe (always carried as a type parameter, unlike the object-safe `Transport`), and
 neither plausible alternate use (compression, cross-language interop) is served by swapping a trait
 — compression interacts with authenticate-before-decode and datagram-size accounting, and
-cross-language interop needs a published wire spec, not a Rust trait. `BincodeCodec` is now a
-concrete, `pub(crate)` adapter with inherent `encode` / `decode_stream` methods (`codec.rs`); the
-engine (`reconcile_engine.rs`) and `mirror.rs` call it directly instead of naming it as a type
-parameter. `Transport`, by contrast, remains a genuine port (§3.4/§3.5): object-safe, `pub`, and with
+cross-language interop needs a published wire spec, not a Rust trait. A second review pass then
+dissolved `BincodeCodec` itself (still issue #144): zero-sized and stateless, with no injection point
+(`pub(crate)`, never swapped), it was pure ceremony threaded through `Inner`, `SendPorts`, and every
+constructor just to call what were effectively two static functions. Wire encoding is now the plain
+`pub(crate) fn encode` / `fn decode_stream` in `bincode.rs` (renamed from `codec.rs`, since there is
+no abstraction left to name — it is just the code that talks to the `bincode` crate); the engine
+(`reconcile_engine.rs`) and `mirror.rs` call `crate::bincode::encode` / `crate::bincode::decode_stream`
+directly. `Transport`, by contrast, remains a genuine port (§3.4/§3.5): object-safe, `pub`, and with
 two real implementations (`UdpTransport`, `InMemoryTransport`).
 
 Consequence of the (now-superseded) tuple representation, addressed by the same step:
@@ -143,8 +147,8 @@ Two rules follow:
 ```
                          ┌─────────────────────── adapters (infrastructure) ──────────────┐
    driving side          │                                                                │
-   (application)         │   HlcClock        UdpTransport      BincodeCodec    FileSnapshot│
-        │                │  (system time)   (tokio / UDP)      (bincode)     / InMemory     │
+   (application)         │   HlcClock        UdpTransport    bincode::encode   FileSnapshot│
+        │                │  (system time)   (tokio / UDP)   /decode_stream   / InMemory     │
         ▼                │       │               │                 │              │         │
   ┌───────────┐  impl    └───────┼───────────────┼─────────────────┼──────────────┼─────────┘
   │  Store    │           ports: │ Clock         │ Transport       │ (mechanism,  │ Persistence
@@ -194,15 +198,13 @@ pub trait Transport: Send + Sync + 'static {
     fn local_addr(&self) -> io::Result<Self::Addr>;
 }
 
-// Wire encoding is NOT a port — see §2.4. `BincodeCodec` (codec.rs) is a concrete adapter with
-// inherent methods of the same shape decode_stream carries a max_items cap so a single datagram
-// cannot be expanded into an unbounded number of messages (closes the allocation-bomb hazard,
-// issue #151). Authentication wraps it externally; never folded in (invariant 5).
+// Wire encoding is NOT a port — see §2.4. `bincode.rs` holds plain functions of this shape;
+// decode_stream carries a max_items cap so a single datagram cannot be expanded into an
+// unbounded number of messages (closes the allocation-bomb hazard, issue #151). Authentication
+// wraps it externally; never folded in (invariant 5).
 //
-// impl BincodeCodec {
-//     fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> bincode::Result<()>;
-//     fn decode_stream<T: DeserializeOwned>(&self, bytes: &[u8], max_items: usize) -> bincode::Result<Vec<T>>;
-// }
+// pub(crate) fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> bincode::Result<()>;
+// pub(crate) fn decode_stream<T: DeserializeOwned>(bytes: &[u8], max_items: usize) -> bincode::Result<Vec<T>>;
 
 // Persistence — durability boundary (already present, the model the others follow).
 pub trait Persistence<K, V>: Send + Sync + 'static {
@@ -233,26 +235,28 @@ pub trait Discovery: Send + Sync + 'static {
 | `Persistence` | `FileSnapshot`, `InMemory` | file / memory |
 | `Discovery` | `RandomProbe` (default, speculative per-net probing); `DnsDiscovery` (authoritative, headless-Service DNS) | `gen_ip` / `tokio::net::lookup_host` |
 
-Wire encoding is not a port (`BincodeCodec(DefaultOptions)`, backed by `bincode` — see §2.4): the
-engine and `mirror.rs` call its inherent methods directly rather than naming a `Codec` trait.
+Wire encoding is not a port (`bincode::{DefaultOptions, ...}`, backed by `bincode` — see §2.4): the
+engine and `mirror.rs` call the plain `crate::bincode::encode` / `crate::bincode::decode_stream`
+functions directly rather than naming a `Codec` trait or a codec value.
 
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
-raw bytes before any decoding occurs. It is never folded into `BincodeCodec`.
+raw bytes before any decoding occurs. It is never folded into `bincode.rs`.
 
 The ports make the domain testable in isolation: an in-memory `Transport` (`InMemoryNetwork` /
 `InMemoryTransport`, `transport.rs`) and a fixed `Clock` make convergence and HLC behaviour
 deterministic without real sockets or wall-clock time.
 
-**Visibility asymmetry (`Transport` public, `BincodeCodec` `pub(crate)`).** `Transport` is
+**Visibility asymmetry (`Transport` public, `bincode.rs` `pub(crate)`).** `Transport` is
 consumer-wireable: `ReconcileStore::new_with_transport` takes any
 `Arc<dyn Transport<Addr = SocketAddr>>`, and `InMemoryNetwork`/`InMemoryTransport` are public (not
 test-gated) so a downstream crate can drive a deterministic in-process cluster in its own tests —
 that, plus a future non-UDP datagram transport (e.g. QUIC unreliable datagrams), is what earns
-`Transport` a public injection point. `BincodeCodec` stays `pub(crate)` and, since it is no longer a
-trait at all (§2.4), carries no visibility-vs-object-safety tradeoff to explain — it is simply an
-internal mechanism, the same as `HRTree`. `Clock` stays test-only for a different reason: the
-protocol already tolerates an unreliable transport, but a non-monotonic clock silently breaks the
-causal ordering tombstone collection depends on, so it is not a seam offered to callers.
+`Transport` a public injection point. `bincode.rs`'s `encode`/`decode_stream` stay `pub(crate)` and,
+since there is no type — trait or struct — to name at all (§2.4), carry no visibility-vs-object-safety
+tradeoff to explain — they are simply an internal mechanism, the same as `HRTree`. `Clock` stays
+test-only for a different reason: the protocol already tolerates an unreliable transport, but a
+non-monotonic clock silently breaks the causal ordering tombstone collection depends on, so it is not
+a seam offered to callers.
 
 ### 3.6 Domain types and conflict policy
 
@@ -327,8 +331,9 @@ reconcile-core   // DOMAIN + PORTS: Clock, Persistence (traits);
                  //   Entry / State, Timestamp, Fingerprint, HRTree, the diff algorithm, LWW.
                  //   no infrastructure deps (no tokio, bincode, chrono-IO, ipnet, runtime rand);
                  //   serde + blake3, plus the dependency-light tracing / metrics facades.
-reconcile-net    // ADAPTERS + I/O PORT: Transport (trait); UdpTransport, BincodeCodec (concrete,
-                 //   no trait — §2.4), Authenticator, peer discovery (gen_ip / ipnet / rand).
+reconcile-net    // ADAPTERS + I/O PORT: Transport (trait); UdpTransport, bincode.rs's encode/
+                 //   decode_stream functions (no adapter type — §2.4), Authenticator, peer
+                 //   discovery (gen_ip / ipnet / rand).
 reconcile-store  // ADAPTERS: FileSnapshot / InMemory persistence.
 reconcile        // WIRING + driving API: the Store facade, configuration, the HlcClock adapter
                  //   (which holds the chrono read), the tombstone wheel.
@@ -337,8 +342,8 @@ reconcile        // WIRING + driving API: the Store facade, configuration, the H
 The `Clock` and `Persistence` ports are defined in `reconcile-core` (the domain-adjacent logic
 injects them). The **`Transport` port is defined in `reconcile-net`**, not the core: it is consumed
 by the UDP driver, which lives in `reconcile-net`, and the diff/merge domain does no I/O — this also
-keeps `async_trait` out of the core. `BincodeCodec` lives in `reconcile-net` too, as a concrete
-adapter rather than a port (§2.4). The chrono-reading `HlcClock` adapter lives
+keeps `async_trait` out of the core. `bincode.rs`'s wire-encoding functions live in `reconcile-net`
+too, rather than behind a port (§2.4). The chrono-reading `HlcClock` adapter lives
 in `reconcile` (the `Timestamp` *type* and the pure HLC advance stay in the core, so the core carries no
 `chrono`). Adapters depend on `reconcile-core`; infrastructure cannot be imported into the core
 without a compile error — the guarantee a single crate cannot provide.
@@ -357,7 +362,7 @@ without a compile error — the guarantee a single crate cannot provide.
 | `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
 | `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
 | `UdpSocket` in `reconcile_engine.rs` | ✅ `Transport` port (`transport.rs`); `UdpTransport` adapter (public, `ReconcileStore::new_with_transport` — D2) |
-| `bincode` in `reconcile_engine.rs` | ✅ `BincodeCodec` (`codec.rs`), concrete `pub(crate)` wire-encoding adapter — no `Codec` trait (dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
+| `bincode` in `reconcile_engine.rs` | ✅ `encode`/`decode_stream` (`bincode.rs`), plain `pub(crate)` wire-encoding functions — no `Codec` trait and no `BincodeCodec` type (both dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
@@ -377,7 +382,7 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 3. **Size-not-hash emptiness/equality** in `diff_round` (`diff.rs:135-141`).
 4. **Malformed-bound / inverted-range hardening** in `diff_round` (`diff.rs:100-134`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs;
-   `BincodeCodec` never absorbs authentication.
+   `bincode.rs`'s `decode_stream` never absorbs authentication.
 6. **Causal-stability tombstone gate** — a tombstone is garbage-collected only after every monotonic
    cluster member has acknowledged the exact version hash. Dynamic discovery (e.g. `DnsDiscovery`)
    only ever feeds the gossip-target `peers` set, **never** the `members` set: membership stays
@@ -411,32 +416,37 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    `State<V>` internally; `add_pre_insert`, `ReconcileMirror::add_on_update` and `PersistedState`
    carry `Entry<Timestamp, V>` / `State<V>` directly. *Changed the wire and on-disk formats*, as
    anticipated — acceptable pre-1.0.
-5. ✅ **`Transport` port + `BincodeCodec` wire adapter** (done, issue #144) — extract the `Transport`
-   port and a `BincodeCodec` wire-encoding adapter; `UdpTransport` / `BincodeCodec`
-   (`transport.rs` / `codec.rs`); the engine (`reconcile_engine.rs`) becomes a thin driver over them
-   — it imports neither `tokio::net` nor `bincode` directly — with authentication ahead of the codec
-   (invariant 5) and `BincodeCodec::decode_stream`'s `max_items` cap closing the
+5. ✅ **`Transport` port + `bincode.rs` wire-encoding functions** (done, issue #144) — extract the
+   `Transport` port and the crate's wire-encoding functions; `UdpTransport` / `encode` /
+   `decode_stream` (`transport.rs` / `bincode.rs`); the engine (`reconcile_engine.rs`) becomes a thin
+   driver over them — it imports neither `tokio::net` nor `bincode` directly — with authentication
+   ahead of the codec (invariant 5) and `decode_stream`'s `max_items` cap closing the
    datagram-expansion DoS (#151). `ReconcileEngine` holds the transport as
-   `Arc<dyn Transport<Addr = SocketAddr>>` and the codec as a plain `BincodeCodec` field (concrete,
-   `Copy`, zero-sized). `BincodeCodec` started life generic-over-a-`Codec`-trait like `Transport`,
-   but the trait was dissolved as a follow-up (same PR-review pass that landed §2.4's writeup):
-   with a single implementation, generic (non-object-safe) methods always carried as a type
-   parameter, and no plausible alternate use, it did not earn its keep as a port — same call as
-   `HashRangeQueryable`/`Diffable` (step 2) and `Reconcilable`/`MaybeTombstone` (step 4).
-   `ReconcileEngine`/`SendPorts` therefore take no codec type parameter; call sites use
-   `BincodeCodec`'s inherent `encode`/`decode_stream` methods directly.
+   `Arc<dyn Transport<Addr = SocketAddr>>`; wire encoding needs no field at all. The wire-encoding
+   logic started life generic-over-a-`Codec`-trait like `Transport`, but the trait was dissolved as a
+   follow-up (same PR-review pass that landed §2.4's writeup): with a single implementation, generic
+   (non-object-safe) methods always carried as a type parameter, and no plausible alternate use, it
+   did not earn its keep as a port — same call as `HashRangeQueryable`/`Diffable` (step 2) and
+   `Reconcilable`/`MaybeTombstone` (step 4). The concrete replacement, a zero-sized `BincodeCodec`
+   struct with inherent `encode`/`decode_stream` methods, was itself dissolved in a second
+   review pass (still issue #144): stateless and never swapped, it was pure ceremony threaded
+   through `Inner`, `SendPorts`, and every constructor to call what were effectively two static
+   functions — so it became the plain `pub(crate) fn encode` / `fn decode_stream` free functions in
+   `bincode.rs` (renamed from `codec.rs`, since there is no abstraction left to name).
+   `ReconcileEngine`/`SendPorts` therefore take no codec type parameter and hold no codec field;
+   call sites use `crate::bincode::encode`/`crate::bincode::decode_stream` directly.
    `ReconcileStore::new_with_transport` makes `Transport` consumer-wireable (infallible: the only
    fallible step in `new` is the socket bind, already done by a caller supplying their own
    transport) and `InMemoryNetwork`/`InMemoryTransport` are public, not test-gated, so downstream
-   crates can drive a deterministic in-process cluster in their own tests; `BincodeCodec` stays
-   `pub(crate)` (internal mechanism, not a port — see §3.5). `Clock::node_id` was added so
+   crates can drive a deterministic in-process cluster in their own tests; `bincode.rs`'s functions
+   stay `pub(crate)` (internal mechanism, not a port — see §3.5). `Clock::node_id` was added so
    `ReconcileStore::node_id()` can read the identity back from the same adapter that stamps it,
    rather than caching it separately. `Value` dropped its `PartialEq` bound: the receive path's
    post-merge change detection is now a stamp comparison (`remote.stamp > local.stamp`, equivalent
    to `Entry::merge` under LWW) rather than an `Entry`/value equality check, which needed no bound on
    `V` and avoids a clone on the hot path. **Residual coupling**: `ReconcileMirror` (`mirror.rs`)
    still binds and owns its own UDP socket and calls `bincode` directly for its own receive loop —
-   only its *send* calls were rewired onto the shared `Transport`-generic, `BincodeCodec`-using
+   only its *send* calls were rewired onto the shared `Transport`-generic, `crate::bincode::encode`-using
    helpers. Routing the mirror's own socket onto an injectable `Transport` is deferred (tracked
    under issue #138, same as the workspace split below).
 6. **Workspace split** — promote the layers to `reconcile-core` / `reconcile-net` /
