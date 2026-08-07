@@ -109,7 +109,7 @@ feature interactions hide bugs.
 **9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/hrtree.rs`, `rsos/src/hrtree_iter.rs`,
 `rsos/src/fingerprint.rs` moved to the standalone `rsos` crate (migration step 6 Step A) — a leaf
 with zero workspace/infrastructure dependency, enforced by its own minimal `Cargo.toml`. Within the
-`reconcile` package, **domain**, infrastructure-free: `reconcilable.rs`, `bounds.rs`, `proto.rs`.
+`reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`, `proto.rs`.
 **Infrastructure**: `reconcile_engine.rs`, `reconcile_store.rs`, `clock.rs`, `discovery.rs`,
 `persistence.rs`, `auth.rs`, `replay.rs`, `observability.rs`, `prometheus.rs`.
 
