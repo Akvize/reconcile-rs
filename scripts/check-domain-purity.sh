@@ -5,7 +5,16 @@
 # invariant today (not aspirational), so we gate on it rather than let it silently rot
 # as the ports/adapters migration (#138) proceeds.
 #
-# Add a module to DOMAIN_FILES only once ARCHITECTURE.md documents it as infra-free.
+#
+# Two parts, two different levels of the same invariant:
+#   1. a source grep over `lww-register/src/*.rs` — is an *allowed* dependency being used to
+#      reach something forbidden, through a re-export? (a manifest cannot see this)
+#   2. a manifest gate over `rsos`/`rbsr`/`lww-register`'s own `Cargo.toml`s — can the forbidden
+#      thing be reached at all? (a source grep there could never fire: with the dependency
+#      undeclared, the import would not compile in the first place)
+#
+# Add a module to DOMAIN_FILES / a manifest to STANDALONE_MANIFESTS only once ARCHITECTURE.md
+# documents it as infra-free.
 set -Eeuo pipefail
 
 # Resolve the repo root from the script's own location (not `git rev-parse`, since the
@@ -74,6 +83,110 @@ if [ "$status" -ne 0 ]; then
     echo >&2
     echo "Domain modules must stay infrastructure-free (ARCHITECTURE.md §2.2/§3.3)." >&2
     echo "Route the dependency through a port/adapter instead, or move the code out of the domain." >&2
+    echo >&2
+fi
+
+manifest_status=0
+
+# ---------------------------------------------------------------------------
+# Part 2: the manifest gate for the standalone crates.
+#
+# The source grep above answers "is an *allowed* dependency being used to reach something
+# forbidden, through a re-export?". This part answers the prior question: "can the forbidden
+# thing be reached at all?" — i.e. is the dependency even declared. That is where the invariant
+# is actually breakable for `rsos`/`rbsr`/`lww-register`: none of them declares an
+# infrastructure crate today, so `use tokio::…` there does not compile, and a source-level grep
+# for such imports could never fire. The step that *would* make it compile is someone adding the
+# dependency to the manifest — so that is what is gated here.
+#
+# Deliberately scoped to these three manifests only. The workspace root (`reconcile`) and
+# `gossip`/`snapshot` legitimately carry infrastructure dependencies; they are adapters, that is
+# their job.
+STANDALONE_MANIFESTS=(
+    rsos/Cargo.toml
+    rbsr/Cargo.toml
+    lww-register/Cargo.toml
+)
+
+# Same infrastructure set as FORBIDDEN above, expressed as crate names rather than import paths,
+# plus the two that only ever appear as dependencies (`socket2`, `async-trait`).
+FORBIDDEN_DEPS='tokio|bincode|chrono|ipnet|mio|reqwest|hyper|socket2|async-trait'
+
+# One documented exemption, and only in a `[dev-dependencies]` table: `rbsr` may name `bincode`.
+# `rbsr` owns no encoding — nothing in its shipped artifact touches the codec, and a dev-dependency
+# never reaches a consumer. What it does own is `RangeAggregate`, whose *field declaration order*
+# is load-bearing for wire compatibility (`rsos::Aggregate` must serialize `fingerprint` before
+# `size`). `diff.rs`'s `wire_format_is_unchanged_by_the_aggregate_collapse` pins that with a golden
+# byte vector under the same `bincode::DefaultOptions` configuration `gossip`'s codec uses, and it
+# has to live next to the declaration it guards: `KeyRange`/`StartBound`/`EndBound` are
+# `pub(crate)`, so the vector cannot be constructed from another crate.
+# Format: `<crate-dir>:<dep-name>`. Keep this list at exactly the entries argued for in prose.
+DEV_DEP_EXEMPTIONS='rbsr:bincode'
+
+# Section-scoped scan, no TOML parser: track the current `[section]`, and inside any
+# `[…dependencies]` table flag a forbidden key (`tokio = …`, `tokio.workspace = true`) or a
+# forbidden `package = "…"` rename target. `[dependencies.tokio]`-style tables are matched on the
+# header itself. Comments are stripped first so the explanatory prose in these manifests — which
+# names these very crates — does not trip the check.
+for m in "${STANDALONE_MANIFESTS[@]}"; do
+    if [ ! -f "$m" ]; then
+        echo "check-domain-purity: $m listed but missing — update the script" >&2
+        manifest_status=1
+        continue
+    fi
+    crate_dir=$(dirname "$m")
+    if ! awk -v forb="^(${FORBIDDEN_DEPS})\$" \
+             -v crate="$crate_dir" -v exempt="$DEV_DEP_EXEMPTIONS" '
+        function allowed(name) {
+            return (index(" " exempt " ", " " crate ":" name " ") > 0)
+        }
+        { line = $0; sub(/#.*$/, "", line) }
+        line ~ /^[[:space:]]*\[/ {
+            hdr = line
+            sub(/^[[:space:]]*\[+/, "", hdr)
+            sub(/\]+.*$/, "", hdr)
+            gsub(/[[:space:]"'"'"']/, "", hdr)
+            insec = (hdr ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)$/)
+            isdev = (hdr ~ /(^|\.)dev-dependencies($|\.)/)
+            if (hdr ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)\.[A-Za-z0-9_.-]+$/) {
+                nm = hdr
+                sub(/^.*dependencies\./, "", nm)
+                if (nm ~ forb && !(isdev && allowed(nm))) {
+                    printf "  line %d: [%s]\n", NR, hdr; bad = 1
+                }
+            }
+            next
+        }
+        insec && line ~ /=/ {
+            key = line
+            sub(/=.*$/, "", key)
+            gsub(/[[:space:]"'"'"']/, "", key)
+            sub(/\..*$/, "", key)
+            if (key ~ forb && !(isdev && allowed(key))) {
+                printf "  line %d: %s\n", NR, key; bad = 1
+            }
+            if (match(line, /package[[:space:]]*=[[:space:]]*"[^"]+"/)) {
+                pkg = substr(line, RSTART, RLENGTH)
+                sub(/^[^"]*"/, "", pkg)
+                sub(/".*$/, "", pkg)
+                if (pkg ~ forb && !(isdev && allowed(pkg))) {
+                    printf "  line %d: %s (renamed dependency)\n", NR, pkg; bad = 1
+                }
+            }
+        }
+        END { exit bad ? 1 : 0 }
+    ' "$m"; then
+        echo "check-domain-purity: forbidden infrastructure dependency in $m (see above)" >&2
+        manifest_status=1
+    fi
+done
+
+if [ "$manifest_status" -ne 0 ]; then
+    echo >&2
+    echo "rsos/rbsr/lww-register must stay standalone: no async runtime, socket, wire codec or" >&2
+    echo "wall clock in their manifests (ARCHITECTURE.md §2.2, AGENTS.md §9.2). Put the adapter" >&2
+    echo "in gossip/snapshot/reconcile instead." >&2
+    status=1
 fi
 
 exit "$status"

@@ -10,9 +10,10 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-06-12
-- **Baseline:** `claude/determined-franklin-s3tvt1` @ `f1423ce` (2026-06 correctness sprint; pending
-  merge to main)
+- **Last updated:** 2026-08-07
+- **Baseline:** `claude/workspace-split-step-c` + Step D (migration step 6 A–D landed; pending merge
+  to main). Correctness baseline unchanged since the 2026-06 sprint
+  (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is behaviour-preserving.
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
   [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
@@ -187,12 +188,31 @@ Progress:
   formats** (expected; the crate is unpublished, pre-1.0).
 - ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
   dissolved, ARCHITECTURE.md §2.4).
-- ◑ Step 6 — workspace split, in progress: Step A extracted the `rsos` crate (`FingerprintTreeMap`,
-  `Fingerprint`, `Aggregate`, the `Rsos<K>` trait); Step B extracted the `rbsr` crate
-  (`start_diff`/`diff_round`/`RangeAggregate`, generic over `rbsr::RsosView<K>`,
-  blanket-implemented for every `rsos::Rsos`
-  implementor). Steps C (`lww-register`/`gossip`/`snapshot` + the type renames) and D (facade
-  reassembly, CI/docs) remain.
+- ✅ Step 6 — workspace split, done in four sub-steps (ARCHITECTURE.md §6):
+  **A** extracted the `rsos` crate (`FingerprintTreeMap` — renamed from `HRTree` via
+  `FingerprintTree` — `Fingerprint`, the `Rsos` trait, and the Def. 3.5 bundled `Aggregate`
+  returned by `aggregate`);
+  **B** extracted the `rbsr` crate (`start_diff`/`diff_round`/`RangeAggregate`, generic over
+  `rbsr::RsosView<K>`, blanket-implemented for every `rsos::Rsos` implementor, with `Rsos<K, V>`
+  becoming `Rsos<K>` + associated `Value`);
+  **C** split out `lww-register` (domain), `gossip` (network adapters, deliberately with no
+  `lww-register` dependency) and `snapshot` (file persistence adapter), plus the
+  `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` renames;
+  **D** reassembled `reconcile` as a thin re-exporting facade and swept CI/scripts/docs — `--all` →
+  `--workspace` across `main.yml`/`pre-commit`/`AGENTS.md` §3, and
+  `scripts/check-domain-purity.sh` gained a **manifest gate** forbidding
+  `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/`socket2`/`async-trait` in
+  `rsos`/`rbsr`/`lww-register`'s `Cargo.toml`s — the level at which that invariant is actually
+  breakable, since with the dependency undeclared the import would not compile (ARCHITECTURE.md
+  §2.2).
+
+**#138 is not yet closed.** The structural migration is complete — six crates, ports on the correct
+side of each boundary, domain purity enforced by the compiler and by `check-domain-purity.sh`. What
+remains is the one item carried over from Step 5: `src/mirror.rs` still binds and owns its own
+`tokio::net::UdpSocket` and calls `bincode`'s `Serializer`/`Deserializer` directly on its receive
+path (its *send* path already goes through the shared `Transport` helpers). Giving `Mirror` an
+injectable `Transport` is the last piece of residual infrastructure coupling; see ARCHITECTURE.md
+§2.3/§6.
 
 ---
 

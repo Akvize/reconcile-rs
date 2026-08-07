@@ -3,7 +3,7 @@ name = "rsos"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "A Range-Summarizable Order-Statistics Store (RSOS): the Rsos<K, V> trait and its FingerprintTreeMap<K, V> realization"
+description = "A Range-Summarizable Order-Statistics Store (RSOS): the Rsos<K> trait and its FingerprintTreeMap<K, V> realization"
 repository = "https://github.com/Akvize/reconcile-rs"
 publish = false
 

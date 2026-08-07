@@ -19,6 +19,7 @@ tracing = "0.1.40"
 [dev-dependencies]
 # Test-only, and deliberately not a real dependency: `rbsr` owns no encoding. `diff.rs`'s
 # `wire_format_is_unchanged_by_the_aggregate_collapse` golden-vector test pins `RangeAggregate`'s
-# bytes under the same `DefaultOptions` configuration `reconcile`'s codec uses, next to the field
-# declaration order it guards.
+# bytes under the same `DefaultOptions` configuration `gossip`'s codec uses, next to the field
+# declaration order it guards. Explicitly exempted in `scripts/check-domain-purity.sh` — see the
+# `DEV_DEP_EXEMPTIONS` note there.
 bincode = "1.3.3"
