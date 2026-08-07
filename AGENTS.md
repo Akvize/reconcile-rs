@@ -65,9 +65,10 @@ runs `cargo fmt --check`, `cargo clippy --all -- --deny warnings`, and
 
 ## 5. Code style guidelines
 
-- `#![forbid(unsafe_code)]` (`src/lib.rs`, and the `lww-register`/`gossip`/`snapshot`/`rbsr` crate
-  roots) — no `unsafe`, ever; this is a compile error, not a lint. `rsos` is the one root still
-  missing the attribute; add it there rather than dropping it elsewhere.
+- `#![forbid(unsafe_code)]` on **every** crate root (`src/lib.rs` and all five workspace crates) —
+  no `unsafe`, ever; this is a compile error, not a lint. Carry it onto any new crate root: the
+  workspace split briefly lost it on `rsos`, because moving code out of the monolithic `src/lib.rs`
+  silently drops the attribute that used to cover it.
 - `cargo fmt` and `cargo clippy --deny warnings` (both feature sets, §3/§6) are gated — not style
   suggestions.
 - Strong typing and type-owned validation (§4) are conventions, not yet mechanically gated — hold
@@ -169,21 +170,22 @@ required-file-pairs, and structural invariants almost always are.
 
 ## 11. Publishing
 
-`cargo package -p rsos --allow-dirty` runs in CI to catch packaging breakage (see `Cargo.toml`'s
-`exclude` list — repo-only docs and `examples/k8s/` are excluded from the published crate). Actual
-publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run `cargo publish`
-outside that flow.
+`cargo package` runs in CI for `rsos`, `lww-register` and `gossip` to catch packaging breakage (see
+`Cargo.toml`'s `exclude` list — repo-only docs and `examples/k8s/` are excluded from the published
+crate). Actual publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run
+`cargo publish` outside that flow.
 
-The check covers **`rsos` only** — not `rbsr`, and not the top-level `reconcile` package. Cargo
-refuses to package any crate holding a path dependency that carries no version requirement, until
-that dependency is itself on crates.io. `rsos` is the workspace's one true leaf (zero intra-workspace
-dependencies), so it is the only crate that can be packaged today; `rbsr` depends on `rsos` by path
-and `reconcile` on both, so both hit that wall. Whether and how to publish a multi-crate workspace
-is an open policy question (#204) — until it is settled, do **not** "fix" this by inventing version
-requirements for the internal crates or by publishing them ad hoc. The internal crates carry
-`publish = false` deliberately; `cargo package` is used rather than `cargo publish --dry-run`
-precisely so that guard can stay in place while still compiling the packaged crate. A new crate
-becomes checkable here only once it has no unpublished path dependency of its own.
+The check covers **only the crates with no intra-workspace dependency**. Cargo refuses to package
+any crate holding a path dependency that carries no version requirement, until that dependency is
+itself on crates.io. `rsos`, `lww-register` and `gossip` each depend on nothing else in the
+workspace, so all three can be packaged; `rbsr` (→ `rsos`), `snapshot` (→ `lww-register`) and the
+top-level `reconcile` package (→ all five) hit that wall. Whether and how to publish a multi-crate
+workspace is an open policy question (#204) — until it is settled, do **not** "fix" this by
+inventing version requirements for the internal crates or by publishing them ad hoc. The internal
+crates carry `publish = false` deliberately; `cargo package` is used rather than
+`cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
+packaged crate. A new crate becomes checkable here only once it has no unpublished path dependency
+of its own.
 
 **Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
 tag today, for the same path-dependency reason — loudly, at release time, not silently. That is

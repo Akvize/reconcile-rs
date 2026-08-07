@@ -131,6 +131,8 @@
 //!   bits, which the paper describes as only "probabilistically sound" rather than
 //!   information-theoretically exact. `rsos` does not make that tradeoff.
 
+#![forbid(unsafe_code)]
+
 pub mod aggregate;
 pub mod fingerprint;
 pub mod fingerprint_tree_map;
