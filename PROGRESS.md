@@ -169,7 +169,18 @@ Progress:
   deterministic `ManualClock` test adapter makes HLC behaviour reproducible without wall-clock time.
   Iso-functional; invariant 2 (HLC total order) preserved.
 - ✅ Naming cleanup alongside the port: type `Hlc`→`Timestamp` (#159) and module `hlc`→`clock` (#163).
-- ◯ Steps 4–6 — `Entry`/`State` → `Transport`/`Codec` → workspace split.
+- ✅ Step 4 — `Entry`/`State` domain type: the untyped `(Timestamp, Option<V>)` tuple is replaced by
+  `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); `MaybeTombstone`, `Reconcilable`, `Timestamped`,
+  `Projectable` and `ValueOnly<V>` are dissolved into `Entry`'s inherent methods
+  (`is_tombstone`/`value`/`merge`/`project`) and direct `.stamp` field access. `reconcile_engine.rs`
+  and `reconcile_store.rs` parameterize the engine over the plain `V` and construct
+  `Entry<Timestamp, V>` (map) / `State<V>` (projection) internally; `add_pre_insert`,
+  `ReconcileMirror::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
+  the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
+  — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
+  include — and is guarded by tests in `entry.rs` and `mirror.rs`. **Changes the wire and on-disk
+  formats** (expected; the crate is unpublished, pre-1.0).
+- ◯ Steps 5–6 — `Transport`/`Codec` → workspace split.
 
 ---
 

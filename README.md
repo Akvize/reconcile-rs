@@ -230,7 +230,7 @@ Set either field to `None` to leave the inherited OS default untouched.
 For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReconcileStore`
 keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
 only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
-stores only the value (`ValueOnly<V>`, ~24 bytes lighter per entry for a small payload) and still
+stores only the value (`State<V>`, ~24 bytes lighter per entry for a small payload) and still
 converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
 
 It stays issue-#109-safe: rather than replacing the timestamped reconciliation hash everywhere (which
