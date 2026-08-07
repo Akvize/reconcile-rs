@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ use crate::fingerprint::Fingerprint;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
+use crate::transport::Transport;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
@@ -205,17 +206,43 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
-        let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, V>::new(config).await?,
-            tombstones: TimeoutWheel::new(),
-            persistence: Arc::new(InMemoryPersistence::default()),
-            discovery: None,
-            discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
-            discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
-            discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
-        };
-        svc.add_pre_insert(|_, _| {});
-        Ok(svc)
+        Ok(Self::from_engine(
+            ReconcileEngine::<K, V>::new(config).await?,
+        ))
+    }
+
+    /// Create a `ReconcileStore` over a caller-supplied [`Transport`] adapter instead of the
+    /// default UDP one.
+    ///
+    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
+    /// which the caller has already done, or does not need to do at all. Two uses motivate this
+    /// seam:
+    ///
+    /// - a different datagram transport, e.g. QUIC unreliable datagrams (RFC 9221), whose shape
+    ///   fits this trait;
+    /// - a lossy, reordering or delaying transport, so convergence can be tested under adversity;
+    ///   [`InMemoryNetwork`](crate::InMemoryNetwork) provides the reliable in-process case.
+    ///
+    /// The protocol already assumes datagrams may be lost, duplicated or reordered, so a transport
+    /// cannot violate an invariant by being unreliable. (The [`Clock`](crate::Clock) port is
+    /// deliberately *not* injectable for the opposite reason: a non-monotonic clock silently breaks
+    /// the causal ordering that tombstone collection depends on.)
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use reconcile::{reconcile_store::Config, InMemoryNetwork, ReconcileStore};
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
+    /// let store = ReconcileStore::<String, String>::new_with_transport(
+    ///     Config::default(),
+    ///     transport,
+    /// );
+    /// ```
+    pub fn new_with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        Self::from_engine(ReconcileEngine::<K, V>::with_transport(config, transport))
     }
 
     /// Test-only constructor that accepts an explicit [`Clock`] adapter.
@@ -227,8 +254,17 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {
+        Ok(Self::from_engine(
+            ReconcileEngine::<K, V>::new_with_clock(config, clock).await?,
+        ))
+    }
+
+    /// Wrap a constructed engine in the store's own bookkeeping (tombstone wheel, persistence,
+    /// discovery defaults). The single place those defaults are spelled out, so the constructors
+    /// above cannot drift apart.
+    fn from_engine(engine: ReconcileEngine<K, V>) -> Self {
         let svc = ReconcileStore {
-            engine: ReconcileEngine::<K, V>::new_with_clock(config, clock).await?,
+            engine,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
             discovery: None,
@@ -237,7 +273,18 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
         svc.add_pre_insert(|_, _| {});
-        Ok(svc)
+        svc
+    }
+
+    /// This node's Hybrid-Logical-Clock identity — the `node_id` component of every
+    /// [`Timestamp`] it mints, and the deterministic tie-break that makes the conflict order
+    /// total.
+    ///
+    /// Set explicitly with [`Config::with_node_id`]; otherwise randomly generated at construction,
+    /// in which case it changes on every restart. Reading it back is useful for diagnostics and for
+    /// asserting that a durable deployment really did pin a stable identity.
+    pub fn node_id(&self) -> u64 {
+        self.engine.node_id()
     }
 
     /// Plug in a durable persistence backend, **loading any previously saved state first**.
@@ -491,7 +538,20 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
-    /// Fully-qualified insert: just_insert + async broadcast.
+    /// Fully-qualified insert: `just_insert` + async broadcast.
+    ///
+    /// # Value-size ceiling
+    ///
+    /// The send path packs protocol messages into datagrams but never **fragments** one, so a
+    /// single encoded `(key, entry)` must fit in `65507 - authentication overhead` bytes. Above
+    /// that ceiling the update is never delivered and **the key never converges on any peer** —
+    /// the local map still holds it, so the failure is silent from this node's point of view and
+    /// shows up only as a `warn!` on the send path (tracked as
+    /// [issue #230](https://github.com/Akvize/reconcile-rs/issues/230)).
+    ///
+    /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
+    /// `io::Result` on every write. Keep values well clear of the ceiling — and well clear of the
+    /// network MTU, since an IP-fragmented datagram is lost entirely if any fragment is.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -1211,6 +1271,71 @@ mod reconcile_store_tests {
             max_peers: super::DEFAULT_MAX_PEERS,
             max_concurrent_bulk_dumps: super::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         }
+    }
+
+    /// D4: the node id is settable through `Config` and readable back off the store, and the
+    /// value reported is the one the clock actually stamps onto minted timestamps.
+    #[tokio::test]
+    async fn node_id_is_readable_and_matches_the_minted_stamp() {
+        let store = ReconcileStore::<i32, i32>::new(ephemeral_config().with_node_id(0xABCD))
+            .await
+            .unwrap();
+        assert_eq!(store.node_id(), 0xABCD);
+        store.insert(1, 1);
+        let stamp = store.engine.map.read().get(&1).unwrap().stamp;
+        assert_eq!(stamp.node_id(), store.node_id());
+    }
+
+    /// D2: two stores wired to a caller-supplied `Transport` converge over it, with no UDP socket
+    /// bound anywhere. This is the public seam, exercised exactly as a downstream crate would.
+    #[tokio::test]
+    async fn stores_converge_over_an_injected_transport() {
+        use std::net::SocketAddr;
+        use std::time::Instant;
+
+        use crate::transport::InMemoryNetwork;
+
+        let net = InMemoryNetwork::new();
+        let port = 5100u16;
+        let a_ip: IpAddr = "127.0.0.4".parse().unwrap();
+        let b_ip: IpAddr = "127.0.0.5".parse().unwrap();
+        let cfg = |ip: IpAddr, id: u64| {
+            ephemeral_config()
+                .with_listen_addr(ip)
+                .with_port(port)
+                .with_node_id(id)
+                .with_reconcile_interval(Duration::from_millis(5))
+        };
+        let a = ReconcileStore::<i32, i32>::new_with_transport(
+            cfg(a_ip, 1),
+            Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+        );
+        let b = ReconcileStore::<i32, i32>::new_with_transport(
+            cfg(b_ip, 2),
+            Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+        );
+        // Seed each as the other's gossip peer: the in-memory fabric has no discovery.
+        a.engine.peers.write().insert(b_ip, Instant::now());
+        b.engine.peers.write().insert(a_ip, Instant::now());
+        a.insert(7, 42);
+
+        let ta = tokio::spawn(a.clone().run());
+        let tb = tokio::spawn(b.clone().run());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut converged = false;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if b.get(&7).as_deref() == Some(&42) {
+                converged = true;
+                break;
+            }
+        }
+        ta.abort();
+        tb.abort();
+        assert!(
+            converged,
+            "B never learned A's write over the injected transport"
+        );
     }
 
     #[tokio::test]

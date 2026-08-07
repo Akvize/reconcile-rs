@@ -45,14 +45,22 @@ impl<T> Key for T where
 ///
 /// A blanket impl makes any type that satisfies the listed bounds a `Value` automatically, so this
 /// never has to be implemented by hand. It does not add or remove any concrete bound; it is purely
-/// a shorthand for the repeated `Clone + Debug + Hash + PartialEq + Send + Sync + Serialize +
-/// DeserializeOwned + 'static` list. Note it requires `PartialEq` (not `Ord`), unlike [`Key`].
+/// a shorthand for the repeated `Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned
+/// + 'static` list. Unlike [`Key`] it needs no ordering: values are ordered by the stamp on their
+/// [`Entry`](crate::entry::Entry), never by their own content.
+///
+/// It also needs no `PartialEq`. Values are never compared: under last-write-wins,
+/// [`Entry::merge`](crate::entry::Entry::merge) returns the *other* entry exactly when the remote
+/// stamp is strictly greater, so "would merging change state?" is answered by comparing stamps
+/// (`Timestamp: Ord`) alone — no bound on `V`, and no clone of the value, needed on the receive
+/// path. That equivalence holds only because conflict resolution is last-write-wins; a different
+/// policy could need to inspect the value itself.
 pub trait Value:
-    Clone + Debug + Hash + PartialEq + Send + Sync + Serialize + DeserializeOwned + 'static
+    Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 
 impl<T> Value for T where
-    T: Clone + Debug + Hash + PartialEq + Send + Sync + Serialize + DeserializeOwned + 'static
+    T: Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }

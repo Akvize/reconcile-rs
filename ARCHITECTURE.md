@@ -45,7 +45,9 @@ converge. The design rests on five mechanisms:
 | `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
 | `auth.rs` | Per-datagram message authentication (MAC). |
 | `persistence.rs` | Durability boundary: load/save a snapshot of the dated map. |
-| `reconcile_engine.rs` | Network orchestration: UDP socket, (de)serialisation, peer discovery, gossip. |
+| `transport.rs` | The `Transport` port (datagram I/O) and its `UdpTransport` / `InMemoryTransport` adapters (migration step 5, done). |
+| `reconcile_engine.rs` | Network orchestration: peer discovery, gossip, driving the `Transport`/`Codec` ports. |
+| `codec.rs` | The `Codec` port (wire encoding) and its `BincodeCodec` adapter (`pub(crate)`, migration step 5, done). |
 | `reconcile_store.rs` | Public facade tying the engine, the map, and timeouts together. |
 | `timeout_wheel.rs` | Acknowledgement timeout tracking. |
 
@@ -62,19 +64,25 @@ This is, in effect, the interior of the hexagon and it exists today.
 
 ### 2.3 Infrastructure coupling
 
-The infrastructure dependencies are concentrated in two places:
+Migration step 5 (§6) extracted the `Transport` and `Codec` ports, so `reconcile_engine.rs` no
+longer imports `tokio::net` or `bincode` directly — it drives the gossip protocol purely over the
+two ports (default adapters `UdpTransport` / `BincodeCodec`). The remaining infrastructure
+dependencies:
 
-| Module | Infrastructure imported directly | `file:line` |
+| Module | Infrastructure imported directly | Notes |
 |---|---|---|
-| `clock.rs` | `chrono::Utc` — physical time read inside the domain | `clock.rs:35` |
-| `reconcile_engine.rs` | `tokio::net::UdpSocket`, `tokio::time`, `bincode`, `rand::StdRng`, `ipnet` | `reconcile_engine.rs:21-28,67` |
-| `reconcile_store.rs` | `chrono`, `ipnet` | `reconcile_store.rs:19-20` |
+| `clock.rs` | `chrono::Utc` — physical time read inside the domain | Behind the `Clock` port (`HlcClock` adapter); not yet extracted to a separate adapter module (§3.9 target, not yet split into a workspace). |
+| `transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
+| `codec.rs` | `bincode` | The `Codec` port's adapter — likewise intended. |
+| `reconcile_engine.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O and encoding are). |
+| `reconcile_store.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
+| `mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `ReconcileMirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport`/`BincodeCodec` per send), but the mirror was never given its own injectable `Transport`/`Codec` — out of scope for step 5, left for a future pass. |
 
-The reconciliation engine therefore mixes three concerns — transport (UDP), encoding (bincode), and
-the gossip orchestration — in a single module, with the data structure and protocol reached
-underneath. There is no abstraction boundary between the domain and the transport, the codec, or the
-time source: the domain cannot be exercised without real sockets and real wall-clock time, and none
-of the three can be substituted.
+There is no longer an abstraction boundary missing between the dated engine and the transport or the
+codec: both are substitutable adapters, and the in-memory `Transport`/`Codec` pairing
+(`InMemoryNetwork`/`InMemoryTransport`, `BincodeCodec`) makes the engine's gossip protocol
+exercisable with no real sockets. The wall-clock time source (`clock.rs`) and the mirror's socket
+stack remain the open items.
 
 ### 2.4 Trait landscape
 
@@ -162,6 +170,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 // parameter to the engine, store and Config. Only the physical-time read crosses the boundary.
 pub trait Clock: Send + Sync + 'static {
     fn now(&self) -> Timestamp;           // mint a strictly-monotonic local stamp
+    fn node_id(&self) -> u64;             // identity stamped onto every minted Timestamp
     fn observe(&self, remote: Timestamp);  // advance past a peer's stamp (causality)
 }
 
@@ -222,9 +231,22 @@ pub trait Discovery: Send + Sync + 'static {
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
 raw bytes before any decoding occurs. It is never folded into the `Codec`.
 
-The ports make the domain testable in isolation: an in-memory `Transport` (optionally lossy and
-reordering) and a fixed `Clock` make convergence and HLC behaviour deterministic without real
-sockets or wall-clock time.
+The ports make the domain testable in isolation: an in-memory `Transport` (`InMemoryNetwork` /
+`InMemoryTransport`, `transport.rs`) and a fixed `Clock` make convergence and HLC behaviour
+deterministic without real sockets or wall-clock time.
+
+**Visibility asymmetry (`Transport` public, `Codec` `pub(crate)`).** `Transport` is
+consumer-wireable: `ReconcileStore::new_with_transport` takes any
+`Arc<dyn Transport<Addr = SocketAddr>>`, and `InMemoryNetwork`/`InMemoryTransport` are public (not
+test-gated) so a downstream crate can drive a deterministic in-process cluster in its own tests —
+that, plus a future non-UDP datagram transport (e.g. QUIC unreliable datagrams), is what earns
+`Transport` a public injection point. `Codec` (and `BincodeCodec`) stay `pub(crate)`: its methods
+are generic, so it is not object-safe and is always carried as a type parameter rather than a
+trait object — exposing it would force a type-changing builder on every consumer — and no
+plausible use (compression, cross-language interop) is served by making it swappable from outside
+the crate. `Clock` stays test-only for the opposite reason: the protocol already tolerates an
+unreliable transport, but a non-monotonic clock silently breaks the causal ordering tombstone
+collection depends on, so it is not a seam offered to callers.
 
 ### 3.6 Domain types and conflict policy
 
@@ -280,11 +302,14 @@ so implementation sites read `impl<K: Key, V: Value>`:
 pub trait Key:   Clone + Debug + Hash + Ord + Send + Sync + Serialize + DeserializeOwned + 'static {}
 impl<T> Key for T where T: /* same */ {}
 
-pub trait Value: Clone + Debug + Hash + PartialEq + Send + Sync + Serialize + DeserializeOwned + 'static {}
+pub trait Value: Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static {}
 impl<T> Value for T where T: /* same */ {}
 ```
 
-Entry semantics travel with `Entry`, not with the `V` bound.
+Entry semantics travel with `Entry`, not with the `V` bound. `Value` carries no `PartialEq`: the
+receive path's only "did this change?" question is a stamp comparison (`Entry::merge` returns
+`other` exactly when the remote stamp is strictly greater), so `Timestamp: Ord` answers it without
+ever needing to compare — or clone — the value itself.
 
 ### 3.9 Crate structure
 
@@ -324,8 +349,8 @@ without a compile error — the guarantee a single crate cannot provide.
 | `HashRangeQueryable`, `Diffable` (public) | inherent `HRTree` methods + `pub(crate)` diff functions |
 | `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
 | `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
-| `UdpSocket` in `reconcile_engine.rs` | `Transport` port; `UdpTransport` adapter |
-| `bincode` in `reconcile_engine.rs` | `Codec` port; `BincodeCodec` adapter |
+| `UdpSocket` in `reconcile_engine.rs` | ✅ `Transport` port (`transport.rs`); `UdpTransport` adapter (public, `ReconcileStore::new_with_transport` — D2) |
+| `bincode` in `reconcile_engine.rs` | ✅ `Codec` port (`codec.rs`); `BincodeCodec` adapter (`pub(crate)` — D2), `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
@@ -379,11 +404,30 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    `State<V>` internally; `add_pre_insert`, `ReconcileMirror::add_on_update` and `PersistedState`
    carry `Entry<Timestamp, V>` / `State<V>` directly. *Changed the wire and on-disk formats*, as
    anticipated — acceptable pre-1.0.
-5. **`Transport` & `Codec` ports** — extract both; `UdpTransport` / `BincodeCodec` adapters; the
-   engine becomes a thin driver over the ports, with authentication ahead of the codec.
+5. ✅ **`Transport` & `Codec` ports** (done, issue #144) — extract both; `UdpTransport` /
+   `BincodeCodec` adapters (`transport.rs` / `codec.rs`); the engine (`reconcile_engine.rs`) becomes
+   a thin driver over the ports — it imports neither `tokio::net` nor `bincode` directly — with
+   authentication ahead of the codec (invariant 5) and `Codec::decode_stream`'s `max_items` cap
+   closing the datagram-expansion DoS (#151). `ReconcileEngine`/`SendPorts` are generic over the
+   codec and hold the transport as `Arc<dyn Transport<Addr = SocketAddr>>`.
+   `ReconcileStore::new_with_transport` makes `Transport` consumer-wireable (infallible: the only
+   fallible step in `new` is the socket bind, already done by a caller supplying their own
+   transport) and `InMemoryNetwork`/`InMemoryTransport` are public, not test-gated, so downstream
+   crates can drive a deterministic in-process cluster in their own tests; `Codec`/`BincodeCodec`
+   stay `pub(crate)` (not object-safe, always a type parameter — see §3.5). `Clock::node_id` was
+   added so `ReconcileStore::node_id()` can read the identity back from the same adapter that
+   stamps it, rather than caching it separately. `Value` dropped its `PartialEq` bound: the
+   receive path's post-merge change detection is now a stamp comparison
+   (`remote.stamp > local.stamp`, equivalent to `Entry::merge` under LWW) rather than an
+   `Entry`/value equality check, which needed no bound on `V` and avoids a clone on the hot path.
+   **Residual coupling**: `ReconcileMirror` (`mirror.rs`) still binds and owns its own UDP socket
+   and calls `bincode` directly for its own receive loop — only its *send* calls were rewired onto
+   the shared `Transport`/`Codec`-generic helpers. Routing the mirror's own socket onto an
+   injectable `Transport` is deferred (tracked under issue #138, same as the workspace split
+   below).
 6. **Workspace split** — promote the layers to `reconcile-core` / `reconcile-net` /
    `reconcile-store` / `reconcile`; ports defined in the core; the core carries no infrastructure
    dependency.
 
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
-done); steps 5–6 complete the boundary extraction and enforce it at the crate level.
+done); step 5 is done; step 6 completes the boundary extraction and enforces it at the crate level.
