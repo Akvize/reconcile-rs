@@ -27,8 +27,8 @@ use criterion::{
 use tokio::runtime::Runtime;
 
 use reconcile::{
-    reconcile_store::Config, FileSnapshot, PersistedState, Persistence, ReconcileStore, Timestamp,
-    ValueOnly,
+    reconcile_store::Config, Entry, FileSnapshot, PersistedState, Persistence, ReconcileStore,
+    State, Timestamp,
 };
 
 /// Dataset sizes swept by the size-parameterised benchmarks (log scale).
@@ -114,11 +114,11 @@ fn bulk_load(c: &mut Criterion) {
 /// projection, across value payload sizes. Printed rather than timed (it is a compile-time fact).
 fn memory_footprint(c: &mut Criterion) {
     fn report<const N: usize>() {
-        let dated = std::mem::size_of::<(Timestamp, Option<[u8; N]>)>();
-        let light = std::mem::size_of::<ValueOnly<[u8; N]>>();
+        let dated = std::mem::size_of::<Entry<Timestamp, [u8; N]>>();
+        let light = std::mem::size_of::<State<[u8; N]>>();
         println!(
-            "[memory] value=[u8; {N}]: dated (Timestamp, Option) = {dated} B/entry, \
-             value-only = {light} B/entry, saved = {} B/entry",
+            "[memory] value=[u8; {N}]: dated Entry<Timestamp, V> = {dated} B/entry, \
+             value-only State<V> = {light} B/entry, saved = {} B/entry",
             dated.saturating_sub(light)
         );
     }
@@ -128,7 +128,7 @@ fn memory_footprint(c: &mut Criterion) {
 
     // A trivial timed anchor so the report participates in a normal `cargo bench` run.
     c.bench_function("memory_footprint::size_of", |b| {
-        b.iter(|| black_box(std::mem::size_of::<(Timestamp, Option<[u8; 64]>)>()));
+        b.iter(|| black_box(std::mem::size_of::<Entry<Timestamp, [u8; 64]>>()));
     });
 }
 
@@ -209,7 +209,7 @@ fn durable_rejoin(c: &mut Criterion) {
         let snapshot = FileSnapshot::new(dir.path().join("reconcile.snapshot"));
         let state: PersistedState<u32, u32> = PersistedState {
             entries: (0..size as u32)
-                .map(|k| (k, (Timestamp::new(k as u64, 0, 0), Some(k))))
+                .map(|k| (k, Entry::present(Timestamp::new(k as u64, 0, 0), k)))
                 .collect(),
             members: HashSet::new(),
             tombstone_acks: HashMap::new(),
