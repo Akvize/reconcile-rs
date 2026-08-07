@@ -6,52 +6,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The [`Codec`] port — the domain's wire-encoding boundary — and its default [`BincodeCodec`]
-//! adapter (`ARCHITECTURE.md` §3.4).
+//! [`BincodeCodec`]: the crate's wire-encoding adapter — `bincode` with the frozen
+//! [`DefaultOptions`](bincode::DefaultOptions) configuration.
 //!
-//! The reconciliation engine drives itself over this port instead of calling `bincode` directly, so
-//! the encoding is a substitutable adapter rather than a hard dependency of the domain. Message
+//! Concrete, not a trait: unlike [`Transport`](crate::transport::Transport), there is exactly one
+//! encoding in use, its methods are generic (so a trait version would not be object-safe and would
+//! always be carried as a type parameter anyway), and its plausible alternate uses — compression,
+//! cross-language interop — are not served by swapping an implementation: compression interacts
+//! with authenticate-before-decode and with datagram-size accounting, and cross-language interop
+//! needs a published wire spec, not a Rust trait. `HashRangeQueryable`/`Diffable` and
+//! `Reconcilable`/`MaybeTombstone` were dissolved for the same reason (`ARCHITECTURE.md` §2.4).
+//!
+//! The reconciliation engine drives itself over [`BincodeCodec`]'s inherent methods instead of
+//! calling `bincode` directly elsewhere, so the encoding stays isolated to this module. Message
 //! authentication always sits **ahead of** the codec: the MAC is verified on the raw datagram bytes
 //! before any decoding runs (invariant #5, `ARCHITECTURE.md` §5), so a forged datagram never reaches
-//! [`decode_stream`](Codec::decode_stream).
-//!
-//! Deliberately `pub(crate)` (`ARCHITECTURE.md` §7 D2): `Codec` has generic methods, so it is not
-//! object-safe and is always carried as a type parameter — exposing it would force a type-changing
-//! builder on every consumer. Its plausible uses (compression, cross-language interop) are not
-//! served by swapping the trait anyway: compression interacts with authenticate-before-decode and
-//! with datagram-size accounting, and cross-language interop needs a published wire spec, not a
-//! Rust trait.
+//! [`decode_stream`](BincodeCodec::decode_stream).
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// Abstracts the wire encoding used for protocol messages.
-///
-/// A single datagram carries a *stream* of protocol messages, so the decode side returns a `Vec`
-/// and takes a `max_items` cap: a crafted datagram cannot be expanded into an unbounded number of
-/// messages (a denial-of-service hazard). The encode side appends to a caller-owned buffer so a
-/// batch of messages can be framed into one datagram without per-message allocation.
-pub(crate) trait Codec: Send + Sync + 'static {
-    /// The error type produced by encoding or decoding.
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Append the encoding of `value` to `out`.
-    fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> Result<(), Self::Error>;
-
-    /// Decode a stream of `T` from `bytes`, stopping at a clean end-of-input or once `max_items`
-    /// values have been decoded (whichever comes first).
-    ///
-    /// A **clean** end-of-input (all bytes consumed on a message boundary) yields the values decoded
-    /// so far; a *malformed* stream (a partial or invalid message mid-buffer) is an error, so a
-    /// corrupt or hostile datagram is rejected wholesale rather than half-applied.
-    fn decode_stream<T: DeserializeOwned>(
-        &self,
-        bytes: &[u8],
-        max_items: usize,
-    ) -> Result<Vec<T>, Self::Error>;
-}
-
-/// The default [`Codec`] adapter: `bincode` with the crate's frozen
+/// The crate's wire-encoding adapter: `bincode` with the frozen
 /// [`DefaultOptions`](bincode::DefaultOptions) configuration.
 ///
 /// The configuration (variable-int encoding, little-endian) is part of the frozen wire format;
@@ -64,21 +39,31 @@ impl BincodeCodec {
     pub(crate) fn new() -> Self {
         BincodeCodec
     }
-}
 
-impl Codec for BincodeCodec {
-    type Error = bincode::Error;
-
-    fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> Result<(), Self::Error> {
+    /// Append the encoding of `value` to `out`.
+    ///
+    /// The encode side appends to a caller-owned buffer so a batch of messages can be framed into
+    /// one datagram without per-message allocation.
+    pub(crate) fn encode<T: Serialize>(&self, value: &T, out: &mut Vec<u8>) -> bincode::Result<()> {
         use bincode::{DefaultOptions, Serializer};
         value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
     }
 
-    fn decode_stream<T: DeserializeOwned>(
+    /// Decode a stream of `T` from `bytes`, stopping at a clean end-of-input or once `max_items`
+    /// values have been decoded (whichever comes first).
+    ///
+    /// A single datagram carries a *stream* of protocol messages, so this returns a `Vec` and takes
+    /// a `max_items` cap: a crafted datagram cannot be expanded into an unbounded number of messages
+    /// (a denial-of-service hazard).
+    ///
+    /// A **clean** end-of-input (all bytes consumed on a message boundary) yields the values decoded
+    /// so far; a *malformed* stream (a partial or invalid message mid-buffer) is an error, so a
+    /// corrupt or hostile datagram is rejected wholesale rather than half-applied.
+    pub(crate) fn decode_stream<T: DeserializeOwned>(
         &self,
         bytes: &[u8],
         max_items: usize,
-    ) -> Result<Vec<T>, Self::Error> {
+    ) -> bincode::Result<Vec<T>> {
         use bincode::{DefaultOptions, Deserializer};
         let mut deserializer = Deserializer::from_slice(bytes, DefaultOptions::new());
         let mut out = Vec::new();

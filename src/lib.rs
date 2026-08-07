@@ -76,12 +76,10 @@ pub mod transport;
 pub mod prometheus;
 
 pub(crate) mod auth;
-// The `Codec` port is deliberately internal, unlike `Transport` (`ARCHITECTURE.md` §3.4/§3.5): it
-// has generic methods, so it is not object-safe and is carried as a type parameter — exposing it
-// would force a type-changing builder. Its plausible uses are not served by swapping the trait
-// anyway: compression interacts with authenticate-before-decode (invariant 5) and with datagram
-// size accounting, and cross-language interop needs a published wire spec, not a Rust trait. The
-// type parameter is kept, so the seam survives at no public cost.
+// `BincodeCodec` (`codec.rs`) is a concrete wire-encoding adapter, not a port: unlike `Transport`
+// (`ARCHITECTURE.md` §3.4/§3.5) there is a single implementation and no plausible swap (compression
+// interacts with authenticate-before-decode; cross-language interop needs a published wire spec,
+// not a Rust trait) — see the module doc comment for the full reasoning.
 pub(crate) mod codec;
 // Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
 // implementation details, not part of the supported public surface. The few internals the
