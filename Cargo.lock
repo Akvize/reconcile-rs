@@ -1292,7 +1292,6 @@ dependencies = [
 name = "reconcile"
 version = "0.2.1"
 dependencies = [
- "arrayvec",
  "async-trait",
  "bincode",
  "blake3",
@@ -1309,7 +1308,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rand 0.8.5",
- "range-cmp",
+ "rsos",
  "serde",
  "sha2",
  "socket2",
@@ -1357,6 +1356,19 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
+
+[[package]]
+name = "rsos"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "blake3",
+ "once_cell",
+ "rand 0.8.5",
+ "range-cmp",
+ "serde",
+ "tracing",
+]
 
 [[package]]
 name = "rustc-demangle"

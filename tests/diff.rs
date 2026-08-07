@@ -3,15 +3,15 @@
 use std::hash::Hash;
 use std::ops::Bound;
 
-use reconcile::hrtree::HRTree;
 use reconcile::testing::{diff_round, range_hash, start_diff, DiffRange};
+use rsos::FingerprintTree;
 
 /// Run the full diff exchange between two trees, returning `(local_owes, remote_owes)`: the
 /// ranges `local` must send to `remote` and vice-versa. Drives the `pub(crate)` anti-entropy
 /// protocol through the gated `reconcile::testing` seam.
 pub fn diff<K, V>(
-    local: &HRTree<K, V>,
-    remote: &HRTree<K, V>,
+    local: &FingerprintTree<K, V>,
+    remote: &FingerprintTree<K, V>,
 ) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>)
 where
     K: Clone + Hash + Ord,
@@ -38,7 +38,7 @@ where
     (local_diff_ranges, remote_diff_ranges)
 }
 
-pub fn reconcile<K, V>(local: &mut HRTree<K, V>, remote: &mut HRTree<K, V>)
+pub fn reconcile<K, V>(local: &mut FingerprintTree<K, V>, remote: &mut FingerprintTree<K, V>)
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
@@ -58,11 +58,11 @@ where
 
 #[test]
 fn test_compare() {
-    let tree1 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
-    let tree2 = HRTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
-    let tree3 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
-    let tree4 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
-    let tree5 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+    let tree1 = FingerprintTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+    let tree2 = FingerprintTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+    let tree3 = FingerprintTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+    let tree4 = FingerprintTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+    let tree5 = FingerprintTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
     assert_eq!(range_hash(&tree1, &..), range_hash(&tree1, &..));
     assert_eq!(range_hash(&tree1, &..), range_hash(&tree2, &..));

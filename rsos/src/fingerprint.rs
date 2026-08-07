@@ -236,7 +236,7 @@ impl Hasher for Blake3Hasher {
 
 /// Compute the 256-bit [`Fingerprint`] of a single key-value element.
 ///
-/// This is the per-element hash that the [`HRTree`](crate::hrtree::HRTree)
+/// This is the per-element hash that the [`FingerprintTree`](crate::hrtree::FingerprintTree)
 /// combines into range fingerprints. It is BLAKE3 over the key bytes followed by
 /// the value bytes, fed in a fixed, portable encoding (see the `Blake3Hasher` adapter),
 /// and is part of the wire protocol — see the golden-vector tests.

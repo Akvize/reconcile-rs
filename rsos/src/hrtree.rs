@@ -6,13 +6,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides a [`Hash Range Tree`](HRTree), a key-value store
-//! based on a BTree structure.
+//! Provides [`FingerprintTree`], a from-scratch `ArrayVec`-node B-tree (order 6) that caches a
+//! per-subtree [`Fingerprint`] (and element count) at every node.
 //!
-//! It is the core of the protocol, as it allows `O(log(n))` access,
-//! insertion and removal, as well as `O(log(n))` cumulated hash range-query.
-//! The latter property enables querying
-//! the cumulated [`Fingerprint`] of all key-value pairs between two keys.
+//! It allows `O(log(n))` access, insertion and removal, as well as `O(log(n))` cumulated
+//! hash range-queries. The latter property enables querying the cumulated [`Fingerprint`] of all
+//! key-value pairs between two keys.
 //!
 //! The per-element hash and the way fingerprints are combined (256-bit addition,
 //! *not* XOR) live in [`crate::fingerprint`]; see that module for
@@ -22,9 +21,10 @@
 //! published on Arxiv in February 2023:
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
-//! [`HRTree`] exposes the inherent range-hash queries (`hash`, `insertion_position`,
-//! `key_at`, `len`) that the crate-internal anti-entropy protocol (see the `proto` module)
-//! uses to drive range reconciliation.
+//! [`FingerprintTree`] exposes the range-hash queries (`hash`/`range_aggregate`,
+//! `insertion_position`, `key_at`, `len`) that a range-based-set-reconciliation anti-entropy
+//! protocol (such as this workspace's `rbsr`-to-be) needs to drive range reconciliation. It also
+//! implements the [`Rsos`](crate::Rsos) trait — see the crate root docs.
 
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -277,19 +277,19 @@ impl<K, V> Node<K, V> {
 }
 
 #[derive(Clone)]
-pub struct HRTree<K, V> {
+pub struct FingerprintTree<K, V> {
     pub(crate) root: Box<Node<K, V>>,
 }
 
-impl<K, V> Default for HRTree<K, V> {
+impl<K, V> Default for FingerprintTree<K, V> {
     fn default() -> Self {
-        HRTree {
+        FingerprintTree {
             root: Box::new(Node::new()),
         }
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
+impl<K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
     pub fn new() -> Self {
         Default::default()
     }
@@ -575,33 +575,34 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
     }
 }
 
-impl<K, V> PartialEq for HRTree<K, V> {
+impl<K, V> PartialEq for FingerprintTree<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.root.tree_hash == other.root.tree_hash
     }
 }
 
-impl<K, V> Eq for HRTree<K, V> {}
+impl<K, V> Eq for FingerprintTree<K, V> {}
 
-impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for HRTree<K, V> {
+impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for FingerprintTree<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
-    /// Cumulated [`Fingerprint`] over a range of keys: the 256-bit additive combination
-    /// (see [`crate::fingerprint`]) of the per-element hashes of every element in the range,
-    /// answered in `O(log n)` from the per-subtree cached hashes. Drives the anti-entropy
-    /// protocol (the `proto` module); `pub(crate)` — it is reconciliation mechanism, not part
-    /// of the public surface.
-    pub(crate) fn hash<R: RangeBounds<K>>(&self, range: &R) -> Fingerprint {
+impl<K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
+    /// Bundled `(count, Fingerprint)` aggregate over a range of keys: Def. 3.5's `A(S) = (|S|,
+    /// Σ(S))`, answered in a single `O(log n)` tree walk from the per-subtree cached
+    /// `tree_size`/`tree_hash` (see the internal `Node` type), which are already updated together in lockstep on
+    /// every mutation. This is [`Rsos::aggregate`](crate::Rsos::aggregate)'s realization; `hash`
+    /// below is a thin wrapper discarding the count half for callers that only need the
+    /// [`Fingerprint`].
+    pub fn range_aggregate<R: RangeBounds<K>>(&self, range: &R) -> (usize, Fingerprint) {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
             range: &R,
             mut lower_bound: Option<&'a K>,
             upper_bound: Option<&K>,
-        ) -> Fingerprint {
+        ) -> (usize, Fingerprint) {
             // check if the lower-bound is included in the range
             let lower_bound_included = match range.start_bound() {
                 Bound::Unbounded => true,
@@ -624,12 +625,14 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
                     }
                 }
             };
-            // if both lower and upper bounds are included in the range, just use the tree hash invariant
+            // if both lower and upper bounds are included in the range, just use the tree
+            // size/hash invariants
             if lower_bound_included && upper_bound_included {
-                return node.tree_hash;
+                return (node.tree_size, node.tree_hash);
             }
             // otherwise, recurse in the relevant sub-trees
 
+            let mut cum_size = 0;
             let mut cum_hash = Fingerprint::ZERO;
             let mut i = 0;
             while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Below {
@@ -638,23 +641,43 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
             while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Inside {
                 let cur_bound = Some(&node.keys[i]);
                 if let Some(children) = node.children.as_ref() {
-                    cum_hash += aux(&children[i], range, lower_bound, cur_bound);
+                    let (child_size, child_hash) = aux(&children[i], range, lower_bound, cur_bound);
+                    cum_size += child_size;
+                    cum_hash += child_hash;
                 }
                 cum_hash += node.hashes[i];
+                cum_size += 1;
                 lower_bound = cur_bound;
                 i += 1;
             }
             if let Some(children) = node.children.as_ref() {
-                cum_hash += aux(&children[i], range, lower_bound, upper_bound);
+                let (child_size, child_hash) = aux(&children[i], range, lower_bound, upper_bound);
+                cum_size += child_size;
+                cum_hash += child_hash;
             }
-            cum_hash
+            (cum_size, cum_hash)
         }
         aux(&self.root, range, None, None)
     }
 
+    /// Cumulated [`Fingerprint`] over a range of keys: the 256-bit additive combination
+    /// (see [`crate::fingerprint`]) of the per-element hashes of every element in the range,
+    /// answered in `O(log n)` from the per-subtree cached hashes. `pub` — it is reconciliation
+    /// mechanism (drives range-based-set-reconciliation protocols such as this workspace's
+    /// `rbsr`-to-be), not general-purpose public API, but reachable across the crate boundary now
+    /// that `FingerprintTree` lives in its own crate.
+    ///
+    /// Thin wrapper over [`range_aggregate`](Self::range_aggregate), keeping this exact signature
+    /// and return value for existing simple callers that only need the fingerprint.
+    pub fn hash<R: RangeBounds<K>>(&self, range: &R) -> Fingerprint {
+        self.range_aggregate(range).1
+    }
+
     /// Position of `key` in the in-order sequence if present, or the position it would occupy
-    /// after insertion otherwise. Reconciliation mechanism (`proto`); `pub(crate)`.
-    pub(crate) fn insertion_position(&self, key: &K) -> usize {
+    /// after insertion otherwise. This realizes Def. 3.9's `Rank` operation (see
+    /// [`Rsos::rank`](crate::Rsos::rank)); `pub` so range-based-set-reconciliation protocol
+    /// crates outside `rsos` can drive it.
+    pub fn insertion_position(&self, key: &K) -> usize {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
@@ -684,9 +707,10 @@ impl<K: Hash + Ord, V: Hash> HRTree<K, V> {
         aux(&self.root, key)
     }
 
-    /// Reference to the key at the given in-order position. Panics if out of bounds.
-    /// Reconciliation mechanism (`proto`); `pub(crate)`.
-    pub(crate) fn key_at(&self, index: usize) -> &K {
+    /// Reference to the key at the given in-order position. Panics if out of bounds. This
+    /// realizes Def. 3.9's `Select` operation (see [`Rsos::select`](crate::Rsos::select));
+    /// `pub` so range-based-set-reconciliation protocol crates outside `rsos` can drive it.
+    pub fn key_at(&self, index: usize) -> &K {
         fn aux<K: Ord, V>(node: &Node<K, V>, mut index: usize) -> &K {
             if let Some(children) = node.children.as_ref() {
                 for i in 0..node.keys.len() {
@@ -758,7 +782,7 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
     }
 }
 
-impl<K: Ord, V> HRTree<K, V> {
+impl<K: Ord, V> FingerprintTree<K, V> {
     pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();
@@ -805,14 +829,13 @@ mod tests {
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
     use crate::fingerprint::Fingerprint;
-    use crate::proto::{diff_round, start_diff};
 
-    use super::HRTree;
+    use super::FingerprintTree;
 
     #[test]
     fn test_simple() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut tree: HRTree<u64, u64> = HRTree::new();
+        let mut tree: FingerprintTree<u64, u64> = FingerprintTree::new();
         for _ in 1..=100 {
             tree.insert(rng.gen(), rng.gen());
             tree.check_invariants();
@@ -822,7 +845,7 @@ mod tests {
     #[test]
     fn test_hash() {
         // empty
-        let mut tree = HRTree::new();
+        let mut tree = FingerprintTree::new();
         assert_eq!(tree.hash(&..), Fingerprint::ZERO);
         tree.check_invariants();
 
@@ -857,7 +880,7 @@ mod tests {
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut tree1 = HRTree::new();
+        let mut tree1 = FingerprintTree::new();
         let mut key_values = Vec::new();
 
         let mut expected_hash = Fingerprint::ZERO;
@@ -891,7 +914,7 @@ mod tests {
         // in the tree, the items should now be sorted
         key_values.sort();
 
-        let mut tree2 = HRTree::from_iter(key_values.iter().copied());
+        let tree2 = FingerprintTree::from_iter(key_values.iter().copied());
         assert_eq!(tree1, tree2);
 
         // check for partial ranges
@@ -920,7 +943,7 @@ mod tests {
             SI: std::slice::SliceIndex<[(u64, u64)], Output = [(u64, u64)]>,
         >(
             key_values: &[(u64, u64)],
-            tree: &HRTree<u64, u64>,
+            tree: &FingerprintTree<u64, u64>,
             range: R,
             slice_index: SI,
         ) {
@@ -943,33 +966,10 @@ mod tests {
         test_range(&key_values, &tree1, from_key.., from_index..);
         test_range(&key_values, &tree1, .., ..);
 
-        // test diff
-        let key: u64 = rng.gen::<u64>();
-        let value: u64 = rng.gen();
-        let old = tree2.insert(key, value);
-        assert!(old.is_none());
-        let mut diff_ranges1 = Vec::new();
-        let mut diff_ranges2 = Vec::new();
-        let mut segments1 = start_diff(&tree1);
-        let mut segments2 = Vec::new();
-        while !segments1.is_empty() {
-            diff_round(
-                &tree2,
-                std::mem::take(&mut segments1),
-                &mut segments2,
-                &mut diff_ranges2,
-            );
-            diff_round(
-                &tree1,
-                std::mem::take(&mut segments2),
-                &mut segments1,
-                &mut diff_ranges1,
-            );
-        }
-        assert_eq!(diff_ranges1.len(), 0);
-        assert_eq!(diff_ranges2.len(), 1);
-        let items: Vec<_> = tree2.get_range(&diff_ranges2[0]).collect();
-        assert_eq!(items, vec![(&key, &value)]);
+        // NOTE: the diff-protocol exchange between `tree1`/`tree2` used to be exercised here too,
+        // but the anti-entropy protocol (`proto`/future `rbsr`) lives in a different crate now
+        // (this crate is a leaf with no dependency on it) — that coverage lives in the
+        // `reconcile` crate's own tests (`tests/diff.rs`, `tests/proptest_hrtree.rs`) instead.
 
         // remove everything one-by-one
         key_values.shuffle(&mut rng);
@@ -980,5 +980,63 @@ mod tests {
             expected_hash -= super::hash(&key, &value);
             assert_eq!(tree1.hash(&..), expected_hash);
         }
+    }
+
+    /// The bundled `range_aggregate(range).0` (Def. 3.5's `A(S) = (|S|, Σ(S))`, the count half)
+    /// must agree with the pre-existing, independently-computed `get_range(range).count()` — the
+    /// two-call approach `range_aggregate` replaces — over a handful of ranges (empty, full,
+    /// partial) on a tree with several dozen inserted keys. Also checks that the fingerprint half
+    /// still matches `hash(range)` exactly, since `hash` is now a thin wrapper over it.
+    #[test]
+    fn range_aggregate_count_matches_get_range_count() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut tree: FingerprintTree<u32, u32> = FingerprintTree::new();
+        let mut keys = Vec::new();
+        for _ in 0..75 {
+            let key: u32 = rng.gen();
+            let value: u32 = rng.gen();
+            tree.insert(key, value);
+            keys.push(key);
+        }
+        keys.sort_unstable();
+        tree.check_invariants();
+
+        let check = |range: &dyn Fn() -> (std::ops::Bound<u32>, std::ops::Bound<u32>)| {
+            let range = range();
+            let (count, agg_hash) = tree.range_aggregate(&range);
+            assert_eq!(
+                count,
+                tree.get_range(&range).count(),
+                "range_aggregate count disagrees with get_range().count() for {range:?}"
+            );
+            assert_eq!(
+                agg_hash,
+                tree.hash(&range),
+                "range_aggregate fingerprint disagrees with hash() for {range:?}"
+            );
+        };
+
+        // empty range: nothing between a key and itself, excluded
+        let mid = keys[keys.len() / 2];
+        check(&|| {
+            (
+                std::ops::Bound::Included(mid),
+                std::ops::Bound::Excluded(mid),
+            )
+        });
+        // full range
+        check(&|| (std::ops::Bound::Unbounded, std::ops::Bound::Unbounded));
+        // partial ranges
+        let lo = keys[keys.len() / 4];
+        let hi = keys[3 * keys.len() / 4];
+        check(&|| (std::ops::Bound::Included(lo), std::ops::Bound::Excluded(hi)));
+        check(&|| (std::ops::Bound::Excluded(lo), std::ops::Bound::Included(hi)));
+        check(&|| (std::ops::Bound::Unbounded, std::ops::Bound::Excluded(hi)));
+        check(&|| (std::ops::Bound::Included(lo), std::ops::Bound::Unbounded));
+        // an empty tree
+        let empty: FingerprintTree<u32, u32> = FingerprintTree::new();
+        let (count, hash) = empty.range_aggregate(&..);
+        assert_eq!(count, 0);
+        assert_eq!(hash, Fingerprint::ZERO);
     }
 }

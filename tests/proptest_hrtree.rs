@@ -11,10 +11,10 @@
 //! These exercise the two invariants that matter most for a reconciliation
 //! library and that fixed-seed example tests cannot cover exhaustively:
 //!
-//! 1. The hand-rolled B-tree (`HRTree`) behaves like a `BTreeMap` oracle for
+//! 1. The hand-rolled B-tree (`FingerprintTree`) behaves like a `BTreeMap` oracle for
 //!    every random `insert`/`remove`/`get`/`range` sequence, and its internal
-//!    [`HRTree::check_invariants`] holds after *every* mutation (this is where
-//!    the `TODO` rebalancing edge cases in `src/hrtree.rs` would surface).
+//!    [`FingerprintTree::check_invariants`] holds after *every* mutation (this is where
+//!    the `TODO` rebalancing edge cases in `rsos/src/hrtree.rs` would surface).
 //! 2. Any two stores converge to identical state after running the full diff
 //!    loop, the returned diff ranges equal the true symmetric difference of the
 //!    key sets, and convergence survives reordered, duplicated and dropped
@@ -30,12 +30,11 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use reconcile::fingerprint::Fingerprint;
-use reconcile::hrtree::HRTree;
-use reconcile::testing::{diff_round, hash, range_hash, start_diff, DiffRange, HashSegment};
+use reconcile::testing::{diff_round, range_hash, start_diff, DiffRange, HashSegment};
+use rsos::{hash, Fingerprint, FingerprintTree};
 
 // ---------------------------------------------------------------------------
-// Property 1: HRTree is observationally equivalent to a BTreeMap oracle, and
+// Property 1: FingerprintTree is observationally equivalent to a BTreeMap oracle, and
 // every internal invariant holds after every single mutation.
 // ---------------------------------------------------------------------------
 
@@ -61,7 +60,7 @@ proptest! {
 
     #[test]
     fn hrtree_matches_btreemap_oracle(ops in prop::collection::vec(op_strategy(), 0..400)) {
-        let mut tree: HRTree<u8, u16> = HRTree::new();
+        let mut tree: FingerprintTree<u8, u16> = FingerprintTree::new();
         let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
 
         for op in ops {
@@ -102,7 +101,7 @@ proptest! {
         lo in any::<u8>(),
         hi in any::<u8>(),
     ) {
-        let mut tree: HRTree<u8, u16> = HRTree::new();
+        let mut tree: FingerprintTree<u8, u16> = FingerprintTree::new();
         let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
         for (k, v) in entries {
             tree.insert(k, v);
@@ -129,12 +128,12 @@ proptest! {
 // We model a universe of (key, value) pairs and give each store an arbitrary
 // subset. Shared keys carry identical values (the diff algorithm reconciles the
 // *set* of keys; per-key conflict resolution is the job of `ReconcileStore`'s
-// last-write-wins layer, not of the raw `HRTree`). The true symmetric
+// last-write-wins layer, not of the raw `FingerprintTree`). The true symmetric
 // difference of the key sets is therefore well defined and we assert the
 // protocol discovers exactly it.
 // ---------------------------------------------------------------------------
 
-type Tree = HRTree<u64, u64>;
+type Tree = FingerprintTree<u64, u64>;
 
 /// One full diff exchange, optionally perturbing the in-flight message vectors
 /// each round with `perturb` to model an adversarial transport (reordering and
@@ -193,8 +192,8 @@ fn build_pair(
     // Deduplicate by key, keeping the first occurrence so shared keys are
     // guaranteed identical values across both trees.
     let mut seen = BTreeMap::new();
-    let mut a = HRTree::new();
-    let mut b = HRTree::new();
+    let mut a = FingerprintTree::new();
+    let mut b = FingerprintTree::new();
     let mut only_a = Vec::new();
     let mut only_b = Vec::new();
     let mut union = BTreeMap::new();

@@ -20,7 +20,7 @@
 
 ## 1. Headline
 
-The **algorithmic core** (HRTree + range fingerprint + RBSR diff) is correct and SOTA-aligned. The
+The **algorithmic core** (FingerprintTree + range fingerprint + RBSR diff) is correct and SOTA-aligned. The
 **critical engineering and distributed-design defects** found by the original review have since been
 fixed: the crate now has a collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution,
 causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication and
@@ -159,9 +159,9 @@ into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a 
 Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
 - ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
-  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `HRTree`
+  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `FingerprintTree`
   (`hash` / `insertion_position` / `key_at` `pub(crate)`, `len` / `is_empty` public) and
-  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&HRTree`,
+  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&FingerprintTree`,
   with `HashSegment` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
   preserved byte-for-byte.
 - ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142), PR #158): `pub trait Clock`

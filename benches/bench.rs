@@ -1,7 +1,7 @@
-// The benchmark drives the internal range-fingerprint via `HRTree::hash`, which is `pub(crate)`.
-// Like the integration-test oracles it reaches that internal through the gated
-// `reconcile::testing` seam (the `range_hash` shim), so the real bench body only compiles with the
-// `internal-testing` feature. Without it we fall back to an empty `main` so the target still links.
+// The benchmark drives the range-fingerprint via `FingerprintTree::hash`. Like the
+// integration-test oracles it reaches it through the gated `reconcile::testing` seam (the
+// `range_hash` shim), so the real bench body only compiles with the `internal-testing` feature.
+// Without it we fall back to an empty `main` so the target still links.
 #[cfg(not(feature = "internal-testing"))]
 fn main() {}
 
@@ -21,12 +21,16 @@ mod imp {
     };
 
     use reconcile::testing::range_hash;
-    use reconcile::{reconcile_store::Config, Entry, HRTree, ReconcileStore, State, Timestamp};
+    use reconcile::{
+        reconcile_store::Config, Entry, FingerprintTree, ReconcileStore, State, Timestamp,
+    };
 
     fn hrtree_new(c: &mut Criterion) {
-        let mut group = c.benchmark_group("HRTree::new");
+        let mut group = c.benchmark_group("FingerprintTree::new");
         group.bench_function("BTreeMap::new()", |b| b.iter(BTreeMap::<u32, u32>::new));
-        group.bench_function("HRTree::new()", |b| b.iter(HRTree::<u32, u32>::new));
+        group.bench_function("FingerprintTree::new()", |b| {
+            b.iter(FingerprintTree::<u32, u32>::new)
+        });
     }
 
     /// Measure the time to insert N elements in the tree
@@ -42,7 +46,7 @@ mod imp {
         let key_values = &key_values;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("HRTree::fill");
+        let mut group = c.benchmark_group("FingerprintTree::fill");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
@@ -61,14 +65,18 @@ mod imp {
                     })
                 },
             );
-            group.bench_with_input(BenchmarkId::new("HRTree::fill", size), &size, |b, &size| {
-                b.iter(|| {
-                    let mut tree = HRTree::<u32, u32>::new();
-                    for (k, v) in key_values[..size].iter().copied() {
-                        tree.insert(k, v);
-                    }
-                })
-            });
+            group.bench_with_input(
+                BenchmarkId::new("FingerprintTree::fill", size),
+                &size,
+                |b, &size| {
+                    b.iter(|| {
+                        let mut tree = FingerprintTree::<u32, u32>::new();
+                        for (k, v) in key_values[..size].iter().copied() {
+                            tree.insert(k, v);
+                        }
+                    })
+                },
+            );
             size *= 10;
         }
     }
@@ -86,7 +94,7 @@ mod imp {
         let key_values = &key_values;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("HRTree::insert");
+        let mut group = c.benchmark_group("FingerprintTree::insert");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
@@ -113,10 +121,10 @@ mod imp {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("HRTree::insert", size),
+                BenchmarkId::new("FingerprintTree::insert", size),
                 &size,
                 |b, &size| {
-                    let mut tree = HRTree::<u32, u32>::new();
+                    let mut tree = FingerprintTree::<u32, u32>::new();
                     for (k, v) in key_values[..size].iter().copied() {
                         tree.insert(k, v);
                     }
@@ -148,7 +156,7 @@ mod imp {
         let key_values = &key_values;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("HRTree::remove");
+        let mut group = c.benchmark_group("FingerprintTree::remove");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
@@ -175,10 +183,10 @@ mod imp {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("HRTree::remove", size),
+                BenchmarkId::new("FingerprintTree::remove", size),
                 &size,
                 |b, &size| {
-                    let mut tree = HRTree::<u32, u32>::new();
+                    let mut tree = FingerprintTree::<u32, u32>::new();
                     for (k, v) in key_values[..size].iter().copied() {
                         tree.insert(k, v);
                     }
@@ -197,7 +205,7 @@ mod imp {
         }
     }
 
-    /// Measure the time to compute the hash over a range in a HRTree of size N
+    /// Measure the time to compute the hash over a range in a FingerprintTree of size N
     fn hrtree_hash(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -210,14 +218,14 @@ mod imp {
         let key_values = &key_values;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("HRTree::hash");
+        let mut group = c.benchmark_group("FingerprintTree::hash");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
             group.sample_size(10.max(1_000_000 / size).min(100));
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-                let mut tree = HRTree::<u32, u32>::new();
+                let mut tree = FingerprintTree::<u32, u32>::new();
                 for (k, v) in key_values[..size].iter().copied() {
                     tree.insert(k, v);
                 }
@@ -232,9 +240,9 @@ mod imp {
         }
     }
 
-    /// Compare the in-memory cost of a **naive dated mirror** (`HRTree<K, Entry<Timestamp, V>>`, which
+    /// Compare the in-memory cost of a **naive dated mirror** (`FingerprintTree<K, Entry<Timestamp, V>>`, which
     /// drags along a timestamp it never uses) against the **lightweight value-only mirror**
-    /// (`HRTree<K, State<V>>`) that the lightweight-mirror design introduces.
+    /// (`FingerprintTree<K, State<V>>`) that the lightweight-mirror design introduces.
     ///
     /// Criterion times the *fill* of each tree at growing sizes; the value-only tree both builds faster
     /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
@@ -268,7 +276,7 @@ mod imp {
                 &size,
                 |b, &size| {
                     b.iter(|| {
-                        let mut tree = HRTree::<u32, Entry<Timestamp, u32>>::new();
+                        let mut tree = FingerprintTree::<u32, Entry<Timestamp, u32>>::new();
                         for &k in keys[..size].iter() {
                             tree.insert(k, Entry::present(Timestamp::new(k as u64, 0, 0), k));
                         }
@@ -280,7 +288,7 @@ mod imp {
                 &size,
                 |b, &size| {
                     b.iter(|| {
-                        let mut tree = HRTree::<u32, State<u32>>::new();
+                        let mut tree = FingerprintTree::<u32, State<u32>>::new();
                         for &k in keys[..size].iter() {
                             tree.insert(k, State::Present(k));
                         }

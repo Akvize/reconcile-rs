@@ -1,0 +1,19 @@
+[package]
+name = "rsos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A Range-Summarizable Order-Statistics Store (RSOS): the Rsos<K, V> trait and its FingerprintTree<K, V> realization"
+repository = "https://github.com/Akvize/reconcile-rs"
+publish = false
+
+[dependencies]
+arrayvec = "0.7.4"
+blake3 = "1.5"
+range-cmp = "1"
+serde = { version = "1.0.192", features = ["derive"] }
+tracing = "0.1.40"
+
+[dev-dependencies]
+once_cell = "1.21.3"
+rand = "0.8.5"

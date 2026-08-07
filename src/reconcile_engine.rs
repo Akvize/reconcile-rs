@@ -34,14 +34,14 @@ use crate::bounds::{Key, Value};
 use crate::clock::{Clock, HlcClock, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
-use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
 use crate::observability;
 use crate::proto::{self, HashSegment};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::replay;
 use crate::transport::{Transport, UdpTransport};
-use crate::HRTree;
+use crate::FingerprintTree;
+use rsos::Fingerprint;
 
 const BUFFER_SIZE: usize = 65507;
 /// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
@@ -141,14 +141,14 @@ pub(crate) struct ReconcileEngine<K, V> {
 
 /// Shared, refcounted state of a [`ReconcileEngine`]; see that struct for the rationale.
 pub(crate) struct Inner<K, V> {
-    pub(crate) map: Arc<RwLock<HRTree<K, Entry<Timestamp, V>>>>,
+    pub(crate) map: Arc<RwLock<FingerprintTree<K, Entry<Timestamp, V>>>>,
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
     ///
     /// Its range fingerprints are timestamp-less by construction (see
     /// [`State`](crate::entry::State)), which is what lets a dateless mirror
     /// converge with this dated store over the existing range-diff protocol. It is read-only state
     /// for the dated↔dated path and never touches the causal-stability bookkeeping.
-    pub(crate) projection: Arc<RwLock<HRTree<K, State<V>>>>,
+    pub(crate) projection: Arc<RwLock<FingerprintTree<K, State<V>>>>,
     port: u16,
     /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
     /// only through this, so it never names a concrete socket type.
@@ -399,8 +399,8 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             }
         }
         let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
-        let map = HRTree::<K, Entry<Timestamp, V>>::new();
-        let projection = HRTree::<K, State<V>>::new();
+        let map = FingerprintTree::<K, Entry<Timestamp, V>>::new();
+        let projection = FingerprintTree::<K, State<V>>::new();
         // The geographical networks this cluster spans. With none declared, fall back to the
         // historical flat loopback cluster.
         let mut nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
@@ -471,7 +471,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// other. The caller already holds the `map` write guard.
     fn map_insert(
         &self,
-        guard: &mut HRTree<K, Entry<Timestamp, V>>,
+        guard: &mut FingerprintTree<K, Entry<Timestamp, V>>,
         key: K,
         value: Entry<Timestamp, V>,
     ) -> Option<Entry<Timestamp, V>> {
@@ -1604,7 +1604,7 @@ mod deadlock_regressions {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
-        // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
+        // let tree = FingerprintTree::from_iter(vec![(1, 10), (2, 20)]);
         let svc = ReconcileStore::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 

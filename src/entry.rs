@@ -21,7 +21,7 @@
 //!
 //! [`State<V>`] is isomorphic to the old `ValueOnly<V>(Option<V>)`: `Present(v) ↔ Some(v)`,
 //! `Tombstone ↔ None`. It is *itself* the value-only wire/projection type — a dated store's
-//! projection tree is `HRTree<K, State<V>>` and a mirror stores `HRTree<K, State<V>>` directly.
+//! projection tree is `FingerprintTree<K, State<V>>` and a mirror stores `FingerprintTree<K, State<V>>` directly.
 //!
 //! # Invariant 8 — the two hashes must stay distinct
 //!

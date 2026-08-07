@@ -6,9 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This crate provides a key-data map structure [`HRTree`] that can be used together with the
-//! reconciliation [`ReconcileStore`]. Different instances can talk together over UDP to efficiently
-//! reconcile their differences.
+//! This crate provides a key-data map structure [`FingerprintTree`] (from the [`rsos`] crate) that
+//! can be used together with the reconciliation [`ReconcileStore`]. Different instances can talk
+//! together over UDP to efficiently reconcile their differences.
 
 //! All the data is available locally in all instances, and the user can be
 //! notified of changes to the collection with an insertion hook.
@@ -64,8 +64,6 @@ pub mod bounds;
 pub mod clock;
 pub mod discovery;
 pub mod entry;
-pub mod fingerprint;
-pub mod hrtree;
 pub mod mirror;
 pub mod persistence;
 pub mod reconcile_store;
@@ -87,7 +85,6 @@ pub(crate) mod bincode;
 // implementation details, not part of the supported public surface. The few internals the
 // integration-test oracles need are re-exported through the gated [`testing`] module below.
 pub(crate) mod gen_ip;
-pub(crate) mod hrtree_iter;
 pub(crate) mod observability;
 pub(crate) mod proto;
 pub(crate) mod reconcile_engine;
@@ -98,17 +95,18 @@ pub use bounds::{Key, Value};
 pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use entry::{Entry, State};
-pub use fingerprint::Fingerprint;
-pub use hrtree::HRTree;
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
-// The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
-// method return types, so they must stay publicly reachable. A `pub` type re-exported from a
-// `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).
-// `IterMut` and `ValuesMut` are intentionally omitted (and are themselves `#[cfg(test)]`-only in
-// `hrtree_iter`): they hand out `&mut V` without updating per-element hashes or the cumulative
+// `FingerprintTree`, `Fingerprint`, the `Rsos<K, V>` trait, and its
+// iterator types now live in the standalone `rsos` crate (see `rsos/src/lib.rs`); re-exported here
+// so existing consumers of `reconcile::*` see no change in what resolves at the crate root.
+// `IterMut`/`ValuesMut` are intentionally not re-exported (and are themselves `#[cfg(test)]`-only
+// in `rsos`): they hand out `&mut V` without updating per-element hashes or the cumulative
 // `tree_hash`, so exposing them publicly would silently corrupt fingerprints. The supported
-// mutation path is `HRTree::with_mut`. A correct iterator-based design is future work.
-pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
+// mutation path is `FingerprintTree::with_mut`. A correct iterator-based design is future work.
+pub use rsos::{
+    Fingerprint, FingerprintTree, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos, Values,
+};
+
 pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
 pub use reconcile_store::ReconcileStore;
@@ -125,13 +123,15 @@ pub use reconcile_store::ReconcileStore;
 #[doc(hidden)]
 #[cfg(any(test, feature = "internal-testing"))]
 pub mod testing {
-    pub use crate::fingerprint::hash;
+    pub use rsos::hash;
+
     pub use crate::proto::{diff_round, start_diff, DiffRange, HashSegment};
 
-    /// Range fingerprint of an [`HRTree`](crate::HRTree), exposed for the integration-test
-    /// oracles. The inherent `HRTree::hash` is `pub(crate)` (reconciliation mechanism), so the
-    /// external test crates reach it through this gated seam rather than the public surface.
-    pub fn range_hash<K, V, R>(tree: &crate::HRTree<K, V>, range: &R) -> crate::Fingerprint
+    /// Range fingerprint of a [`FingerprintTree`](crate::FingerprintTree), exposed for the
+    /// integration-test oracles. `FingerprintTree::hash` is now `pub` on the `rsos` crate (it had
+    /// to be, to stay reachable from `proto.rs`'s new home across the crate boundary), so this
+    /// wrapper is kept only for source compatibility with the existing test call sites.
+    pub fn range_hash<K, V, R>(tree: &crate::FingerprintTree<K, V>, range: &R) -> crate::Fingerprint
     where
         K: std::hash::Hash + Ord,
         V: std::hash::Hash,

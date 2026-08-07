@@ -26,11 +26,11 @@ use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::discovery::{Discovery, DiscoveryKind, DnsDiscovery};
 use crate::entry::Entry;
-use crate::fingerprint::Fingerprint;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
 use crate::reconcile_engine::{version_hash, ReconcileEngine};
 use crate::timeout_wheel::TimeoutWheel;
 use crate::transport::Transport;
+use rsos::Fingerprint;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
@@ -83,7 +83,7 @@ const DEFAULT_MAX_CONCURRENT_BULK_DUMPS: usize = 4;
 ///
 /// The store also keeps track of the addresses of other instances.
 ///
-/// Provides wrappers for its underlying [`HRTree`](crate::HRTree)'s insertion and deletion methods,
+/// Provides wrappers for its underlying [`FingerprintTree`](crate::FingerprintTree)'s insertion and deletion methods,
 /// as well as its main service method: `run()`,
 /// which must be called to actually synchronize with peers.
 ///
@@ -1919,11 +1919,11 @@ mod reconcile_store_tests {
     fn dated_comparison_payload() -> Vec<u8> {
         use crate::proto;
         use crate::reconcile_engine::Message;
-        use crate::HRTree;
+        use crate::FingerprintTree;
         use bincode::{DefaultOptions, Serializer};
         use serde::Serialize as _;
 
-        let tree = HRTree::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
+        let tree = FingerprintTree::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
         let segments = proto::start_diff(&tree);
         let mut buf = Vec::new();
         for seg in segments {

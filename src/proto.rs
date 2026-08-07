@@ -8,21 +8,20 @@
 
 //! Anti-entropy protocol mechanism (Range-Based Set Reconciliation).
 //!
-//! [`start_diff`] and [`diff_round`] are free functions over the concrete [`HRTree`]; they are
+//! [`start_diff`] and [`diff_round`] are free functions over the concrete [`FingerprintTree`]; they are
 //! the *how* of reconciliation, an implementation detail of the domain, not part of the crate's
 //! public surface (see `ARCHITECTURE.md` §3.7). The whole module is `pub(crate)`, so although the
 //! items below are declared `pub`, they are unreachable through the public path — the gated
 //! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-hash
-//! queries the algorithm relies on ([`HRTree::hash`], [`HRTree::insertion_position`],
-//! [`HRTree::key_at`], [`HRTree::len`]) are inherent methods on `HRTree`.
+//! queries the algorithm relies on ([`FingerprintTree::hash`], [`FingerprintTree::insertion_position`],
+//! [`FingerprintTree::key_at`], [`FingerprintTree::len`]) are inherent methods on `FingerprintTree`.
 
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::fingerprint::Fingerprint;
-use crate::hrtree::HRTree;
+use rsos::{Fingerprint, FingerprintTree};
 
 /// The start bound of a [`HashSegment`] range, as this protocol actually emits it: `Included` or
 /// `Unbounded`, never `Excluded`.
@@ -68,7 +67,7 @@ impl<K> From<EndBound<K>> for Bound<K> {
 /// A [`HashSegment`]'s range: `(StartBound<K>, EndBound<K>)`, wrapped in a local tuple struct
 /// (rather than a bare tuple) so it can implement the foreign [`RangeBounds`] trait directly —
 /// Rust's orphan rules require the outermost type to be local, and a plain tuple never qualifies.
-/// This lets a segment's range feed straight into [`HRTree::hash`] / [`HRTree::get_range`] like
+/// This lets a segment's range feed straight into [`FingerprintTree::hash`] / [`FingerprintTree::get_range`] like
 /// any other `RangeBounds<K>`, with no intermediate conversion.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct SegmentRange<K>(StartBound<K>, EndBound<K>);
@@ -106,7 +105,7 @@ pub struct HashSegment<K> {
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
-/// A [`HashSegment`]'s range, checked against a concrete [`HRTree`]: the bound *shapes* are
+/// A [`HashSegment`]'s range, checked against a concrete [`FingerprintTree`]: the bound *shapes* are
 /// already guaranteed by [`StartBound`]/[`EndBound`] (unrepresentable otherwise), so the only
 /// remaining way a wire segment can be malformed is an inverted range (`start_index >
 /// end_index`) — which can only be detected against a specific tree, hence this being a fallible
@@ -126,7 +125,7 @@ impl<K: std::hash::Hash + Ord> BoundedRange<K> {
     fn parse<V: std::hash::Hash>(
         start: StartBound<K>,
         end: EndBound<K>,
-        tree: &HRTree<K, V>,
+        tree: &FingerprintTree<K, V>,
     ) -> Result<Self, InvertedRange> {
         let start_index = match &start {
             StartBound::Unbounded => 0,
@@ -156,7 +155,7 @@ impl<K: std::hash::Hash + Ord> BoundedRange<K> {
 
 /// Returns a representation of all the elements in the tree that can be sent to [`diff_round`]:
 /// the root segment `{(−∞, +∞), global hash, size}` that bootstraps a reconciliation.
-pub fn start_diff<K, V>(tree: &HRTree<K, V>) -> Vec<HashSegment<K>>
+pub fn start_diff<K, V>(tree: &FingerprintTree<K, V>) -> Vec<HashSegment<K>>
 where
     K: std::hash::Hash + Ord,
     V: std::hash::Hash,
@@ -175,7 +174,7 @@ where
 /// listed as `differences`. In other cases, the set must be refined and sent back to the peer
 /// for further analysis.
 pub fn diff_round<K, V>(
-    tree: &HRTree<K, V>,
+    tree: &FingerprintTree<K, V>,
     in_comparison: Vec<HashSegment<K>>,
     out_comparison: &mut Vec<HashSegment<K>>,
     differences: &mut Vec<DiffRange<K>>,
@@ -190,7 +189,7 @@ pub fn diff_round<K, V>(
             size,
         } = segment;
         // Safe on any bound combination — including a not-yet-validated inverted range —
-        // because `HRTree::hash` walks the tree via point/range comparisons, never index
+        // because `FingerprintTree::hash` walks the tree via point/range comparisons, never index
         // arithmetic (see its doc comment).
         let local_hash = tree.hash(&SegmentRange::new(start.clone(), end.clone()));
         // The bound *shapes* are already guaranteed by `StartBound`/`EndBound`: a peer sending
@@ -286,16 +285,16 @@ pub fn diff_round<K, V>(
 mod tests {
     use super::*;
 
-    /// Build a real `HRTree` over the given (distinct, unsorted-ok) `i32` keys. The values are
+    /// Build a real `FingerprintTree` over the given (distinct, unsorted-ok) `i32` keys. The values are
     /// irrelevant to the protocol mechanism — `diff_round` only ever queries key positions,
     /// the range fingerprint and the size — so we store a constant.
-    fn tree(keys: &[i32]) -> HRTree<i32, i32> {
-        HRTree::from_iter(keys.iter().map(|&k| (k, 0)))
+    fn tree(keys: &[i32]) -> FingerprintTree<i32, i32> {
+        FingerprintTree::from_iter(keys.iter().map(|&k| (k, 0)))
     }
 
     /// Run a single crafted segment through `diff_round` and return whatever it produced.
     fn round(
-        store: &HRTree<i32, i32>,
+        store: &FingerprintTree<i32, i32>,
         segment: HashSegment<i32>,
     ) -> (Vec<HashSegment<i32>>, Vec<DiffRange<i32>>) {
         let mut out_comparison = Vec::new();

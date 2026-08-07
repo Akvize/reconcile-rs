@@ -7,7 +7,7 @@
 > state see [`PROGRESS.md`](./PROGRESS.md); for the target design see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 >
 > - **Literature survey dated:** 2026-05-30 (sources cited inline and in the [bibliography (§4)](#4-bibliography)).
-> - **Scope:** the HRTree as a *data structure* and RBSR as an *algorithm*, compared to the published
+> - **Scope:** the FingerprintTree as a *data structure* and RBSR as an *algorithm*, compared to the published
 >   state of the art — not an audit of any particular commit.
 > - **Navigation:** a [glossary (§3)](#3-glossary) defines ~120 terms and an
 >   [alphabetical index (§5)](#5-alphabetical-index) lists them; first uses in the text link to it.
@@ -67,12 +67,12 @@ SOTA choice** for this use case.
 
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
-Important panel nuance: **HRTree does NOT belong to the Merkle Search Tree (MST) / prolly-tree
+Important panel nuance: **FingerprintTree does NOT belong to the Merkle Search Tree (MST) / prolly-tree
 family**, and that is a point in its favor. MST (Auvolat & Taïani, SRDS 2019) and prolly-trees
 (Dolt/Noms) *need* **insertion-order independence** because they diff by comparing the hashes of the
-tree's **internal nodes**. HRTree, by contrast, diffs **value-defined ranges**: the cumulative XOR
+tree's **internal nodes**. FingerprintTree, by contrast, diffs **value-defined ranges**: the cumulative XOR
 over `[a,b)` is identical on two peers iff the *content* of the range is identical, **regardless of
-each one's B-tree shape**. HRTree therefore obtains the convergence guarantee that MST/prolly pay
+each one's B-tree shape**. FingerprintTree therefore obtains the convergence guarantee that MST/prolly pay
 for with history-independence, **without paying for it** — and thereby escapes the MST
 "leading-zeros" attack. The B-tree's order-dependence is therefore **not** a defect here.
 
@@ -123,9 +123,9 @@ credible Rust IMDG.
 
 ## 2. Competitor audit and differentiators
 
-> This section refocuses the analysis on the **HRTree as a data structure** (and its protocol),
+> This section refocuses the analysis on the **FingerprintTree as a data structure** (and its protocol),
 > not on the full system. *(All structure/algo names below are defined in the
-> [glossary §3.2](#g92).)* Methodological anchor: the HRTree **is not a [Merkle tree](#g92) in the
+> [glossary §3.2](#g92).)* Methodological anchor: the FingerprintTree **is not a [Merkle tree](#g92) in the
 > [MST](#g92)/[prolly](#g92) sense**. It is a *[Range-Summarizable Order-Statistics Store](#g92)*
 > (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (the XOR of hashes)
 > **+ an order statistic** (the subtree size). This abstraction was formalized in 2026
@@ -145,8 +145,8 @@ descent comparing **internal node hashes**.
   (one MST per repository).
 - ❌ **"Leading-zeros" attack**: an attacker forges keys with very deep hashes to inflate height and
   unbalance the tree. ❌ Only probabilistic balancing; no native rank/select.
-- **vs HRTree:** MST *pays* for history-independence; HRTree does not (value-based diff, §2.3) and
-  **escapes the leading-zeros attack**. But MST gains structural sharing (versioning) that HRTree
+- **vs FingerprintTree:** MST *pays* for history-independence; FingerprintTree does not (value-based diff, §2.3) and
+  **escapes the leading-zeros attack**. But MST gains structural sharing (versioning) that FingerprintTree
   lacks.
 
 #### Prolly trees (Noms, Dolt) — *probabilistic B-trees*
@@ -158,7 +158,7 @@ identical chunks across versions.
   → a value update does not move boundaries. Resists the leading-zeros attack.
 - ❌ Heavy machinery (rolling hash, chunks, CAS); higher latency than an in-mem B-tree; designed for
   **persistence**.
-- **vs HRTree:** prolly = SOTA if you want **versioning + persistence + branch/merge**. HRTree is
+- **vs FingerprintTree:** prolly = SOTA if you want **versioning + persistence + branch/merge**. FingerprintTree is
   simpler/faster in memory but offers **none** of those. Central trade-off "simplicity/speed vs
   versioning/durability".
 
@@ -174,21 +174,21 @@ Ethereum (Merkle-Patricia) and SMTs.
 - ❌ **Over-streaming**: a leaf covers a *range* of partitions (Cassandra: depth 15 = 32K leaves) →
   a single differing row forces streaming the whole leaf (~30 partitions for 1 bad in 1M). ❌ Tree
   rebuild when token ranges move.
-- **vs HRTree:** this is precisely the defect RBSR/HRTree fix (the recursion tightens onto the
-  actually-differing elements). **Clear advantage to HRTree** on this axis.
+- **vs FingerprintTree:** this is precisely the defect RBSR/FingerprintTree fix (the recursion tightens onto the
+  actually-differing elements). **Clear advantage to FingerprintTree** on this axis.
 
 #### RSOS / AELMDB (arXiv:2603.19820, 2026) — *the most direct competitor*
 The paper formalizes "**B+-tree augmented with subtree counts + composable summaries**" as the RSOS
 abstraction, proves RBSR's local-cost bounds on this backend, and ships **AELMDB**: a **persistent,
 memory-mapped** LMDB extension, evaluated with Negentropy.
-- **vs HRTree:** **it is the same design**, but (a) **persistent** (LMDB) and (b) with a **secure
-  summary** (Negentropy). HRTree *is* an RSOS — but the in-memory, 64-bit-XOR, non-persistent
+- **vs FingerprintTree:** **it is the same design**, but (a) **persistent** (LMDB) and (b) with a **secure
+  summary** (Negentropy). FingerprintTree *is* an RSOS — but the in-memory, 64-bit-XOR, non-persistent
   version. **The structure's SOTA in this niche = "persistent RSOS + secure fingerprint", and the
-  HRTree→SOTA delta reads directly as that gap.**
+  FingerprintTree→SOTA delta reads directly as that gap.**
 
 | Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
 |---|---|---|---|---|---|---|---|
-| **HRTree** | B-tree splits (insertion order) | **No** | **value ranges** | No | No (in-mem) | **Yes** (n/a) | pre-alpha |
+| **FingerprintTree** | B-tree splits (insertion order) | **No** | **value ranges** | No | No (in-mem) | **Yes** (n/a) | pre-alpha |
 | MST | level = hash(key) | Yes | nodes | partial | impl-dependent | **No** | mature (Bluesky) |
 | Prolly tree | rolling-hash on content | Yes | chunks | **Yes** (CAS) | **Yes** | Yes | mature (Dolt) |
 | Merkle radix/SMT | prefix bits | Yes | hash paths | partial | yes | Yes | mature (Ethereum) |
@@ -197,11 +197,11 @@ memory-mapped** LMDB extension, evaluated with Negentropy.
 
 ### 2.2 Competitors at the "reconciliation algorithm" level
 
-The HRTree implements **RBSR**; its competitors are not tree structures.
+The FingerprintTree implements **RBSR**; its competitors are not tree structures.
 
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **XOR RBSR (HRTree)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Weak** | Earthstar/Willow/Negentropy |
+| **XOR RBSR (FingerprintTree)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Weak** | Earthstar/Willow/Negentropy |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
@@ -217,14 +217,14 @@ The HRTree implements **RBSR**; its competitors are not tree structures.
   if *d* is mis-guessed) and **ordered-range reconciliation** (partial sync by prefix/subspace —
   what Willow exploits in 3D). Sketches reconcile an *opaque* set.
 - **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a sketch (Rateless IBLT) to
-  drain divergent leaves in one shot — would beat pure HRTree on latency without losing
+  drain divergent leaves in one shot — would beat pure FingerprintTree on latency without losing
   adaptiveness.
 
 ### 2.3 Real differentiators of the approach (structural strengths)
 
 1. **Value-based range diff ⇒ history-independence is not needed** *(the deepest differentiator)*.
    MST/prolly *must* be history-independent because they compare **internal node hashes** (different
-   tree shapes → false positives). HRTree never compares nodes: it computes the **cumulative XOR
+   tree shapes → false positives). FingerprintTree never compares nodes: it computes the **cumulative XOR
    over `[a,b)`**, identical on two peers **iff the range content is identical**, regardless of each
    one's B-tree shape. → Convergence guaranteed **without paying** for history-independence, and
    **immunity to the MST leading-zeros attack**.
@@ -258,7 +258,7 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to th
    (cf. F8)
 
 **P1 — Generality (what makes it a *structure*, not a special case):**
-4. **Generic summary over a monoid**: `HRTree<XOR>` → `RSOS<M: Monoid>` (secure fingerprint, but
+4. **Generic summary over a monoid**: `FingerprintTree<XOR>` → `RSOS<M: Monoid>` (secure fingerprint, but
    also sum/min/max/count, sketches). Enables **embedding a sketch in the leaves** (hybrid RBSR +
    Rateless IBLT) to break the O(log n) RTT cost (§2.2).
 5. **Fully expose the RSOS contract**: **lazy + double-ended** iterators (repo issues #90-92),
@@ -292,7 +292,7 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to th
 | Deletions | causal-stability GC (no resurrection) |
 | Confidence | property tests + convergence fuzzing against an oracle |
 
-**In one sentence:** the HRTree starts from the **right skeleton** — an RSOS, the design validated by
+**In one sentence:** the FingerprintTree starts from the **right skeleton** — an RSOS, the design validated by
 2026 research, with a real differentiator (value-based diff that removes the need for
 history-independence). The remaining distance to a *true* SOTA structure is along the axes above; the
 structural ones (secure/generic fingerprint, persistence/content-addressing, property-testing
@@ -324,8 +324,8 @@ surrounding system.
 | Term | Definition |
 |---|---|
 | **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): recursive partition of an ordered set, exchange of range fingerprints, descent into divergent ranges. What reconcile-rs implements. O(log n) RTT. |
-| **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026): an ordered set offering **composable** range summaries + rank/select navigation. An augmented B+-tree realizes it → **the HRTree is an RSOS**. |
-| **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the HRTree. |
+| **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026): an ordered set offering **composable** range summaries + rank/select navigation. An augmented B+-tree realizes it → **the FingerprintTree is an RSOS**. |
+| **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the FingerprintTree. |
 | **MST** (*Merkle Search Tree*) | Auvolat & Taïani, SRDS 2019. A B-tree whose key level derives from the **hash of the key** ⇒ history-independent. Diffs **nodes**. Vulnerable to the leading-zeros attack. Usage: Bluesky/atproto. |
 | **Prolly tree** (*probabilistic B-tree*) | Noms/Dolt. Content-addressed B-tree, boundaries by **rolling hash**. History-independent + **structural sharing** → versioning (Git-like). SOTA of versioned ordered stores. |
 | **Merkle radix / Patricia trie** | A Merkle tree where position depends on the key's **prefix bits**. History-independent. The basis of Ethereum. |

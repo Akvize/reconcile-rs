@@ -20,7 +20,7 @@
 [docs-badge]: https://docs.rs/reconcile/badge.svg
 [docs-url]: https://docs.rs/reconcile/latest/reconcile/
 
-This crate provides a key-data map structure `HRTree` that can be used together
+This crate provides a key-data map structure `FingerprintTree` that can be used together
 with the reconciliation `ReconcileStore`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
 
@@ -372,15 +372,15 @@ k8s`), the manifests (headless `Service`, `StatefulSet`, `ConfigMap`, example `S
 [`examples/k8s/`](examples/k8s/). It is example/deployment scaffolding only and is excluded from
 the published crate.
 
-## HRTree
+## FingerprintTree
 
-The core of the protocol is made possible by the `HRTree` (Hash-Range Tree) data structure, which
-allows `O(log(n))` access, insertion and removal, as well as `O(log(n))`
-cumulated hash range-query. The latter property enables querying
+The core of the protocol is made possible by the `FingerprintTree` data structure (in the
+standalone `rsos` crate), which allows `O(log(n))` access, insertion and removal, as well as
+`O(log(n))` cumulated hash range-query. The latter property enables querying
 the cumulated fingerprint of all key-value pairs between two keys. The fingerprint is a
 256-bit BLAKE3-per-element hash combined by addition modulo 2²⁵⁶ — a stable, portable wire
 token, chosen over a 64-bit XOR for collision resistance and cross-version interoperability
-(see `src/fingerprint.rs`).
+(see `rsos/src/fingerprint.rs`).
 
 Although we did come we the idea independently, it exactly matches a paper
 published on Arxiv in February 2023: [Range-Based Set
@@ -397,9 +397,9 @@ The graph above shows the amount of time **in milliseconds** (ordinate, left
 axis) needed to **insert N elements** (abscissa, bottom axis) in a tree
 (initially empty). Note that both axes use a logarithmic scale.
 
-The performance of our `HRTree` implementation follows closely that of
+The performance of our `FingerprintTree` implementation follows closely that of
 `BTreeMap`. When looking at each value of N, we see that the average throughput
-of the `HRTree` is between one third and one half that of `BTreeMap`.
+of the `FingerprintTree` is between one third and one half that of `BTreeMap`.
 
 ![Graph of the time needed to insert and remove 1 element in a tree of size N](img/perf-insert.png)
 
@@ -434,12 +434,12 @@ The average time per cumulated hash grows from 30 ns to 1,200 ns as the size o
 the tree changes from 10 to 1,000,000 elements.
 
 Although there is likely still a lot of room for improvement regarding the
-performance of the `HRTree`, it is quite enough for our purposes, since we
+performance of the `FingerprintTree`, it is quite enough for our purposes, since we
 expect network delays to be orders of magnitude longer.
 
 ## ReconcileStore
 
-The ReconcileStore exploits the properties of `HRTree` to conduct a binary-search-like
+The ReconcileStore exploits the properties of `FingerprintTree` to conduct a binary-search-like
 search in the collections of the two instances. Once difference are found, the
 corresponding key-value pairs are exchanged and conflicts are resolved.
 
