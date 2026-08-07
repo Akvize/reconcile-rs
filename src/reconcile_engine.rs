@@ -1303,6 +1303,30 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         self.tombstone_acks.write().remove(key);
     }
 
+    /// Returns `true` if `peer` has not yet acknowledged the current version of at least one
+    /// tombstone this node currently holds.
+    ///
+    /// Mirrors [`is_tombstone_stable`](Self::is_tombstone_stable)'s per-key acknowledgment test —
+    /// this is `true` precisely when `peer`'s absence would still block causal-stability GC on some
+    /// held tombstone — by walking [`live_tombstones`](Self::live_tombstones) (the local tombstone
+    /// set), not [`tombstone_acks`](Self::tombstone_acks): a freshly deleted tombstone has no ack
+    /// entry at all yet, and must still count as pending rather than reading as "no acks owed".
+    pub(crate) fn has_pending_tombstone_acks(&self, peer: IpAddr) -> bool {
+        let live = self.live_tombstones.read();
+        if live.is_empty() {
+            return false;
+        }
+        let map = self.map.read();
+        let acks = self.tombstone_acks.read();
+        live.iter().any(|key| {
+            let Some(entry) = map.get(key) else {
+                return false;
+            };
+            let version = version_hash(entry);
+            acks.get(key).and_then(|peer_acks| peer_acks.get(&peer)) != Some(&version)
+        })
+    }
+
     /// Permanently remove a peer from the membership set so that tombstones are no longer held
     /// back waiting for its acknowledgment. Use when a replica is decommissioned or will never
     /// return. Also clears any acknowledgments it had recorded.
@@ -1877,6 +1901,61 @@ mod causal_stability {
         // Forgetting the tombstone clears its bookkeeping.
         eng.forget_tombstone(&key);
         assert!(eng.tombstone_acks.read().get(&key).is_none());
+    }
+
+    /// A tombstone with zero acknowledgments — the state a deletion is in the instant it happens —
+    /// must read as pending. This is the exact case a predicate walking `tombstone_acks` (rather than
+    /// `live_tombstones`) gets wrong, because no entry exists there until the first ack arrives.
+    #[tokio::test]
+    async fn fresh_tombstone_with_zero_acks_is_pending() {
+        let eng = engine("127.0.0.67").await;
+        let peer: IpAddr = "127.0.0.68".parse().unwrap();
+        let key = 3;
+        eng.just_insert(key, Entry::tombstone(Timestamp::new(1, 0, 0)));
+
+        assert!(
+            eng.tombstone_acks.read().get(&key).is_none(),
+            "test setup: no ack should exist yet"
+        );
+        assert!(
+            eng.has_pending_tombstone_acks(peer),
+            "a freshly deleted, zero-ack tombstone must count as pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_local_tombstones_is_never_pending() {
+        let eng = engine("127.0.0.69").await;
+        let peer: IpAddr = "127.0.0.70".parse().unwrap();
+        eng.just_insert(1, Entry::present(Timestamp::new(1, 0, 0), 42));
+        assert!(!eng.has_pending_tombstone_acks(peer));
+    }
+
+    #[tokio::test]
+    async fn acked_tombstone_is_not_pending_but_stale_or_missing_ack_is() {
+        let eng = engine("127.0.0.71").await;
+        let acked: IpAddr = "127.0.0.72".parse().unwrap();
+        let stale: IpAddr = "127.0.0.73".parse().unwrap();
+        let silent: IpAddr = "127.0.0.74".parse().unwrap();
+        let key = 5;
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
+        let version = version_hash(&tombstone);
+        eng.just_insert(key, tombstone);
+
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(acked, version);
+        eng.tombstone_acks
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(stale, version.wrapping_add(1));
+
+        assert!(!eng.has_pending_tombstone_acks(acked));
+        assert!(eng.has_pending_tombstone_acks(stale));
+        assert!(eng.has_pending_tombstone_acks(silent));
     }
 }
 
