@@ -531,6 +531,11 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// 2. Acquires the write lock on the map, performs the insertion, then drops the lock.
     ///
     /// Returns the overwritten value if the key already existed.
+    ///
+    /// Local-only (no broadcast), so it is **not** part of the published API (available only under
+    /// `cfg(test)` / the `internal-testing` feature). For deliberate no-broadcast seeding use the
+    /// public [`load_bulk`](Self::load_bulk); for a propagating write use [`insert`](Self::insert).
+    #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -565,18 +570,12 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// 1. Runs the pre-insert hook for each entry (outside any lock).
     /// 2. Acquires the write lock once and inserts all entries.
+    ///
+    /// Local-only; off the published API (test/`internal-testing` only). Use the public
+    /// [`load_bulk`](Self::load_bulk) for no-broadcast seeding.
+    #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
-        self.engine.just_insert_bulk(
-            &key_values
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        Entry::present(self.engine.clock_now(), v.clone()),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
+        self.load_bulk(key_values);
     }
 
     /// Bulk-insert + async broadcast.
@@ -594,6 +593,28 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         );
     }
 
+    /// Bulk-insert many entries **locally, without broadcasting** — the one deliberate no-broadcast
+    /// write on the public API. Each entry gets a fresh HLC stamp and runs the pre-insert hook, but
+    /// propagates only on the next anti-entropy round; use this to seed a large initial dataset
+    /// without a broadcast storm. For a propagating write see
+    /// [`insert`](Self::insert)/[`insert_bulk`](Self::insert_bulk).
+    pub fn load_bulk(&self, key_values: &[(K, V)]) {
+        self.engine.just_insert_bulk(
+            &key_values
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        Entry::present(self.engine.clock_now(), v.clone()),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Local-only single removal; off the published API (test/`internal-testing` only). Use
+    /// [`remove`](Self::remove) for a propagating deletion.
+    #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_remove(&self, key: &K) -> Option<V> {
         let ret = self
             .engine
@@ -608,6 +629,9 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
+    /// Local-only bulk removal; off the published API (test/`internal-testing` only). Use
+    /// [`remove_bulk`](Self::remove_bulk) for propagating deletions.
+    #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_remove_bulk(&self, keys: &[K]) {
         self.engine.just_insert_bulk(
             &keys
@@ -630,6 +654,55 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
                 .map(|k| (k.clone(), Entry::tombstone(self.engine.clock_now())))
                 .collect::<Vec<_>>(),
         );
+    }
+
+    /// Collect the live keys currently satisfying `select`, holding the map read lock only for the
+    /// scan (dropped before any deletion). Shared by [`clear`](Self::clear),
+    /// [`retain`](Self::retain), and [`delete_range`](Self::delete_range).
+    fn live_keys_where<P: FnMut(&K, &V) -> bool>(&self, mut select: P) -> Vec<K> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .filter_map(|(k, v)| {
+                v.value()
+                    .and_then(|value| select(k, value).then(|| k.clone()))
+            })
+            .collect()
+    }
+
+    /// Delete every live entry, as broadcast tombstones (so the deletion reconciles to peers rather
+    /// than mutating the map only locally). Tombstoned keys are reclaimed later by causal-stability
+    /// GC. A no-op if the store holds no live entry.
+    pub fn clear(&self) {
+        let keys = self.live_keys_where(|_, _| true);
+        if !keys.is_empty() {
+            self.remove_bulk(&keys);
+        }
+    }
+
+    /// Delete every live entry for which `keep` returns `false`, as broadcast tombstones. Keys where
+    /// `keep` returns `true` are retained. The predicate runs under the read lock; keep it cheap and
+    /// side-effect free.
+    pub fn retain<P: FnMut(&K, &V) -> bool>(&self, mut keep: P) {
+        let keys = self.live_keys_where(|k, v| !keep(k, v));
+        if !keys.is_empty() {
+            self.remove_bulk(&keys);
+        }
+    }
+
+    /// Delete every live entry whose key falls in `range`, as broadcast tombstones. Mirrors the
+    /// [`fingerprint`](Self::fingerprint) range signature.
+    pub fn delete_range<R: RangeBounds<K>>(&self, range: R) {
+        let keys: Vec<K> = {
+            let guard = self.engine.map.read();
+            guard
+                .get_range(&range)
+                .filter_map(|(k, v)| v.value().map(|_| k.clone()))
+                .collect()
+        };
+        if !keys.is_empty() {
+            self.remove_bulk(&keys);
+        }
     }
 
     pub async fn start_reconciliation(&self) {
@@ -917,6 +990,77 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         if let Some(value) = updated {
             self.engine.broadcast_update(k.clone(), value);
         }
+    }
+
+    /// Mutate the value for `k` in place **only when it is live**, then re-stamp and broadcast the
+    /// edit. Returns whether a live value was present (and thus mutated). Absent or tombstoned keys
+    /// leave the map untouched and are not re-broadcast. The whole read-modify-write holds the map
+    /// write lock for the duration of `callback`, so it is atomic against the reconciliation loop.
+    ///
+    /// This is the shared core of [`update`](Self::update) and [`upsert`](Self::upsert).
+    fn mutate_live<F: FnOnce(&mut V)>(&self, k: &K, callback: F) -> bool {
+        // Mint the timestamp before taking the map lock, matching the lock order of `insert`.
+        let now = self.engine.clock_now();
+        let mut updated: Option<Entry<Timestamp, V>> = None;
+        let mut guard = self.engine.map.write();
+        guard.with_mut(k, |maybe_entry| {
+            if let Some(entry) = maybe_entry {
+                if let Some(value) = entry.value_mut() {
+                    callback(value);
+                    // Re-stamp so the edit wins last-write-wins on peers; `with_mut` recomputes the
+                    // dated fingerprint from the whole entry afterwards.
+                    entry.stamp = now;
+                    updated = Some(entry.clone());
+                }
+            }
+        });
+        // Keep the value-only projection in sync, as `get_mut` does (lock order map → projection).
+        if updated.is_some() {
+            if let Some(entry) = guard.get(k) {
+                let projected = entry.project();
+                self.engine.projection.write().insert(k.clone(), projected);
+            }
+        }
+        drop(guard);
+        if let Some(value) = updated {
+            self.engine.broadcast_update(k.clone(), value);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Atomically mutate the live value for `k` in place, then re-stamp and broadcast — the
+    /// ergonomic, presence-reporting evolution of [`get_mut`](Self::get_mut).
+    ///
+    /// `f` runs only if the key is live; the return value reports whether it existed. This is the
+    /// race-free replacement for a `get`-then-`insert` read-modify-write: the whole operation holds
+    /// the map write lock, so a concurrent reconciliation cannot interleave.
+    pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
+        self.mutate_live(k, f)
+    }
+
+    /// Update the live value for `k` with `f`, or insert `default` if the key is absent/tombstoned.
+    ///
+    /// The update branch is atomic (holds the write lock); the insert branch stamps a fresh
+    /// timestamp and broadcasts like [`insert`](Self::insert), so under last-write-wins a concurrent
+    /// write is resolved by timestamp order (no lost-update within a single node).
+    pub fn upsert<F: FnOnce(&mut V)>(&self, k: K, default: V, f: F) {
+        if !self.mutate_live(&k, f) {
+            self.insert(k, default);
+        }
+    }
+
+    /// Return the live value for `k`, inserting (and broadcasting) `f()` first if it is
+    /// absent/tombstoned. Under last-write-wins, two nodes racing to insert converge by timestamp
+    /// order; this node returns the value it observed/created.
+    pub fn get_or_insert_with<F: FnOnce() -> V>(&self, k: &K, f: F) -> V {
+        if let Some(value) = self.get(k) {
+            return value.clone();
+        }
+        let value = f();
+        self.insert(k.clone(), value.clone());
+        value
     }
 }
 

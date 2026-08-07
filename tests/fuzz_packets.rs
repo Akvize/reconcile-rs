@@ -70,7 +70,7 @@ async fn malformed_datagrams_do_not_panic_or_corrupt_state() {
     let store = ReconcileStore::<i32, String>::new(config)
         .await
         .expect("bind failed");
-    store.just_insert(0, "legit".to_string());
+    store.load_bulk(&[(0, "legit".to_string())]);
 
     let task = tokio::spawn(store.clone().run());
 

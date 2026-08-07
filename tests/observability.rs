@@ -150,12 +150,14 @@ async fn local_mutations_increment_metric_counters() {
     let recorder = DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
 
-    // `just_insert` / `just_remove` are the purely local, synchronous variants (no broadcast),
-    // so every metric is emitted on this thread, inside the local-recorder scope.
+    // The insert/remove counters are recorded synchronously on this thread (the subsequent
+    // broadcast is a detached task that, with no peers, sends nothing), so every counted metric is
+    // emitted inside the local-recorder scope. This node has no peers, so `insert`/`remove` behave
+    // like the local-only variants for counting purposes.
     with_local_recorder(&recorder, || {
-        store.just_insert(1, 10);
-        store.just_insert(2, 20);
-        store.just_remove(&1);
+        store.insert(1, 10);
+        store.insert(2, 20);
+        store.remove(&1);
     });
 
     let mut inserts = 0u64;
