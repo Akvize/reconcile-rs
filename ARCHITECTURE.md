@@ -41,15 +41,23 @@ converge. The design rests on five mechanisms:
 | `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, the bundled `Aggregate` (Def. 3.5), plus the `Rsos<K>` trait (Def. 3.9, `Value` associated type) it implements. |
 | `rsos/src/fingerprint.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
 | `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
-| `entry.rs` | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
-| `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
-| `auth.rs` | Per-datagram message authentication (MAC). |
-| `persistence.rs` | Durability boundary: load/save a snapshot of the dated map. |
-| `transport.rs` | The `Transport` port (datagram I/O) and its `UdpTransport` / `InMemoryTransport` adapters (migration step 5, done). |
-| `reconcile_engine.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `bincode` wire-encoding functions. |
-| `bincode.rs` | The crate's wire-encoding functions (`pub(crate)`, no adapter type — migration step 5, done; see §2.4). |
-| `reconcile_store.rs` | Public facade tying the engine, the map, and timeouts together. |
-| `timeout_wheel.rs` | Acknowledgement timeout tracking. |
+| `lww-register/src/entry.rs` (standalone `lww-register` crate, migration step 6 Step C, done) | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
+| `lww-register/src/bounds.rs` | The `Key`/`Value` data-bound bundles (§3.8). |
+| `lww-register/src/clock.rs` | Hybrid Logical Clock, ordering half: the `Timestamp` type, the `Clock` port, and the `advance`/`advance_past` HLC arithmetic. Reads no clock of its own. |
+| `lww-register/src/persistence.rs` | Durability boundary: the `Persistence` port, the `PersistedState` snapshot type, and the non-durable `InMemoryPersistence` default. |
+| `gossip/src/auth.rs` (standalone `gossip` crate, Step C, done) | Per-datagram message authentication (MAC) and optional AEAD encryption. |
+| `gossip/src/replay.rs` | Per-sender sequence/freshness state: the anti-replay half of the same envelope. |
+| `gossip/src/transport.rs` | The `Transport` port (datagram I/O) and its `UdpTransport` / `InMemoryTransport` adapters (migration step 5, done). |
+| `gossip/src/bincode.rs` | The wire-encoding functions (no adapter type — migration step 5, done; see §2.4). |
+| `gossip/src/discovery.rs`, `gossip/src/gen_ip.rs` | The `Discovery` port with its `RandomProbe`/`DnsDiscovery` adapters, and the address generation the former probes over. |
+| `snapshot/src/lib.rs` (standalone `snapshot` crate, Step C, done) | `FileSnapshot`: the durable, atomically-replaced file adapter for the `Persistence` port, with its versioned on-disk header. |
+| `src/clock.rs` | Hybrid Logical Clock, adapter half: `HlcClock`, the sole physical-time read, feeding `lww-register`'s ordering arithmetic. |
+| `src/replica.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `bincode` wire-encoding functions. |
+| `src/replicated_map.rs` | Public facade tying the engine, the map, and timeouts together. |
+| `src/mirror.rs` | The dateless read-only `Mirror`. |
+| `src/timeout_wheel.rs` | Acknowledgement timeout tracking. |
+| `src/observability.rs`, `src/prometheus.rs` | Metric call sites (no-ops without the `metrics` feature) and the optional Prometheus recorder/endpoint. |
+| `src/persistence.rs`, `src/lib.rs` | Re-export shims keeping `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`, `reconcile::FileSnapshot` etc. resolving after the split. |
 
 ### 2.2 The domain mechanism is already infrastructure-free
 
@@ -60,31 +68,49 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 |---|---|
 | `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — enforced today by the crate's own minimal `Cargo.toml` dependency list, not just by grep. |
 | `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — enforced by the crate's own `Cargo.toml` (`rsos` + `serde` + `tracing`), not just by grep. |
-| `entry.rs` | none |
+| `lww-register/src/*.rs` (standalone `lww-register` crate) | none — its `Cargo.toml` names exactly one dependency, `serde` (derive only, for data shapes *other* crates encode), so `use tokio::…` there does not compile. |
 
 This is, in effect, the interior of the hexagon and it exists today.
+
+`./scripts/check-domain-purity.sh` still greps every `lww-register/src/*.rs` file for
+`tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/`std::net` imports. That is not redundant
+with the manifest: a manifest cannot see an infrastructure type reached through a *re-export* of an
+allowed dependency, which compiles fine and silently breaches the boundary. The script covers that
+intra-crate sub-boundary, and lists every file in the crate rather than a hand-picked subset — a new
+module in `lww-register` is domain by construction. It carries one documented carve-out: `std::net`'s
+plain address *value* types (`IpAddr`, `SocketAddr`, …) are allowed, because `PersistedState`'s
+causal-stability membership set is literally a set of peer identities and a peer's identity is its
+address; the socket types (`UdpSocket`, `TcpStream`, `ToSocketAddrs`) are not, and a mixed import
+such as `use std::net::{IpAddr, UdpSocket};` is still rejected. Making peer identity an opaque domain
+newtype would remove the need for the carve-out — a separate change, not part of the split.
+
+Widening or narrowing the domain set means updating `DOMAIN_FILES` in the script **and** this section
+together (AGENTS.md §9.2).
 
 ### 2.3 Infrastructure coupling
 
 Migration step 5 (§6) extracted the `Transport` port and the `bincode.rs` wire-encoding functions, so
-`reconcile_engine.rs` no longer imports `tokio::net` or `bincode` directly — it drives the gossip
-protocol purely over `Transport` (default adapter `UdpTransport`) and `crate::bincode::{encode,
+`replica.rs` no longer imports `tokio::net` or `bincode` directly — it drives the gossip
+protocol purely over `Transport` (default adapter `UdpTransport`) and `gossip::bincode::{encode,
 decode_stream}`. The remaining infrastructure dependencies:
 
 | Module | Infrastructure imported directly | Notes |
 |---|---|---|
-| `clock.rs` | `chrono::Utc` — physical time read inside the domain | Behind the `Clock` port (`HlcClock` adapter); not yet extracted to a separate adapter module (§3.9 target, not yet split into a workspace). |
-| `transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
-| `bincode.rs` | `bincode` | The crate's wire-encoding functions — likewise intended; not a port (§2.4). |
-| `reconcile_engine.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
-| `reconcile_store.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
-| `mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `ReconcileMirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport` and go through `crate::bincode::encode` per send), but the mirror was never given its own injectable `Transport` — out of scope for step 5, left for a future pass. |
+| `src/clock.rs` | `chrono::Utc` — the sole physical-time read | The `Clock` port's adapter (`HlcClock`). Step C split the module: the `Timestamp` type, the port and the HLC ordering arithmetic went to `lww-register`, this adapter stayed — so the wall-clock read is now *outside* the domain, which is the intended location, not residual coupling. |
+| `gossip/src/transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
+| `gossip/src/bincode.rs` | `bincode` | The wire-encoding functions — likewise intended; not a port (§2.4). |
+| `gossip/src/auth.rs`, `gossip/src/replay.rs` | `chrono::Utc`, MAC/AEAD backends | Datagram sealing and per-sender freshness stamps — intended, in the adapter layer. |
+| `snapshot/src/lib.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
+| `src/replica.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
+| `src/replicated_map.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
+| `src/mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `Mirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport` and go through `gossip::bincode::encode` per send), but the mirror was never given its own injectable `Transport` — out of scope for step 5, left for a future pass. |
 
 There is no longer an abstraction boundary missing between the dated engine and the transport: it is
 a substitutable adapter, and the in-memory `Transport` (`InMemoryNetwork`/`InMemoryTransport`) paired
-with the `bincode.rs` wire-encoding functions makes the engine's gossip protocol exercisable with no
-real sockets. Wire encoding itself has a single implementation and is not behind a port (§2.4). The
-wall-clock time source (`clock.rs`) and the mirror's socket stack remain the open items.
+with the wire-encoding functions makes the engine's gossip protocol exercisable with no real sockets.
+Wire encoding itself has a single implementation and is not behind a port (§2.4). Step C closed the
+wall-clock item by splitting `clock.rs` along the port boundary; the mirror's socket stack remains
+the open one.
 
 ### 2.4 Trait landscape
 
@@ -116,14 +142,14 @@ dissolved `BincodeCodec` itself (still issue #144): zero-sized and stateless, wi
 constructor just to call what were effectively two static functions. Wire encoding is now the plain
 `pub(crate) fn encode` / `fn decode_stream` in `bincode.rs` (renamed from `codec.rs`, since there is
 no abstraction left to name — it is just the code that talks to the `bincode` crate); the engine
-(`reconcile_engine.rs`) and `mirror.rs` call `crate::bincode::encode` / `crate::bincode::decode_stream`
+(`replica.rs`) and `mirror.rs` call `gossip::bincode::encode` / `gossip::bincode::decode_stream`
 directly. `Transport`, by contrast, remains a genuine port (§3.4/§3.5): object-safe, `pub`, and with
 two real implementations (`UdpTransport`, `InMemoryTransport`).
 
 Consequence of the (now-superseded) tuple representation, addressed by the same step:
 
 - The internal tuple used to leak onto the public surface — into the `add_pre_insert` hook and into
-  `PersistedState`. Both now carry `Entry<Timestamp, V>` directly (`reconcile_store.rs`,
+  `PersistedState`. Both now carry `Entry<Timestamp, V>` directly (`replicated_map.rs`,
   `persistence.rs`).
 
 ---
@@ -238,7 +264,7 @@ pub trait Discovery: Send + Sync + 'static {
 | `Discovery` | `RandomProbe` (default, speculative per-net probing); `DnsDiscovery` (authoritative, headless-Service DNS) | `gen_ip` / `tokio::net::lookup_host` |
 
 Wire encoding is not a port (`bincode::{DefaultOptions, ...}`, backed by `bincode` — see §2.4): the
-engine and `mirror.rs` call the plain `crate::bincode::encode` / `crate::bincode::decode_stream`
+engine and `mirror.rs` call the plain `gossip::bincode::encode` / `gossip::bincode::decode_stream`
 functions directly rather than naming a `Codec` trait or a codec value.
 
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
@@ -249,7 +275,7 @@ The ports make the domain testable in isolation: an in-memory `Transport` (`InMe
 deterministic without real sockets or wall-clock time.
 
 **Visibility asymmetry (`Transport` public, `bincode.rs` `pub(crate)`).** `Transport` is
-consumer-wireable: `ReconcileStore::new_with_transport` takes any
+consumer-wireable: `ReplicatedMap::new_with_transport` takes any
 `Arc<dyn Transport<Addr = SocketAddr>>`, and `InMemoryNetwork`/`InMemoryTransport` are public (not
 test-gated) so a downstream crate can drive a deterministic in-process cluster in its own tests —
 that, plus a future non-UDP datagram transport (e.g. QUIC unreliable datagrams), is what earns
@@ -287,7 +313,7 @@ resolution is **domain policy**, not an infrastructure port: last-write-wins is 
 default. A pluggable `Resolve` seam is warranted only if a second policy (e.g. a CRDT) becomes a
 real requirement.
 
-The same step also absorbs the **value-only projection** that powers the dateless `ReconcileMirror`.
+The same step also absorbs the **value-only projection** that powers the dateless `Mirror`.
 Today the engine keeps a second tree `FingerprintTreeMap<K, V::Projected>` fed through the `Projectable` trait
 into a `ValueOnly<V>(Option<V>)` cell whose `Hash` is timestamp-less by construction. `State<V>` is
 isomorphic to that cell (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), so the projection becomes
@@ -326,29 +352,44 @@ ever needing to compare — or clone — the value itself.
 ### 3.9 Crate structure
 
 The layers are separated into a workspace so that the inward dependency direction is enforced by the
-compiler:
+compiler. As of migration step 6 Step C this is **the shape of the tree today**, not a target:
 
 ```
-reconcile-core   // DOMAIN + PORTS: Clock, Persistence (traits);
-                 //   Entry / State, Timestamp, Fingerprint, FingerprintTreeMap, the diff algorithm, LWW.
-                 //   no infrastructure deps (no tokio, bincode, chrono-IO, ipnet, runtime rand);
-                 //   serde + blake3, plus the dependency-light tracing / metrics facades.
-reconcile-net    // ADAPTERS + I/O PORT: Transport (trait); UdpTransport, bincode.rs's encode/
-                 //   decode_stream functions (no adapter type — §2.4), Authenticator, peer
-                 //   discovery (gen_ip / ipnet / rand).
-reconcile-store  // ADAPTERS: FileSnapshot / InMemory persistence.
-reconcile        // WIRING + driving API: the Store facade, configuration, the HlcClock adapter
-                 //   (which holds the chrono read), the tombstone wheel.
+rsos           // DATA STRUCTURE: the Rsos<K> trait (Def. 3.9's seven operations, with the stored
+               //   value as an associated type) and its one realization, FingerprintTreeMap<K, V>,
+               //   plus Fingerprint and the bundled Aggregate (Def. 3.5). Zero workspace deps.
+rbsr           // ALGORITHM: start_diff / diff_round / RangeAggregate, generic over RsosView<K>
+               //   (four of the seven operations), blanket-implemented for every rsos::Rsos.
+               //   Depends on rsos only.
+lww-register   // DOMAIN + PORTS: Entry / State, Timestamp + the Clock port + the HLC ordering
+               //   arithmetic, the Persistence port + PersistedState + InMemoryPersistence,
+               //   Key / Value. One dependency: serde's derive. No tokio / bincode / chrono / ipnet
+               //   — the manifest itself makes that a compile error (§2.2).
+gossip         // ADAPTERS + I/O PORT: Transport (trait); UdpTransport / InMemoryTransport, the
+               //   encode / decode_stream wire functions (no adapter type — §2.4), Authenticator,
+               //   replay protection, the Discovery port with RandomProbe / DnsDiscovery
+               //   (gen_ip / ipnet / rand). Does NOT depend on lww-register.
+snapshot       // ADAPTERS: FileSnapshot, the durable half of persistence. Depends on lww-register.
+reconcile      // WIRING + driving API: ReplicatedMap, Replica, Mirror, configuration, the HlcClock
+               //   adapter (which holds the chrono read), the tombstone wheel, observability.
+               //   Depends on all five, and re-exports their public types.
 ```
 
-The `Clock` and `Persistence` ports are defined in `reconcile-core` (the domain-adjacent logic
-injects them). The **`Transport` port is defined in `reconcile-net`**, not the core: it is consumed
-by the UDP driver, which lives in `reconcile-net`, and the diff/merge domain does no I/O — this also
-keeps `async_trait` out of the core. `bincode.rs`'s wire-encoding functions live in `reconcile-net`
-too, rather than behind a port (§2.4). The chrono-reading `HlcClock` adapter lives
-in `reconcile` (the `Timestamp` *type* and the pure HLC advance stay in the core, so the core carries no
-`chrono`). Adapters depend on `reconcile-core`; infrastructure cannot be imported into the core
-without a compile error — the guarantee a single crate cannot provide.
+The `Clock` and `Persistence` ports are defined in `lww-register` (the domain-adjacent logic injects
+them). The **`Transport` port is defined in `gossip`**, not the domain crate: it is consumed by the
+UDP driver, and the diff/merge domain does no I/O — this also keeps `async_trait` out of the domain.
+The wire-encoding functions live in `gossip` too, rather than behind a port (§2.4).
+
+`gossip` carries this further than the earlier `reconcile-net` sketch anticipated: it has **no
+dependency on `lww-register` at all**. Nothing in the transport/auth/replay/discovery layer knows
+what an `Entry`, a `Timestamp` or a `Key` is — a datagram is a byte slice, a peer is an address. So
+`gossip` is a core-independent *sibling* rather than a layer above the domain, and `reconcile` is the
+one place the two meet. Adding that edge is the signal that something landed in the wrong crate.
+
+The chrono-reading `HlcClock` adapter lives in `reconcile` (the `Timestamp` *type*, the `Clock` port
+and the pure HLC advance stay in `lww-register`, so the domain carries no `chrono`). Adapters depend
+on `lww-register`; infrastructure cannot be imported into it without a compile error — the guarantee
+a single crate could not provide.
 
 ---
 
@@ -361,14 +402,14 @@ without a compile error — the guarantee a single crate cannot provide.
 | `Reconcilable` (LWW over tuple) | ✅ `Entry::merge` (LWW); no `Resolve` seam needed yet |
 | `Projectable` / `ValueOnly<V>` (dateless mirror) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `FingerprintTreeMap` methods + `pub(crate)` diff functions |
-| `pub mod diff` exposing wire types | `pub(crate)` `RangeAggregate` / `DiffRange` |
-| `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
-| `UdpSocket` in `reconcile_engine.rs` | ✅ `Transport` port (`transport.rs`); `UdpTransport` adapter (public, `ReconcileStore::new_with_transport` — D2) |
-| `bincode` in `reconcile_engine.rs` | ✅ `encode`/`decode_stream` (`bincode.rs`), plain `pub(crate)` wire-encoding functions — no `Codec` trait and no `BincodeCodec` type (both dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
+| `pub mod diff` exposing wire types | `RangeAggregate` / `DiffRange`, with private fields, in `rbsr` |
+| `chrono::Utc` read in `clock.rs` | ✅ `Clock` port (`lww-register`); the `HlcClock` adapter in `src/clock.rs` holds the time read |
+| `UdpSocket` in `replica.rs` | ✅ `Transport` port (`gossip/src/transport.rs`); `UdpTransport` adapter (public, `ReplicatedMap::new_with_transport` — D2) |
+| `bincode` in `replica.rs` | ✅ `encode`/`decode_stream` (`gossip/src/bincode.rs`), plain wire-encoding functions — no `Codec` trait and no `BincodeCodec` type (both dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
-| Single crate | `reconcile-core` / `-net` / `-store` / `reconcile` workspace (steps A/B done: `rsos` and `rbsr` split out below the domain layer) |
+| Single crate | ✅ six-crate workspace `rsos` / `rbsr` / `lww-register` / `gossip` / `snapshot` / `reconcile` (steps A/B/C done; §3.9) |
 
 ---
 
@@ -391,10 +432,10 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
    earned by an authenticated dated datagram, so a discovered (unverified) address can neither block
    GC nor be the subject of a GC release. Decommissioning a member that has vanished from discovery
    uses the same `decommission_peer` escape hatch as `forget_peer`.
-7. **`version_hash` determinism** (`reconcile_engine.rs:55`) — preserved as `Entry` derives `Hash`.
+7. **`version_hash` determinism** (`replica.rs:55`) — preserved as `Entry` derives `Hash`.
 8. **Value-only projection hash is timestamp-less** — the dated `Entry` hashes with its `stamp`
    (feeding `version_hash`), while its `State<V>` projection hashes the value alone, so a dated
-   store and a dateless `ReconcileMirror` compute identical per-element fingerprints. Guarded by
+   store and a dateless `Mirror` compute identical per-element fingerprints. Guarded by
    `mirror.rs::value_fingerprint_is_timestamp_independent`.
 
 ---
@@ -413,17 +454,17 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    read; the domain becomes time-source-free.
 4. ✅ **`Entry` / `State` domain type** (done) — replace `(Timestamp, Option<V>)` with
    `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); dissolve `MaybeTombstone` / `Timestamped` /
-   `Reconcilable` / `Projectable` / `ValueOnly<V>`; `reconcile_engine.rs` and `reconcile_store.rs`
+   `Reconcilable` / `Projectable` / `ValueOnly<V>`; `replica.rs` and `replicated_map.rs`
    now parameterize the engine over the plain `V` and construct `Entry<Timestamp, V>` /
-   `State<V>` internally; `add_pre_insert`, `ReconcileMirror::add_on_update` and `PersistedState`
+   `State<V>` internally; `add_pre_insert`, `Mirror::add_on_update` and `PersistedState`
    carry `Entry<Timestamp, V>` / `State<V>` directly. *Changed the wire and on-disk formats*, as
    anticipated — acceptable pre-1.0.
 5. ✅ **`Transport` port + `bincode.rs` wire-encoding functions** (done, issue #144) — extract the
    `Transport` port and the crate's wire-encoding functions; `UdpTransport` / `encode` /
-   `decode_stream` (`transport.rs` / `bincode.rs`); the engine (`reconcile_engine.rs`) becomes a thin
+   `decode_stream` (`transport.rs` / `bincode.rs`); the engine (`replica.rs`) becomes a thin
    driver over them — it imports neither `tokio::net` nor `bincode` directly — with authentication
    ahead of the codec (invariant 5) and `decode_stream`'s `max_items` cap closing the
-   datagram-expansion DoS (#151). `ReconcileEngine` holds the transport as
+   datagram-expansion DoS (#151). `Replica` holds the transport as
    `Arc<dyn Transport<Addr = SocketAddr>>`; wire encoding needs no field at all. The wire-encoding
    logic started life generic-over-a-`Codec`-trait like `Transport`, but the trait was dissolved as a
    follow-up (same PR-review pass that landed §2.4's writeup): with a single implementation, generic
@@ -435,25 +476,30 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    through `Inner`, `SendPorts`, and every constructor to call what were effectively two static
    functions — so it became the plain `pub(crate) fn encode` / `fn decode_stream` free functions in
    `bincode.rs` (renamed from `codec.rs`, since there is no abstraction left to name).
-   `ReconcileEngine`/`SendPorts` therefore take no codec type parameter and hold no codec field;
-   call sites use `crate::bincode::encode`/`crate::bincode::decode_stream` directly.
-   `ReconcileStore::new_with_transport` makes `Transport` consumer-wireable (infallible: the only
+   `Replica`/`SendPorts` therefore take no codec type parameter and hold no codec field;
+   call sites use `gossip::bincode::encode`/`gossip::bincode::decode_stream` directly.
+   `ReplicatedMap::new_with_transport` makes `Transport` consumer-wireable (infallible: the only
    fallible step in `new` is the socket bind, already done by a caller supplying their own
    transport) and `InMemoryNetwork`/`InMemoryTransport` are public, not test-gated, so downstream
    crates can drive a deterministic in-process cluster in their own tests; `bincode.rs`'s functions
    stay `pub(crate)` (internal mechanism, not a port — see §3.5). `Clock::node_id` was added so
-   `ReconcileStore::node_id()` can read the identity back from the same adapter that stamps it,
+   `ReplicatedMap::node_id()` can read the identity back from the same adapter that stamps it,
    rather than caching it separately. `Value` dropped its `PartialEq` bound: the receive path's
    post-merge change detection is now a stamp comparison (`remote.stamp > local.stamp`, equivalent
    to `Entry::merge` under LWW) rather than an `Entry`/value equality check, which needed no bound on
-   `V` and avoids a clone on the hot path. **Residual coupling**: `ReconcileMirror` (`mirror.rs`)
+   `V` and avoids a clone on the hot path. **Residual coupling**: `Mirror` (`mirror.rs`)
    still binds and owns its own UDP socket and calls `bincode` directly for its own receive loop —
-   only its *send* calls were rewired onto the shared `Transport`-generic, `crate::bincode::encode`-using
+   only its *send* calls were rewired onto the shared `Transport`-generic, `gossip::bincode::encode`-using
    helpers. Routing the mirror's own socket onto an injectable `Transport` is deferred (tracked
    under issue #138, same as the workspace split below).
-6. **Workspace split** — promote the layers to `reconcile-core` / `reconcile-net` /
-   `reconcile-store` / `reconcile`; ports defined in the core; the core carries no infrastructure
-   dependency.
+6. **Workspace split** — promote the layers to a multi-crate workspace; ports defined in the domain
+   crate; the domain carries no infrastructure dependency. Landed in four steps: **A** extracted
+   `rsos` (`FingerprintTreeMap` + the `Rsos<K>` trait), **B** extracted `rbsr` (the diff walk +
+   `RsosView<K>`), **C** split out `lww-register` / `gossip` / `snapshot` and renamed
+   `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror`, and
+   **D** reassembles `reconcile` as a thin facade and finishes the CI/doc sweep. The names replace
+   the earlier `reconcile-core` / `-net` / `-store` sketch: each says what the crate *is* rather than
+   prefixing the project name onto every layer (§3.9).
 
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
 done); step 5 is done; step 6 completes the boundary extraction and enforces it at the crate level.

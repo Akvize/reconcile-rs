@@ -5,7 +5,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{reconcile_store::Config, Fingerprint, ReconcileStore};
+use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -70,13 +70,13 @@ async fn test() {
     });
 
     // start reconciliation stores for tree1 and tree2
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2)
+    let store2 = ReplicatedMap::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -191,11 +191,11 @@ async fn get_mut_edit_propagates_to_peers() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
-    let store2 = ReconcileStore::new(cfg2)
+    let store2 = ReplicatedMap::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -253,13 +253,13 @@ async fn authenticated_nodes_converge() {
         (key, value)
     });
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2)
+    let store2 = ReplicatedMap::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -306,11 +306,11 @@ async fn concurrent_writes_converge() {
         .with_net(net)
         .with_node_id(2);
 
-    let store1 = ReconcileStore::<String, String>::new(cfg1)
+    let store1 = ReplicatedMap::<String, String>::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -363,12 +363,12 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
 
     // Aggressive wall-clock expiry so that, without causal-stability gating, the tombstone
     // would be GC'd almost immediately.
-    let store1 = ReconcileStore::<i32, i32>::new(cfg1)
+    let store1 = ReplicatedMap::<i32, i32>::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(50));
-    let store2 = ReconcileStore::<i32, i32>::new(cfg2)
+    let store2 = ReplicatedMap::<i32, i32>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1)
@@ -430,12 +430,12 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    let store1 = ReconcileStore::<i32, i32>::new(cfg1)
+    let store1 = ReplicatedMap::<i32, i32>::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(50));
-    let store2 = ReconcileStore::<i32, i32>::new(cfg2)
+    let store2 = ReplicatedMap::<i32, i32>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1)
@@ -501,11 +501,11 @@ async fn test_malformed_datagram_does_not_crash() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
-    let store2 = ReconcileStore::new(cfg2)
+    let store2 = ReplicatedMap::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -558,13 +558,13 @@ async fn encrypted_nodes_converge() {
         (key, value)
     });
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::new(cfg2)
+    let store2 = ReplicatedMap::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -607,13 +607,13 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
         .with_cluster_key([0x99u8; 32]) // different key
         .with_encryption();
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("secret".to_string(), "value".to_string());
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -659,13 +659,13 @@ async fn cross_net_reconciliation() {
         .with_remote_interval(1)
         .with_remote_fanout(1);
 
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("key".to_string(), "value".to_string());
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -714,10 +714,10 @@ async fn cross_net_discovery_without_seed() {
         .with_remote_fanout(1);
 
     // No `with_seed`: the two nodes must find each other purely through per-network discovery probes.
-    let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
+    let store1 = ReplicatedMap::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed");
 
@@ -733,7 +733,7 @@ async fn cross_net_discovery_without_seed() {
 /// Runtime topology injection: a network declared **while the loop is running** must take effect
 /// without recreating the node. Two nodes start declaring only their own network and with no seed,
 /// so discovery never probes the peer and they cannot converge. Injecting the peer's network with
-/// [`add_net`](ReconcileStore::add_net) makes per-network discovery reach the peer and they converge,
+/// [`add_net`](ReplicatedMap::add_net) makes per-network discovery reach the peer and they converge,
 /// proving the running reconciliation loop observes the mutation.
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_add_net_enables_discovery_and_convergence() {
@@ -760,10 +760,10 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
         .with_remote_fanout(1);
 
     // No seed: the nodes can only meet through per-network discovery probes.
-    let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
+    let store1 = ReplicatedMap::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed");
 
@@ -813,13 +813,13 @@ async fn unclassified_peer_is_still_reconciled() {
         .with_remote_fanout(1);
 
     // Seeded so each knows the other, even though neither address is in any declared network.
-    let store1 = ReconcileStore::new(cfg1)
+    let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("k".to_string(), "v".to_string());
     let start_fingerprint = store1.fingerprint(..);
-    let store2 = ReconcileStore::<String, String>::new(cfg2)
+    let store2 = ReplicatedMap::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1);
@@ -847,7 +847,7 @@ async fn runtime_config_setters() {
     let host_route = "127.0.8.1/32".parse().unwrap();
 
     // Port 0 = ephemeral, so this never collides with the networked tests above.
-    let store = ReconcileStore::<i32, i32>::new(
+    let store = ReplicatedMap::<i32, i32>::new(
         Config::default()
             .with_port(0)
             .with_listen_addr(addr)
@@ -880,17 +880,17 @@ async fn runtime_config_setters() {
     assert_eq!(store.local_net(), net_c);
 
     // add_net enforces the MAX_NETS cap (no-op + false beyond it).
-    for i in 0..(reconcile::reconcile_store::MAX_NETS - 1) {
+    for i in 0..(reconcile::replicated_map::MAX_NETS - 1) {
         let n = format!("127.1.{i}.0/30").parse().unwrap();
         assert!(store.add_net(n));
     }
-    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+    assert_eq!(store.nets().len(), reconcile::replicated_map::MAX_NETS);
     let overflow = "127.2.0.0/30".parse().unwrap();
     assert!(
         !store.add_net(overflow),
         "add_net past MAX_NETS must return false"
     );
-    assert_eq!(store.nets().len(), reconcile::reconcile_store::MAX_NETS);
+    assert_eq!(store.nets().len(), reconcile::replicated_map::MAX_NETS);
 
     // Scalar knob setters: smoke (no getters, must not panic).
     store.set_remote_interval(3);
@@ -926,7 +926,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
         .with_cluster_key(key);
     // Default freshness window is 5 minutes; the injected stamp is 1 hour in the past.
 
-    let store = ReconcileStore::<i32, i32>::new(cfg)
+    let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
         .expect("bind failed");
     store.just_insert(0, 99);
@@ -996,7 +996,7 @@ async fn replayed_sealed_datagram_is_rejected() {
         .with_net(net)
         .with_cluster_key(key);
 
-    let store = ReconcileStore::<i32, i32>::new(cfg)
+    let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
         .expect("bind failed");
     let task = tokio::spawn(store.clone().run());
@@ -1066,7 +1066,7 @@ async fn decommissioned_peer_replay_is_rejected() {
         .with_net(net)
         .with_cluster_key(key);
 
-    let store = ReconcileStore::<i32, i32>::new(cfg)
+    let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
         .expect("bind failed");
     let task = tokio::spawn(store.clone().run());
@@ -1146,19 +1146,19 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
             .with_net(net)
             .with_reconcile_interval(Duration::from_millis(100))
     };
-    let store1 = ReconcileStore::<i32, i32>::new(mk(addr1))
+    let store1 = ReplicatedMap::<i32, i32>::new(mk(addr1))
         .await
         .expect("bind failed")
         .with_seed(addr2)
         .with_seed(addr3)
         .with_tombstone_timeout(Duration::from_millis(200));
-    let store2 = ReconcileStore::<i32, i32>::new(mk(addr2))
+    let store2 = ReplicatedMap::<i32, i32>::new(mk(addr2))
         .await
         .expect("bind failed")
         .with_seed(addr1)
         .with_seed(addr3)
         .with_tombstone_timeout(Duration::from_millis(200));
-    let store3 = ReconcileStore::<i32, i32>::new(mk(addr3))
+    let store3 = ReplicatedMap::<i32, i32>::new(mk(addr3))
         .await
         .expect("bind failed")
         .with_seed(addr1)
@@ -1229,18 +1229,18 @@ async fn tombstone_gc_converges_in_3_node_cluster_line() {
     };
     // Line: A seeds B; B seeds A and C; C seeds B. Seeds define the intended topology; a stray
     // discovery probe could only add connectivity, which never prevents GC convergence.
-    let store1 = ReconcileStore::<i32, i32>::new(mk(addr1))
+    let store1 = ReplicatedMap::<i32, i32>::new(mk(addr1))
         .await
         .expect("bind failed")
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(200));
-    let store2 = ReconcileStore::<i32, i32>::new(mk(addr2))
+    let store2 = ReplicatedMap::<i32, i32>::new(mk(addr2))
         .await
         .expect("bind failed")
         .with_seed(addr1)
         .with_seed(addr3)
         .with_tombstone_timeout(Duration::from_millis(200));
-    let store3 = ReconcileStore::<i32, i32>::new(mk(addr3))
+    let store3 = ReplicatedMap::<i32, i32>::new(mk(addr3))
         .await
         .expect("bind failed")
         .with_seed(addr2)

@@ -17,7 +17,7 @@
 //! - [`Entry::is_tombstone`] / [`Entry::value`] read the tombstone/live state (formerly
 //!   `MaybeTombstone`).
 //! - [`Entry::project`] produces the timestamp-less [`State<V>`] projection consumed by a dateless
-//!   [`ReconcileMirror`](crate::mirror::ReconcileMirror) (formerly `Projectable` / `ValueOnly<V>`).
+//!   `Mirror` (formerly `Projectable` / `ValueOnly<V>`).
 //!
 //! [`State<V>`] is isomorphic to the old `ValueOnly<V>(Option<V>)`: `Present(v) ↔ Some(v)`,
 //! `Tombstone ↔ None`. It is *itself* the value-only wire/projection type — a dated store's
@@ -27,9 +27,9 @@
 //!
 //! [`Entry`]'s derived [`Hash`] includes `stamp` (it is a plain struct field), which is exactly
 //! what feeds `version_hash` for the causal-stability tombstone acknowledgments
-//! (`reconcile_engine.rs`). [`State`]'s derived `Hash` has no `Timestamp` field at all, so it
+//! (`replica.rs`). [`State`]'s derived `Hash` has no `Timestamp` field at all, so it
 //! hashes the value alone. This is what lets a dated store and a dateless
-//! [`ReconcileMirror`](crate::mirror::ReconcileMirror) compute *identical* per-element
+//! `Mirror` compute *identical* per-element
 //! fingerprints for the same logical value regardless of when (or on which node) it was last
 //! written — guarded by `mirror.rs::value_fingerprint_is_timestamp_independent` and by the test
 //! below.
@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Isomorphic to `Option<V>` (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), but a named type reads
 /// better at the call sites that matter here (an [`Entry`]'s projection, and the value a
-/// [`ReconcileMirror`](crate::mirror::ReconcileMirror) stores) and its derived [`Hash`] is
+/// `Mirror` stores) and its derived [`Hash`] is
 /// value-only *by construction* — no [`Timestamp`](crate::clock::Timestamp) field exists to
 /// accidentally include.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -151,7 +151,7 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
     /// Project this dated entry to its timestamp-less [`State<V>`] form.
     ///
     /// This is what a dated store's value-only *projection* tree stores, and what a dateless
-    /// [`ReconcileMirror`](crate::mirror::ReconcileMirror) converges on. See invariant 8 in
+    /// `Mirror` converges on. See invariant 8 in
     /// `ARCHITECTURE.md` §5: the projection's `Hash` deliberately excludes `stamp`.
     pub fn project(&self) -> State<V> {
         self.state.clone()

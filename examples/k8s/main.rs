@@ -41,7 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 /// Read a required environment variable or exit with a clear message.
 fn required(name: &str) -> String {
@@ -130,7 +130,7 @@ async fn main() {
         .await
         .expect("failed to start the metrics endpoint");
 
-    let store = ReconcileStore::<String, String>::new(config)
+    let store = ReplicatedMap::<String, String>::new(config)
         .await
         .expect("failed to bind UDP socket")
         .with_dns_discovery(dns_name, port)

@@ -111,7 +111,7 @@ all but one High resolved or mitigated.
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
   (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).
 - ◯ Larger-than-datagram payloads — [#2](https://github.com/Akvize/reconcile-rs/issues/2).
-- ✅ Lightweight dateless read-only mirror (`ReconcileMirror`), #109-safe — PR #133 ([#128](https://github.com/Akvize/reconcile-rs/issues/128)).
+- ✅ Lightweight dateless read-only mirror (`Mirror`), #109-safe — PR #133 ([#128](https://github.com/Akvize/reconcile-rs/issues/128)).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — PR #130 ([#94](https://github.com/Akvize/reconcile-rs/issues/94)).
 
 ### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
@@ -154,7 +154,8 @@ Refinements adopted after a `file:line` review of the sequence (see issue
 into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a decode cap and the
 `BincodeCodec` adapter sets `with_limit` (partially closing
 [#151](https://github.com/Akvize/reconcile-rs/issues/151)); the `Transport`/`Codec` ports live in
-`reconcile-net` (the `Clock`/`Persistence` ports in `reconcile-core`).
+the network crate (the `Clock`/`Persistence` ports in the domain crate) — which is what the split
+delivered, as `gossip` and `lww-register` respectively.
 
 Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
@@ -176,10 +177,10 @@ Progress:
 - ✅ Step 4 — `Entry`/`State` domain type: the untyped `(Timestamp, Option<V>)` tuple is replaced by
   `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); `MaybeTombstone`, `Reconcilable`, `Timestamped`,
   `Projectable` and `ValueOnly<V>` are dissolved into `Entry`'s inherent methods
-  (`is_tombstone`/`value`/`merge`/`project`) and direct `.stamp` field access. `reconcile_engine.rs`
-  and `reconcile_store.rs` parameterize the engine over the plain `V` and construct
+  (`is_tombstone`/`value`/`merge`/`project`) and direct `.stamp` field access. `replica.rs`
+  and `replicated_map.rs` parameterize the engine over the plain `V` and construct
   `Entry<Timestamp, V>` (map) / `State<V>` (projection) internally; `add_pre_insert`,
-  `ReconcileMirror::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
+  `Mirror::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
   the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
   — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
   include — and is guarded by tests in `entry.rs` and `mirror.rs`. **Changes the wire and on-disk

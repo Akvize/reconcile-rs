@@ -5,11 +5,13 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTreeMap` + range fingerprint) is
-a standalone leaf, `rbsr` holds the Range-Based Set Reconciliation algorithm generic over any `rsos`
-backend, and the `reconcile` package is an embedded, in-memory, eventually-consistent key-value
-store whose replicas reconcile over UDP (anti-entropy gossip over `rbsr`/`rsos`, LWW over a Hybrid
-Logical Clock). Edition 2021, no MSRV pin.
+`reconcile-rs` is a six-crate Cargo workspace. `rsos` (`FingerprintTreeMap` + range fingerprint) is
+a standalone leaf; `rbsr` holds the Range-Based Set Reconciliation algorithm generic over any `rsos`
+backend; `lww-register` is the infrastructure-free LWW-Register CRDT domain; `gossip` is the network
+adapter layer; `snapshot` is the file-backed persistence adapter; and the published `reconcile`
+package is the facade over all five — an embedded, in-memory, eventually-consistent key-value store
+whose replicas reconcile over UDP (anti-entropy gossip over `rbsr`/`rsos`, LWW over a Hybrid Logical
+Clock). See §9.1 for the full map. Edition 2021, no MSRV pin.
 
 For non-trivial changes, read first rather than duplicating here: [`README.md`](./README.md)
 (usage/API/security/deployment), [`ARCHITECTURE.md`](./ARCHITECTURE.md) (target hexagonal
@@ -48,14 +50,14 @@ runs `cargo fmt --check`, `cargo clippy --all -- --deny warnings`, and
 - **Strong-type every wire/domain entity.** A value meaningful to the protocol or domain (sequence
   number, timestamp, key, MAC tag, cluster secret) is its own newtype, never a bare
   `u64`/`[u8; N]`/`String` — two same-typed primitives let a caller swap them silently; two newtypes
-  make that a compile error. Precedent: [`Timestamp`](./src/clock.rs), [`ClusterKey`]/[`Tag`]
-  (`src/auth.rs`), [`Seq`]/[`Stamp`] (`src/replay.rs`).
+  make that a compile error. Precedent: [`Timestamp`](./lww-register/src/clock.rs), [`ClusterKey`]/[`Tag`]
+  (`gossip/src/auth.rs`), [`Seq`]/[`Stamp`] (`gossip/src/replay.rs`).
 - **Every entity owns its own validation** — never the caller. Parsing/encoding lives on the type
   (`Seq::from_le_bytes`, not a free function); an "is this acceptable" check is a method on the type
-  (e.g. [`Stamp::is_fresh`](./src/replay.rs)) — if the same validation arithmetic shows up at two
+  (e.g. [`Stamp::is_fresh`](./gossip/src/replay.rs)) — if the same validation arithmetic shows up at two
   call sites, it belongs on the type instead. Construction of an invalid instance should be
   structurally impossible or funneled through one fallible constructor. Same "parse, don't validate"
-  principle as [`Payload`](./src/auth.rs) (only obtainable via `Authenticator::open`) and
+  principle as [`Payload`](./gossip/src/auth.rs) (only obtainable via `Authenticator::open`) and
   [`Entry`](./ARCHITECTURE.md#36-domain-types-and-conflict-policy) — apply it to every entity, not
   just the security-critical ones.
 - **New wire field or protocol value:** newtype it in the module that owns its semantics; put
@@ -63,7 +65,9 @@ runs `cargo fmt --check`, `cargo clippy --all -- --deny warnings`, and
 
 ## 5. Code style guidelines
 
-- `#![forbid(unsafe_code)]` (`src/lib.rs`) — no `unsafe`, ever; this is a compile error, not a lint.
+- `#![forbid(unsafe_code)]` (`src/lib.rs`, and the `lww-register`/`gossip`/`snapshot`/`rbsr` crate
+  roots) — no `unsafe`, ever; this is a compile error, not a lint. `rsos` is the one root still
+  missing the attribute; add it there rather than dropping it elsewhere.
 - `cargo fmt` and `cargo clippy --deny warnings` (both feature sets, §3/§6) are gated — not style
   suggestions.
 - Strong typing and type-owned validation (§4) are conventions, not yet mechanically gated — hold
@@ -74,11 +78,22 @@ runs `cargo fmt --check`, `cargo clippy --all -- --deny warnings`, and
 ## 6. Feature flags
 
 `mac-blake3` (default MAC backend) vs `mac-hmac` — exactly one wins (`mac-blake3` if both set; build
-fails if neither). `zeroize`, `encryption`, `metrics`, `metrics-prometheus` are opt-in.
-`internal-testing` exposes `crate::testing` (the `pub(crate)` reconciliation seam) for external test
-oracles/benches only — not public API. Touching feature-gated code: run **both** the default and
-`--all-features` variants of `clippy`/`test` (§3) — CI gates them as separate required jobs because
-feature interactions hide bugs.
+fails with a `compile_error!` if neither). `zeroize`, `encryption`, `metrics`, `metrics-prometheus`
+are opt-in. `internal-testing` exposes `crate::testing` (the `pub(crate)` reconciliation seam) for
+external test oracles/benches only — not public API.
+
+Since the workspace split, the flags live where their code lives: `mac-blake3`, `mac-hmac`,
+`zeroize`, `encryption` and `dns-hickory` are **declared on `gossip`** (which owns `auth.rs` and
+`discovery.rs`) and re-exposed from `reconcile` as unification entries
+(`mac-blake3 = ["gossip/mac-blake3"]`). `metrics`/`metrics-prometheus` (for `observability.rs` /
+`prometheus.rs`) and `internal-testing` stay on `reconcile`. `reconcile` depends on `gossip` with
+`default-features = false`, so its own `default = ["mac-blake3"]` is the single place the MAC backend
+gets chosen. `encryption` is both forwarded *and* read locally — `replica.rs`/`replicated_map.rs`
+carry their own `#[cfg(feature = "encryption")]` arms.
+
+Touching feature-gated code: run **both** the default and `--all-features` variants of
+`clippy`/`test` (§3) — CI gates them as separate required jobs because feature interactions hide
+bugs.
 
 ## 7. Testing instructions
 
@@ -103,26 +118,38 @@ feature interactions hide bugs.
 - Never commit a real key/credential — README's examples are placeholders, keep them that way.
 - `mirror.rs` and the `zeroize` feature reduce key exposure in memory; extend them rather than adding
   new places that hold the raw key.
-- Per-peer replay protection ([`src/replay.rs`](./src/replay.rs)) deliberately outlives peer
+- Per-peer replay protection ([`gossip/src/replay.rs`](./gossip/src/replay.rs)) deliberately outlives peer
   membership (see module docs) — don't "clean up" a decommissioned peer's entry, that reopens replay.
 
 ## 9. Project structure and boundaries
 
-**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/fingerprint_tree_map.rs`,
-`rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` moved
-to (or were added in) the standalone `rsos` crate (migration step 6 Step A), and `src/proto.rs` to
-the standalone `rbsr` crate (Step B, now `rbsr/src/diff.rs` + `rbsr/src/rsos_view.rs`) — both
-leaves with zero workspace/infrastructure dependency, enforced by their own minimal `Cargo.toml`s.
-Within the `reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`.
-**Infrastructure**: `reconcile_engine.rs`, `reconcile_store.rs`, `clock.rs`, `discovery.rs`,
-`persistence.rs`, `auth.rs`, `replay.rs`, `observability.rs`, `prometheus.rs`.
+**9.1 Crates and modules** (full table: `ARCHITECTURE.md` §2.1). Six workspace members, in
+dependency order:
+
+| Crate | Holds | Kind |
+|---|---|---|
+| `rsos` | `FingerprintTreeMap`, `Fingerprint`, `Aggregate`, the `Rsos<K>` trait (`fingerprint_tree_map.rs`, `fingerprint_tree_map_iter.rs`, `fingerprint.rs`, `aggregate.rs`) | leaf, zero workspace deps |
+| `rbsr` | the RBSR diff walk + `RsosView<K>` (`diff.rs`, `rsos_view.rs`) | depends on `rsos` only |
+| `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
+| `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |
+| `snapshot` | `FileSnapshot` + the versioned on-disk header | infrastructure; depends on `lww-register` |
+| `reconcile` | `replica.rs`, `replicated_map.rs`, `mirror.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all five and re-exports their public types |
+
+The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.rs`, `pub use` in
+`src/lib.rs`) so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`,
+`reconcile::FileSnapshot` and friends resolve exactly as before the split.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
-load-bearing for the in-progress ports/adapters migration (#138). `./scripts/check-domain-purity.sh`
-greps the §9.1 domain files for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/
-`std::net` imports and fails if found; runs in `./pre-commit` and CI (§3). Widening/narrowing the
-domain set means updating `DOMAIN_FILES` in the script **and** `ARCHITECTURE.md` §2.1/§2.2 together.
+load-bearing for the in-progress ports/adapters migration (#138). Since the split, the *crate-level*
+edge is enforced by `lww-register/Cargo.toml` itself: it names no infrastructure dependency, so
+`use tokio::…` there does not compile. `./scripts/check-domain-purity.sh` covers what a manifest
+cannot — an infrastructure type reached through a re-export of an allowed dependency — by grepping
+every `lww-register/src/*.rs` file for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/
+`std::net` imports; it runs in `./pre-commit` and CI (§3). One documented carve-out: `std::net`'s
+plain address *value* types (`IpAddr` & co.) are allowed, since `PersistedState`'s membership set is
+a set of peer identities; socket types are not. Widening/narrowing the domain set means updating
+`DOMAIN_FILES` in the script **and** `ARCHITECTURE.md` §2.1/§2.2 together.
 
 **9.3 Docs that change with code vs. not.** `README.md`, `ARCHITECTURE.md` §1–§4, this file: same PR
 as the change they describe. `PROGRESS.md`: living status, update as findings/phases change.

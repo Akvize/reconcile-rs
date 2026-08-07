@@ -14,7 +14,7 @@
 //! engines in-process (no real sockets), which is what makes convergence tests deterministic — and
 //! is exposed (not test-gated) so downstream crates can drive a deterministic in-process cluster in
 //! their own tests too, through
-//! [`ReconcileStore::new_with_transport`](crate::ReconcileStore::new_with_transport).
+//! `ReplicatedMap::new_with_transport`.
 
 use std::hash::Hash;
 use std::io;
@@ -150,7 +150,7 @@ impl Transport for UdpTransport {
 /// Exposed (not test-gated) so downstream crates can test *their own* application against a
 /// deterministic cluster, which is the second of the two uses (alongside a future non-UDP
 /// datagram transport, e.g. QUIC unreliable datagrams) that earn `Transport` a public injection
-/// point — see [`ReconcileStore::new_with_transport`](crate::ReconcileStore::new_with_transport).
+/// point — see `ReplicatedMap::new_with_transport`.
 pub use in_memory::{InMemoryNetwork, InMemoryTransport};
 
 mod in_memory {

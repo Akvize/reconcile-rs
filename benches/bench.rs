@@ -15,7 +15,7 @@ mod imp {
     };
 
     use reconcile::{
-        reconcile_store::Config, Entry, FingerprintTreeMap, ReconcileStore, State, Timestamp,
+        replicated_map::Config, Entry, FingerprintTreeMap, ReplicatedMap, State, Timestamp,
     };
 
     fn fingerprint_tree_map_new(c: &mut Criterion) {
@@ -292,7 +292,7 @@ mod imp {
         }
     }
 
-    /// Measure the time to send 1 insertion, and 1 removal between 2 ReconcileStore instances containing N items
+    /// Measure the time to send 1 insertion, and 1 removal between 2 ReplicatedMap instances containing N items
     fn service_send(c: &mut Criterion) {
         let port = 8080;
         let net = "127.0.0.1/8".parse().unwrap();
@@ -315,7 +315,7 @@ mod imp {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("ReconcileStore::send");
+        let mut group = c.benchmark_group("ReplicatedMap::send");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
@@ -324,12 +324,12 @@ mod imp {
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
                     // start reconciliation stores
-                    let store1 = ReconcileStore::new(cfg1)
+                    let store1 = ReplicatedMap::new(cfg1)
                         .await
                         .expect("bind failed")
                         .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReconcileStore::new(cfg2)
+                    let store2 = ReplicatedMap::new(cfg2)
                         .await
                         .expect("bind failed")
                         .with_seed(addr1);
@@ -359,7 +359,7 @@ mod imp {
         }
     }
 
-    /// Measure the time to reconcile 1 insertion/removal between ReconcileStore instances containing N items
+    /// Measure the time to reconcile 1 insertion/removal between ReplicatedMap instances containing N items
     fn service_reconcile(c: &mut Criterion) {
         let port = 8080;
         let net = "127.0.0.1/8".parse().unwrap();
@@ -382,7 +382,7 @@ mod imp {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("ReconcileStore::reconcile");
+        let mut group = c.benchmark_group("ReplicatedMap::reconcile");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {
@@ -391,12 +391,12 @@ mod imp {
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
                     // start reconciliation services
-                    let store1 = ReconcileStore::new(cfg1)
+                    let store1 = ReplicatedMap::new(cfg1)
                         .await
                         .expect("bind failed")
                         .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReconcileStore::new(cfg2)
+                    let store2 = ReplicatedMap::new(cfg2)
                         .await
                         .expect("bind failed")
                         .with_seed(addr1);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up a local kind cluster running 5 ReconcileStore pods.
+# Bring up a local kind cluster running 5 ReplicatedMap pods.
 #
 # Idempotent: safe to re-run. It will (re)build the image, (re)load it into kind, ensure the
 # cluster key Secret exists, and (re)apply the manifests.

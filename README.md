@@ -21,7 +21,7 @@
 [docs-url]: https://docs.rs/reconcile/latest/reconcile/
 
 This crate provides a key-data map structure `FingerprintTreeMap` that can be used together
-with the reconciliation `ReconcileStore`. Different instances can talk together over
+with the reconciliation `ReplicatedMap`. Different instances can talk together over
 UDP to efficiently reconcile their differences.
 
 All the data is available locally on all instances, and the user can be
@@ -43,7 +43,7 @@ the cluster as an empty replica.
 In code, this would look like this:
 
 ```rust
-let mut store = ReconcileStore::new(Config::default()).await.unwrap();
+let mut store = ReplicatedMap::new(Config::default()).await.unwrap();
 tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
@@ -94,7 +94,7 @@ To close this vector, provide a shared 32-byte cluster secret on **every** node:
 ```rust
 let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
 let config = Config::default().with_cluster_key(key);
-let store = ReconcileStore::new(config).await.unwrap();
+let store = ReplicatedMap::new(config).await.unwrap();
 ```
 
 With a key set, every outgoing datagram is framed with a per-datagram keyed MAC over its payload,
@@ -134,7 +134,7 @@ you need them, run the protocol over a trusted/encrypted underlay.
 
 ## Persistence
 
-By default a `ReconcileStore` is held purely in memory: a process restart loses the entire dataset,
+By default a `ReplicatedMap` is held purely in memory: a process restart loses the entire dataset,
 **including tombstones**. Losing tombstones is not just a durability problem — it is a correctness
 hazard. A node that restarts empty behaves like a brand-new replica, re-learns already-deleted
 values from peers, and can resurrect them (the tombstone-resurrection problem of issue #109).
@@ -153,9 +153,9 @@ not look like a fresh, empty replica:
 
 ```rust
 use std::sync::Arc;
-use reconcile::{reconcile_store::Config, FileSnapshot, ReconcileStore};
+use reconcile::{replicated_map::Config, FileSnapshot, ReplicatedMap};
 
-let store = ReconcileStore::new(Config::default())
+let store = ReplicatedMap::new(Config::default())
     .await
     .unwrap()
     .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
@@ -225,11 +225,11 @@ grep -A1 '^Udp:' /proc/net/snmp        # the RcvbufErrors column
 
 Set either field to `None` to leave the inherited OS default untouched.
 
-## Read-only mirror (`ReconcileMirror`)
+## Read-only mirror (`Mirror`)
 
-For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReconcileStore`
+For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReplicatedMap`
 keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
-only consumes values never needs it. `ReconcileMirror` is a **dateless, read-only mirror** that
+only consumes values never needs it. `Mirror` is a **dateless, read-only mirror** that
 stores only the value (`State<V>`, ~24 bytes lighter per entry for a small payload) and still
 converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
 
@@ -240,10 +240,10 @@ mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is nev
 causal-stability member, so it cannot hold back a dated node's garbage collection.
 
 ```rust
-use reconcile::{reconcile_store::Config, ReconcileMirror};
+use reconcile::{replicated_map::Config, Mirror};
 
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
-let mirror = ReconcileMirror::<String, String>::new(Config::default())
+let mirror = Mirror::<String, String>::new(Config::default())
     .await
     .unwrap()
     .with_seed(dated_addr);
@@ -263,14 +263,14 @@ per location, no rack/host level and no hierarchy), because the CIDR mask alread
 granularity. Declare every network with `with_net` — **including this node's own**:
 
 ```rust
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 let config = Config::default()
     .with_listen_addr("10.1.0.7".parse().unwrap())
     .with_net("10.1.0.0/16".parse().unwrap())  // this node's network (contains listen_addr)
     .with_net("10.2.0.0/16".parse().unwrap())  // another location
     .with_net("10.3.0.0/16".parse().unwrap()); // and another
-let store = ReconcileStore::<String, String>::new(config).await.unwrap();
+let store = ReplicatedMap::<String, String>::new(config).await.unwrap();
 ```
 
 This node's **local** network is whichever declared net contains its `listen_addr`; all others are
@@ -299,7 +299,7 @@ collects a tombstone before *every* member has acknowledged it).
 
 The topology and gossip knobs can be retuned **live**, without recreating the node (which would
 re-bind the socket and lose its identity) — useful for elastic deployments: opening a new region,
-decommissioning one, or retuning WAN traffic on the fly. These `&self` methods on `ReconcileStore`
+decommissioning one, or retuning WAN traffic on the fly. These `&self` methods on `ReplicatedMap`
 take effect on the running `run()` loop:
 
 ```rust
@@ -320,7 +320,7 @@ anti-entropy — the worst case is suboptimal WAN traffic, never silent divergen
 *not* a security boundary (authentication is the cluster key); a declared net only tells the node
 which address range to send discovery probes into, so **only declare ranges you operate**. When
 migrating a region, prefer `add_net(new)` *before* `remove_net(old)` so discovery keeps the cluster
-well-connected throughout. `ReconcileMirror` exposes the analogous `set_net`.
+well-connected throughout. `Mirror` exposes the analogous `set_net`.
 
 ## Kubernetes (DNS-based discovery)
 
@@ -331,13 +331,13 @@ almost never lands on a live pod. Instead, point the store at a **headless `Serv
 a single lookup — the canonical StatefulSet pattern, with **no Kubernetes API access and no RBAC**.
 
 ```rust
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 let config = Config::default()
     .with_listen_addr(pod_ip)         // bind to the pod IP (downward API: status.podIP)
     .with_node_id(node_id);           // stable id derived from the pod name
 // Note: no `with_net` — discovery is purely DNS-driven in Kubernetes.
-let store = ReconcileStore::<String, String>::new(config)
+let store = ReplicatedMap::<String, String>::new(config)
     .await
     .unwrap()
     .with_dns_discovery("reconcile-headless.default.svc.cluster.local", 8080);
@@ -395,6 +395,18 @@ The reconciliation algorithm itself lives in the standalone `rbsr` crate, writte
 read-only backend trait (`rbsr::RsosView`) rather than against `FingerprintTreeMap` directly — so it
 runs over any store that can answer the four range/order-statistics queries it needs.
 
+### Workspace layout
+
+`reconcile` is the published facade over five internal crates, layered so the compiler enforces the
+dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the diff walk) →
+`lww-register` (the LWW-Register CRDT domain: `Entry`/`State`, `Timestamp`, the `Clock` and
+`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it) → `snapshot`
+(the file-backed persistence adapter), with `gossip` (UDP transport, wire encoding, datagram
+authentication, replay protection, peer discovery) as a domain-independent sibling. Everything the
+facade re-exports keeps resolving at `reconcile::*` — `reconcile::ReplicatedMap`,
+`reconcile::Entry`, `reconcile::FingerprintTreeMap`, `reconcile::UdpTransport` and so on — so the
+layout is an implementation detail unless you want to depend on one layer directly.
+
 Our implementation of this data structure is based on a B-Trees that we wrote
 ourselves. Although we put a limited amount of effort in this
 and have to maintain more invariants, we stay within a factor 2 of the
@@ -446,9 +458,9 @@ Although there is likely still a lot of room for improvement regarding the
 performance of the `FingerprintTreeMap`, it is quite enough for our purposes, since we
 expect network delays to be orders of magnitude longer.
 
-## ReconcileStore
+## ReplicatedMap
 
-The ReconcileStore exploits the properties of `FingerprintTreeMap` to conduct a binary-search-like
+The ReplicatedMap exploits the properties of `FingerprintTreeMap` to conduct a binary-search-like
 search in the collections of the two instances. Once difference are found, the
 corresponding key-value pairs are exchanged and conflicts are resolved.
 
@@ -485,7 +497,7 @@ require version vectors or a CRDT, which is out of scope.
 
 The graph above shows the amount of time **in microseconds** (abscissa, bottom
 axis) needed to send 1 insertion, then 1 removal** between two instances of
-`ReconcileStore` that contain the same N elements (ordinate, left axis). Note that
+`ReplicatedMap` that contain the same N elements (ordinate, left axis). Note that
 both axes use a logarithmic scale.
 
 The times are very consistent, hovering around 122 µs, showing that the
@@ -497,7 +509,7 @@ insertion/removal.
 
 The graph above shows the amount of time **in milliseconds** (abscissa, bottom
 axis) needed to reconcile 1 insertion, then 1 removal** between two instances of
-`ReconcileStore` that contain the same other N elements (ordinate, left axis). Note that
+`ReplicatedMap` that contain the same other N elements (ordinate, left axis). Note that
 both axes use a logarithmic scale.
 
 This time, the full reconciliation protocol must be run to identify the

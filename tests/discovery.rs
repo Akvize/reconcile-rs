@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reconcile::discovery::{DiscoverFuture, Discovery};
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..200 {
@@ -76,7 +76,7 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
 
     // store1 finds peers through discovery (which initially reports store2 present).
     let discovery = ScriptedDiscovery::new(vec![addr2]);
-    let store1 = ReconcileStore::<i32, i32>::new(cfg1)
+    let store1 = ReplicatedMap::<i32, i32>::new(cfg1)
         .await
         .expect("bind failed")
         .with_seed(addr2)
@@ -88,7 +88,7 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
         // decommissioning takes the wall-time-floor path, not the miss-threshold fast path; keep
         // the floor short so the test still runs quickly.
         .with_discovery_decommission_floor(Duration::from_millis(50));
-    let store2 = ReconcileStore::<i32, i32>::new(cfg2)
+    let store2 = ReplicatedMap::<i32, i32>::new(cfg2)
         .await
         .expect("bind failed")
         .with_seed(addr1)
