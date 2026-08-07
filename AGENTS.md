@@ -147,14 +147,16 @@ required-file-pairs, and structural invariants almost always are.
 publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run `cargo publish`
 outside that flow.
 
-The check covers the **leaf crates only**, not the top-level `reconcile` package: since the
-workspace split, `reconcile` depends on `rsos` by path, and cargo refuses a path dependency
-carrying no version requirement until that dependency is itself on crates.io. Whether and how to
-publish a multi-crate workspace is an open policy question (#204) — until it is settled, do
-**not** "fix" this by inventing version requirements for the internal crates or by publishing them
-ad hoc. The internal crates carry `publish = false` deliberately; `cargo package` is used rather
-than `cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
-packaged crate. Extend the CI step to each new leaf crate as the split proceeds.
+The check covers **`rsos` only** — not `rbsr`, and not the top-level `reconcile` package. Cargo
+refuses to package any crate holding a path dependency that carries no version requirement, until
+that dependency is itself on crates.io. `rsos` is the workspace's one true leaf (zero intra-workspace
+dependencies), so it is the only crate that can be packaged today; `rbsr` depends on `rsos` by path
+and `reconcile` on both, so both hit that wall. Whether and how to publish a multi-crate workspace
+is an open policy question (#204) — until it is settled, do **not** "fix" this by inventing version
+requirements for the internal crates or by publishing them ad hoc. The internal crates carry
+`publish = false` deliberately; `cargo package` is used rather than `cargo publish --dry-run`
+precisely so that guard can stay in place while still compiling the packaged crate. A new crate
+becomes checkable here only once it has no unpublished path dependency of its own.
 
 **Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
 tag today, for the same path-dependency reason — loudly, at release time, not silently. That is
