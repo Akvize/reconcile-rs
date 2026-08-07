@@ -533,14 +533,19 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
             .map
             .read()
             .iter()
-            .filter(|(_, v)| v.1.is_some())
+            .filter(|(_, v)| !v.is_tombstone())
             .count()
     }
 
     /// Whether the store holds no live entry. `O(n)` worst case, but returns as soon as it finds a
     /// live value. A store that holds only tombstones is empty.
     pub fn is_empty(&self) -> bool {
-        !self.engine.map.read().iter().any(|(_, v)| v.1.is_some())
+        !self
+            .engine
+            .map
+            .read()
+            .iter()
+            .any(|(_, v)| !v.is_tombstone())
     }
 
     /// Whether `k` maps to a live value (a tombstoned key reads as absent).
@@ -556,7 +561,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
         let guard = self.engine.map.read();
         for (k, v) in guard.iter() {
-            if let Some(value) = v.1.as_ref() {
+            if let Some(value) = v.value() {
                 f(k, value);
             }
         }
@@ -568,7 +573,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
         let guard = self.engine.map.read();
         for (k, v) in guard.get_range(&range) {
-            if let Some(value) = v.1.as_ref() {
+            if let Some(value) = v.value() {
                 f(k, value);
             }
         }
@@ -580,7 +585,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         let guard = self.engine.map.read();
         guard
             .iter()
-            .filter_map(|(k, v)| v.1.as_ref().map(|value| (k.clone(), value.clone())))
+            .filter_map(|(k, v)| v.value().map(|value| (k.clone(), value.clone())))
             .collect()
     }
 
@@ -589,7 +594,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         let guard = self.engine.map.read();
         guard
             .get_range(&range)
-            .filter_map(|(k, v)| v.1.as_ref().map(|value| (k.clone(), value.clone())))
+            .filter_map(|(k, v)| v.value().map(|value| (k.clone(), value.clone())))
             .collect()
     }
 
@@ -598,7 +603,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         let guard = self.engine.map.read();
         guard
             .iter()
-            .filter_map(|(k, v)| v.1.as_ref().map(|_| k.clone()))
+            .filter_map(|(k, v)| v.value().map(|_| k.clone()))
             .collect()
     }
 
@@ -607,7 +612,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         let guard = self.engine.map.read();
         guard
             .iter()
-            .filter_map(|(_, v)| v.1.as_ref().cloned())
+            .filter_map(|(_, v)| v.value().cloned())
             .collect()
     }
 
