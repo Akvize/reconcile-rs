@@ -24,8 +24,6 @@ exclude = [
     "docs/SOTA.md",
     "docs/PROGRESS.md",
     "docs/README.md",
-    # Session tooling for coding agents. Repo-only: it serves contributors, not consumers.
-    "agent-workflow/",
     # MUST NOT ship: it sets `--cfg reconcile_internal_testing`, which gates the test-only
     # `reconcile::testing` seam. Packaging it would let that cfg leak into a consumer's build of the
     # crate, re-exposing internals the move off the Cargo feature was meant to hide.
