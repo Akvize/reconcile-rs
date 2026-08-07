@@ -20,15 +20,12 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
 use parking_lot::RwLock;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
-use socket2::SockRef;
-use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -43,9 +40,15 @@ use crate::observability;
 use crate::proto::{self, HashSegment};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::replay;
+use crate::transport::{Transport, UdpTransport};
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
+/// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
+/// [`BUFFER_SIZE`] bytes and the smallest message is at least one byte, so it can never legitimately
+/// contain more than this many messages; the cap turns a crafted datagram's decode-expansion into a
+/// bounded operation (issue #151) rather than an unbounded allocation.
+const MAX_MESSAGES_PER_DATAGRAM: usize = BUFFER_SIZE;
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// Byte budget for the tombstone ack resends piggybacked onto each reconciliation datagram. Kept
 /// well under [`BUFFER_SIZE`] so the datagram still fits after authentication framing; when more
@@ -116,52 +119,17 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
     })
 }
 
-/// Apply the configured `SO_RCVBUF` / `SO_SNDBUF` to the gossip socket.
-///
-/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
-/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
-/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
-/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
-/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
-/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
-/// leaves the inherited OS default untouched.
-///
-/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
-/// honoured request reads back larger than asked.
-fn set_socket_buffers(socket: &UdpSocket, config: &Config) {
-    let sock = SockRef::from(socket);
-    if let Some(size) = config.recv_buffer_size {
-        match sock.set_recv_buffer_size(size) {
-            Ok(()) => match sock.recv_buffer_size() {
-                Ok(actual) => debug!(
-                    "gossip socket SO_RCVBUF: requested {size} B, OS granted {actual} B \
-                     (raise net.core.rmem_max if a larger buffer is needed)"
-                ),
-                Err(e) => debug!("could not read back SO_RCVBUF: {e}"),
-            },
-            Err(e) => warn!("failed to set gossip socket SO_RCVBUF to {size} B: {e}"),
-        }
-    }
-    if let Some(size) = config.send_buffer_size {
-        match sock.set_send_buffer_size(size) {
-            Ok(()) => match sock.send_buffer_size() {
-                Ok(actual) => debug!(
-                    "gossip socket SO_SNDBUF: requested {size} B, OS granted {actual} B \
-                     (raise net.core.wmem_max if a larger buffer is needed)"
-                ),
-                Err(e) => debug!("could not read back SO_SNDBUF: {e}"),
-            },
-            Err(e) => warn!("failed to set gossip socket SO_SNDBUF to {size} B: {e}"),
-        }
-    }
-}
-
 /// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
 /// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
 ///
 /// `V` is the plain user value type; the engine internally stores and exchanges the dated
 /// [`Entry<Timestamp, V>`](crate::entry::Entry) domain type (see `ARCHITECTURE.md` §3.6).
+///
+/// The datagram-I/O [`Transport`] port is carried as `Arc<dyn Transport<Addr = SocketAddr>>` inside
+/// [`Inner`], since it is always reached behind a trait object. Wire encoding goes through the
+/// free functions in [`crate::bincode`] (not a port), so the engine names no codec type
+/// parameter.
 pub(crate) struct ReconcileEngine<K, V> {
     /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
     /// shares the same maps, peers, clock, …) is a single refcount bump. Cloning is therefore
@@ -182,7 +150,9 @@ pub(crate) struct Inner<K, V> {
     /// for the dated↔dated path and never touches the causal-stability bookkeeping.
     pub(crate) projection: Arc<RwLock<HRTree<K, State<V>>>>,
     port: u16,
-    socket: Arc<UdpSocket>,
+    /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
+    /// only through this, so it never names a concrete socket type.
+    transport: Arc<dyn Transport<Addr = SocketAddr>>,
     /// The geographical networks the cluster spans, each a CIDR. One random address is
     /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
     /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
@@ -333,7 +303,8 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
 }
 
 impl<K: Key, V: Value> ReconcileEngine<K, V> {
-    /// Create a new engine, binding the gossip UDP socket.
+    /// Create a new engine over the default transport adapter: a [`UdpTransport`] bound to the
+    /// gossip socket. Wire encoding always goes through [`crate::bincode`].
     ///
     /// # Errors
     ///
@@ -346,27 +317,69 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let node_id_is_random = config.node_id.is_none();
         let node_id = config.node_id.unwrap_or_else(rand::random);
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
-        Self::build(config, clock, node_id_is_random).await
+        let transport = Self::bind_udp(&config).await?;
+        Ok(Self::build(config, transport, clock, node_id_is_random))
     }
 
-    /// Construct an engine over an explicit [`Clock`] adapter. Test-only seam: a deterministic
-    /// clock (`ManualClock`) makes HLC behaviour reproducible without real wall-clock time.
+    /// Construct an engine over an explicit [`Clock`] adapter (default transport). Test-only
+    /// seam: a deterministic clock (`ManualClock`) makes HLC behaviour reproducible without real
+    /// wall-clock time.
     #[cfg(test)]
     pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
         // so persistence tests do not trigger the operator warning.
-        Self::build(config, clock, false).await
+        let transport = Self::bind_udp(&config).await?;
+        Ok(Self::build(config, transport, clock, false))
     }
 
-    async fn build(
+    /// Construct an engine over a caller-supplied [`Transport`], with the default clock.
+    ///
+    /// Infallible: the only fallible step in [`new`](Self::new) is binding the UDP socket, which
+    /// the caller has already done (or does not need to do at all).
+    pub(crate) fn with_transport(
         config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        let node_id_is_random = config.node_id.is_none();
+        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        Self::build(config, transport, clock, node_id_is_random)
+    }
+
+    /// As [`with_transport`](Self::with_transport), but over a caller-supplied [`Clock`] too.
+    /// Test-only seam: pairing an in-memory transport with a `ManualClock` makes convergence
+    /// deterministic without real sockets or wall-clock time.
+    #[cfg(test)]
+    pub(crate) fn new_with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self::build(config, transport, clock, false)
+    }
+
+    /// Bind the default [`UdpTransport`] for `config` and log the bound address.
+    async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+        let transport = UdpTransport::bind(
+            SocketAddr::new(config.listen_addr, config.port),
+            config.recv_buffer_size,
+            config.send_buffer_size,
+        )
+        .await?;
+        info!("Listening on: {}", transport.local_addr()?);
+        Ok(Arc::new(transport))
+    }
+}
+
+impl<K: Key, V: Value> ReconcileEngine<K, V> {
+    /// Assemble an engine from an already-constructed [`Transport`] and a clock. Pure wiring — no
+    /// I/O — so it is infallible; the fallible socket bind lives in [`new`](Self::new).
+    fn build(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
-    ) -> io::Result<Self> {
-        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
-        info!("Listening on: {}", socket.local_addr()?);
-        // Size the kernel send/receive buffers before any traffic flows.
-        set_socket_buffers(&socket, &config);
+    ) -> Self {
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         match &authenticator {
             #[cfg(feature = "encryption")]
@@ -403,12 +416,12 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
         let probe: Arc<dyn Discovery> =
             Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
-        Ok(ReconcileEngine {
+        ReconcileEngine {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
                 port: config.port,
-                socket: Arc::new(socket),
+                transport,
                 nets,
                 local_net: Arc::new(RwLock::new(local_net)),
                 listen_addr: config.listen_addr,
@@ -437,7 +450,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                 node_id_is_random,
                 max_peers: PeerCap::new(config.max_peers),
             }),
-        })
+        }
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
@@ -503,6 +516,12 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// Returns `true` when the node id was generated at random (`Config::node_id` was `None`).
     pub(crate) fn node_id_is_random(&self) -> bool {
         self.node_id_is_random
+    }
+
+    /// This node's Hybrid-Logical-Clock identity, read back from the clock adapter so it can never
+    /// disagree with the `node_id` actually stamped onto minted timestamps.
+    pub(crate) fn node_id(&self) -> u64 {
+        self.clock.node_id()
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
@@ -572,6 +591,16 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         guard.keys().cloned().collect()
     }
 
+    /// Bundle this engine's outbound ports and send state for the batched-message helpers
+    /// ([`send_messages_to`] / [`send_messages_paced`]). See [`SendPorts`].
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
+        SendPorts {
+            transport: &*self.transport,
+            authenticator: &self.authenticator,
+            sender_counter: &self.sender_counter,
+        }
+    }
+
     pub fn just_insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
         // 1) Call the pre-insert hook *before* taking the map lock
         (self.pre_insert.read())(&key, &value);
@@ -597,22 +626,19 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     fn broadcast(&self, messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>) {
         let peers = self.get_peers();
         let port = self.port;
-        let socket = Arc::clone(&self.socket);
+        let transport = Arc::clone(&self.transport);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         tokio::spawn(async move {
+            let ports = SendPorts {
+                transport: &*transport,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
             for addr in peers {
                 let peer = SocketAddr::new(addr, port);
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&socket),
-                    &authenticator,
-                    &sender_counter,
-                    &peer,
-                    &mut send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &ports, &peer, &mut send_buf).await;
             }
         });
     }
@@ -690,7 +716,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         peer_guard: BulkInFlightGuard,
         global_guard: BulkDumpCountGuard,
     ) {
-        let socket = Arc::clone(&self.socket);
+        let transport = Arc::clone(&self.transport);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
@@ -699,17 +725,13 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             // slots on drop, even if this task is aborted or panics.
             let _peer_guard = peer_guard;
             let _global_guard = global_guard;
+            let ports = SendPorts {
+                transport: &*transport,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
             let mut send_buf = Vec::new();
-            send_messages_paced(
-                &messages,
-                socket,
-                &authenticator,
-                &sender_counter,
-                &peer,
-                &mut send_buf,
-                rate,
-            )
-            .await;
+            send_messages_paced(&messages, &ports, &peer, &mut send_buf, rate).await;
         });
     }
 
@@ -771,7 +793,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         loop {
             // Re-read each iteration so the cadence can be retuned at runtime.
             let recv_timeout = *self.reconcile_interval.read();
-            match timeout(recv_timeout, self.socket.recv_from(&mut recv_buf)).await {
+            match timeout(recv_timeout, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     // timeout
                     debug!("no recent activity; initiating diff protocol");
@@ -875,9 +897,11 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         };
         send_buf.clear();
         for segment in segments {
-            Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment)
-                .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
+            crate::bincode::encode(
+                &Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment),
+                send_buf,
+            )
+            .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
         // Geography-aware target selection. With a single network this reduces to the
         // historical behaviour: every known peer is local, so all of them are contacted each round,
@@ -942,11 +966,11 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         for peer in targets {
             trace!("start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
-                &self.socket,
+                &*self.transport,
                 &self.authenticator,
                 &self.sender_counter,
                 send_buf,
-                (peer, self.port),
+                SocketAddr::new(peer, self.port),
             )
             .await
             {
@@ -994,9 +1018,14 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             // Re-confirm against the map: the tombstone may have been resurrected or GC'd since
             // we snapshotted the index, and only the live tombstone's version is a valid ack.
             if let Some(v) = map_guard.get(key).filter(|v| v.is_tombstone()) {
-                Message::Ack::<K, Entry<Timestamp, V>, State<V>>((key.clone(), version_hash(v)))
-                    .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                    .expect("serializing an Ack into an in-memory buffer cannot fail");
+                crate::bincode::encode(
+                    &Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
+                        key.clone(),
+                        version_hash(v),
+                    )),
+                    send_buf,
+                )
+                .expect("serializing an Ack into an in-memory buffer cannot fail");
                 appended += 1;
             }
         }
@@ -1034,31 +1063,28 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let mut updates: Vec<(K, Entry<Timestamp, V>)> = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
         let mut value_in_comparison = Vec::new();
-        let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
-        // read messages in buffer
-        loop {
-            match Message::<K, Entry<Timestamp, V>, State<V>>::deserialize(&mut deserializer) {
-                Err(ref kind) => {
-                    if let bincode::ErrorKind::Io(err) = kind.as_ref() {
-                        if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                            break;
-                        }
-                    }
-                    // Never panic on network input: a single malformed datagram from any
-                    // host would otherwise kill the receive loop (unauthenticated remote
-                    // DoS). Drop the rest of the datagram and keep the loop alive, just like
-                    // the oversized-datagram case above.
+        // Decode the whole datagram through `crate::bincode`. `MAX_MESSAGES_PER_DATAGRAM` bounds the
+        // message count (a datagram can hold no more one-byte messages than its byte length), so a
+        // crafted datagram cannot be expanded without limit. A malformed datagram is dropped whole —
+        // never panicking the receive loop, an unauthenticated remote-DoS hazard.
+        let messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>> =
+            match crate::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
+                Ok(messages) => messages,
+                Err(kind) => {
                     warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
                     observability::record_datagram_dropped("malformed");
-                    break;
+                    return false;
                 }
-                Ok(Message::ComparisonItem(segment)) => in_comparison.push(segment),
-                Ok(Message::Update(update)) => updates.push(update),
-                Ok(Message::Ack(ack)) => acks.push(ack),
-                Ok(Message::ValueComparisonItem(segment)) => value_in_comparison.push(segment),
+            };
+        for message in messages {
+            match message {
+                Message::ComparisonItem(segment) => in_comparison.push(segment),
+                Message::Update(update) => updates.push(update),
+                Message::Ack(ack) => acks.push(ack),
+                Message::ValueComparisonItem(segment) => value_in_comparison.push(segment),
                 // A dated store is authoritative and never integrates a value-only update; mirrors
                 // are the only consumers of `ValueUpdate`. Ignore it defensively.
-                Ok(Message::ValueUpdate(_)) => {}
+                Message::ValueUpdate(_) => {}
             }
         }
         let spoke_dated = !in_comparison.is_empty() || !updates.is_empty() || !acks.is_empty();
@@ -1108,15 +1134,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                     .into_iter()
                     .map(Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // The differing values are the bulk payload — a cold/empty peer pulls the whole dataset
             // here. Hand them to a rate-paced background task so the burst cannot overrun the
@@ -1165,9 +1183,14 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                     self.clock.observe(remote_v.stamp);
                     match guard.get(&k) {
                         Some(local_v) => {
-                            let merged_v = local_v.merge(&remote_v);
-                            if merged_v != *local_v {
-                                to_apply.push((k, merged_v));
+                            // Under last-write-wins, `Entry::merge` returns `other` exactly when
+                            // the remote stamp is strictly greater and `self` otherwise, so the
+                            // stamp comparison decides "would merging change state?" on its own.
+                            // Comparing stamps rather than merged values avoids cloning the value
+                            // on this hot path and is why `Value` needs no `PartialEq` bound. The
+                            // equivalence holds *only* under LWW conflict resolution.
+                            if remote_v.stamp > local_v.stamp {
+                                to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {
                                 // We already hold an equal-or-newer value; still acknowledge it
                                 // if it is the same tombstone, so the peer learns we have it.
@@ -1210,15 +1233,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                 }
             }
             if !acks_to_send.is_empty() {
-                send_messages_to(
-                    &acks_to_send,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&acks_to_send, &self.send_ports(), &peer, send_buf).await;
             }
         }
         // Value-only channel: answer a dateless mirror by diffing against the value-only
@@ -1244,15 +1259,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                     .into_iter()
                     .map(Message::ValueComparisonItem::<K, Entry<Timestamp, V>, State<V>>)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
             // background task, exactly like the dated bulk path.
@@ -1399,12 +1406,25 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 }
 
-pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
-    socket: &UdpSocket,
+/// Bundles the outbound [`Transport`] port and per-node send state that a batched-message send
+/// needs: the transport, the datagram authenticator, and the per-sender replay counter. Wire
+/// encoding itself goes through the free functions in [`crate::bincode`], which need no state to
+/// bundle here. These three pieces always travel together into [`send_messages_to`] and
+/// [`send_messages_paced`] from both call sites (the engine and
+/// [`ReconcileMirror`](crate::mirror::ReconcileMirror)); bundling them into one reference keeps
+/// each helper's signature short instead of repeating the same three parameters everywhere.
+pub(crate) struct SendPorts<'a, T: ?Sized> {
+    pub(crate) transport: &'a T,
+    pub(crate) authenticator: &'a auth::Authenticator,
+    pub(crate) sender_counter: &'a replay::SenderCounter,
+}
+
+pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
+    transport: &T,
     authenticator: &auth::Authenticator,
     sender_counter: &replay::SenderCounter,
     buf: &[u8],
-    target: A,
+    target: SocketAddr,
 ) -> std::io::Result<usize> {
     // Allocate a sequence number and stamp, then frame the datagram once and reuse it across
     // retries. When authentication is disabled, `seal` returns `None` and the wire bytes are
@@ -1415,7 +1435,7 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
     let wire: &[u8] = framed.as_deref().unwrap_or(buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
-        res = socket.send_to(wire, &target).await;
+        res = transport.send_to(wire, &target).await;
         if res.is_ok() {
             break;
         }
@@ -1436,24 +1456,18 @@ pub(crate) async fn send_to_retry<A: ToSocketAddrs>(
 /// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
 /// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead;
 /// see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
-pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
+pub(crate) async fn send_messages_to<K, V, P, T>(
     messages: &[Message<K, V, P>],
-    socket: Arc<UdpSocket>,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
-) {
-    send_messages_paced(
-        messages,
-        socket,
-        authenticator,
-        sender_counter,
-        peer,
-        send_buf,
-        None,
-    )
-    .await
+) where
+    K: Serialize,
+    V: Serialize,
+    P: Serialize,
+    T: Transport<Addr = SocketAddr> + ?Sized,
+{
+    send_messages_paced(messages, ports, peer, send_buf, None).await
 }
 
 /// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
@@ -1465,35 +1479,37 @@ pub(crate) async fn send_messages_to<K: Serialize, V: Serialize, P: Serialize>(
 /// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
 /// reception of every other peer for the duration of the transfer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
-pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize>(
+pub(crate) async fn send_messages_paced<K, V, P, T>(
     messages: &[Message<K, V, P>],
-    socket: Arc<UdpSocket>,
-    authenticator: &auth::Authenticator,
-    sender_counter: &replay::SenderCounter,
+    ports: &SendPorts<'_, T>,
     peer: &SocketAddr,
     send_buf: &mut Vec<u8>,
     rate: Option<usize>,
-) {
+) where
+    K: Serialize,
+    V: Serialize,
+    P: Serialize,
+    T: Transport<Addr = SocketAddr> + ?Sized,
+{
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
-    let max_payload = BUFFER_SIZE - authenticator.overhead();
+    let max_payload = BUFFER_SIZE - ports.authenticator.overhead();
     send_buf.clear();
     // Anchor the pacing schedule once, so it self-corrects rather than drifting per datagram.
     let start = Instant::now();
     let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
-        message
-            .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
+        crate::bincode::encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
             if let Err(err) = send_to_retry(
-                &socket,
-                authenticator,
-                sender_counter,
+                ports.transport,
+                ports.authenticator,
+                ports.sender_counter,
                 &send_buf[..last_size],
-                peer,
+                *peer,
             )
             .await
             {
@@ -1507,7 +1523,15 @@ pub(crate) async fn send_messages_paced<K: Serialize, V: Serialize, P: Serialize
         }
     }
     trace!("sending last {} bytes to {peer}", send_buf.len());
-    if let Err(err) = send_to_retry(&socket, authenticator, sender_counter, send_buf, peer).await {
+    if let Err(err) = send_to_retry(
+        ports.transport,
+        ports.authenticator,
+        ports.sender_counter,
+        send_buf,
+        *peer,
+    )
+    .await
+    {
         warn!("failed to send final datagram to {peer}: {err}; continuing");
     } else {
         trace!("sent last {} bytes to {peer}", send_buf.len());
@@ -1995,7 +2019,8 @@ mod pacing {
 
     use crate::auth::Authenticator;
     use crate::entry::State;
-    use crate::reconcile_engine::{send_messages_paced, Message};
+    use crate::reconcile_engine::{send_messages_paced, Message, SendPorts};
+    use crate::transport::UdpTransport;
 
     type Msg = Message<u64, Vec<u8>, State<u8>>;
 
@@ -2010,21 +2035,18 @@ mod pacing {
     /// unconnected UDP socket) at `rate` and return how long it took.
     async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let transport = UdpTransport::new(socket);
         let authenticator = Authenticator::new(None, false);
         let sender_counter = crate::replay::SenderCounter::new();
+        let ports = SendPorts {
+            transport: &transport,
+            authenticator: &authenticator,
+            sender_counter: &sender_counter,
+        };
         let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
         let mut send_buf = Vec::new();
         let start = Instant::now();
-        send_messages_paced(
-            messages,
-            socket,
-            &authenticator,
-            &sender_counter,
-            &peer,
-            &mut send_buf,
-            rate,
-        )
-        .await;
+        send_messages_paced(messages, &ports, &peer, &mut send_buf, rate).await;
         start.elapsed()
     }
 
@@ -2065,54 +2087,41 @@ mod pacing {
 mod socket_buffers {
     use socket2::SockRef;
 
-    use crate::reconcile_engine::ReconcileEngine;
-    use crate::reconcile_store::Config;
+    use crate::transport::UdpTransport;
 
-    async fn engine(addr: &str, config: Config) -> ReconcileEngine<i32, i32> {
-        ReconcileEngine::new(config.with_listen_addr(addr.parse().unwrap()))
+    async fn bound(addr: &str, recv: Option<usize>, send: Option<usize>) -> UdpTransport {
+        UdpTransport::bind(addr.parse().unwrap(), recv, send)
             .await
             .expect("bind failed")
     }
 
     /// The receive-buffer knob must actually size the gossip socket. Asserting an
     /// absolute byte count would be flaky — the kernel clamps `SO_RCVBUF` to `net.core.rmem_max`,
-    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: the multi-MiB
-    /// default must yield a strictly larger buffer than an explicitly tiny request. That holds for
+    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: a multi-MiB
+    /// request must yield a strictly larger buffer than an explicitly tiny one. That holds for
     /// any `rmem_max` above a few KiB, which is true on every realistic host.
     #[tokio::test]
     async fn recv_buffer_size_is_configurable() {
-        // Default config requests the multi-MiB DEFAULT_SOCKET_BUFFER_SIZE.
-        let big = engine("127.0.0.90", Config::default()).await;
+        let big = bound("127.0.0.90:0", Some(4 * 1024 * 1024), None).await;
         // An explicit, tiny request — well below any plausible rmem_max, so it is honoured as-is.
-        let small = engine(
-            "127.0.0.91",
-            Config::default().with_recv_buffer_size(8 * 1024),
-        )
-        .await;
+        let small = bound("127.0.0.91:0", Some(8 * 1024), None).await;
 
-        let big_buf = SockRef::from(&*big.socket).recv_buffer_size().unwrap();
-        let small_buf = SockRef::from(&*small.socket).recv_buffer_size().unwrap();
+        let big_buf = SockRef::from(big.socket()).recv_buffer_size().unwrap();
+        let small_buf = SockRef::from(small.socket()).recv_buffer_size().unwrap();
 
         assert!(
             big_buf > small_buf,
-            "the multi-MiB default ({big_buf} B) should exceed an explicitly tiny buffer \
+            "the multi-MiB request ({big_buf} B) should exceed an explicitly tiny buffer \
              ({small_buf} B)"
         );
     }
 
-    /// `None` opts out of the tuning entirely, leaving the inherited OS default. Combined with the
-    /// test above (the default is large), this pins down both ends of the knob: a tiny explicit
-    /// request shrinks the buffer below the large default.
+    /// `None` opts out of the tuning entirely, leaving the inherited OS default: the call path does
+    /// not panic and the socket has a positive receive buffer.
     #[tokio::test]
     async fn recv_buffer_size_none_leaves_os_default() {
-        let config = Config {
-            recv_buffer_size: None,
-            ..Config::default()
-        };
-        let eng = engine("127.0.0.92", config).await;
-        // Just assert it builds and the socket is usable; the OS default is host-dependent, so we
-        // only check the call path does not panic and yields a positive buffer.
-        let buf = SockRef::from(&*eng.socket).recv_buffer_size().unwrap();
+        let t = bound("127.0.0.92:0", None, None).await;
+        let buf = SockRef::from(t.socket()).recv_buffer_size().unwrap();
         assert!(buf > 0, "a socket always has a positive receive buffer");
     }
 }
@@ -2299,5 +2308,97 @@ mod dump_budget {
             "slot must be available after release"
         );
         drop(slot_b_retry);
+    }
+}
+
+#[cfg(test)]
+mod in_memory_convergence {
+    //! Deterministic convergence over the [`InMemoryTransport`](crate::transport::InMemoryTransport):
+    //! two engines exchange datagrams entirely in-process — no real sockets — so the anti-entropy
+    //! protocol is exercised without any network flakiness. The engine reaches its I/O only through
+    //! the `Transport` port, which is what makes this substitution possible.
+    use std::collections::BTreeMap;
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use proptest::prelude::*;
+
+    use crate::clock::ManualClock;
+    use crate::entry::Entry;
+    use crate::reconcile_engine::ReconcileEngine;
+    use crate::reconcile_store::Config;
+    use crate::transport::InMemoryNetwork;
+
+    /// Live (value-only) view of an engine's map, for comparing convergence regardless of stamps.
+    fn live_view(eng: &ReconcileEngine<u32, u32>) -> BTreeMap<u32, u32> {
+        eng.map
+            .read()
+            .iter()
+            .filter_map(|(k, e)| e.value().map(|v| (*k, *v)))
+            .collect()
+    }
+
+    /// Load `entries` into engine A and drive both engines over an in-memory network until B's live
+    /// view matches A's (or a short deadline elapses). Returns whether they converged.
+    async fn converges(entries: &[(u32, u32)]) -> bool {
+        let net = InMemoryNetwork::new();
+        let port = 5000u16;
+        let a_ip: IpAddr = "127.0.0.2".parse().unwrap();
+        let b_ip: IpAddr = "127.0.0.3".parse().unwrap();
+        let cfg = |ip: IpAddr| {
+            Config::default()
+                .with_listen_addr(ip)
+                .with_port(port)
+                .with_reconcile_interval(Duration::from_millis(5))
+        };
+        let a: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+            cfg(a_ip),
+            Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+            Arc::new(ManualClock::new(1)),
+        );
+        let b: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+            cfg(b_ip),
+            Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+            Arc::new(ManualClock::new(2)),
+        );
+        // Seed each as the other's known gossip peer (no real discovery over the in-memory fabric).
+        a.peers.write().insert(b_ip, Instant::now());
+        b.peers.write().insert(a_ip, Instant::now());
+        // Load A only; B must learn every entry purely through anti-entropy.
+        for (k, v) in entries {
+            a.just_insert(*k, Entry::present(a.clock_now(), *v));
+        }
+        let want = live_view(&a);
+
+        let ta = tokio::spawn(a.clone().run());
+        let tb = tokio::spawn(b.clone().run());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut converged = false;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if live_view(&b) == want {
+                converged = true;
+                break;
+            }
+        }
+        ta.abort();
+        tb.abort();
+        converged
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(12))]
+
+        /// For any small map, a cold replica converges to it over the in-memory transport.
+        #[test]
+        fn cold_replica_converges_over_in_memory_transport(
+            entries in prop::collection::vec((0u32..64, 0u32..1000), 0..24)
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let ok = rt.block_on(converges(&entries));
+            prop_assert!(ok, "B did not converge to A's {} entries over the in-memory transport", entries.len());
+        }
     }
 }

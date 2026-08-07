@@ -45,8 +45,6 @@
 //!   replica with no causal-stability bookkeeping of its own.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
@@ -58,21 +56,22 @@ use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use crate::auth;
-use crate::bounds::Key;
+use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::{Entry, State};
 use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
-use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap};
+use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
 use crate::reconcile_store::Config;
 use crate::replay;
+use crate::transport::UdpTransport;
 use crate::HRTree;
 
 const BUFFER_SIZE: usize = 65507;
@@ -89,6 +88,14 @@ type WireDated<V> = Entry<Timestamp, V>;
 /// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
 ///
 /// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
+///
+/// # Correct only under last-write-wins
+///
+/// A mirror stores no timestamps, so it cannot resolve a conflict: inbound updates are applied by
+/// plain overwrite (its internal `integrate` step). That is correct *only* because the
+/// authoritative dated peer already resolved the conflict under last-write-wins before sending the
+/// projection. Under any other conflict-resolution policy, last-writer-by-arrival would be wrong
+/// and the mirror would need redesigning.
 pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`State`]), matching a dated peer's value-only projection.
@@ -131,12 +138,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
     }
 }
 
-// NOTE: `V` here is NOT the `Value` bundle: a mirror only ever handles the value-only projection,
-// so it does not require `V: PartialEq` (which `Value` includes). The data bounds are spelled out
-// to keep the required bound set identical (no tightening). `K` matches `Key` exactly.
-impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Sync + 'static>
-    ReconcileMirror<K, V>
-{
+impl<K: Key, V: Value> ReconcileMirror<K, V> {
     /// Create a new mirror bound to the configured UDP socket.
     ///
     /// The mirror honours the same [`Config`] as a dated store, including
@@ -282,11 +284,11 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
-                &self.socket,
+                &UdpTransport::new(Arc::clone(&self.socket)),
                 &self.authenticator,
                 &self.sender_counter,
                 send_buf,
-                (peer, self.port),
+                SocketAddr::new(peer, self.port),
             )
             .await
             {
@@ -356,15 +358,13 @@ impl<K: Key, V: Clone + Debug + DeserializeOwned + Hash + Send + Serialize + Syn
                     .into_iter()
                     .map(Message::<K, WireDated<V>, State<V>>::ValueComparisonItem)
                     .collect();
-                send_messages_to(
-                    &messages,
-                    Arc::clone(&self.socket),
-                    &self.authenticator,
-                    &self.sender_counter,
-                    &peer,
-                    send_buf,
-                )
-                .await;
+                let transport = UdpTransport::new(Arc::clone(&self.socket));
+                let ports = SendPorts {
+                    transport: &transport,
+                    authenticator: &self.authenticator,
+                    sender_counter: &self.sender_counter,
+                };
+                send_messages_to(&messages, &ports, &peer, send_buf).await;
             }
         }
     }

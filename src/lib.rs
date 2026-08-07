@@ -69,12 +69,20 @@ pub mod hrtree;
 pub mod mirror;
 pub mod persistence;
 pub mod reconcile_store;
+pub mod transport;
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
 #[cfg(feature = "metrics-prometheus")]
 pub mod prometheus;
 
 pub(crate) mod auth;
+// `bincode.rs` holds the crate's wire-encoding functions, not a port: unlike `Transport`
+// (`ARCHITECTURE.md` §3.4/§3.5) there is a single implementation and no plausible swap (compression
+// interacts with authenticate-before-decode; cross-language interop needs a published wire spec,
+// not a Rust trait) — see the module doc comment for the full reasoning. Named after the external
+// `bincode` crate it wraps, since there is no abstraction left to name; references to the crate
+// itself from inside (or near) this module use `::bincode::…` to disambiguate.
+pub(crate) mod bincode;
 // Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
 // implementation details, not part of the supported public surface. The few internals the
 // integration-test oracles need are re-exported through the gated [`testing`] module below.
@@ -92,6 +100,7 @@ pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, Rand
 pub use entry::{Entry, State};
 pub use fingerprint::Fingerprint;
 pub use hrtree::HRTree;
+pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
 // The `hrtree_iter` module is `pub(crate)`, but the iterator types below appear in public `HRTree`
 // method return types, so they must stay publicly reachable. A `pub` type re-exported from a
 // `pub(crate)` module is publicly reachable, which avoids private-in-public errors (E0446).
