@@ -86,7 +86,6 @@ pub(crate) mod bincode;
 // integration-test oracles need are re-exported through the gated [`testing`] module below.
 pub(crate) mod gen_ip;
 pub(crate) mod observability;
-pub(crate) mod proto;
 pub(crate) mod reconcile_engine;
 pub(crate) mod replay;
 pub(crate) mod timeout_wheel;
@@ -96,7 +95,7 @@ pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use entry::{Entry, State};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
-// `FingerprintTreeMap`, `Fingerprint`, the `Rsos<K, V>` trait, and its
+// `FingerprintTreeMap`, `Fingerprint`, `Aggregate`, the `Rsos<K>` trait, and its
 // iterator types now live in the standalone `rsos` crate (see `rsos/src/lib.rs`); re-exported here
 // so existing consumers of `reconcile::*` see no change in what resolves at the crate root.
 // `IterMut`/`ValuesMut` are intentionally not re-exported (and are themselves `#[cfg(test)]`-only
@@ -112,39 +111,22 @@ pub use mirror::ReconcileMirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
 pub use reconcile_store::ReconcileStore;
 
-/// Internal seam for the external integration-test oracles (`tests/diff.rs`,
-/// `tests/proptest_fingerprint_tree_map.rs`).
+/// Internal seam for the external integration tests (today: `tests/service.rs`).
 ///
 /// The reconciliation mechanism modules are `pub(crate)` (ARCHITECTURE.md §3.7), but the
-/// integration tests need to reach a handful of their internals to drive the diff protocol. This
-/// module re-exports exactly those symbols so the default public surface stays clean while the
-/// tests can still reach them. It is hidden from docs and only compiled under `cfg(test)` or the
-/// `internal-testing` feature (integration tests are separate crates, so `cfg(test)` does not
-/// apply to them — they enable the feature instead).
+/// integration tests need to reach a handful of their internals. This module exposes exactly those
+/// symbols so the default public surface stays clean while the tests can still reach them. It is
+/// hidden from docs and only compiled under `cfg(test)` or the `internal-testing` feature
+/// (integration tests are separate crates, so `cfg(test)` does not apply to them — they enable the
+/// feature instead).
+///
+/// It deliberately carries only what stays `reconcile`-crate-internal. The diff mechanism itself
+/// (`start_diff`/`diff_round`/`RangeAggregate`/`DiffRange`) and the tree/fingerprint primitives are
+/// genuinely `pub` on the standalone `rbsr` and `rsos` crates now, so the oracles import those
+/// directly instead of routing through here.
 #[doc(hidden)]
 #[cfg(any(test, feature = "internal-testing"))]
 pub mod testing {
-    pub use rsos::lift;
-
-    pub use crate::proto::{diff_round, start_diff, DiffRange, RangeAggregate};
-
-    /// Range fingerprint of a [`FingerprintTreeMap`](crate::FingerprintTreeMap), exposed for the
-    /// integration-test oracles: the `Σ(S)` half of `FingerprintTreeMap::aggregate`, which is `pub`
-    /// on the `rsos` crate (it had to be, to stay reachable from `proto.rs`'s new home across the
-    /// crate boundary). This wrapper is kept only for source compatibility with the existing test
-    /// call sites, which care about the fingerprint alone.
-    pub fn range_fingerprint<K, V, R>(
-        tree: &crate::FingerprintTreeMap<K, V>,
-        range: &R,
-    ) -> crate::Fingerprint
-    where
-        K: std::hash::Hash + Ord,
-        V: std::hash::Hash,
-        R: std::ops::RangeBounds<K>,
-    {
-        tree.aggregate(range).fingerprint()
-    }
-
     /// Seal `payload` with MAC authentication (not encryption): `tag(32) || seq(8 LE) || stamp(8
     /// LE) || payload`. Lets integration tests craft legitimate datagrams to exercise the
     /// anti-replay pipeline over a raw UDP socket.

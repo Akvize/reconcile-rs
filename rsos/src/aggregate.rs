@@ -41,12 +41,12 @@ use crate::fingerprint::Fingerprint;
 ///
 /// `fingerprint` is declared **before** `size`, even though Def. 3.5 writes the pair the other way
 /// round as `(|S|, Σ(S))`. That is deliberate and must stay: `Aggregate` is embedded in the
-/// serialized wire type `RangeAggregate` (`reconcile`'s `proto.rs`), and bincode encodes struct
-/// fields sequentially with no framing or field names, so a nested struct is simply inlined.
-/// Declaring `fingerprint` first is exactly what makes `{range, aggregate: {fingerprint, size}}`
-/// produce byte-for-byte the same datagram as the pre-`Aggregate` `{range, hash, size}` layout —
-/// swapping these two lines is a silent wire break between old and new nodes, caught only by
-/// `proto.rs`'s golden-vector test.
+/// serialized wire type `RangeAggregate` (the `rbsr` crate's `diff.rs`), and bincode encodes
+/// struct fields sequentially with no framing or field names, so a nested struct is simply
+/// inlined. Declaring `fingerprint` first is exactly what makes `{range, aggregate: {fingerprint,
+/// size}}` produce byte-for-byte the same datagram as the pre-`Aggregate` `{range, hash, size}`
+/// layout — swapping these two lines is a silent wire break between old and new nodes, caught only
+/// by `rbsr/src/diff.rs`'s golden-vector test.
 ///
 /// Field order here is *representation*, not semantics: the paper's `(|S|, Σ(S))` ordering lives
 /// in [`new`](Aggregate::new)'s argument order, in the accessors, and in the [`Add`] impl, none of

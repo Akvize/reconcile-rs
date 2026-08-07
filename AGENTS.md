@@ -5,10 +5,11 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTreeMap` + range fingerprint) is a
-standalone leaf, and the `reconcile` package is an embedded, in-memory, eventually-consistent
-key-value store whose replicas reconcile over UDP (anti-entropy gossip over `rsos`, LWW over a
-Hybrid Logical Clock). Edition 2021, no MSRV pin.
+`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTreeMap` + range fingerprint) is
+a standalone leaf, `rbsr` holds the Range-Based Set Reconciliation algorithm generic over any `rsos`
+backend, and the `reconcile` package is an embedded, in-memory, eventually-consistent key-value
+store whose replicas reconcile over UDP (anti-entropy gossip over `rbsr`/`rsos`, LWW over a Hybrid
+Logical Clock). Edition 2021, no MSRV pin.
 
 For non-trivial changes, read first rather than duplicating here: [`README.md`](./README.md)
 (usage/API/security/deployment), [`ARCHITECTURE.md`](./ARCHITECTURE.md) (target hexagonal
@@ -83,8 +84,9 @@ feature interactions hide bugs.
 
 - New behavior needs a test: `tests/*.rs` integration tests for public-API-crossing changes,
   `#[cfg(test)]` unit tests for internal invariants.
-- `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for the data
-  structure and wire format — extend these over narrow example tests when touching parsing or
+- `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for
+  the data structure and wire format (the former drives `rbsr`/`rsos` directly, not via
+  `reconcile::testing`) — extend these over narrow example tests when touching parsing or
   `FingerprintTreeMap` invariants.
 - `cargo llvm-cov` coverage uploads to Codecov, but `codecov.yml` marks both checks
   `informational: true` — **coverage regressions do not block merge today** (a known gap vs. the
@@ -106,10 +108,12 @@ feature interactions hide bugs.
 
 ## 9. Project structure and boundaries
 
-**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`,
-`rsos/src/fingerprint.rs` moved to the standalone `rsos` crate (migration step 6 Step A) — a leaf
-with zero workspace/infrastructure dependency, enforced by its own minimal `Cargo.toml`. Within the
-`reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`, `proto.rs`.
+**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/fingerprint_tree_map.rs`,
+`rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` moved
+to (or were added in) the standalone `rsos` crate (migration step 6 Step A), and `src/proto.rs` to
+the standalone `rbsr` crate (Step B, now `rbsr/src/diff.rs` + `rbsr/src/rsos_view.rs`) — both
+leaves with zero workspace/infrastructure dependency, enforced by their own minimal `Cargo.toml`s.
+Within the `reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`.
 **Infrastructure**: `reconcile_engine.rs`, `reconcile_store.rs`, `clock.rs`, `discovery.rs`,
 `persistence.rs`, `auth.rs`, `replay.rs`, `observability.rs`, `prometheus.rs`.
 

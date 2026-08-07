@@ -391,6 +391,10 @@ Although we did come we the idea independently, it exactly matches a paper
 published on Arxiv in February 2023: [Range-Based Set
 Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 
+The reconciliation algorithm itself lives in the standalone `rbsr` crate, written against a small
+read-only backend trait (`rbsr::RsosView`) rather than against `FingerprintTreeMap` directly — so it
+runs over any store that can answer the four range/order-statistics queries it needs.
+
 Our implementation of this data structure is based on a B-Trees that we wrote
 ourselves. Although we put a limited amount of effort in this
 and have to maintain more invariants, we stay within a factor 2 of the

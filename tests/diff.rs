@@ -1,14 +1,13 @@
-#![cfg(feature = "internal-testing")]
-
 use std::hash::Hash;
 use std::ops::Bound;
 
-use reconcile::testing::{diff_round, range_fingerprint, start_diff, DiffRange};
+use rbsr::{diff_round, start_diff, DiffRange};
 use rsos::FingerprintTreeMap;
 
 /// Run the full diff exchange between two trees, returning `(local_owes, remote_owes)`: the
-/// ranges `local` must send to `remote` and vice-versa. Drives the `pub(crate)` anti-entropy
-/// protocol through the gated `reconcile::testing` seam.
+/// ranges `local` must send to `remote` and vice-versa. Drives the anti-entropy algorithm
+/// directly on the standalone `rbsr` crate, where these items are genuinely public — no
+/// `reconcile::testing` detour needed.
 pub fn diff<K, V>(
     local: &FingerprintTreeMap<K, V>,
     remote: &FingerprintTreeMap<K, V>,
@@ -64,26 +63,11 @@ fn test_compare() {
     let tree4 = FingerprintTreeMap::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
     let tree5 = FingerprintTreeMap::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
-    assert_eq!(
-        range_fingerprint(&tree1, &..),
-        range_fingerprint(&tree1, &..)
-    );
-    assert_eq!(
-        range_fingerprint(&tree1, &..),
-        range_fingerprint(&tree2, &..)
-    );
-    assert_eq!(
-        range_fingerprint(&tree1, &..),
-        range_fingerprint(&tree3, &..)
-    );
-    assert_ne!(
-        range_fingerprint(&tree1, &..),
-        range_fingerprint(&tree4, &..)
-    );
-    assert_ne!(
-        range_fingerprint(&tree1, &..),
-        range_fingerprint(&tree5, &..)
-    );
+    assert_eq!(tree1.aggregate(&..), tree1.aggregate(&..));
+    assert_eq!(tree1.aggregate(&..), tree2.aggregate(&..));
+    assert_eq!(tree1.aggregate(&..), tree3.aggregate(&..));
+    assert_ne!(tree1.aggregate(&..), tree4.aggregate(&..));
+    assert_ne!(tree1.aggregate(&..), tree5.aggregate(&..));
 
     assert_eq!(tree1, tree1);
     assert_eq!(tree1, tree2);
@@ -126,7 +110,7 @@ fn test_compare() {
 
 // The size-not-hash regression tests — a *non-empty* range that
 // fingerprints to `ZERO`, and equal fingerprints over different-sized ranges — require feeding
-// crafted `RangeAggregate`s (whose `hash`/`size` fields are deliberately set to collide) straight
-// into `diff_round`. Because `RangeAggregate`'s fields are `pub(crate)`, those tests live as unit
-// tests in `src/proto.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends), next to
-// the algorithm they guard, rather than here.
+// crafted `RangeAggregate`s (whose bundled `Aggregate` is deliberately set to collide) straight
+// into `diff_round`. Because `RangeAggregate`'s fields are private, those tests live as unit
+// tests in `rbsr/src/diff.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends),
+// next to the algorithm they guard, rather than here.

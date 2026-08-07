@@ -1,9 +1,10 @@
 [workspace]
-# Workspace split (migration step 6, Step A): `rsos` is the new leaf crate holding the
-# data-structure/fingerprint mechanism (`FingerprintTreeMap` + the `Rsos<K, V>` trait); `.` is this
-# still-monolithic `reconcile` package, which depends on `rsos` by path below. See
-# ARCHITECTURE.md §3.9 for the target multi-crate shape this is the first step of.
-members = ["rsos", "."]
+# Workspace split (migration step 6, Steps A and B): `rsos` is the leaf crate holding the
+# data-structure/fingerprint mechanism (`FingerprintTreeMap` + the `Rsos<K>` trait); `rbsr` holds
+# the Range-Based Set Reconciliation algorithm over any `rsos` backend; `.` is this still-monolithic
+# `reconcile` package, which depends on both by path below. See ARCHITECTURE.md §3.9 for the target
+# multi-crate shape these are the first steps of.
+members = ["rsos", "rbsr", "."]
 resolver = "2"
 
 [package]
@@ -88,8 +89,11 @@ metrics-exporter-prometheus = { version = "0.16", optional = true, default-featu
 once_cell = "1.21.3"
 parking_lot = "0.12.1"
 rand = "0.8.5"
-# The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K, V>`, `Fingerprint`) — see
-# `rsos/src/lib.rs` for what it is. Path dependency: not yet published (workspace-internal for now).
+# The anti-entropy algorithm (`start_diff`/`diff_round`/`RangeAggregate`), generic over any RSOS
+# backend — see `rbsr/src/lib.rs`.
+rbsr = { path = "rbsr" }
+# The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K>`, `Fingerprint`) — see
+# `rsos/src/lib.rs` for what it is. Path dependencies: not published (workspace-internal for now).
 rsos = { path = "rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 sha2 = { version = "0.10", optional = true }
