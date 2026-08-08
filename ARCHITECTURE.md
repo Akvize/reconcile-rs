@@ -66,26 +66,40 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 
 | Module | Infrastructure imported |
 |---|---|
-| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — enforced today by the crate's own minimal `Cargo.toml` dependency list, not just by grep. |
-| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — enforced by the crate's own `Cargo.toml` (`rsos` + `serde` + `tracing`), not just by grep. |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — the crate's own minimal `Cargo.toml` dependency list (`arrayvec` + `blake3` + `range-cmp` + `serde` + `tracing`) makes an infrastructure import a compile error; the manifest itself is gated, see below. |
+| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — likewise, from `Cargo.toml` (`rsos` + `serde` + `tracing`). |
 | `lww-register/src/*.rs` (standalone `lww-register` crate) | none — its `Cargo.toml` names exactly one dependency, `serde` (derive only, for data shapes *other* crates encode), so `use tokio::…` there does not compile. |
 
 This is, in effect, the interior of the hexagon and it exists today.
 
-`./scripts/check-domain-purity.sh` still greps every `lww-register/src/*.rs` file for
-`tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/`std::net` imports. That is not redundant
-with the manifest: a manifest cannot see an infrastructure type reached through a *re-export* of an
-allowed dependency, which compiles fine and silently breaches the boundary. The script covers that
-intra-crate sub-boundary, and lists every file in the crate rather than a hand-picked subset — a new
-module in `lww-register` is domain by construction. It carries one documented carve-out: `std::net`'s
+`./scripts/check-domain-purity.sh` gates both of those claims, in two parts that answer two different
+questions. The division of labour is the point:
+
+| Part | Question it answers | Scope |
+|---|---|---|
+| **Manifest gate** | *Can the forbidden thing be reached at all?* — is the dependency even declared | the `[dependencies]` / `[dev-dependencies]` / `[build-dependencies]` tables of `rsos/Cargo.toml`, `rbsr/Cargo.toml`, `lww-register/Cargo.toml`, which must name none of `tokio`, `bincode`, `chrono`, `ipnet`, `mio`, `reqwest`, `hyper`, `socket2`, `async-trait` (renamed `package = "…"` targets included) |
+| **Source grep** | *Is an **allowed** dependency being used to reach something forbidden?* | every `lww-register/src/*.rs` file, for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/`std::net` imports |
+
+Neither subsumes the other. The manifest gate exists because that is the level at which the invariant
+is actually breakable for these three crates: with the dependency undeclared, `use tokio::…` there
+does not compile, so a source-level grep *for those crates* could never fire — it would read as
+protection that is not there. The step that would make such an import compile is someone adding the
+dependency, and that is what gets caught. Conversely a manifest cannot see an infrastructure type
+reached through a *re-export* of an allowed dependency, which compiles fine and silently breaches the
+boundary; the source grep covers that intra-crate sub-boundary, and lists every file in the crate
+rather than a hand-picked subset — a new module in `lww-register` is domain by construction.
+`gossip`, `snapshot` and the root `reconcile` package are deliberately outside the manifest gate:
+they are the adapters, and carrying infrastructure dependencies is their job.
+
+The source grep carries one documented carve-out: `std::net`'s
 plain address *value* types (`IpAddr`, `SocketAddr`, …) are allowed, because `PersistedState`'s
 causal-stability membership set is literally a set of peer identities and a peer's identity is its
 address; the socket types (`UdpSocket`, `TcpStream`, `ToSocketAddrs`) are not, and a mixed import
 such as `use std::net::{IpAddr, UdpSocket};` is still rejected. Making peer identity an opaque domain
 newtype would remove the need for the carve-out — a separate change, not part of the split.
 
-Widening or narrowing the domain set means updating `DOMAIN_FILES` in the script **and** this section
-together (AGENTS.md §9.2).
+Widening or narrowing either set means updating `DOMAIN_FILES` / `STANDALONE_MANIFESTS` in the script
+**and** this section together (AGENTS.md §9.2).
 
 ### 2.3 Infrastructure coupling
 
@@ -114,22 +128,29 @@ the open one.
 
 ### 2.4 Trait landscape
 
-Seven traits exist. They fall into three groups:
+Nine traits exist across the six crates. They fall into four groups:
 
-- **Boundary abstraction (1).** `Persistence` (`persistence.rs:77`) is a genuine port: it has two
-  implementations (in-memory and file snapshot) and abstracts durability behind a small,
-  intention-revealing contract.
-- **Internal mechanism, currently public (2).** `HashRangeQueryable` (`diff.rs:30`) and `Diffable`
-  (`diff.rs:58`) describe *how* the diff is computed over the tree. `Diffable` is a blanket impl
-  whose associated types are always the same concrete types; `HashRangeQueryable` has a single
-  real implementation (`FingerprintTreeMap`). They are exposed through `pub mod diff` (`lib.rs:30`), placing the
-  protocol mechanism on the crate's public surface.
+- **Boundary abstractions — genuine ports (4).** `Persistence` (`lww-register/src/persistence.rs`):
+  two implementations (`InMemoryPersistence`, `snapshot::FileSnapshot`). `Clock`
+  (`lww-register/src/clock.rs`): the physical-time read behind a port, adapter `HlcClock`.
+  `Transport` (`gossip/src/transport.rs`): object-safe, two real implementations (`UdpTransport`,
+  `InMemoryTransport` — the latter genuinely needed so tests drive a cluster with no real sockets).
+  `Discovery` (`gossip/src/discovery.rs`): `RandomProbe` + `DnsDiscovery`.
+- **Contract of the data structure (2).** `rsos::Rsos<K>` (`rsos/src/rsos_trait.rs`) states Def. 3.9's
+  seven RSOS operations; `rbsr::RsosView<K>` (`rbsr/src/rsos_view.rs`) is the read-only four-operation
+  subset the diff walk needs, blanket-implemented over every `Rsos`. These are not ports in the
+  hexagonal sense — they are the literature's contract, written down so `rbsr` is generic over the
+  backend rather than welded to `FingerprintTreeMap`.
+- **Bound bundles and compile-time selection (3).** `Key` / `Value` (`lww-register/src/bounds.rs`)
+  bundle the multi-bound `where` blocks; `Mac` (`gossip/src/auth.rs`) selects a MAC backend chosen at
+  compile time.
 - **Value-shape helpers — dissolved (migration step 4, done).** `MaybeTombstone`, `Reconcilable` and
   `Timestamped` used to each carry a single implementation over the untyped `(Timestamp, Option<V>)`
   tuple that represented the stored cell. They have been replaced by the `Entry<Timestamp, V>` /
   `State<V>` domain type (`entry.rs`, §3.6): `Entry::is_tombstone` / `Entry::value` replace
   `MaybeTombstone`, `Entry::merge` replaces `Reconcilable`, and direct `.stamp` field access replaces
-  `Timestamped`. `Mac` (`auth.rs:92`) selects a MAC backend chosen at compile time.
+  `Timestamped`. `HashRangeQueryable` / `Diffable` went the same way in step 2 (§6), replaced by
+  `FingerprintTreeMap`'s inherent methods and, since step 6, by `Rsos` / `RsosView` above.
 
 `Codec` followed the same path and was dissolved after step 5 landed (this cleanup, still tracked
 under issue #144): it had exactly one implementation (`BincodeCodec`), its methods are generic so it
@@ -151,6 +172,33 @@ Consequence of the (now-superseded) tuple representation, addressed by the same 
 - The internal tuple used to leak onto the public surface — into the `add_pre_insert` hook and into
   `PersistedState`. Both now carry `Entry<Timestamp, V>` directly (`replicated_map.rs`,
   `persistence.rs`).
+
+#### Future extension points (tracked, not implemented)
+
+The Meyer/Willow-ecosystem reference implementation of range-based set reconciliation
+(`github.com/earthstar-project/range-reconcile`) documents three "Bring Your Own …" extension
+points: `BYOTransport`, `BYOLiftingMonoid`, `BYOEncoding`. Two of them are worth recording here.
+
+- **A public `Encoding` port (`BYOE`) — a candidate *if* an external consumer ever needs pluggable
+  wire formats.** It is deliberately absent today. Compare it with `Transport`, which *is* a real
+  port: two real implementations, and the second one (`InMemoryTransport`) is not decorative — it is
+  how the gossip protocol gets exercised without real sockets. Wire encoding has exactly one
+  implementation and no test-driven need: `bincode.rs`'s own tests call `encode` / `decode_stream`
+  directly, with no fake. The reason Meyer's implementation *does* need `BYOE` is structural, not a
+  difference of taste: it is a generic library meant to embed into arbitrary host protocols that
+  already own a wire format, whereas `reconcile-rs` owns its wire format end to end and has no
+  external interop requirement. Reintroducing the port later is additive and non-breaking — bincode
+  simply becomes the default implementation behind the trait — so the cost of waiting for a real
+  second consumer is low. Until one asks, the codebase's standing convention against speculative
+  single-implementation abstractions wins; `Codec` and `Diffable` were dissolved above for exactly
+  this reason, and re-adding a third instance of the same shape would contradict both.
+- **`BYOLiftingMonoid` names the generic-summary generalization.** `rsos` today hardwires its range
+  summary to the 256-bit BLAKE3 `Fingerprint`. Generalizing it to an arbitrary summary monoid is
+  already tracked as a future gap in [`SOTA.md`](./SOTA.md) (P0/F6); `lift` / `combine` / `neutral`
+  is the right vocabulary for it when that work happens — the term comes from the same reference
+  implementation, so adopting it costs nothing and buys shared language with the literature. Not in
+  scope here: `Rsos::aggregate` / `RsosView::aggregate` keep the concrete `(usize, Fingerprint)`
+  return type until a second summary type actually exists.
 
 ---
 
@@ -352,12 +400,13 @@ ever needing to compare — or clone — the value itself.
 ### 3.9 Crate structure
 
 The layers are separated into a workspace so that the inward dependency direction is enforced by the
-compiler. As of migration step 6 Step C this is **the shape of the tree today**, not a target:
+compiler. With migration step 6 (Steps A–D, §6) landed, this is **the shape of the tree today**, not
+a target:
 
 ```
-rsos           // DATA STRUCTURE: the Rsos<K> trait (Def. 3.9's seven operations, with the stored
-               //   value as an associated type) and its one realization, FingerprintTreeMap<K, V>,
-               //   plus Fingerprint and the bundled Aggregate (Def. 3.5). Zero workspace deps.
+rsos           // DATA STRUCTURE: the Rsos<K> trait (Def. 3.9's seven operations, with an
+               //   associated Value type) and its one realization, FingerprintTreeMap<K, V>, plus
+               //   Fingerprint and the bundled Aggregate (Def. 3.5). Zero workspace deps.
 rbsr           // ALGORITHM: start_diff / diff_round / RangeAggregate, generic over RsosView<K>
                //   (four of the seven operations), blanket-implemented for every rsos::Rsos.
                //   Depends on rsos only.
@@ -409,7 +458,7 @@ a single crate could not provide.
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
-| Single crate | ✅ six-crate workspace `rsos` / `rbsr` / `lww-register` / `gossip` / `snapshot` / `reconcile` (steps A/B/C done; §3.9) |
+| Single crate | ✅ six-crate workspace `rsos` / `rbsr` / `lww-register` / `gossip` / `snapshot` / `reconcile` (steps A–D done; §3.9, §6) |
 
 ---
 
@@ -492,14 +541,54 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    only its *send* calls were rewired onto the shared `Transport`-generic, `gossip::bincode::encode`-using
    helpers. Routing the mirror's own socket onto an injectable `Transport` is deferred (tracked
    under issue #138, same as the workspace split below).
-6. **Workspace split** — promote the layers to a multi-crate workspace; ports defined in the domain
-   crate; the domain carries no infrastructure dependency. Landed in four steps: **A** extracted
-   `rsos` (`FingerprintTreeMap` + the `Rsos<K>` trait), **B** extracted `rbsr` (the diff walk +
-   `RsosView<K>`), **C** split out `lww-register` / `gossip` / `snapshot` and renamed
-   `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror`, and
-   **D** reassembles `reconcile` as a thin facade and finishes the CI/doc sweep. The names replace
+6. ✅ **Workspace split** (done) — promote the layers to a multi-crate workspace so the inward
+   dependency direction is enforced by the compiler rather than by review. The crate names replace
    the earlier `reconcile-core` / `-net` / `-store` sketch: each says what the crate *is* rather than
-   prefixing the project name onto every layer (§3.9).
+   prefixing the project name onto every layer (§3.9). It landed as four independently-green
+   sub-steps:
+
+   - ✅ **A — extract `rsos`.** The tree, its iterators and `fingerprint.rs` moved into a new leaf
+     crate as `fingerprint_tree_map.rs` / `fingerprint_tree_map_iter.rs` / `fingerprint.rs`;
+     `HRTree` renamed `FingerprintTreeMap` across the tree (types, doc comments, prose), with
+     `insertion_position` / `key_at` / `get_range` promoted to `pub` and aligned on Def. 3.9's own
+     terms as `rank` / `select` / `range`. Added `aggregate(range) -> Aggregate`
+     (`rsos/src/aggregate.rs`), the paper's Def. 3.5 *bundled* aggregate as a named monoid — one
+     tree walk producing the element count and the range fingerprint together, replacing the
+     separate `hash`/`tree_size` pair. Defined the `Rsos<K, V>` trait stating Def. 3.9's seven
+     operations and implemented it for `FingerprintTreeMap`. The root `Cargo.toml` became a
+     workspace manifest.
+   - ✅ **B — extract `rbsr`.** `proto.rs` moved into a second leaf-ish crate (`diff.rs` +
+     `rsos_view.rs`), depending on `rsos` only. Introduced `RsosView<K>`, the read-only
+     four-operation subset of Def. 3.9 that the diff walk actually needs, blanket-implemented over
+     every `rsos::Rsos`, and regenericized `start_diff` / `diff_round` over it. `Rsos<K, V>` became
+     `Rsos<K>` with an associated `Value` type, so a backend — not the caller — names its own value
+     type.
+   - ✅ **C — split `lww-register` / `gossip` / `snapshot`.** The domain (`entry.rs`, `bounds.rs`,
+     `Timestamp` + the `Clock` port + the HLC ordering arithmetic, the `Persistence` port +
+     `PersistedState` + `InMemoryPersistence`) went to `lww-register`; the adapter layer
+     (`transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs`) to
+     `gossip`, which deliberately took **no** `lww-register` dependency; `FileSnapshot` to
+     `snapshot`. Landed together, since the three are interdependent. The type renames
+     `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` rode
+     along in the same pass, the files being moved anyway.
+   - ✅ **D — reassemble `reconcile` as the facade; CI, scripts, docs.** What stayed: `replica.rs`,
+     `replicated_map.rs`, `mirror.rs`, `observability.rs`, `prometheus.rs`, `timeout_wheel.rs`, and
+     the chrono-reading `HlcClock` adapter split out of `clock.rs`; `lib.rs` plus the
+     `persistence.rs` / `clock.rs` shims became a re-export surface, so `reconcile::ReplicatedMap`,
+     `reconcile::Entry`, `reconcile::FingerprintTreeMap` & co. keep resolving for existing consumers.
+     CI and `./pre-commit` normalized `--all` → `--workspace`; `check-domain-purity.sh` gained the
+     manifest gate over `rsos` / `rbsr` / `lww-register` (§2.2); this section and §2.4 were brought
+     up to date.
 
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
-done); step 5 is done; step 6 completes the boundary extraction and enforces it at the crate level.
+done); step 5 is done; step 6 completed the boundary extraction and now enforces it at the crate
+level.
+
+**Is #138 complete?** Not quite — the *structural* migration is. Every layer is its own crate, every
+port is defined on the right side of the boundary, and the domain's infrastructure-freedom is a
+compile error rather than a convention (§2.2). One item from step 5 remains open, and it is the
+reason the issue stays open: **`src/mirror.rs` still binds and owns its own `tokio::net::UdpSocket`
+and calls `bincode`'s `Serializer` / `Deserializer` directly for its receive loop** (§2.3). Its send
+path already goes through the shared `Transport`-based helpers, but the mirror was never given its
+own injectable `Transport`. That is the last piece of residual infrastructure coupling in the
+codebase; closing it closes #138.

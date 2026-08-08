@@ -14,8 +14,10 @@ repo — read it, don't skim it. This file adds only what's specific to Claude C
   for what a manifest cannot see (an infrastructure type reached through a re-export). The `rsos` and
   `rbsr` crates (`rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`,
   `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs`, `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs`)
-  hold the same invariant, enforced by their own `Cargo.toml` dependency lists rather than by grep —
-  don't add an infrastructure dependency there either.
+  hold the same invariant via their own `Cargo.toml` dependency lists — and the *same* script now
+  gates those manifests too: adding `tokio`, `bincode`, `chrono`, `ipnet`, `mio`, `reqwest`,
+  `hyper`, `socket2` or `async-trait` to `rsos`, `rbsr` or `lww-register` fails the build. Don't
+  reach for one there; put the adapter in `gossip`/`snapshot`/`reconcile`.
 - `gossip` deliberately does **not** depend on `lww-register`: nothing in the transport/auth/replay/
   discovery layer knows what an `Entry`, a `Timestamp` or a `Key` is. If a change seems to need that
   edge, the code has probably landed in the wrong crate.
