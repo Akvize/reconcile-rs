@@ -15,7 +15,7 @@
 //! of `rbsr` entirely, rather than admitting one and then carving an exception for it.
 //!
 //! The segment is built through `RangeAggregate::for_testing`, the `internal-testing` seam, because
-//! chosen bounds are the whole point: `start_diff` only ever emits `(Unbounded, Unbounded)`, so a
+//! chosen bounds are the whole point: `initial_ranges` only ever emits `(Unbounded, Unbounded)`, so a
 //! vector built from it would never exercise the `Included`/`Excluded` encodings — nor catch a
 //! reordering of `StartBound`/`EndBound`'s variants, which bincode writes positionally.
 

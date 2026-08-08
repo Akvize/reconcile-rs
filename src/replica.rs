@@ -896,7 +896,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         observability::record_reconcile_round();
         let segments = {
             let guard = self.map.read();
-            rbsr::start_diff(&*guard)
+            rbsr::initial_ranges(&*guard)
         };
         send_buf.clear();
         for segment in segments {
@@ -967,7 +967,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
         // initiate the reconciliation protocol with the selected peers and discovery probes
         for peer in targets {
-            trace!("start_diff {} bytes to {peer}", send_buf.len());
+            trace!("initial_ranges {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
                 &*self.transport,
                 &self.authenticator,
@@ -1127,7 +1127,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             let mut out_comparison = Vec::new();
             {
                 let guard = self.map.read();
-                rbsr::diff_round(
+                rbsr::protocol_round(
                     &*guard,
                     in_comparison,
                     &mut out_comparison,
@@ -1254,7 +1254,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             let mut out_comparison = Vec::new();
             {
                 let guard = self.projection.read();
-                rbsr::diff_round(
+                rbsr::protocol_round(
                     &*guard,
                     value_in_comparison,
                     &mut out_comparison,

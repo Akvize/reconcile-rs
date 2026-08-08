@@ -413,7 +413,7 @@ runs over any store that can answer the four range/order-statistics queries it n
 ### Workspace layout
 
 `reconcile` is the facade over four sibling crates, layered so the compiler enforces the
-dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the diff walk) →
+dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the protocol driver) →
 `lww-register` (the LWW-Register CRDT domain: `Entry`/`State`, `Timestamp`, the `Clock` and
 `Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it), with `gossip`
 (UDP transport, wire encoding, datagram authentication, replay protection, peer discovery) as a

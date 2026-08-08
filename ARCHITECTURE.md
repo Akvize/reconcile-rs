@@ -21,8 +21,8 @@ converge. The design rests on five mechanisms:
 
 - **Storage** — `FingerprintTreeMap`: an ordered map that also maintains, for every subtree,
   a **range fingerprint** so the hash of any key interval is available in `O(log n)`.
-- **Anti-entropy protocol** — two peers compare fingerprints over shrinking key ranges (`diff`) and
-  exchange only the divergent entries. Equality and emptiness are decided by interval **size**, not
+- **Anti-entropy protocol** — two peers compare aggregates over shrinking key ranges (`rbsr`'s `protocol_round`) and
+  exchange only the entries that actually differ. Equality and emptiness are decided by interval **size**, not
   by hash, to stay collision-safe.
 - **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock timestamp (`Timestamp`);
   conflicts resolve by **last-write-wins** over the HLC total order `(wall_ms, counter, node_id)`.
@@ -41,7 +41,7 @@ converge. The design rests on five mechanisms:
 |---|---|
 | `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, the bundled `Aggregate` (Def. 3.5), plus the `Rsos<K>` trait (Def. 3.9, `Value` associated type) it implements. |
 | `rsos/src/fingerprint.rs`, `rsos/src/encoding.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶), and the canonical serde encoding its per-element bytes come from — see §3.10. |
-| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
+| `rbsr/src/protocol.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`initial_ranges`, `protocol_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
 | `lww-register/src/entry.rs` (standalone `lww-register` crate, migration step 6 Step C, done) | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `lww-register/src/bounds.rs` | The `Key`/`Value` data-bound bundles (§3.8). |
 | `lww-register/src/clock.rs` | Hybrid Logical Clock, ordering half: the `Timestamp` type, the `Clock` port, and the `advance`/`advance_past` HLC arithmetic. Reads no clock of its own. |
@@ -68,7 +68,7 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 | Module | Infrastructure imported |
 |---|---|
 | `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/encoding.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — the crate's own minimal `Cargo.toml` dependency list (`arrayvec` + `blake3` + `range-cmp` + `serde` + `tracing`) makes an infrastructure import a compile error; the manifest itself is gated, see below. |
-| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — likewise, from `Cargo.toml` (`rsos` + `serde` + `tracing`). |
+| `rbsr/src/protocol.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — likewise, from `Cargo.toml` (`rsos` + `serde` + `tracing`). |
 | `lww-register/src/*.rs` (standalone `lww-register` crate) | none — its `Cargo.toml` names exactly one dependency, `serde` (derive only, for data shapes *other* crates encode), so `use tokio::…` there does not compile. |
 
 This is, in effect, the interior of the hexagon and it exists today.
@@ -142,7 +142,7 @@ Nine traits exist across the five crates. They fall into four groups:
   `Discovery` (`gossip/src/discovery.rs`): `RandomProbe` + `DnsDiscovery`.
 - **Contract of the data structure (2).** `rsos::Rsos<K>` (`rsos/src/rsos_trait.rs`) states Def. 3.9's
   seven RSOS operations; `rbsr::RsosView<K>` (`rbsr/src/rsos_view.rs`) is the read-only four-operation
-  subset the diff walk needs, blanket-implemented over every `Rsos`. These are not ports in the
+  subset the protocol driver needs, blanket-implemented over every `Rsos`. These are not ports in the
   hexagonal sense — they are the literature's contract, written down so `rbsr` is generic over the
   backend rather than welded to `FingerprintTreeMap`.
 - **Bound bundles and compile-time selection (3).** `Key` / `Value` (`lww-register/src/bounds.rs`)
@@ -246,7 +246,7 @@ Two rules follow:
 
 The interior contains, with no infrastructure dependency:
 
-- the anti-entropy algorithm (`start_diff` / `diff_round`),
+- the anti-entropy algorithm (`initial_ranges` / `protocol_round`),
 - the conflict-resolution policy (last-write-wins over the HLC order),
 - the tombstone lifecycle and the causal-stability garbage-collection rule,
 - the `FingerprintTreeMap` and `Fingerprint` (the storage and range-hash mechanism),
@@ -381,8 +381,8 @@ format, alongside the dated wire and on-disk formats (acceptable while the forma
 ### 3.7 Internal mechanism
 
 The anti-entropy mechanism is not a port. `HashRangeQueryable` and `Diffable` are removed as traits:
-range-hash querying becomes inherent methods on the concrete `FingerprintTreeMap`, and `start_diff` / `diff_round`
-become `pub(crate)` functions over it. The wire types `RangeAggregate` / `DiffRange` are `pub(crate)`.
+range-hash querying becomes inherent methods on the concrete `FingerprintTreeMap`, and `initial_ranges` / `protocol_round`
+become `pub(crate)` functions over it. The wire types `RangeAggregate` / `EnumerationRange` are `pub(crate)`.
 None of this appears in the public surface.
 
 ### 3.8 Generic bounds
@@ -421,7 +421,7 @@ a target:
 rsos           // DATA STRUCTURE: the Rsos<K> trait (Def. 3.9's seven operations, with an
                //   associated Value type) and its one realization, FingerprintTreeMap<K, V>, plus
                //   Fingerprint and the bundled Aggregate (Def. 3.5). Zero workspace deps.
-rbsr           // ALGORITHM: start_diff / diff_round / RangeAggregate, generic over RsosView<K>
+rbsr           // ALGORITHM: initial_ranges / protocol_round / RangeAggregate, generic over RsosView<K>
                //   (four of the seven operations), blanket-implemented for every rsos::Rsos.
                //   Depends on rsos only.
 lww-register   // DOMAIN + PORTS: Entry / State, Timestamp + the Clock port + the HLC ordering
@@ -499,7 +499,7 @@ rolling upgrade, and it had to land before any release tag.
 | `Reconcilable` (LWW over tuple) | ✅ `Entry::merge` (LWW); no `Resolve` seam needed yet |
 | `Projectable` / `ValueOnly<V>` (dateless read replica) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `FingerprintTreeMap` methods + `pub(crate)` diff functions |
-| `pub mod diff` exposing wire types | `RangeAggregate` / `DiffRange`, with private fields, in `rbsr` |
+| `pub mod diff` exposing wire types | `RangeAggregate` / `EnumerationRange`, with private fields, in `rbsr` |
 | `chrono::Utc` read in `clock.rs` | ✅ `Clock` port (`lww-register`); the `HlcClock` adapter in `src/clock.rs` holds the time read |
 | `UdpSocket` in `replica.rs` | ✅ `Transport` port (`gossip/src/transport.rs`); `UdpTransport` adapter (public, `ReplicatedMap::new_with_transport` — D2) |
 | `bincode` in `replica.rs` | ✅ `encode`/`decode_stream` (`gossip/src/bincode.rs`), plain wire-encoding functions — no `Codec` trait and no `BincodeCodec` type (both dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
@@ -519,8 +519,8 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
    golden vectors in `fingerprint.rs` hold.
 2. **HLC total order** `(wall_ms, counter, node_id)` (`clock.rs:44-54`) — the derived ordering *is* the
    conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and merge uses strict `>`.
-3. **Size-not-hash emptiness/equality** in `diff_round` (`rbsr/src/diff.rs`).
-4. **Malformed-bound / inverted-range hardening** in `diff_round` (`rbsr/src/diff.rs`).
+3. **Size-not-hash emptiness/equality** in `protocol_round` (`rbsr/src/protocol.rs`).
+4. **Malformed-bound / inverted-range hardening** in `protocol_round` (`rbsr/src/protocol.rs`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs;
    `bincode.rs`'s `decode_stream` never absorbs authentication.
 6. **Causal-stability tombstone gate** — a tombstone is garbage-collected only after every monotonic
@@ -548,8 +548,8 @@ the wire and on-disk formats (acceptable while the formats are unstable).
 
 1. ✅ **Bound bundles & encapsulation** — introduce `Key` / `Value`; demote the protocol mechanism and
    other internals from `pub` to `pub(crate)`.
-2. ✅ **Dissolve the diff traits** — remove `HashRangeQueryable` / `Diffable`; move `start_diff` /
-   `diff_round` verbatim to `pub(crate)` functions over `FingerprintTreeMap`.
+2. ✅ **Dissolve the diff traits** — remove `HashRangeQueryable` / `Diffable`; move `initial_ranges` /
+   `protocol_round` verbatim to `pub(crate)` functions over `FingerprintTreeMap`.
 3. ✅ **`Clock` port** — extract `Clock`; `HlcClock` becomes its adapter and holds the physical-time
    read; the domain becomes time-source-free.
 4. ✅ **`Entry` / `State` domain type** (done) — replace `(Timestamp, Option<V>)` with
@@ -607,10 +607,10 @@ owning
      separate `hash`/`tree_size` pair. Defined the `Rsos<K, V>` trait stating Def. 3.9's seven
      operations and implemented it for `FingerprintTreeMap`. The root `Cargo.toml` became a
      workspace manifest.
-   - ✅ **B — extract `rbsr`.** `proto.rs` moved into a second leaf-ish crate (`diff.rs` +
-     `rsos_view.rs`), depending on `rsos` only. Introduced `RsosView<K>`, the read-only
-     four-operation subset of Def. 3.9 that the diff walk actually needs, blanket-implemented over
-     every `rsos::Rsos`, and regenericized `start_diff` / `diff_round` over it. `Rsos<K, V>` became
+   - ✅ **B — extract `rbsr`.** `proto.rs` moved into a second leaf-ish crate (`protocol.rs` —
+     briefly named `diff.rs` — plus `rsos_view.rs`), depending on `rsos` only. Introduced `RsosView<K>`, the read-only
+     four-operation subset of Def. 3.9 that the protocol driver actually needs, blanket-implemented over
+     every `rsos::Rsos`, and regenericized `initial_ranges` / `protocol_round` over it. `Rsos<K, V>` became
      `Rsos<K>` with an associated `Value` type, so a backend — not the caller — names its own value
      type.
    - ✅ **C — split `lww-register` / `gossip` / `snapshot`.** The domain (`entry.rs`, `bounds.rs`,

@@ -119,7 +119,7 @@ pub use replicated_map::ReplicatedMap;
 /// feature instead).
 ///
 /// It deliberately carries only what stays `reconcile`-crate-internal. The diff mechanism itself
-/// (`start_diff`/`diff_round`/`RangeAggregate`/`DiffRange`) and the tree/fingerprint primitives are
+/// (`initial_ranges`/`protocol_round`/`RangeAggregate`/`EnumerationRange`) and the tree/fingerprint primitives are
 /// genuinely `pub` on the standalone `rbsr` and `rsos` crates now, so the oracles import those
 /// directly instead of routing through here.
 #[doc(hidden)]

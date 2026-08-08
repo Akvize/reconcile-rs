@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! [`RsosView`]: the read-only slice of the RSOS contract that the RBSR diff walk actually needs.
+//! [`RsosView`]: the read-only slice of the RSOS contract that the RBSR protocol driver actually needs.
 
 use std::ops::RangeBounds;
 
@@ -17,7 +17,7 @@ use rsos::{Aggregate, Rsos};
 /// Order-Statistics Stores* (arXiv:2603.19820): `size`, `Aggregate`, `Rank`, `Select`.
 ///
 /// This is deliberately narrower than the full seven-operation [`Rsos`] contract: `Enumerate`,
-/// `Insert` and `Delete` are absent because the diff walk never calls them — it reads key
+/// `Insert` and `Delete` are absent because the protocol driver never calls them — it reads key
 /// positions and range aggregates and nothing else. For the same reason `RsosView` carries **no
 /// value type at all**, neither parameter nor associated type: RBSR never touches a stored value,
 /// so nothing in this crate's public signatures needs to name one.

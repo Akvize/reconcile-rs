@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use serde::Serialize;
 
-use rbsr::{diff_round, start_diff, DiffRange};
+use rbsr::{initial_ranges, protocol_round, EnumerationRange};
 use rsos::FingerprintTreeMap;
 
 /// Run the full diff exchange between two trees, returning `(local_owes, remote_owes)`: the
@@ -12,23 +12,23 @@ use rsos::FingerprintTreeMap;
 pub fn diff<K, V>(
     local: &FingerprintTreeMap<K, V>,
     remote: &FingerprintTreeMap<K, V>,
-) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>)
+) -> (Vec<EnumerationRange<K>>, Vec<EnumerationRange<K>>)
 where
     K: Clone + Serialize + Ord,
     V: Serialize,
 {
     let mut local_diff_ranges = Vec::new();
     let mut remote_diff_ranges = Vec::new();
-    let mut local_segments = start_diff(local);
+    let mut local_segments = initial_ranges(local);
     let mut remote_segments = Vec::new();
     while !local_segments.is_empty() {
-        diff_round(
+        protocol_round(
             remote,
             std::mem::take(&mut local_segments),
             &mut remote_segments,
             &mut remote_diff_ranges,
         );
-        diff_round(
+        protocol_round(
             local,
             std::mem::take(&mut remote_segments),
             &mut local_segments,
@@ -112,6 +112,6 @@ fn test_compare() {
 // The size-not-hash regression tests — a *non-empty* range that
 // fingerprints to `ZERO`, and equal fingerprints over different-sized ranges — require feeding
 // crafted `RangeAggregate`s (whose bundled `Aggregate` is deliberately set to collide) straight
-// into `diff_round`. Because `RangeAggregate`'s fields are private, those tests live as unit
-// tests in `rbsr/src/diff.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends),
+// into `protocol_round`. Because `RangeAggregate`'s fields are private, those tests live as unit
+// tests in `rbsr/src/protocol.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends),
 // next to the algorithm they guard, rather than here.
