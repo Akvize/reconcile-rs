@@ -57,7 +57,7 @@ jobs:
     # Cargo rejects packaging any crate holding a path dependency that carries no version
     # requirement, until that dependency is itself on crates.io. So only the crates with no
     # intra-workspace dependency can be checked: `rsos`, `lww-register` and `gossip`. `rbsr`
-    # (→ rsos), `snapshot` (→ lww-register) and `reconcile` (→ all five) cannot. Publishing the
+    # (→ rsos) and `reconcile` (→ all four) cannot. Publishing the
     # workspace is a policy question tracked under #204; until it is settled, this keeps real
     # packaging-breakage detection where it still works rather than dropping the check entirely.
     # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate,

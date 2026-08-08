@@ -5,11 +5,11 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a six-crate Cargo workspace. `rsos` (`FingerprintTreeMap` + range fingerprint) is
+`reconcile-rs` is a five-crate Cargo workspace. `rsos` (`FingerprintTreeMap` + range fingerprint) is
 a standalone leaf; `rbsr` holds the Range-Based Set Reconciliation algorithm generic over any `rsos`
 backend; `lww-register` is the infrastructure-free LWW-Register CRDT domain; `gossip` is the network
-adapter layer; `snapshot` is the file-backed persistence adapter; and the published `reconcile`
-package is the facade over all five — an embedded, in-memory, eventually-consistent key-value store
+adapter layer; and the published `reconcile`
+package is the facade over all four — an embedded, in-memory, eventually-consistent key-value store
 whose replicas reconcile over UDP (anti-entropy gossip over `rbsr`/`rsos`, LWW over a Hybrid Logical
 Clock). See §9.1 for the full map. Edition 2021, no MSRV pin.
 
@@ -41,7 +41,7 @@ cargo bench --no-run --features internal-testing            # benches must still
 cargo doc --workspace --all-features                        # docs must build warning-free
 ```
 
-`--workspace` throughout (not the deprecated `--all` alias): with six members, the distinction is
+`--workspace` throughout (not the deprecated `--all` alias): with five members, the distinction is
 worth being unambiguous about. `.github/workflows/main.yml`, `./pre-commit` and this listing are
 kept in sync — change one, change all three.
 
@@ -69,7 +69,7 @@ runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 
 ## 5. Code style guidelines
 
-- `#![forbid(unsafe_code)]` on **every** crate root (`src/lib.rs` and all five workspace crates) —
+- `#![forbid(unsafe_code)]` on **every** crate root (`src/lib.rs` and all four sibling crates) —
   no `unsafe`, ever; this is a compile error, not a lint. Carry it onto any new crate root: the
   workspace split briefly lost it on `rsos`, because moving code out of the monolithic `src/lib.rs`
   silently drops the attribute that used to cover it.
@@ -128,7 +128,7 @@ bugs.
 
 ## 9. Project structure and boundaries
 
-**9.1 Crates and modules** (full table: `ARCHITECTURE.md` §2.1). Six workspace members, in
+**9.1 Crates and modules** (full table: `ARCHITECTURE.md` §2.1). Five workspace members, in
 dependency order:
 
 | Crate | Holds | Kind |
@@ -137,12 +137,17 @@ dependency order:
 | `rbsr` | the RBSR diff walk + `RsosView<K>` (`diff.rs`, `rsos_view.rs`) | depends on `rsos` only |
 | `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |
-| `snapshot` | `FileSnapshot` + the versioned on-disk header | infrastructure; depends on `lww-register` |
-| `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all five and re-exports their public types |
+| `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `snapshot.rs` (`FileSnapshot` + the versioned on-disk header), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all four and re-exports their public types |
 
 The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.rs`, `pub use` in
 `src/lib.rs`) so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`,
 `reconcile::FileSnapshot` and friends resolve exactly as before the split.
+
+`snapshot` was a sixth member for one step of the split and was folded back in on purpose
+(`src/snapshot.rs`): one type, no reuse away from this workspace, no published identity to earn —
+ARCHITECTURE.md §3.9 and migration step 9. The persistence *architecture* is unchanged: the
+`Persistence` port and `PersistedState` stay in `lww-register`, so the domain still touches no
+filesystem. Don't re-split it without a reason the other four boundaries can point to.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
@@ -156,8 +161,9 @@ answer two different questions**:
    `ipnet`, `mio`, `reqwest`, `hyper`, `socket2`, `async-trait` (renamed `package = "…"` targets
    included). This is where the invariant is actually breakable: with the dependency undeclared,
    `use tokio::…` in those crates does not compile — so *adding the dependency* is the step that
-   has to be caught. `gossip`, `snapshot` and the root `reconcile` package are deliberately out of
-   scope; they are adapters and carry infrastructure deps by design.
+   has to be caught. `gossip` and the root `reconcile` package (which holds the file-persistence
+   adapter, `src/snapshot.rs`) are deliberately out of scope; they are adapters and carry
+   infrastructure deps by design.
 2. **Source grep — "is an *allowed* dependency being used to reach something forbidden?"** Every
    `lww-register/src/*.rs` file is grepped for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/
    `hyper`/`std::net` imports. A manifest cannot see this: an infrastructure type re-exported by an
@@ -195,8 +201,8 @@ crate). Actual publishing happens from `.github/workflows/tags.yml` on `v*` tags
 The check covers **only the crates with no intra-workspace dependency**. Cargo refuses to package
 any crate holding a path dependency that carries no version requirement, until that dependency is
 itself on crates.io. `rsos`, `lww-register` and `gossip` each depend on nothing else in the
-workspace, so all three can be packaged; `rbsr` (→ `rsos`), `snapshot` (→ `lww-register`) and the
-top-level `reconcile` package (→ all five) hit that wall. Whether and how to publish a multi-crate
+workspace, so all three can be packaged; `rbsr` (→ `rsos`) and the
+top-level `reconcile` package (→ all four) hit that wall. Whether and how to publish a multi-crate
 workspace is an open policy question (#204) — until it is settled, do **not** "fix" this by
 inventing version requirements for the internal crates or by publishing them ad hoc. The internal
 crates carry `publish = false` deliberately; `cargo package` is used rather than

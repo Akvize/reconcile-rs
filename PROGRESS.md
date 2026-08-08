@@ -199,7 +199,8 @@ Progress:
   `rbsr::RsosView<K>`, blanket-implemented for every `rsos::Rsos` implementor, with `Rsos<K, V>`
   becoming `Rsos<K>` + associated `Value`);
   **C** split out `lww-register` (domain), `gossip` (network adapters, deliberately with no
-  `lww-register` dependency) and `snapshot` (file persistence adapter), plus the
+  `lww-register` dependency) and `snapshot` (file persistence adapter — later folded back into
+  `reconcile` as `src/snapshot.rs`, Step 9 below), plus the
   `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` renames;
   **D** reassembled `reconcile` as a thin re-exporting facade and swept CI/scripts/docs — `--all` →
   `--workspace` across `main.yml`/`pre-commit`/`AGENTS.md` §3, and
@@ -230,7 +231,18 @@ Progress:
   `ReplicatedMap`. No deprecated alias (pre-1.0, as with `ReconcileEngine`→`Replica` and
   `ReconcileStore`→`ReplicatedMap`); pure rename, no behaviour, wire-format or on-disk change.
 
-**#138 is closed.** The structural migration was complete after Step 6 — six crates, ports on the
+- ✅ Step 9 — the `snapshot` crate folded back into `reconcile` as `src/snapshot.rs`, taking the
+  workspace from six crates to five. A deliberate follow-up decision on Step 6C's granularity, not a
+  revert: the domain/adapter *separation* stands (the `Persistence` port and `PersistedState` stay in
+  `lww-register`, so nothing there touches a filesystem), but `FileSnapshot` — one type, useful to
+  nobody outside this workspace, and with its name already taken on crates.io — did not need a crate
+  of its own. Its six unit tests moved with it, including the two needing `bincode`, which was the
+  reason they could not live in `lww-register`. `reconcile::FileSnapshot` and
+  `reconcile::persistence::FileSnapshot` resolve exactly as before; no public-surface, wire-format or
+  on-disk change. See ARCHITECTURE.md §3.9.
+
+**#138 is closed.** The structural migration was complete after Step 6 — a multi-crate workspace
+(six then, five now: Step 9), ports on the
 correct side of each boundary, domain purity enforced by the compiler and by
 `check-domain-purity.sh` — and Step 7 removed the last residual infrastructure coupling. A grep of
 the `reconcile` crate for `tokio::net`/`UdpSocket`/`bincode` now returns only `#[cfg(test)]` code and

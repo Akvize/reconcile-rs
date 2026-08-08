@@ -23,7 +23,7 @@
 //!   adapter behind that port, outside this crate.
 //! - [`persistence`] — the [`persistence::Persistence`] port, the
 //!   [`persistence::PersistedState`] snapshot type, and the in-memory default backend. The
-//!   file-backed adapter lives in the separate `snapshot` crate.
+//!   file-backed adapter (`FileSnapshot`) lives outside this crate, in `reconcile`.
 //! - [`bounds`] — the [`bounds::Key`]/[`bounds::Value`] data-bound bundles every generic signature
 //!   in the workspace is written against.
 //!

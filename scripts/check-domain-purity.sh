@@ -33,7 +33,8 @@ DOMAIN_FILES=(
 # `bounds.rs` moved there wholesale, `clock.rs` contributed `Timestamp`/`Clock`/the HLC ordering
 # arithmetic (the chrono-reading `HlcClock` adapter stayed behind in `src/clock.rs`), and
 # `persistence.rs` contributed the `Persistence` port, `PersistedState` and `InMemoryPersistence`
-# (the `std::fs`-touching `FileSnapshot` went to the `snapshot` crate).
+# (the `std::fs`-touching `FileSnapshot` stayed on the adapter side, in `reconcile`'s
+# `src/snapshot.rs`).
 #
 # `lww-register/Cargo.toml` already blocks the crate-level edge — it names no infrastructure
 # dependency, so `use tokio::…` there would not compile. This script covers what that manifest
@@ -100,7 +101,7 @@ manifest_status=0
 # dependency to the manifest — so that is what is gated here.
 #
 # Deliberately scoped to these three manifests only. The workspace root (`reconcile`) and
-# `gossip`/`snapshot` legitimately carry infrastructure dependencies; they are adapters, that is
+# `gossip` legitimately carry infrastructure dependencies; they are adapters, that is
 # their job.
 STANDALONE_MANIFESTS=(
     rsos/Cargo.toml
@@ -185,7 +186,7 @@ if [ "$manifest_status" -ne 0 ]; then
     echo >&2
     echo "rsos/rbsr/lww-register must stay standalone: no async runtime, socket, wire codec or" >&2
     echo "wall clock in their manifests (ARCHITECTURE.md §2.2, AGENTS.md §9.2). Put the adapter" >&2
-    echo "in gossip/snapshot/reconcile instead." >&2
+    echo "in gossip or reconcile instead." >&2
     status=1
 fi
 

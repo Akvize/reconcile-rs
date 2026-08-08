@@ -397,12 +397,13 @@ runs over any store that can answer the four range/order-statistics queries it n
 
 ### Workspace layout
 
-`reconcile` is the published facade over five internal crates, layered so the compiler enforces the
+`reconcile` is the facade over four sibling crates, layered so the compiler enforces the
 dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the diff walk) →
 `lww-register` (the LWW-Register CRDT domain: `Entry`/`State`, `Timestamp`, the `Clock` and
-`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it) → `snapshot`
-(the file-backed persistence adapter), with `gossip` (UDP transport, wire encoding, datagram
-authentication, replay protection, peer discovery) as a domain-independent sibling. Everything the
+`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it), with `gossip`
+(UDP transport, wire encoding, datagram authentication, replay protection, peer discovery) as a
+domain-independent sibling. The file-backed persistence adapter (`FileSnapshot`) lives in the facade
+itself, `src/snapshot.rs`. Everything the
 facade re-exports keeps resolving at `reconcile::*` — `reconcile::ReplicatedMap`,
 `reconcile::Entry`, `reconcile::FingerprintTreeMap`, `reconcile::UdpTransport` and so on — so the
 layout is an implementation detail unless you want to depend on one layer directly.
