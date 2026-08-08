@@ -65,14 +65,14 @@ use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::{Entry, State};
-use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{gen_ip, net_of};
 use crate::proto;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
 use crate::reconcile_store::Config;
 use crate::replay;
 use crate::transport::UdpTransport;
-use crate::HRTree;
+use crate::FingerprintTreeMap;
+use rsos::Fingerprint;
 
 const BUFFER_SIZE: usize = 65507;
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -99,7 +99,7 @@ type WireDated<V> = Entry<Timestamp, V>;
 pub struct ReconcileMirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`State`]), matching a dated peer's value-only projection.
-    tree: Arc<RwLock<HRTree<K, State<V>>>>,
+    tree: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
     port: u16,
     socket: Arc<UdpSocket>,
     /// The single network this read-only mirror probes for discovery. A mirror is a
@@ -169,7 +169,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
         Ok(ReconcileMirror {
-            tree: Arc::new(RwLock::new(HRTree::<K, State<V>>::new())),
+            tree: Arc::new(RwLock::new(FingerprintTreeMap::<K, State<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
             net: Arc::new(RwLock::new(net)),
@@ -237,7 +237,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
     /// [`value_fingerprint`](crate::ReconcileStore::value_fingerprint) over the same range.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.tree.read().hash(&range)
+        self.tree.read().aggregate(&range).fingerprint()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -504,11 +504,14 @@ mod tests {
             (2, State::Tombstone),
         ]);
 
-        let mut reference: HRTree<i32, State<String>> = HRTree::new();
+        let mut reference: FingerprintTreeMap<i32, State<String>> = FingerprintTreeMap::new();
         reference.insert(1, State::Present("a".to_string()));
         reference.insert(2, State::Tombstone);
 
-        assert_eq!(mirror.fingerprint(..), reference.hash(&..));
+        assert_eq!(
+            mirror.fingerprint(..),
+            reference.aggregate(&..).fingerprint()
+        );
     }
 
     /// A live value and its `State` projection hash identically only via the value-only basis:

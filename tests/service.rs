@@ -75,7 +75,7 @@ async fn test() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::new(cfg2)
         .await
         .expect("bind failed")
@@ -84,15 +84,15 @@ async fn test() {
     // spawned a background broadcast to its seeded peer (store2), so once store2 starts
     // receiving these asserts would race with reconciliation.
     assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
-    assert_eq!(store1.fingerprint(..), start_hash);
+    assert_eq!(store1.fingerprint(..), start_fingerprint);
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
     // check that tree2 is filled with the values from tree1
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     // check that tree1 is unchanged
-    assert_eq!(store1.fingerprint(..), start_hash);
+    assert_eq!(store1.fingerprint(..), start_fingerprint);
 
     // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
@@ -258,7 +258,7 @@ async fn authenticated_nodes_converge() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::new(cfg2)
         .await
         .expect("bind failed")
@@ -267,7 +267,7 @@ async fn authenticated_nodes_converge() {
     let task1 = tokio::spawn(store1.clone().run());
 
     // store2 should receive all of store1's values across the authenticated channel
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     // a fresh incremental insert also propagates
     let key = "auth-key".to_string();
@@ -389,14 +389,14 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     // Delete key 1 on store1; store2 (a member) cannot acknowledge while partitioned.
     store1.remove(&1);
     assert!(store1.get(&1).is_none());
-    let hash_with_tombstone = store1.fingerprint(..);
+    let fingerprint_with_tombstone = store1.fingerprint(..);
 
     // Wait well past both the tombstone timeout (50 ms) and the GC scan period (1 s): the
     // tombstone must still be present because store2 has not acknowledged it.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(
         store1.fingerprint(..),
-        hash_with_tombstone,
+        fingerprint_with_tombstone,
         "tombstone was garbage-collected before the partitioned peer acknowledged it (resurrection hazard)"
     );
 
@@ -405,7 +405,7 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_ne!(
         store1.fingerprint(..),
-        hash_with_tombstone,
+        fingerprint_with_tombstone,
         "tombstone was not collected after the silent peer was decommissioned"
     );
 
@@ -563,7 +563,7 @@ async fn encrypted_nodes_converge() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert_bulk(&key_values);
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::new(cfg2)
         .await
         .expect("bind failed")
@@ -572,7 +572,7 @@ async fn encrypted_nodes_converge() {
     let task1 = tokio::spawn(store1.clone().run());
 
     // store2 should receive all of store1's values across the encrypted channel
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     // a fresh incremental insert also propagates
     let key = "enc-key".to_string();
@@ -612,7 +612,7 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("secret".to_string(), "value".to_string());
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
@@ -623,7 +623,7 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
     // store2 must NOT be able to read store1's data: with a wrong key every datagram fails
     // authentication and is dropped, so it never reaches store1's fingerprint.
     assert!(
-        !wait_until(|| store2.fingerprint(..) == start_hash).await,
+        !wait_until(|| store2.fingerprint(..) == start_fingerprint).await,
         "node with the wrong key must not converge"
     );
 
@@ -664,7 +664,7 @@ async fn cross_net_reconciliation() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("key".to_string(), "value".to_string());
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
@@ -676,7 +676,7 @@ async fn cross_net_reconciliation() {
 
     // The remote-network peer eventually receives the value over cross-network anti-entropy.
     assert_until!(store2.get(&"key".to_string()).as_deref() == Some(&"value".to_string()));
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     task1.abort();
     task2.abort();
@@ -716,7 +716,7 @@ async fn cross_net_discovery_without_seed() {
     // No `with_seed`: the two nodes must find each other purely through per-network discovery probes.
     let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
         .expect("bind failed");
@@ -724,7 +724,7 @@ async fn cross_net_discovery_without_seed() {
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     task1.abort();
     task2.abort();
@@ -762,7 +762,7 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     // No seed: the nodes can only meet through per-network discovery probes.
     let store1 = ReconcileStore::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
         .expect("bind failed");
@@ -772,7 +772,7 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
 
     // Without the peer's network declared, discovery never reaches it, so no convergence.
     assert!(
-        !wait_until(|| store2.fingerprint(..) == start_hash).await,
+        !wait_until(|| store2.fingerprint(..) == start_fingerprint).await,
         "nodes converged before the peer network was declared"
     );
 
@@ -781,7 +781,7 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     store2.add_net(peer1_host);
 
     // The running loops pick up the new network and converge.
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     task1.abort();
     task2.abort();
@@ -818,7 +818,7 @@ async fn unclassified_peer_is_still_reconciled() {
         .expect("bind failed")
         .with_seed(addr2);
     store1.insert("k".to_string(), "v".to_string());
-    let start_hash = store1.fingerprint(..);
+    let start_fingerprint = store1.fingerprint(..);
     let store2 = ReconcileStore::<String, String>::new(cfg2)
         .await
         .expect("bind failed")
@@ -831,7 +831,7 @@ async fn unclassified_peer_is_still_reconciled() {
     let task1 = tokio::spawn(store1.clone().run());
 
     // Converges purely through the unclassified-peer repair bucket.
-    assert_until!(store2.fingerprint(..) == start_hash);
+    assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     task1.abort();
     task2.abort();

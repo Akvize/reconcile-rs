@@ -107,12 +107,12 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
     task2.abort();
     store1.remove(&1);
     assert!(store1.get(&1).is_none());
-    let hash_with_tombstone = store1.fingerprint(..);
+    let fingerprint_with_tombstone = store1.fingerprint(..);
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(
         store1.fingerprint(..),
-        hash_with_tombstone,
+        fingerprint_with_tombstone,
         "tombstone collected while the peer was still reported present (resurrection hazard)"
     );
 
@@ -120,7 +120,7 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
     // wall-time floor (since its tombstone ack is pending) it is decommissioned, and the tombstone
     // becomes causally stable, so GC proceeds.
     discovery.set(vec![]);
-    assert_until!(store1.fingerprint(..) != hash_with_tombstone);
+    assert_until!(store1.fingerprint(..) != fingerprint_with_tombstone);
 
     task1.abort();
 }

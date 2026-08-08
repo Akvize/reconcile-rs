@@ -34,14 +34,14 @@ use crate::bounds::{Key, Value};
 use crate::clock::{Clock, HlcClock, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
-use crate::fingerprint::Fingerprint;
 use crate::gen_ip::{host_net, net_of};
 use crate::observability;
-use crate::proto::{self, HashSegment};
+use crate::proto::{self, RangeAggregate};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::replay;
 use crate::transport::{Transport, UdpTransport};
-use crate::HRTree;
+use crate::FingerprintTreeMap;
+use rsos::Fingerprint;
 
 const BUFFER_SIZE: usize = 65507;
 /// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
@@ -141,14 +141,14 @@ pub(crate) struct ReconcileEngine<K, V> {
 
 /// Shared, refcounted state of a [`ReconcileEngine`]; see that struct for the rationale.
 pub(crate) struct Inner<K, V> {
-    pub(crate) map: Arc<RwLock<HRTree<K, Entry<Timestamp, V>>>>,
+    pub(crate) map: Arc<RwLock<FingerprintTreeMap<K, Entry<Timestamp, V>>>>,
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
     ///
     /// Its range fingerprints are timestamp-less by construction (see
     /// [`State`](crate::entry::State)), which is what lets a dateless mirror
     /// converge with this dated store over the existing range-diff protocol. It is read-only state
     /// for the dated↔dated path and never touches the causal-stability bookkeeping.
-    pub(crate) projection: Arc<RwLock<HRTree<K, State<V>>>>,
+    pub(crate) projection: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
     port: u16,
     /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
     /// only through this, so it never names a concrete socket type.
@@ -285,7 +285,7 @@ impl<K, V> std::ops::Deref for ReconcileEngine<K, V> {
 pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// Provides information about a set of keys that allows checking
     /// whether there are differences between the two instances over this set
-    ComparisonItem(HashSegment<K>),
+    ComparisonItem(RangeAggregate<K>),
     /// Provides an individual key-value pair when the protocol
     /// has identified that it differs on the two instances
     Update((K, V)),
@@ -296,7 +296,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// Like [`ComparisonItem`](Message::ComparisonItem) but on the **value-only basis**: the
     /// fingerprints were computed over timestamp-less values. A dated store answers these by
     /// diffing against its value-only *projection* tree, never its dated map.
-    ValueComparisonItem(HashSegment<K>),
+    ValueComparisonItem(RangeAggregate<K>),
     /// An individual timestamp-less update sent to a dateless mirror once the value-only diff has
     /// identified a difference. Carries the projected payload only (no [`Timestamp`]).
     ValueUpdate((K, P)),
@@ -399,8 +399,8 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             }
         }
         let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
-        let map = HRTree::<K, Entry<Timestamp, V>>::new();
-        let projection = HRTree::<K, State<V>>::new();
+        let map = FingerprintTreeMap::<K, Entry<Timestamp, V>>::new();
+        let projection = FingerprintTreeMap::<K, State<V>>::new();
         // The geographical networks this cluster spans. With none declared, fall back to the
         // historical flat loopback cluster.
         let mut nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
@@ -454,7 +454,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.map.read().hash(&range)
+        self.map.read().aggregate(&range).fingerprint()
     }
 
     /// Fingerprint of the value-only [`projection`](Self::projection) over a range.
@@ -462,7 +462,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// This is the timestamp-less counterpart of [`fingerprint`](Self::fingerprint); a dateless
     /// mirror that has converged with this store computes the same value over the same range.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.projection.read().hash(&range)
+        self.projection.read().aggregate(&range).fingerprint()
     }
 
     /// Insert into the dated `map` **and** mirror the value-only projection (and the
@@ -471,7 +471,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// other. The caller already holds the `map` write guard.
     fn map_insert(
         &self,
-        guard: &mut HRTree<K, Entry<Timestamp, V>>,
+        guard: &mut FingerprintTreeMap<K, Entry<Timestamp, V>>,
         key: K,
         value: Entry<Timestamp, V>,
     ) -> Option<Entry<Timestamp, V>> {
@@ -1150,7 +1150,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                         let guard = self.map.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, v) in guard.get_range(&range) {
+                            for (k, v) in guard.range(&range) {
                                 updates.push(Message::Update((k.clone(), v.clone())));
                             }
                         }
@@ -1269,7 +1269,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                         let guard = self.projection.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, p) in guard.get_range(&range) {
+                            for (k, p) in guard.range(&range) {
                                 updates.push(Message::ValueUpdate((k.clone(), p.clone())));
                             }
                         }
@@ -1604,7 +1604,7 @@ mod deadlock_regressions {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
-        // let tree = HRTree::from_iter(vec![(1, 10), (2, 20)]);
+        // let tree = FingerprintTreeMap::from_iter(vec![(1, 10), (2, 20)]);
         let svc = ReconcileStore::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 

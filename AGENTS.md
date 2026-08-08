@@ -5,9 +5,10 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a Rust library crate: an embedded, in-memory, eventually-consistent key-value
-store whose replicas reconcile over UDP (HRTree + range fingerprint + anti-entropy gossip, LWW over
-a Hybrid Logical Clock). Edition 2021, no MSRV pin.
+`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTreeMap` + range fingerprint) is a
+standalone leaf, and the `reconcile` package is an embedded, in-memory, eventually-consistent
+key-value store whose replicas reconcile over UDP (anti-entropy gossip over `rsos`, LWW over a
+Hybrid Logical Clock). Edition 2021, no MSRV pin.
 
 For non-trivial changes, read first rather than duplicating here: [`README.md`](./README.md)
 (usage/API/security/deployment), [`ARCHITECTURE.md`](./ARCHITECTURE.md) (target hexagonal
@@ -82,9 +83,9 @@ feature interactions hide bugs.
 
 - New behavior needs a test: `tests/*.rs` integration tests for public-API-crossing changes,
   `#[cfg(test)]` unit tests for internal invariants.
-- `tests/proptest_hrtree.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for the data
+- `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for the data
   structure and wire format — extend these over narrow example tests when touching parsing or
-  HRTree invariants.
+  `FingerprintTreeMap` invariants.
 - `cargo llvm-cov` coverage uploads to Codecov, but `codecov.yml` marks both checks
   `informational: true` — **coverage regressions do not block merge today** (a known gap vs. the
   gating bar the rest of this doc holds to, §10). Don't rely on a green Codecov comment as proof.
@@ -105,10 +106,12 @@ feature interactions hide bugs.
 
 ## 9. Project structure and boundaries
 
-**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). **Domain**, infrastructure-free: `hrtree.rs`,
-`hrtree_iter.rs`, `fingerprint.rs`, `reconcilable.rs`, `bounds.rs`, `proto.rs`. **Infrastructure**:
-`reconcile_engine.rs`, `reconcile_store.rs`, `clock.rs`, `discovery.rs`, `persistence.rs`,
-`auth.rs`, `replay.rs`, `observability.rs`, `prometheus.rs`.
+**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`,
+`rsos/src/fingerprint.rs` moved to the standalone `rsos` crate (migration step 6 Step A) — a leaf
+with zero workspace/infrastructure dependency, enforced by its own minimal `Cargo.toml`. Within the
+`reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`, `proto.rs`.
+**Infrastructure**: `reconcile_engine.rs`, `reconcile_store.rs`, `clock.rs`, `discovery.rs`,
+`persistence.rs`, `auth.rs`, `replay.rs`, `observability.rs`, `prometheus.rs`.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
@@ -135,7 +138,22 @@ required-file-pairs, and structural invariants almost always are.
 
 ## 11. Publishing
 
-`cargo publish --allow-dirty --dry-run` runs in CI to catch packaging breakage (see `Cargo.toml`'s
+`cargo package -p rsos --allow-dirty` runs in CI to catch packaging breakage (see `Cargo.toml`'s
 `exclude` list — repo-only docs and `examples/k8s/` are excluded from the published crate). Actual
 publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run `cargo publish`
 outside that flow.
+
+The check covers the **leaf crates only**, not the top-level `reconcile` package: since the
+workspace split, `reconcile` depends on `rsos` by path, and cargo refuses a path dependency
+carrying no version requirement until that dependency is itself on crates.io. Whether and how to
+publish a multi-crate workspace is an open policy question (#204) — until it is settled, do
+**not** "fix" this by inventing version requirements for the internal crates or by publishing them
+ad hoc. The internal crates carry `publish = false` deliberately; `cargo package` is used rather
+than `cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
+packaged crate. Extend the CI step to each new leaf crate as the split proceeds.
+
+**Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
+tag today, for the same path-dependency reason — loudly, at release time, not silently. That is
+deliberate: resolving it means deciding what the workspace publishes (one facade crate with the
+internals vendored? every crate, versioned in lockstep? only some?), which is #204's question, not
+something to patch around here.

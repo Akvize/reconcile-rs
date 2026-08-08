@@ -3,15 +3,15 @@
 use std::hash::Hash;
 use std::ops::Bound;
 
-use reconcile::hrtree::HRTree;
-use reconcile::testing::{diff_round, range_hash, start_diff, DiffRange};
+use reconcile::testing::{diff_round, range_fingerprint, start_diff, DiffRange};
+use rsos::FingerprintTreeMap;
 
 /// Run the full diff exchange between two trees, returning `(local_owes, remote_owes)`: the
 /// ranges `local` must send to `remote` and vice-versa. Drives the `pub(crate)` anti-entropy
 /// protocol through the gated `reconcile::testing` seam.
 pub fn diff<K, V>(
-    local: &HRTree<K, V>,
-    remote: &HRTree<K, V>,
+    local: &FingerprintTreeMap<K, V>,
+    remote: &FingerprintTreeMap<K, V>,
 ) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>)
 where
     K: Clone + Hash + Ord,
@@ -38,19 +38,19 @@ where
     (local_diff_ranges, remote_diff_ranges)
 }
 
-pub fn reconcile<K, V>(local: &mut HRTree<K, V>, remote: &mut HRTree<K, V>)
+pub fn reconcile<K, V>(local: &mut FingerprintTreeMap<K, V>, remote: &mut FingerprintTreeMap<K, V>)
 where
     K: Clone + Hash + Ord,
     V: Clone + Hash,
 {
     let (diff_ranges1, diff_ranges2) = diff(local, remote);
     for diff in diff_ranges1 {
-        for (k, v) in local.get_range(&diff) {
+        for (k, v) in local.range(&diff) {
             remote.insert(k.clone(), v.clone());
         }
     }
     for diff in diff_ranges2 {
-        for (k, v) in remote.get_range(&diff) {
+        for (k, v) in remote.range(&diff) {
             local.insert(k.clone(), v.clone());
         }
     }
@@ -58,17 +58,32 @@ where
 
 #[test]
 fn test_compare() {
-    let tree1 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
-    let tree2 = HRTree::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
-    let tree3 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
-    let tree4 = HRTree::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
-    let tree5 = HRTree::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
+    let tree1 = FingerprintTreeMap::from_iter([(25, "World!"), (50, "Hello"), (75, "Everyone!")]);
+    let tree2 = FingerprintTreeMap::from_iter([(75, "Everyone!"), (50, "Hello"), (25, "World!")]);
+    let tree3 = FingerprintTreeMap::from_iter([(75, "Everyone!"), (25, "World!"), (50, "Hello")]);
+    let tree4 = FingerprintTreeMap::from_iter([(75, "Everyone!"), (25, "World!"), (40, "Hello")]);
+    let tree5 = FingerprintTreeMap::from_iter([(25, "World!"), (50, "Hello"), (75, "Goodbye!")]);
 
-    assert_eq!(range_hash(&tree1, &..), range_hash(&tree1, &..));
-    assert_eq!(range_hash(&tree1, &..), range_hash(&tree2, &..));
-    assert_eq!(range_hash(&tree1, &..), range_hash(&tree3, &..));
-    assert_ne!(range_hash(&tree1, &..), range_hash(&tree4, &..));
-    assert_ne!(range_hash(&tree1, &..), range_hash(&tree5, &..));
+    assert_eq!(
+        range_fingerprint(&tree1, &..),
+        range_fingerprint(&tree1, &..)
+    );
+    assert_eq!(
+        range_fingerprint(&tree1, &..),
+        range_fingerprint(&tree2, &..)
+    );
+    assert_eq!(
+        range_fingerprint(&tree1, &..),
+        range_fingerprint(&tree3, &..)
+    );
+    assert_ne!(
+        range_fingerprint(&tree1, &..),
+        range_fingerprint(&tree4, &..)
+    );
+    assert_ne!(
+        range_fingerprint(&tree1, &..),
+        range_fingerprint(&tree5, &..)
+    );
 
     assert_eq!(tree1, tree1);
     assert_eq!(tree1, tree2);
@@ -99,7 +114,7 @@ fn test_compare() {
     reconcile(&mut tree1, &mut tree4);
     assert_eq!(tree1, tree4);
     assert_eq!(
-        tree1.get_range(&..).collect::<Vec<_>>(),
+        tree1.range(&..).collect::<Vec<_>>(),
         [
             (&25, &"World!"),
             (&40, &"Hello"),
@@ -111,7 +126,7 @@ fn test_compare() {
 
 // The size-not-hash regression tests — a *non-empty* range that
 // fingerprints to `ZERO`, and equal fingerprints over different-sized ranges — require feeding
-// crafted `HashSegment`s (whose `hash`/`size` fields are deliberately set to collide) straight
-// into `diff_round`. Because `HashSegment`'s fields are `pub(crate)`, those tests live as unit
-// tests in `src/proto.rs` (`nonempty_zero_hash_vs_empty_is_not_in_sync` and friends), next to
+// crafted `RangeAggregate`s (whose `hash`/`size` fields are deliberately set to collide) straight
+// into `diff_round`. Because `RangeAggregate`'s fields are `pub(crate)`, those tests live as unit
+// tests in `src/proto.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends), next to
 // the algorithm they guard, rather than here.

@@ -11,10 +11,10 @@
 //! These exercise the two invariants that matter most for a reconciliation
 //! library and that fixed-seed example tests cannot cover exhaustively:
 //!
-//! 1. The hand-rolled B-tree (`HRTree`) behaves like a `BTreeMap` oracle for
+//! 1. The hand-rolled B-tree (`FingerprintTreeMap`) behaves like a `BTreeMap` oracle for
 //!    every random `insert`/`remove`/`get`/`range` sequence, and its internal
-//!    [`HRTree::check_invariants`] holds after *every* mutation (this is where
-//!    the `TODO` rebalancing edge cases in `src/hrtree.rs` would surface).
+//!    [`FingerprintTreeMap::check_invariants`] holds after *every* mutation (this is where
+//!    the `TODO` rebalancing edge cases in `rsos/src/fingerprint_tree_map.rs` would surface).
 //! 2. Any two stores converge to identical state after running the full diff
 //!    loop, the returned diff ranges equal the true symmetric difference of the
 //!    key sets, and convergence survives reordered, duplicated and dropped
@@ -30,12 +30,11 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use reconcile::fingerprint::Fingerprint;
-use reconcile::hrtree::HRTree;
-use reconcile::testing::{diff_round, hash, range_hash, start_diff, DiffRange, HashSegment};
+use reconcile::testing::{diff_round, range_fingerprint, start_diff, DiffRange, RangeAggregate};
+use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
 // ---------------------------------------------------------------------------
-// Property 1: HRTree is observationally equivalent to a BTreeMap oracle, and
+// Property 1: FingerprintTreeMap is observationally equivalent to a BTreeMap oracle, and
 // every internal invariant holds after every single mutation.
 // ---------------------------------------------------------------------------
 
@@ -60,8 +59,8 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn hrtree_matches_btreemap_oracle(ops in prop::collection::vec(op_strategy(), 0..400)) {
-        let mut tree: HRTree<u8, u16> = HRTree::new();
+    fn fingerprint_tree_map_matches_btreemap_oracle(ops in prop::collection::vec(op_strategy(), 0..400)) {
+        let mut tree: FingerprintTreeMap<u8, u16> = FingerprintTreeMap::new();
         let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
 
         for op in ops {
@@ -84,25 +83,25 @@ proptest! {
         }
 
         // Full-range iteration yields the exact sorted oracle contents.
-        let got: Vec<(u8, u16)> = tree.get_range(&..).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(&..).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(got, want);
 
-        // The cumulated fingerprint equals the sum of the per-element hashes
+        // The cumulated fingerprint equals the sum of the per-element lifts
         // (and is order-independent), matching the diff protocol's fingerprint.
-        let expected_hash = oracle
+        let expected_fingerprint = oracle
             .iter()
-            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
-        prop_assert_eq!(range_hash(&tree, &..), expected_hash);
+            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
+        prop_assert_eq!(range_fingerprint(&tree, &..), expected_fingerprint);
     }
 
     #[test]
-    fn hrtree_range_queries_match_oracle(
+    fn fingerprint_tree_map_range_queries_match_oracle(
         entries in prop::collection::vec((any::<u8>(), any::<u16>()), 0..200),
         lo in any::<u8>(),
         hi in any::<u8>(),
     ) {
-        let mut tree: HRTree<u8, u16> = HRTree::new();
+        let mut tree: FingerprintTreeMap<u8, u16> = FingerprintTreeMap::new();
         let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
         for (k, v) in entries {
             tree.insert(k, v);
@@ -111,15 +110,15 @@ proptest! {
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         let range = (Bound::Included(lo), Bound::Excluded(hi));
 
-        let got: Vec<(u8, u16)> = tree.get_range(&range).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(&range).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.range(range).map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(&got, &want);
 
         // Range fingerprint is consistent with iterating the same range.
         let expected = want
             .iter()
-            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + hash(k, v));
-        prop_assert_eq!(range_hash(&tree, &range), expected);
+            .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
+        prop_assert_eq!(range_fingerprint(&tree, &range), expected);
     }
 }
 
@@ -129,12 +128,12 @@ proptest! {
 // We model a universe of (key, value) pairs and give each store an arbitrary
 // subset. Shared keys carry identical values (the diff algorithm reconciles the
 // *set* of keys; per-key conflict resolution is the job of `ReconcileStore`'s
-// last-write-wins layer, not of the raw `HRTree`). The true symmetric
+// last-write-wins layer, not of the raw `FingerprintTreeMap`). The true symmetric
 // difference of the key sets is therefore well defined and we assert the
 // protocol discovers exactly it.
 // ---------------------------------------------------------------------------
 
-type Tree = HRTree<u64, u64>;
+type Tree = FingerprintTreeMap<u64, u64>;
 
 /// One full diff exchange, optionally perturbing the in-flight message vectors
 /// each round with `perturb` to model an adversarial transport (reordering and
@@ -143,7 +142,7 @@ type Tree = HRTree<u64, u64>;
 fn run_diff(
     a: &Tree,
     b: &Tree,
-    perturb: &mut dyn FnMut(&mut Vec<HashSegment<u64>>),
+    perturb: &mut dyn FnMut(&mut Vec<RangeAggregate<u64>>),
 ) -> (Vec<DiffRange<u64>>, Vec<DiffRange<u64>>) {
     let mut a_diffs = Vec::new();
     let mut b_diffs = Vec::new();
@@ -169,7 +168,7 @@ fn run_diff(
 fn items_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
-        .flat_map(|r| tree.get_range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
+        .flat_map(|r| tree.range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -182,7 +181,7 @@ fn keys_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<u64> {
 }
 
 fn sorted_items(tree: &Tree) -> Vec<(u64, u64)> {
-    tree.get_range(&..).map(|(k, v)| (*k, *v)).collect()
+    tree.range(&..).map(|(k, v)| (*k, *v)).collect()
 }
 
 /// Build two trees from a universe and per-entry membership flags. Returns the
@@ -193,8 +192,8 @@ fn build_pair(
     // Deduplicate by key, keeping the first occurrence so shared keys are
     // guaranteed identical values across both trees.
     let mut seen = BTreeMap::new();
-    let mut a = HRTree::new();
-    let mut b = HRTree::new();
+    let mut a = FingerprintTreeMap::new();
+    let mut b = FingerprintTreeMap::new();
     let mut only_a = Vec::new();
     let mut only_b = Vec::new();
     let mut union = BTreeMap::new();
@@ -250,7 +249,7 @@ proptest! {
     fn two_trees_converge_and_diff_is_symmetric_difference(universe in universe_strategy()) {
         let (mut a, mut b, only_a, only_b, union) = build_pair(&universe);
 
-        let mut noop = |_: &mut Vec<HashSegment<u64>>| {};
+        let mut noop = |_: &mut Vec<RangeAggregate<u64>>| {};
         let (a_diffs, b_diffs) = run_diff(&a, &b, &mut noop);
 
         // The discovered diff ranges cover exactly the symmetric difference.
@@ -279,7 +278,7 @@ proptest! {
         let (mut a, mut b, only_a, only_b, union) = build_pair(&universe);
 
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut perturb = |segs: &mut Vec<HashSegment<u64>>| {
+        let mut perturb = |segs: &mut Vec<RangeAggregate<u64>>| {
             if !segs.is_empty() {
                 // Duplicate a single random segment (bounded growth) ...
                 let i = rng.gen_range(0..segs.len());
@@ -317,7 +316,7 @@ proptest! {
     ) {
         let (mut a, mut b, _only_a, _only_b, union) = build_pair(&universe);
 
-        let mut noop = |_: &mut Vec<HashSegment<u64>>| {};
+        let mut noop = |_: &mut Vec<RangeAggregate<u64>>| {};
         for deliver_a_to_b in schedule {
             let (a_diffs, b_diffs) = run_diff(&a, &b, &mut noop);
             // Drop one whole direction this cycle.

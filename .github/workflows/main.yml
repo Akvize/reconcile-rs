@@ -32,7 +32,7 @@ jobs:
     - name: Domain purity (hexagonal architecture boundary)
       run: ./scripts/check-domain-purity.sh
     # `--features internal-testing` exposes the `reconcile::testing` seam so the external
-    # integration-test oracles (`tests/diff.rs`, `tests/proptest_hrtree.rs`) and the benchmark,
+    # integration-test oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the benchmark,
     # which reach now-`pub(crate)` reconciliation internals, still compile and run. The
     # `--all-features` steps already cover it; the default steps make it explicit so the oracle
     # always runs.
@@ -54,8 +54,17 @@ jobs:
       run: cargo doc --all --verbose
     - name: Generate the documentation (all features)
       run: cargo doc --all --all-features --verbose
-    - name: Check that the crate is publishable
-      run: cargo publish --allow-dirty --dry-run
+    # Only the leaf crates can be checked today: the `reconcile` package now depends on `rsos`
+    # by path, and cargo rejects a path dependency carrying no version requirement until that
+    # dependency is itself on crates.io. Publishing the workspace is a policy question tracked
+    # under #204; until it is settled, this keeps real packaging-breakage detection on the
+    # crates where it still works rather than dropping the check entirely.
+    # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate,
+    # which is the breakage this check exists to catch, and unlike `publish --dry-run` it does
+    # not additionally demand `package.publish = true` — so `rsos` keeps `publish = false` as a
+    # guard against being released before #204 is settled.
+    - name: Check that the leaf crates package cleanly
+      run: cargo package -p rsos --allow-dirty
 
   coverage:
     runs-on: ubuntu-latest

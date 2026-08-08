@@ -8,26 +8,25 @@
 
 //! Anti-entropy protocol mechanism (Range-Based Set Reconciliation).
 //!
-//! [`start_diff`] and [`diff_round`] are free functions over the concrete [`HRTree`]; they are
+//! [`start_diff`] and [`diff_round`] are free functions over the concrete [`FingerprintTreeMap`]; they are
 //! the *how* of reconciliation, an implementation detail of the domain, not part of the crate's
 //! public surface (see `ARCHITECTURE.md` §3.7). The whole module is `pub(crate)`, so although the
 //! items below are declared `pub`, they are unreachable through the public path — the gated
-//! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-hash
-//! queries the algorithm relies on ([`HRTree::hash`], [`HRTree::insertion_position`],
-//! [`HRTree::key_at`], [`HRTree::len`]) are inherent methods on `HRTree`.
+//! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-aggregate
+//! queries the algorithm relies on ([`FingerprintTreeMap::aggregate`], [`FingerprintTreeMap::rank`],
+//! [`FingerprintTreeMap::select`], [`FingerprintTreeMap::len`]) are inherent methods on `FingerprintTreeMap`.
 
 use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::fingerprint::Fingerprint;
-use crate::hrtree::HRTree;
+use rsos::{Aggregate, FingerprintTreeMap};
 
-/// The start bound of a [`HashSegment`] range, as this protocol actually emits it: `Included` or
+/// The start bound of a [`RangeAggregate`] range, as this protocol actually emits it: `Included` or
 /// `Unbounded`, never `Excluded`.
 ///
-/// `HashSegment` is deserialized straight off the wire (see the module docs on `diff_round`'s
+/// `RangeAggregate` is deserialized straight off the wire (see the module docs on `diff_round`'s
 /// former validation). Narrowing this from `std::ops::Bound<K>` (three variants) to the two
 /// shapes the protocol produces makes the third shape (`Excluded`) **unrepresentable**: a peer
 /// sending it fails to deserialize — the same "malformed, drop the datagram" path
@@ -39,7 +38,7 @@ pub(crate) enum StartBound<K> {
     Included(K),
 }
 
-/// The end bound of a [`HashSegment`] range: `Excluded` or `Unbounded`, never `Included`. See
+/// The end bound of a [`RangeAggregate`] range: `Excluded` or `Unbounded`, never `Included`. See
 /// [`StartBound`].
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) enum EndBound<K> {
@@ -65,21 +64,21 @@ impl<K> From<EndBound<K>> for Bound<K> {
     }
 }
 
-/// A [`HashSegment`]'s range: `(StartBound<K>, EndBound<K>)`, wrapped in a local tuple struct
+/// A [`RangeAggregate`]'s range: `(StartBound<K>, EndBound<K>)`, wrapped in a local tuple struct
 /// (rather than a bare tuple) so it can implement the foreign [`RangeBounds`] trait directly —
 /// Rust's orphan rules require the outermost type to be local, and a plain tuple never qualifies.
-/// This lets a segment's range feed straight into [`HRTree::hash`] / [`HRTree::get_range`] like
+/// This lets a segment's range feed straight into [`FingerprintTreeMap::aggregate`] / [`FingerprintTreeMap::range`] like
 /// any other `RangeBounds<K>`, with no intermediate conversion.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct SegmentRange<K>(StartBound<K>, EndBound<K>);
+pub(crate) struct KeyRange<K>(StartBound<K>, EndBound<K>);
 
-impl<K> SegmentRange<K> {
+impl<K> KeyRange<K> {
     fn new(start: StartBound<K>, end: EndBound<K>) -> Self {
-        SegmentRange(start, end)
+        KeyRange(start, end)
     }
 }
 
-impl<K> RangeBounds<K> for SegmentRange<K> {
+impl<K> RangeBounds<K> for KeyRange<K> {
     fn start_bound(&self) -> Bound<&K> {
         match &self.0 {
             StartBound::Unbounded => Bound::Unbounded,
@@ -95,18 +94,31 @@ impl<K> RangeBounds<K> for SegmentRange<K> {
     }
 }
 
-/// Represents the elements of the collection in the given key range. The `hash` and `size`
-/// fields allow testing whether two segments represent the same elements.
+/// A `KeyRange` paired with the [`Aggregate`] of the elements it covers: what one peer
+/// advertises about one range of its store, and the unit the RBSR refinement walk exchanges.
+///
+/// The two halves used to be spelled out here as `hash: Fingerprint` + `size: usize`, described by
+/// this very doc comment as "allow testing whether two segments represent the same elements" —
+/// which is the definition of Def. 3.5's bundled aggregate `A(S) = (|S|, Σ(S))`. They are one
+/// [`Aggregate`] now, the same value [`FingerprintTreeMap::aggregate`] already returns, so a
+/// segment can no longer be built with a count and a fingerprint that describe different sets.
+///
+/// # Wire compatibility
+///
+/// The encoding is **unchanged** by that collapse. bincode writes struct fields sequentially with
+/// no framing or field names, so the nested `Aggregate` is inlined and
+/// `{range, aggregate: {fingerprint, size}}` is byte-for-byte the old `{range, hash, size}` —
+/// which is why [`Aggregate`] declares `fingerprint` before `size` (see its own note) and why
+/// `wire_format_is_unchanged_by_the_aggregate_collapse` below pins the exact bytes.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HashSegment<K> {
-    range: SegmentRange<K>,
-    hash: Fingerprint,
-    size: usize,
+pub struct RangeAggregate<K> {
+    range: KeyRange<K>,
+    aggregate: Aggregate,
 }
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
 
-/// A [`HashSegment`]'s range, checked against a concrete [`HRTree`]: the bound *shapes* are
+/// A [`RangeAggregate`]'s range, checked against a concrete [`FingerprintTreeMap`]: the bound *shapes* are
 /// already guaranteed by [`StartBound`]/[`EndBound`] (unrepresentable otherwise), so the only
 /// remaining way a wire segment can be malformed is an inverted range (`start_index >
 /// end_index`) — which can only be detected against a specific tree, hence this being a fallible
@@ -126,15 +138,15 @@ impl<K: std::hash::Hash + Ord> BoundedRange<K> {
     fn parse<V: std::hash::Hash>(
         start: StartBound<K>,
         end: EndBound<K>,
-        tree: &HRTree<K, V>,
+        tree: &FingerprintTreeMap<K, V>,
     ) -> Result<Self, InvertedRange> {
         let start_index = match &start {
             StartBound::Unbounded => 0,
-            StartBound::Included(key) => tree.insertion_position(key),
+            StartBound::Included(key) => tree.rank(key),
         };
         let end_index = match &end {
             EndBound::Unbounded => tree.len(),
-            EndBound::Excluded(key) => tree.insertion_position(key),
+            EndBound::Excluded(key) => tree.rank(key),
         };
         if end_index < start_index {
             return Err(InvertedRange);
@@ -155,50 +167,51 @@ impl<K: std::hash::Hash + Ord> BoundedRange<K> {
 }
 
 /// Returns a representation of all the elements in the tree that can be sent to [`diff_round`]:
-/// the root segment `{(−∞, +∞), global hash, size}` that bootstraps a reconciliation.
-pub fn start_diff<K, V>(tree: &HRTree<K, V>) -> Vec<HashSegment<K>>
+/// the root segment `{(−∞, +∞), A(whole store)}` that bootstraps a reconciliation.
+pub fn start_diff<K, V>(tree: &FingerprintTreeMap<K, V>) -> Vec<RangeAggregate<K>>
 where
     K: std::hash::Hash + Ord,
     V: std::hash::Hash,
 {
-    vec![HashSegment {
-        range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-        hash: tree.hash(&..),
-        size: tree.len(),
+    vec![RangeAggregate {
+        range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+        // One tree walk gives both halves; they cannot describe different sets.
+        aggregate: tree.aggregate(&..),
     }]
 }
 
-/// Refines set differences (a range of keys along with the accumulated hash) into smaller sets.
+/// Refines set differences (a range of keys along with its [`Aggregate`]) into smaller sets.
 ///
 /// When sets are determined to contain the same elements, they are removed from the output.
 /// When sets are determined to only contain differing elements, the corresponding elements are
 /// listed as `differences`. In other cases, the set must be refined and sent back to the peer
 /// for further analysis.
 pub fn diff_round<K, V>(
-    tree: &HRTree<K, V>,
-    in_comparison: Vec<HashSegment<K>>,
-    out_comparison: &mut Vec<HashSegment<K>>,
+    tree: &FingerprintTreeMap<K, V>,
+    in_comparison: Vec<RangeAggregate<K>>,
+    out_comparison: &mut Vec<RangeAggregate<K>>,
     differences: &mut Vec<DiffRange<K>>,
 ) where
     K: Clone + std::hash::Hash + Ord,
     V: std::hash::Hash,
 {
     for segment in in_comparison {
-        let HashSegment {
-            range: SegmentRange(start, end),
-            hash,
-            size,
+        let RangeAggregate {
+            range: KeyRange(start, end),
+            aggregate: remote,
         } = segment;
         // Safe on any bound combination — including a not-yet-validated inverted range —
-        // because `HRTree::hash` walks the tree via point/range comparisons, never index
+        // because `FingerprintTreeMap::aggregate` walks the tree via point/range comparisons, never index
         // arithmetic (see its doc comment).
-        let local_hash = tree.hash(&SegmentRange::new(start.clone(), end.clone()));
+        let local_fingerprint = tree
+            .aggregate(&KeyRange::new(start.clone(), end.clone()))
+            .fingerprint();
         // The bound *shapes* are already guaranteed by `StartBound`/`EndBound`: a peer sending
         // anything else fails to deserialize before `diff_round` ever runs (see their doc
         // comments). The one remaining way a wire segment can be malformed is an inverted range
         // (`start_index > end_index`, e.g. `Included(100)..Excluded(5)`) — undetectable without a
         // concrete tree, hence the fallible constructor rather than a static property of the wire
-        // type. Dropping it here avoids the underflow/out-of-bounds `key_at` that trusting the
+        // type. Dropping it here avoids the underflow/out-of-bounds `select` that trusting the
         // arithmetic would cause.
         let bounded = match BoundedRange::parse(start, end, tree) {
             Ok(bounded) => bounded,
@@ -215,41 +228,40 @@ pub fn diff_round<K, V>(
             end: end_bound,
             ..
         } = bounded;
-        // NOTE: decisions about emptiness and equality are made on the exact
-        // `size`/`local_size`, never on `hash`/`local_hash`. A range fingerprint
-        // combines per-element hashes by addition modulo 2²⁵⁶ (see
-        // `crate::fingerprint`), so a *non-empty* range can legitimately fingerprint
-        // to `ZERO`; using `hash == ZERO` as an "empty" sentinel (or `hash ==
-        // local_hash` alone as "equal") would alias such ranges and cause silent,
-        // permanent divergence.
-        if hash == local_hash && size == local_size {
+        // NOTE: decisions about emptiness and equality are made on the exact element counts,
+        // never on the fingerprints alone. A range fingerprint combines per-element lifts by
+        // addition modulo 2²⁵⁶ (see `rsos::fingerprint`), so a *non-empty* range can legitimately
+        // fingerprint to `ZERO`; using `Σ(S) == ZERO` as an "empty" sentinel (or matching
+        // fingerprints alone as "equal") would alias such ranges and cause silent, permanent
+        // divergence. This is also why the comparison below is spelled out over both halves
+        // rather than as `remote == local_aggregate`: `local_size` comes from the tree's index
+        // arithmetic (`BoundedRange`), which is what the branches downstream also use.
+        let remote_size = remote.size();
+        if remote.fingerprint() == local_fingerprint && remote_size == local_size {
             continue;
-        } else if size == 0 {
+        } else if remote_size == 0 {
             differences.push((start_bound.into(), end_bound.into()));
             continue;
         } else if local_size == 0 {
             // present on remote; bounce back to the remote
-            out_comparison.push(HashSegment {
-                range: SegmentRange::new(start_bound, end_bound),
-                hash: Fingerprint::ZERO,
-                size: 0,
+            out_comparison.push(RangeAggregate {
+                range: KeyRange::new(start_bound, end_bound),
+                aggregate: Aggregate::ZERO,
             });
             continue;
-        } else if size == 1 && local_size == 1 {
+        } else if remote_size == 1 && local_size == 1 {
             // ask the remote to send us the conflicting item
-            out_comparison.push(HashSegment {
-                range: SegmentRange::new(start_bound.clone(), end_bound.clone()),
-                hash: Fingerprint::ZERO,
-                size: 0,
+            out_comparison.push(RangeAggregate {
+                range: KeyRange::new(start_bound.clone(), end_bound.clone()),
+                aggregate: Aggregate::ZERO,
             });
             // send the conflicting item to the remote
             differences.push((start_bound.into(), end_bound.into()));
         } else if local_size == 1 {
             // not enough information; bounce back to the remote
-            out_comparison.push(HashSegment {
-                range: SegmentRange::new(start_bound, end_bound),
-                hash: local_hash,
-                size: local_size,
+            out_comparison.push(RangeAggregate {
+                range: KeyRange::new(start_bound, end_bound),
+                aggregate: Aggregate::new(local_size, local_fingerprint),
             });
         } else {
             // NOTE: end_index - start_index ≥ 2
@@ -259,21 +271,19 @@ pub fn diff_round<K, V>(
             loop {
                 let next_index = cur_index + step;
                 if next_index >= end_index {
-                    let range = SegmentRange::new(cur_bound, end_bound);
-                    out_comparison.push(HashSegment {
-                        hash: tree.hash(&range),
-                        range,
-                        size: end_index - cur_index,
-                    });
+                    let range = KeyRange::new(cur_bound, end_bound);
+                    let aggregate =
+                        Aggregate::new(end_index - cur_index, tree.aggregate(&range).fingerprint());
+                    out_comparison.push(RangeAggregate { range, aggregate });
                     break;
                 } else {
-                    let next_key = tree.key_at(next_index);
-                    let range = SegmentRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
-                    out_comparison.push(HashSegment {
-                        hash: tree.hash(&range),
-                        range,
-                        size: next_index - cur_index,
-                    });
+                    let next_key = tree.select(next_index);
+                    let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
+                    let aggregate = Aggregate::new(
+                        next_index - cur_index,
+                        tree.aggregate(&range).fingerprint(),
+                    );
+                    out_comparison.push(RangeAggregate { range, aggregate });
                     cur_bound = StartBound::Included(next_key.clone());
                     cur_index = next_index;
                 }
@@ -284,20 +294,22 @@ pub fn diff_round<K, V>(
 
 #[cfg(test)]
 mod tests {
+    use rsos::Fingerprint;
+
     use super::*;
 
-    /// Build a real `HRTree` over the given (distinct, unsorted-ok) `i32` keys. The values are
+    /// Build a real `FingerprintTreeMap` over the given (distinct, unsorted-ok) `i32` keys. The values are
     /// irrelevant to the protocol mechanism — `diff_round` only ever queries key positions,
     /// the range fingerprint and the size — so we store a constant.
-    fn tree(keys: &[i32]) -> HRTree<i32, i32> {
-        HRTree::from_iter(keys.iter().map(|&k| (k, 0)))
+    fn tree(keys: &[i32]) -> FingerprintTreeMap<i32, i32> {
+        FingerprintTreeMap::from_iter(keys.iter().map(|&k| (k, 0)))
     }
 
     /// Run a single crafted segment through `diff_round` and return whatever it produced.
     fn round(
-        store: &HRTree<i32, i32>,
-        segment: HashSegment<i32>,
-    ) -> (Vec<HashSegment<i32>>, Vec<DiffRange<i32>>) {
+        store: &FingerprintTreeMap<i32, i32>,
+        segment: RangeAggregate<i32>,
+    ) -> (Vec<RangeAggregate<i32>>, Vec<DiffRange<i32>>) {
         let mut out_comparison = Vec::new();
         let mut differences = Vec::new();
         diff_round(store, vec![segment], &mut out_comparison, &mut differences);
@@ -309,23 +321,22 @@ mod tests {
     // An `Excluded` start bound or an `Included` end bound used to be reachable from the wire and
     // required a runtime check (dropped, not panicking). They no longer compile: `StartBound` has
     // no `Excluded` variant and `EndBound` has no `Included` variant, so
-    // `HashSegment { range: (StartBound::Excluded(_), _), .. }` is not an expression this crate
+    // `RangeAggregate { range: (StartBound::Excluded(_), _), .. }` is not an expression this crate
     // can write, let alone a peer deserialize. The illegal state is unrepresentable, so there is
     // nothing left to test at this level — see `StartBound`/`EndBound`'s doc comments.
 
     /// An inverted range (`start_index > end_index`) used to underflow `end_index -
-    /// start_index` (panic in debug, huge `usize` then out-of-bounds `key_at` in release). It
+    /// start_index` (panic in debug, huge `usize` then out-of-bounds `select` in release). It
     /// must be dropped instead. Unlike the bound-shape cases above, this one *is* still
     /// representable on the wire (both bounds are individually legal shapes) and can only be
     /// detected against a concrete tree, so it stays a runtime check (`BoundedRange::parse`).
     #[test]
     fn inverted_range_is_dropped_not_panicking() {
         let store = tree(&[10, 20, 30]);
-        let segment = HashSegment {
-            // start_index = insertion_position(100) = 3, end_index = insertion_position(5) = 0
-            range: SegmentRange::new(StartBound::Included(100), EndBound::Excluded(5)),
-            hash: Fingerprint([1, 0, 0, 0]),
-            size: 1,
+        let segment = RangeAggregate {
+            // start_index = rank(100) = 3, end_index = rank(5) = 0
+            range: KeyRange::new(StartBound::Included(100), EndBound::Excluded(5)),
+            aggregate: Aggregate::new(1, Fingerprint([1, 0, 0, 0])),
         };
         let (out_comparison, differences) = round(&store, segment);
         assert!(out_comparison.is_empty());
@@ -338,35 +349,34 @@ mod tests {
     #[test]
     fn wellformed_segment_still_processed() {
         let store = tree(&[10, 20, 30]);
-        let segment = HashSegment {
-            range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: Fingerprint::ZERO,
-            size: 0,
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: Aggregate::ZERO,
         };
         let (_out_comparison, differences) = round(&store, segment);
         assert_eq!(differences, vec![(Bound::Unbounded, Bound::Unbounded)]);
     }
 
     // ----- Emptiness and equality are decided on `size`, never on the -----
-    // range fingerprint. A range fingerprint combines per-element hashes additively, so a
+    // range fingerprint. A range fingerprint combines per-element lifts additively, so a
     // non-empty range can legitimately fingerprint to `ZERO` and two different ranges can
     // fingerprint equally. The segment fields below are exactly what such a colliding (or
     // hostile) peer puts on the wire; we drive them straight through `diff_round`.
 
     /// Headline counterexample. A *non-empty* peer range that fingerprints to `ZERO`
-    /// (e.g. two elements whose per-element hashes cancel) is advertised against our empty
-    /// tree, which also fingerprints to `ZERO`. The hashes match (`ZERO == ZERO`) but the
-    /// sizes differ (`2 != 0`). The buggy code short-circuited on the first `hash ==
-    /// local_hash` check and concluded "in sync", silently losing the peer's two elements.
+    /// (e.g. two elements whose per-element lifts cancel) is advertised against our empty
+    /// tree, which also fingerprints to `ZERO`. The fingerprints match (`ZERO == ZERO`) but
+    /// the sizes differ (`2 != 0`). The buggy code short-circuited on the fingerprint
+    /// comparison alone and concluded "in sync", silently losing the peer's two elements.
     /// With the size-based decision we must instead bounce the range back so the peer sends
     /// us its content.
     #[test]
-    fn nonempty_zero_hash_vs_empty_is_not_in_sync() {
-        let store = tree(&[]); // empty: local_hash == ZERO, local_size == 0
-        let segment = HashSegment {
-            range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: Fingerprint::ZERO, // collides with our empty fingerprint ...
-            size: 2,                 // ... but the peer is *not* empty
+    fn nonempty_zero_fingerprint_vs_empty_is_not_in_sync() {
+        let store = tree(&[]); // empty: local_fingerprint == ZERO, local_size == 0
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            // Fingerprint collides with our empty one ... but the peer is *not* empty.
+            aggregate: Aggregate::new(2, Fingerprint::ZERO),
         };
         let (out_comparison, differences) = round(&store, segment);
         // Must not be swallowed as "in sync": we bounce an empty segment back so the peer
@@ -375,10 +385,9 @@ mod tests {
         assert_eq!(out_comparison.len(), 1);
         assert_eq!(
             out_comparison[0],
-            HashSegment {
-                range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-                hash: Fingerprint::ZERO,
-                size: 0,
+            RangeAggregate {
+                range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+                aggregate: Aggregate::ZERO,
             }
         );
     }
@@ -387,12 +396,11 @@ mod tests {
     /// concluded in sync (the size check does not produce false differences). We advertise
     /// the tree's own real fingerprint and size back to it.
     #[test]
-    fn matching_hash_and_size_is_in_sync() {
+    fn matching_fingerprint_and_size_is_in_sync() {
         let store = tree(&[10, 20, 30]);
-        let segment = HashSegment {
-            range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: store.hash(&..),
-            size: store.len(),
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: store.aggregate(&..),
         };
         let (out_comparison, differences) = round(&store, segment);
         assert!(out_comparison.is_empty());
@@ -403,16 +411,56 @@ mod tests {
     /// be mistaken for "in sync"; the range is refined instead. We feed the tree's own
     /// fingerprint with a deliberately wrong (larger) size, forcing the fan-out branch.
     #[test]
-    fn matching_hash_but_wrong_size_is_refined() {
+    fn matching_fingerprint_but_wrong_size_is_refined() {
         let store = tree(&[10, 20, 30, 40, 50]);
-        let segment = HashSegment {
-            range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: store.hash(&..), // hashes collide ...
-            size: store.len() + 7, // ... but the advertised size is wrong
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            // Fingerprints collide ... but the advertised size is wrong.
+            aggregate: Aggregate::new(store.len() + 7, store.aggregate(&..).fingerprint()),
         };
         let (out_comparison, differences) = round(&store, segment);
         // Not concluded in sync: the range is subdivided and bounced back for refinement.
         assert!(!out_comparison.is_empty());
         assert!(differences.is_empty());
+    }
+
+    /// Golden vector: `RangeAggregate`'s encoding must be **byte-for-byte** what the pre-
+    /// `Aggregate` layout `{range, hash: Fingerprint, size: usize}` produced, so a node running
+    /// this code and a node running the previous release reconcile without either noticing.
+    ///
+    /// The bytes below were captured from that earlier layout, with this exact
+    /// `bincode::DefaultOptions` configuration (`crate::bincode::encode`), before the two fields
+    /// were collapsed into one nested `Aggregate`. bincode writes struct fields sequentially with
+    /// no framing or field names, so the nested struct is inlined and the encoding is unchanged —
+    /// *provided* `Aggregate` declares `fingerprint` before `size`. Reordering those two
+    /// declarations breaks this test, which is the point (see `rsos::Aggregate`'s own note).
+    ///
+    /// Reading the vector: `1` = `StartBound::Included` discriminant, `7` = the start key; `1` =
+    /// `EndBound::Excluded` discriminant, `42` = the end key; then the four `u64` fingerprint
+    /// limbs as bincode varints; then `251, 44, 1` = the varint for `size == 300`.
+    #[test]
+    fn wire_format_is_unchanged_by_the_aggregate_collapse() {
+        const GOLDEN: &[u8] = &[
+            1, 7, 1, 42, 253, 239, 205, 171, 137, 103, 69, 35, 1, 253, 16, 50, 84, 118, 152, 186,
+            220, 254, 1, 2, 251, 44, 1,
+        ];
+
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Included(7u32), EndBound::Excluded(42u32)),
+            aggregate: Aggregate::new(
+                300,
+                Fingerprint([0x0123456789abcdef, 0xfedcba9876543210, 1, 2]),
+            ),
+        };
+
+        let mut buf = Vec::new();
+        crate::bincode::encode(&segment, &mut buf).unwrap();
+        assert_eq!(
+            buf, GOLDEN,
+            "RangeAggregate's wire encoding changed — this is a protocol break, not a refactor"
+        );
+
+        let decoded: Vec<RangeAggregate<u32>> = crate::bincode::decode_stream(GOLDEN, 4).unwrap();
+        assert_eq!(decoded, vec![segment]);
     }
 }

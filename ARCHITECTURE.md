@@ -18,7 +18,7 @@ stable and may change. Code locations are given as `file:line` against the curre
 A node holds an ordered key-value map and gossips changes to its peers so that all replicas
 converge. The design rests on five mechanisms:
 
-- **Storage** — a Hash-Range Tree (`HRTree`): an ordered map that also maintains, for every subtree,
+- **Storage** — `FingerprintTreeMap`: an ordered map that also maintains, for every subtree,
   a **range fingerprint** so the hash of any key interval is available in `O(log n)`.
 - **Anti-entropy protocol** — two peers compare fingerprints over shrinking key ranges (`diff`) and
   exchange only the divergent entries. Equality and emptiness are decided by interval **size**, not
@@ -38,8 +38,8 @@ converge. The design rests on five mechanisms:
 
 | Module | Responsibility |
 |---|---|
-| `hrtree.rs`, `hrtree_iter.rs` | Ordered map + range-fingerprint data structure and its iterators. |
-| `fingerprint.rs` | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, plus the `Rsos<K, V>` trait (Def. 3.9) it implements. |
+| `rsos/src/fingerprint.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
 | `diff.rs` | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types. |
 | `entry.rs` | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
@@ -58,7 +58,8 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 
 | Module | Infrastructure imported |
 |---|---|
-| `hrtree.rs`, `hrtree_iter.rs`, `fingerprint.rs`, `diff.rs`, `entry.rs` | none |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs` (standalone `rsos` crate) | none — enforced today by the crate's own minimal `Cargo.toml` dependency list, not just by grep. |
+| `diff.rs`, `entry.rs` | none |
 
 This is, in effect, the interior of the hexagon and it exists today.
 
@@ -94,7 +95,7 @@ Seven traits exist. They fall into three groups:
 - **Internal mechanism, currently public (2).** `HashRangeQueryable` (`diff.rs:30`) and `Diffable`
   (`diff.rs:58`) describe *how* the diff is computed over the tree. `Diffable` is a blanket impl
   whose associated types are always the same concrete types; `HashRangeQueryable` has a single
-  real implementation (`HRTree`). They are exposed through `pub mod diff` (`lib.rs:30`), placing the
+  real implementation (`FingerprintTreeMap`). They are exposed through `pub mod diff` (`lib.rs:30`), placing the
   protocol mechanism on the crate's public surface.
 - **Value-shape helpers — dissolved (migration step 4, done).** `MaybeTombstone`, `Reconcilable` and
   `Timestamped` used to each carry a single implementation over the untyped `(Timestamp, Option<V>)`
@@ -156,7 +157,7 @@ Two rules follow:
   └───────────┘                 ┌──────────────────────────────────────────────────────────┐
         ▲                       │                    DOMAIN  (hexagon interior)              │
         │  driving port         │  anti-entropy algorithm · conflict policy (LWW)            │
-        └───────────────────────│  tombstone lifecycle · HRTree + Fingerprint (mechanism)    │
+        └───────────────────────│  tombstone lifecycle · FingerprintTreeMap + Fingerprint (mechanism)    │
                                 │  Timestamp · Entry / State (value types)  —  no tokio / bincode  │
                                 └──────────────────────────────────────────────────────────┘
 ```
@@ -168,7 +169,7 @@ The interior contains, with no infrastructure dependency:
 - the anti-entropy algorithm (`start_diff` / `diff_round`),
 - the conflict-resolution policy (last-write-wins over the HLC order),
 - the tombstone lifecycle and the causal-stability garbage-collection rule,
-- the `HRTree` and `Fingerprint` (the storage and range-hash mechanism),
+- the `FingerprintTreeMap` and `Fingerprint` (the storage and range-hash mechanism),
 - the value types `Timestamp`, `Entry`, `State`.
 
 ### 3.4 Ports
@@ -253,7 +254,7 @@ test-gated) so a downstream crate can drive a deterministic in-process cluster i
 that, plus a future non-UDP datagram transport (e.g. QUIC unreliable datagrams), is what earns
 `Transport` a public injection point. `bincode.rs`'s `encode`/`decode_stream` stay `pub(crate)` and,
 since there is no type — trait or struct — to name at all (§2.4), carry no visibility-vs-object-safety
-tradeoff to explain — they are simply an internal mechanism, the same as `HRTree`. `Clock` stays
+tradeoff to explain — they are simply an internal mechanism, the same as `FingerprintTreeMap`. `Clock` stays
 test-only for a different reason: the protocol already tolerates an unreliable transport, but a
 non-monotonic clock silently breaks the causal ordering tombstone collection depends on, so it is not
 a seam offered to callers.
@@ -286,11 +287,11 @@ default. A pluggable `Resolve` seam is warranted only if a second policy (e.g. a
 real requirement.
 
 The same step also absorbs the **value-only projection** that powers the dateless `ReconcileMirror`.
-Today the engine keeps a second tree `HRTree<K, V::Projected>` fed through the `Projectable` trait
+Today the engine keeps a second tree `FingerprintTreeMap<K, V::Projected>` fed through the `Projectable` trait
 into a `ValueOnly<V>(Option<V>)` cell whose `Hash` is timestamp-less by construction. `State<V>` is
 isomorphic to that cell (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), so the projection becomes
 `Entry::project(&self) -> State<V>` (= `self.state.clone()`) and the projection tree becomes
-`HRTree<K, State<V>>`; the `Projectable` trait and `ValueOnly` type are dissolved. The two hashes
+`FingerprintTreeMap<K, State<V>>`; the `Projectable` trait and `ValueOnly` type are dissolved. The two hashes
 must stay distinct — the dated `Entry` hashes **with** its stamp (for `version_hash`), the projected
 `State<V>` hashes the value **alone** — which is invariant 8 in §5. Because a `ValueOnly(Some(v))`
 and a `State::Present(v)` do not encode to the same bytes, this step also breaks the value-only wire
@@ -299,8 +300,8 @@ format, alongside the dated wire and on-disk formats (acceptable while the forma
 ### 3.7 Internal mechanism
 
 The anti-entropy mechanism is not a port. `HashRangeQueryable` and `Diffable` are removed as traits:
-range-hash querying becomes inherent methods on the concrete `HRTree`, and `start_diff` / `diff_round`
-become `pub(crate)` functions over it. The wire types `HashSegment` / `DiffRange` are `pub(crate)`.
+range-hash querying becomes inherent methods on the concrete `FingerprintTreeMap`, and `start_diff` / `diff_round`
+become `pub(crate)` functions over it. The wire types `RangeAggregate` / `DiffRange` are `pub(crate)`.
 None of this appears in the public surface.
 
 ### 3.8 Generic bounds
@@ -328,7 +329,7 @@ compiler:
 
 ```
 reconcile-core   // DOMAIN + PORTS: Clock, Persistence (traits);
-                 //   Entry / State, Timestamp, Fingerprint, HRTree, the diff algorithm, LWW.
+                 //   Entry / State, Timestamp, Fingerprint, FingerprintTreeMap, the diff algorithm, LWW.
                  //   no infrastructure deps (no tokio, bincode, chrono-IO, ipnet, runtime rand);
                  //   serde + blake3, plus the dependency-light tracing / metrics facades.
 reconcile-net    // ADAPTERS + I/O PORT: Transport (trait); UdpTransport, bincode.rs's encode/
@@ -358,8 +359,8 @@ without a compile error — the guarantee a single crate cannot provide.
 | `MaybeTombstone`, `Timestamped` | ✅ inherent `Entry` methods / field access |
 | `Reconcilable` (LWW over tuple) | ✅ `Entry::merge` (LWW); no `Resolve` seam needed yet |
 | `Projectable` / `ValueOnly<V>` (dateless mirror) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
-| `HashRangeQueryable`, `Diffable` (public) | inherent `HRTree` methods + `pub(crate)` diff functions |
-| `pub mod diff` exposing wire types | `pub(crate)` `HashSegment` / `DiffRange` |
+| `HashRangeQueryable`, `Diffable` (public) | inherent `FingerprintTreeMap` methods + `pub(crate)` diff functions |
+| `pub mod diff` exposing wire types | `pub(crate)` `RangeAggregate` / `DiffRange` |
 | `chrono::Utc` read in `clock.rs` | `Clock` port; `HlcClock` adapter holds the time read |
 | `UdpSocket` in `reconcile_engine.rs` | ✅ `Transport` port (`transport.rs`); `UdpTransport` adapter (public, `ReconcileStore::new_with_transport` — D2) |
 | `bincode` in `reconcile_engine.rs` | ✅ `encode`/`decode_stream` (`bincode.rs`), plain `pub(crate)` wire-encoding functions — no `Codec` trait and no `BincodeCodec` type (both dissolved, §2.4, same as `Diffable`/`Reconcilable`); `decode_stream`'s `max_items` cap closes the datagram-expansion DoS (#151) |
@@ -406,7 +407,7 @@ the wire and on-disk formats (acceptable while the formats are unstable).
 1. ✅ **Bound bundles & encapsulation** — introduce `Key` / `Value`; demote the protocol mechanism and
    other internals from `pub` to `pub(crate)`.
 2. ✅ **Dissolve the diff traits** — remove `HashRangeQueryable` / `Diffable`; move `start_diff` /
-   `diff_round` verbatim to `pub(crate)` functions over `HRTree`.
+   `diff_round` verbatim to `pub(crate)` functions over `FingerprintTreeMap`.
 3. ✅ **`Clock` port** — extract `Clock`; `HlcClock` becomes its adapter and holds the physical-time
    read; the domain becomes time-source-free.
 4. ✅ **`Entry` / `State` domain type** (done) — replace `(Timestamp, Option<V>)` with

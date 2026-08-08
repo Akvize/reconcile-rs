@@ -81,7 +81,7 @@ async fn mirror_converges_with_dated_store() {
         mirror.get(&"doomed".to_string()).as_deref() == Some(&"to be deleted".to_string())
     );
 
-    // The value-only fingerprints converge: the mirror's tree hashes identically to the dated
+    // The value-only fingerprints converge: the mirror's tree fingerprints identically to the dated
     // store's value-only projection, even though the mirror never stored a single timestamp.
     assert_until!(mirror.fingerprint(..) == dated.value_fingerprint(..));
     assert_eq!(mirror.len(), 51);
