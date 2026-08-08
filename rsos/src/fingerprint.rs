@@ -28,13 +28,34 @@
 //!    with carries is *not* `GF(2)`-linear, defeating offline collision crafting.
 //!    The 256-bit width pushes accidental birthday collisions to ~2¹²⁸.
 //!
-//! 2. **Stable, versioned hash function.** The fingerprint is the **wire
-//!    reconciliation token**: two nodes must compute the *same* fingerprint for
-//!    the same data, forever, across Rust versions, platforms (32- vs 64-bit),
-//!    and endianness. `std`'s [`DefaultHasher`](std::collections::hash_map::DefaultHasher)
-//!    is explicitly documented as unspecified and unstable across releases, so
-//!    we pin the element hash to **BLAKE3** and feed integers in fixed
-//!    little-endian width (see the `Blake3Hasher` adapter). The golden-vector tests at the
+//! 2. **Stable, versioned hash function *and* stable input encoding.** The
+//!    fingerprint is the **wire reconciliation token**: two nodes must compute
+//!    the *same* fingerprint for the same data, forever, across Rust versions,
+//!    platforms (32- vs 64-bit), and endianness. That takes two halves, and
+//!    pinning only one of them is not enough.
+//!
+//!    The *hash function* is the first half: `std`'s
+//!    [`DefaultHasher`](std::collections::hash_map::DefaultHasher) is explicitly
+//!    documented as unspecified and unstable across releases, so the element
+//!    hash is pinned to **BLAKE3**.
+//!
+//!    The *input encoding* is the other half, and it is the one this crate used
+//!    to get wrong. Feeding BLAKE3 through a [`std::hash::Hasher`] adapter pins
+//!    how bytes are written but not which bytes std's `Hash` impls choose to
+//!    write — and Rust makes no stability promise about that. `Hash for str`,
+//!    `Hash for Option<T>` or any other impl may change its byte sequence in a
+//!    future release, which would change every fingerprint in a cluster and
+//!    leave a mixed-version cluster re-exchanging ranges forever: exactly the
+//!    failure this property is meant to prevent. `Hash` is also not implemented
+//!    for [`HashMap`](std::collections::HashMap)/[`HashSet`](std::collections::HashSet),
+//!    so such values were unusable.
+//!
+//!    So `rsos` owns the encoding end to end: [`lift`] serializes key and value
+//!    through the crate's own injective, length-prefixed
+//!    [canonical encoding](crate::encoding) (a `serde::Serializer` writing
+//!    straight into BLAKE3 — no codec crate involved) rather than through
+//!    `Hash`. Only with both halves owned here is "stable across Rust versions"
+//!    a claim this crate can actually make. The golden-vector tests at the
 //!    bottom of this module freeze the wire format so any change that would
 //!    break interoperability fails CI.
 //!
@@ -42,10 +63,11 @@
 //! (arXiv:2212.13567); Clarke et al., *Incremental Multiset Hash Functions*
 //! (ASIACRYPT 2003).
 
-use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 use serde::{Deserialize, Serialize};
+
+use crate::encoding;
 
 /// A 256-bit range fingerprint, stored as four little-endian 64-bit limbs
 /// (limb 0 is least significant).
@@ -162,14 +184,12 @@ impl std::fmt::Display for Fingerprint {
     }
 }
 
-/// A [`Hasher`] that feeds bytes into BLAKE3 and yields a 256-bit
-/// [`Fingerprint`].
+/// A BLAKE3 accumulator that yields a 256-bit [`Fingerprint`].
 ///
-/// Integer `write_*` methods are overridden to emit a **fixed little-endian**
-/// byte width, independent of the host endianness and pointer width, so that a
-/// 32-bit and a 64-bit node (or a big-endian and a little-endian one) feed
-/// BLAKE3 the exact same bytes for the same value. This is what makes the
-/// fingerprint a stable wire token.
+/// Bytes reach it exclusively through the crate's [canonical encoding](crate::encoding), which is
+/// what makes the digest a stable wire token: the encoding fixes integer widths and endianness,
+/// length-prefixes everything variable-length, and orders map entries — none of which the hash
+/// function itself can guarantee.
 struct Blake3Hasher(blake3::Hasher);
 
 impl Blake3Hasher {
@@ -177,60 +197,18 @@ impl Blake3Hasher {
         Blake3Hasher(blake3::Hasher::new())
     }
 
+    /// Absorb `value`'s canonical encoding.
+    ///
+    /// Infallible in practice: writing into a BLAKE3 accumulator has nothing that can fail, so the
+    /// only way this panics is a hand-written [`Serialize`] impl that refuses to serialize itself
+    /// (`serde::ser::Error::custom`) — a bug in that type, surfaced loudly rather than folded into
+    /// a wrong fingerprint. See [`encoding::Error`](crate::encoding::Error).
+    fn absorb<T: Serialize + ?Sized>(&mut self, value: &T) {
+        encoding::encode_into(&mut self.0, value).expect("canonical encoding cannot fail");
+    }
+
     fn fingerprint(&self) -> Fingerprint {
         Fingerprint::from_bytes(self.0.finalize().as_bytes())
-    }
-}
-
-impl Hasher for Blake3Hasher {
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.update(bytes);
-    }
-
-    // Fixed-width little-endian integer encodings (portable across platforms).
-    fn write_u8(&mut self, i: u8) {
-        self.0.update(&[i]);
-    }
-    fn write_u16(&mut self, i: u16) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_u32(&mut self, i: u32) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_u64(&mut self, i: u64) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_u128(&mut self, i: u128) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_usize(&mut self, i: usize) {
-        // Encode as a fixed 64-bit value so 32- and 64-bit nodes agree.
-        self.0.update(&(i as u64).to_le_bytes());
-    }
-    fn write_i8(&mut self, i: i8) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_i16(&mut self, i: i16) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_i32(&mut self, i: i32) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_i64(&mut self, i: i64) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_i128(&mut self, i: i128) {
-        self.0.update(&i.to_le_bytes());
-    }
-    fn write_isize(&mut self, i: isize) {
-        self.0.update(&(i as i64).to_le_bytes());
-    }
-
-    fn finish(&self) -> u64 {
-        // Not used to build fingerprints (we call `fingerprint()` instead), but
-        // the trait requires it; return the low 64 bits of the digest.
-        let bytes = self.0.finalize();
-        u64::from_le_bytes(bytes.as_bytes()[..8].try_into().unwrap())
     }
 }
 
@@ -241,19 +219,33 @@ impl Hasher for Blake3Hasher {
 /// arXiv:2603.19820 defines a *lifting function* from an element to the monoid `M`, and the
 /// Meyer/Willow-ecosystem reference implementation (`earthstar-project/range-reconcile`) names the
 /// same operation `lift` in its `BYOLiftingMonoid` (`lift`/`combine`/`neutral`), the vocabulary
-/// this crate's root docs already cite for the future generic-summary work. And it no longer
-/// collides with [`std::hash::Hash::hash`], which this function *calls* on both arguments — two
-/// different operations that used to share one name in the same expression.
+/// this crate's root docs already cite for the future generic-summary work. And it never collided
+/// with [`std::hash::Hash::hash`] — which, since the move to the canonical encoding, it no longer
+/// calls at all.
 ///
 /// This is the per-element summary that the
 /// [`FingerprintTreeMap`](crate::fingerprint_tree_map::FingerprintTreeMap) combines into range
-/// fingerprints. It is BLAKE3 over the key bytes followed by the value bytes, fed in a fixed,
-/// portable encoding (see the `Blake3Hasher` adapter), and is part of the wire protocol — see the
-/// golden-vector tests.
-pub fn lift<K: Hash, V: Hash>(key: &K, value: &V) -> Fingerprint {
+/// fingerprints. It is BLAKE3 over the [canonically encoded](crate::encoding) key followed by the
+/// canonically encoded value, and is part of the wire protocol — see the golden-vector tests.
+///
+/// The bound is [`Serialize`], not [`Hash`](std::hash::Hash): the encoding is this crate's own, so
+/// types std does not implement `Hash` for (notably [`HashMap`](std::collections::HashMap) and
+/// [`HashSet`](std::collections::HashSet)) are usable as keys and values, and no future change to
+/// a std `Hash` impl can move a fingerprint.
+pub fn lift<K: Serialize + ?Sized, V: Serialize + ?Sized>(key: &K, value: &V) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
-    key.hash(&mut hasher);
-    value.hash(&mut hasher);
+    hasher.absorb(key);
+    hasher.absorb(value);
+    hasher.fingerprint()
+}
+
+/// The canonical 256-bit digest of a *single* value — [`lift`] with no key half.
+///
+/// Same encoding, same stability guarantee; used where a deterministic, cross-node content token
+/// for one value is needed rather than a per-element range summary.
+pub fn digest<T: Serialize + ?Sized>(value: &T) -> Fingerprint {
+    let mut hasher = Blake3Hasher::new();
+    hasher.absorb(value);
     hasher.fingerprint()
 }
 
@@ -322,17 +314,25 @@ mod tests {
     // hash (BLAKE3, the feeding order/encoding) or the combiner ever alters
     // them, this test fails — that change would silently break interoperability
     // between nodes and must be a deliberate, versioned wire-format bump.
+    //
+    // The values below are NOT the ones this file carried before. The previous vectors were
+    // computed from `std::hash::Hash`'s byte stream; moving the input encoding to the crate's own
+    // canonical serde encoding changes every element fingerprint, so the old constants are gone on
+    // purpose. That is a deliberate, documented wire break — see the module docs and PROGRESS.md:
+    // a node on the new code and one on the old code never agree on a range fingerprint and would
+    // re-exchange indefinitely, so this is not a rolling upgrade.
 
     #[test]
     fn golden_element_hash() {
-        // BLAKE3(key=50u64 little-endian || value="Hello" || 0xff str terminator).
+        // BLAKE3 over the canonical encoding of the key (50u64, 8 bytes little-endian) followed by
+        // the canonical encoding of the value ("Hello": u64 length 5, then the 5 bytes).
         assert_eq!(
             lift(&50u64, &"Hello"),
             Fingerprint([
-                0x3a24_dc5c_8162_625b,
-                0x8096_8c6a_b597_489b,
-                0x105e_ba4e_6a69_90c8,
-                0x4e24_03d1_e7ce_04f7,
+                0x5983_c089_4de2_aacf,
+                0xa3b7_5857_a517_c2a4,
+                0xf30c_219d_d2d5_d655,
+                0xc269_e4a2_cb9e_3aa1,
             ])
         );
     }
@@ -346,11 +346,110 @@ mod tests {
         assert_eq!(
             combined,
             Fingerprint([
-                0x6be8_b71e_bc22_e801,
-                0x6c53_2dca_19b5_e70c,
-                0x7422_4b2c_43a0_0032,
-                0xacf7_6a81_40c9_c730,
+                0x44d8_8232_ba37_b808,
+                0x3917_4386_159c_3900,
+                0xd744_1273_6509_2edc,
+                0x0d4a_f5d8_5402_598c,
             ])
         );
+    }
+
+    // --- Properties of the canonical encoding, seen through `lift`. ---
+    //
+    // `encoding`'s own unit tests check the byte stream directly; these check that the properties
+    // survive the trip through BLAKE3, which is the form the protocol actually relies on.
+
+    #[test]
+    fn framing_is_unambiguous() {
+        // The classic ambiguity: unprefixed concatenation would make both of these "abc".
+        assert_ne!(lift(&"ab", &"c"), lift(&"a", &"bc"));
+        // Same shape one level down, in a sequence.
+        assert_ne!(
+            lift(&0u8, &vec![vec![1u8, 2]]),
+            lift(&0u8, &vec![vec![1u8], vec![2u8]])
+        );
+        // And between a two-element sequence and a pair of one-element ones.
+        assert_ne!(lift(&vec![1u8, 2], &()), lift(&(vec![1u8], vec![2u8]), &()));
+    }
+
+    #[test]
+    fn hash_maps_fingerprint_independently_of_insertion_order() {
+        use std::collections::{BTreeMap, HashMap};
+
+        let mut forward = HashMap::new();
+        for i in 0..16u32 {
+            forward.insert(i, i * 3);
+        }
+        let mut backward = HashMap::new();
+        for i in (0..16u32).rev() {
+            backward.insert(i, i * 3);
+        }
+        assert_eq!(lift(&0u8, &forward), lift(&0u8, &backward));
+
+        // ...and agrees with the ordered map holding the same entries. `HashMap` has no `Hash`
+        // impl at all, so neither of these was even expressible before the canonical encoding.
+        let ordered: BTreeMap<u32, u32> = forward.iter().map(|(k, v)| (*k, *v)).collect();
+        assert_eq!(lift(&0u8, &forward), lift(&0u8, &ordered));
+    }
+
+    #[test]
+    fn enum_variants_are_distinguished_by_index() {
+        #[derive(Serialize)]
+        enum Payload {
+            A(u32),
+            B(u32),
+        }
+        assert_ne!(
+            lift(&0u8, &Payload::A(7)),
+            lift(&0u8, &Payload::B(7)),
+            "same payload under different variants must differ"
+        );
+    }
+
+    #[test]
+    fn none_does_not_collide_with_a_value() {
+        // `None` encodes as the single byte 0, `Some(0u8)` as 1 then 0: the tag is what keeps the
+        // "absent" case from being read as the payload of a present one.
+        assert_ne!(lift(&0u8, &None::<u8>), lift(&0u8, &Some(0u8)));
+        // The same, where the payload is itself empty: `Some(vec![])` is the tag plus a zero-length
+        // prefix, never bare nothing.
+        assert_ne!(
+            lift(&0u8, &None::<Vec<u8>>),
+            lift(&0u8, &Some(Vec::<u8>::new()))
+        );
+        // Nested options stay distinct all the way down.
+        assert_ne!(
+            lift(&0u8, &Some(None::<u8>)),
+            lift(&0u8, &None::<Option<u8>>)
+        );
+
+        // Injectivity is a property *within* a type, which is all the protocol needs: a given tree
+        // has one `K` and one `V`. Across types it cannot hold and is not claimed — `None::<u8>`
+        // and `0u8` both encode to a single zero byte.
+        assert_eq!(lift(&0u8, &None::<u8>), lift(&0u8, &0u8));
+    }
+
+    #[test]
+    fn integers_of_different_widths_differ() {
+        // Fixed-width, not varint: the same numeric value at two widths is two different elements.
+        assert_ne!(lift(&0u8, &1u32), lift(&0u8, &1u64));
+        assert_ne!(lift(&0u8, &1u8), lift(&0u8, &1u16));
+        // Signed and unsigned of the same width coincide on non-negative values, by construction.
+        assert_eq!(lift(&0u8, &1u32), lift(&0u8, &1i32));
+    }
+
+    #[test]
+    fn floats_follow_bit_patterns_not_partial_eq() {
+        // `+0.0 == -0.0`, but their bit patterns — and so their fingerprints — differ.
+        assert_ne!(lift(&0u8, &0.0f64), lift(&0u8, &-0.0f64));
+        // `NaN != NaN`, but the same bit pattern fingerprints identically.
+        assert_eq!(lift(&0u8, &f64::NAN), lift(&0u8, &f64::NAN));
+    }
+
+    #[test]
+    fn digest_is_lift_without_a_key_half() {
+        // `digest` exists for single-value content tokens; it must be the same encoding.
+        assert_eq!(digest(&"Hello"), lift(&(), &"Hello"));
+        assert_ne!(digest(&"Hello"), digest(&"Hell"));
     }
 }

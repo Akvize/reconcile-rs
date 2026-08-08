@@ -30,7 +30,11 @@
 //!   directly — every node caches its subtree's [`Aggregate`] as one value, so bundling the two
 //!   halves into one walk is a genuine implementation of Def. 3.5, not just an API convenience.
 //! - **Def. 3.4** defines the *lifting function* `lift: U → M` from an element to the summary
-//!   monoid `M`. [`lift`] is that function, and [`Fingerprint`] is that `M`.
+//!   monoid `M`. [`lift`] is that function, and [`Fingerprint`] is that `M`. Its element bound is
+//!   [`Serialize`](serde::Serialize), not [`Hash`](std::hash::Hash): the bytes come from this
+//!   crate's own [canonical encoding](encoding), which is what makes a fingerprint a stable wire
+//!   token across Rust versions, platforms and endianness — see that module for why pinning BLAKE3
+//!   alone was not enough.
 //! - **Thm. 5.2** gives the complexity bounds an aggregate-augmented B+-tree realization achieves:
 //!   `Rank`/`Select` in `O(h)`, `Aggregate` in `O(Bh) = O(h)` under bounded page size,
 //!   `Enumerate` in `O(h + k)`, `Insert`/`Delete` in `O(h)` (`h` = tree height, `B`/page size
@@ -134,13 +138,14 @@
 #![forbid(unsafe_code)]
 
 pub mod aggregate;
+pub mod encoding;
 pub mod fingerprint;
 pub mod fingerprint_tree_map;
 pub mod fingerprint_tree_map_iter;
 mod rsos_trait;
 
 pub use aggregate::Aggregate;
-pub use fingerprint::{lift, Fingerprint};
+pub use fingerprint::{digest, lift, Fingerprint};
 pub use fingerprint_tree_map::FingerprintTreeMap;
 pub use fingerprint_tree_map_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use rsos_trait::Rsos;

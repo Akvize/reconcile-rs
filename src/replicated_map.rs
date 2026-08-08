@@ -197,7 +197,7 @@ where
     }
 }
 
-impl<K: Key, V: Value> ReplicatedMap<K, V> {
+impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Create a new `ReplicatedMap`, binding the gossip UDP socket and setting up tombstone tracking.
     ///
     /// # Errors
@@ -877,7 +877,7 @@ impl<K: Key, V: Value> ReplicatedMap<K, V> {
 // `get_mut` shares the same `V: Value` bound as the rest of the store: an in-place edit is
 // re-stamped and broadcast (see below), and that broadcast serializes `V` through the engine's
 // `Value`-bounded path, so the bound set matches `insert`/`remove` exactly.
-impl<K: Key, V: Value> ReplicatedMap<K, V> {
+impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Mutate the value for `k` in place, then propagate the edit like [`insert`](ReplicatedMap::insert).
     ///
     /// The callback receives `Some(&mut V)` when the key is live, or `None` when it is absent or

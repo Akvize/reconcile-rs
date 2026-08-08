@@ -24,12 +24,13 @@
 //! projection tree is `FingerprintTreeMap<K, State<V>>` and a read replica stores
 //! `FingerprintTreeMap<K, State<V>>` directly.
 //!
-//! # Invariant 8 — the two hashes must stay distinct
+//! # Invariant 8 — the two summaries must stay distinct
 //!
-//! [`Entry`]'s derived [`Hash`] includes `stamp` (it is a plain struct field), which is exactly
-//! what feeds `version_hash` for the causal-stability tombstone acknowledgments
-//! (`replica.rs`). [`State`]'s derived `Hash` has no `Timestamp` field at all, so it
-//! hashes the value alone. This is what lets a dated store and a dateless `ReadReplicaMap` compute
+//! The distinction is **structural**, so every content summary derived field-by-field inherits it:
+//! [`Entry`] has a `stamp` field, [`State`] has no [`Timestamp`](crate::clock::Timestamp) field at
+//! all. That covers the canonical serde encoding `rsos` fingerprints elements through (and which
+//! also feeds `version_hash`, the causal-stability tombstone acknowledgment token in
+//! `replica.rs`), and equally the derived [`Hash`]. This is what lets a dated store and a dateless `ReadReplicaMap` compute
 //! *identical* per-element fingerprints for the same logical value regardless of when (or on which
 //! node) it was last written — guarded by
 //! `read_replica_map.rs::value_fingerprint_is_timestamp_independent` and by the test below.
@@ -40,8 +41,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Isomorphic to `Option<V>` (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), but a named type reads
 /// better at the call sites that matter here (an [`Entry`]'s projection, and the value a
-/// `ReadReplicaMap` stores) and its derived [`Hash`] is value-only *by construction* — no
-/// [`Timestamp`](crate::clock::Timestamp) field exists to accidentally include.
+/// `ReadReplicaMap` stores) and its content summary is value-only *by construction* — no
+/// [`Timestamp`](crate::clock::Timestamp) field exists to accidentally include, in the serde
+/// encoding fingerprints are computed from or in the derived [`Hash`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum State<V> {
     /// A live value.
@@ -150,8 +152,8 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
     /// Project this dated entry to its timestamp-less [`State<V>`] form.
     ///
     /// This is what a dated store's value-only *projection* tree stores, and what a dateless
-    /// `ReadReplicaMap` converges on. See invariant 8 in `ARCHITECTURE.md` §5: the projection's
-    /// `Hash` deliberately excludes `stamp`.
+    /// `ReadReplicaMap` converges on. See invariant 8 in `ARCHITECTURE.md` §5: the projection
+    /// deliberately has no `stamp` field, so no content summary of it can include one.
     pub fn project(&self) -> State<V> {
         self.state.clone()
     }
@@ -224,9 +226,14 @@ mod tests {
         assert_eq!(dead.project(), State::Tombstone);
     }
 
-    /// Invariant 8 (`ARCHITECTURE.md` §5): the dated `Entry` hashes **with** its `stamp`, its
-    /// projected `State<V>` hashes the value **alone** — so two entries that differ only by
+    /// Invariant 8 (`ARCHITECTURE.md` §5): the dated `Entry` summarizes **with** its `stamp`, its
+    /// projected `State<V>` summarizes the value **alone** — so two entries that differ only by
     /// timestamp project to fingerprints that agree, while the dated entries themselves do not.
+    ///
+    /// Checked here through the derived `Hash`, which is a stand-in for the field-by-field walk the
+    /// real range fingerprint does: this crate is infrastructure-free and knows nothing of `rsos`.
+    /// The same invariant is asserted on the actual fingerprint in
+    /// `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
     #[test]
     fn projection_hash_is_timestamp_independent_but_entry_hash_is_not() {
         let early = Entry::present(Timestamp::new(1, 0, 0), "same-value");

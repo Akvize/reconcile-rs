@@ -147,7 +147,7 @@ pub mod testing {
         store: &crate::ReplicatedMap<K, V>,
     ) -> std::collections::HashSet<std::net::IpAddr>
     where
-        K: crate::bounds::Key,
+        K: crate::bounds::Key + std::hash::Hash,
         V: crate::bounds::Value,
     {
         store.members_snapshot()
@@ -159,7 +159,7 @@ pub mod testing {
     /// gossip-peer record is created for a capped-out sender.
     pub fn peers_map_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
-        K: crate::bounds::Key,
+        K: crate::bounds::Key + std::hash::Hash,
         V: crate::bounds::Value,
     {
         store.peers_map_len()
@@ -171,7 +171,7 @@ pub mod testing {
     /// replay-filter entry is created for a capped-out sender.
     pub fn replay_filter_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
-        K: crate::bounds::Key,
+        K: crate::bounds::Key + std::hash::Hash,
         V: crate::bounds::Value,
     {
         store.replay_filter_len()
@@ -183,7 +183,7 @@ pub mod testing {
     /// non-tombstone keys are dropped without growing bookkeeping.
     pub fn tombstone_acks_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
-        K: crate::bounds::Key,
+        K: crate::bounds::Key + std::hash::Hash,
         V: crate::bounds::Value,
     {
         store.tombstone_acks_len()
@@ -195,7 +195,7 @@ pub mod testing {
     /// budget is respected and slots are released after completion.
     pub fn bulk_dumps_in_flight_count<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
-        K: crate::bounds::Key,
+        K: crate::bounds::Key + std::hash::Hash,
         V: crate::bounds::Value,
     {
         store.bulk_dumps_in_flight_count()
