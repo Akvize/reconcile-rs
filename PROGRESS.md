@@ -159,8 +159,8 @@ into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a 
 Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
 - ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
-  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `FingerprintTreeMap`
-  (`hash` / `insertion_position` / `key_at` `pub(crate)`, `len` / `is_empty` public) and
+  `HashRangeQueryable` / `Diffable` removed; range querying is now inherent on `FingerprintTreeMap`
+  (today `aggregate` / `rank` / `select`, all public since the `rsos` extraction; `len` / `is_empty` public) and
   `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&FingerprintTreeMap`,
   with `RangeAggregate` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
   preserved byte-for-byte.
