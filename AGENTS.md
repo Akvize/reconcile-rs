@@ -5,7 +5,7 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTree` + range fingerprint) is a
+`reconcile-rs` is a Cargo workspace: the `rsos` crate (`FingerprintTreeMap` + range fingerprint) is a
 standalone leaf, and the `reconcile` package is an embedded, in-memory, eventually-consistent
 key-value store whose replicas reconcile over UDP (anti-entropy gossip over `rsos`, LWW over a
 Hybrid Logical Clock). Edition 2021, no MSRV pin.
@@ -83,9 +83,9 @@ feature interactions hide bugs.
 
 - New behavior needs a test: `tests/*.rs` integration tests for public-API-crossing changes,
   `#[cfg(test)]` unit tests for internal invariants.
-- `tests/proptest_hrtree.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for the data
+- `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz oracles for the data
   structure and wire format — extend these over narrow example tests when touching parsing or
-  `FingerprintTree` invariants.
+  `FingerprintTreeMap` invariants.
 - `cargo llvm-cov` coverage uploads to Codecov, but `codecov.yml` marks both checks
   `informational: true` — **coverage regressions do not block merge today** (a known gap vs. the
   gating bar the rest of this doc holds to, §10). Don't rely on a green Codecov comment as proof.
@@ -106,7 +106,7 @@ feature interactions hide bugs.
 
 ## 9. Project structure and boundaries
 
-**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/hrtree.rs`, `rsos/src/hrtree_iter.rs`,
+**9.1 Modules** (full table: `ARCHITECTURE.md` §2.1). `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`,
 `rsos/src/fingerprint.rs` moved to the standalone `rsos` crate (migration step 6 Step A) — a leaf
 with zero workspace/infrastructure dependency, enforced by its own minimal `Cargo.toml`. Within the
 `reconcile` package, **domain**, infrastructure-free: `entry.rs`, `bounds.rs`, `proto.rs`.

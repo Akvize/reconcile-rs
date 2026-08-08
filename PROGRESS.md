@@ -20,7 +20,7 @@
 
 ## 1. Headline
 
-The **algorithmic core** (FingerprintTree + range fingerprint + RBSR diff) is correct and SOTA-aligned. The
+The **algorithmic core** (FingerprintTreeMap + range fingerprint + RBSR diff) is correct and SOTA-aligned. The
 **critical engineering and distributed-design defects** found by the original review have since been
 fixed: the crate now has a collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution,
 causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication and
@@ -52,11 +52,11 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F4 | Critical | tombstone resurrection (60 s wall-clock GC) | ✅ | #109 — GC gated on causal stability |
 | F5 | High | physical-clock LWW (lossy + non-commutative) | ✅ | #110 — Hybrid Logical Clock + total order |
 | F6 | High | 64-bit XOR fingerprint (weak, craftable) | ✅ | #111 — 256-bit additive BLAKE3 |
-| F7 | High | crafted `HashSegment` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
+| F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 — wire fingerprint is BLAKE3 (`version_hash` still fixed-key `DefaultHasher`) |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
 | F10 | High | IP-scan discovery, O(N²) membership | ◐ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — `Discovery` port + `DnsDiscovery` (k8s headless-Service DNS, no IP-scan) lands a cloud-native discovery path; bounded-fan-out membership (SWIM/HyParView) still open |
-| F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_hrtree.rs`, `tests/fuzz_packets.rs` |
+| F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_fingerprint_tree_map.rs`, `tests/fuzz_packets.rs` |
 | F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
 | F13 | Medium | panic-only API (no `Result`) | ✅ | [#148](https://github.com/Akvize/reconcile-rs/issues/148) — fallible `new` constructors (`io::Result`, `AddrInUse` surfaces); no network send can panic the run loops (`f1423ce`, this branch) |
 | F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | [#149](https://github.com/Akvize/reconcile-rs/issues/149) — `pre_insert` runs outside the write lock on both paths, with a regression test (`f4b5028`) |
@@ -74,7 +74,7 @@ all but one High resolved or mitigated.
 ## 3. Maturity checklist
 
 - [x] CI green under `-D warnings` (clippy `mismatched_lifetime_syntaxes` fixed)
-- [x] Property tests for convergence (`proptest_hrtree.rs`)
+- [x] Property tests for convergence (`proptest_fingerprint_tree_map.rs`)
 - [x] Malformed-packet fuzz harness (`fuzz_packets.rs`)
 - [x] Security model documented (README "Security model")
 - [x] Pluggable persistence documented (README "Persistence")
@@ -159,10 +159,10 @@ into `State<V>` and is guarded by invariant 8 below; the `Codec` port carries a 
 Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
 - ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
-  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `FingerprintTree`
+  `HashRangeQueryable` / `Diffable` removed; range-hash querying is now inherent on `FingerprintTreeMap`
   (`hash` / `insertion_position` / `key_at` `pub(crate)`, `len` / `is_empty` public) and
-  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&FingerprintTree`,
-  with `HashSegment` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
+  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&FingerprintTreeMap`,
+  with `RangeAggregate` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
   preserved byte-for-byte.
 - ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142), PR #158): `pub trait Clock`
   (`now`/`observe`, returning the concrete `Timestamp`) is the domain's time seam; `HlcClock` is the

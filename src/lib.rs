@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This crate provides a key-data map structure [`FingerprintTree`] (from the [`rsos`] crate) that
+//! This crate provides a key-data map structure [`FingerprintTreeMap`] (from the [`rsos`] crate) that
 //! can be used together with the reconciliation [`ReconcileStore`]. Different instances can talk
 //! together over UDP to efficiently reconcile their differences.
 
@@ -96,15 +96,15 @@ pub use clock::{Clock, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use entry::{Entry, State};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
-// `FingerprintTree`, `Fingerprint`, the `Rsos<K, V>` trait, and its
+// `FingerprintTreeMap`, `Fingerprint`, the `Rsos<K, V>` trait, and its
 // iterator types now live in the standalone `rsos` crate (see `rsos/src/lib.rs`); re-exported here
 // so existing consumers of `reconcile::*` see no change in what resolves at the crate root.
 // `IterMut`/`ValuesMut` are intentionally not re-exported (and are themselves `#[cfg(test)]`-only
-// in `rsos`): they hand out `&mut V` without updating per-element hashes or the cumulative
-// `tree_hash`, so exposing them publicly would silently corrupt fingerprints. The supported
-// mutation path is `FingerprintTree::with_mut`. A correct iterator-based design is future work.
+// in `rsos`): they hand out `&mut V` without updating per-element fingerprints or the
+// node's cached subtree aggregate, so exposing them publicly would silently corrupt fingerprints. The supported
+// mutation path is `FingerprintTreeMap::with_mut`. A correct iterator-based design is future work.
 pub use rsos::{
-    Aggregate, Fingerprint, FingerprintTree, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos,
+    Aggregate, Fingerprint, FingerprintTreeMap, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos,
     Values,
 };
 
@@ -113,7 +113,7 @@ pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persist
 pub use reconcile_store::ReconcileStore;
 
 /// Internal seam for the external integration-test oracles (`tests/diff.rs`,
-/// `tests/proptest_hrtree.rs`).
+/// `tests/proptest_fingerprint_tree_map.rs`).
 ///
 /// The reconciliation mechanism modules are `pub(crate)` (ARCHITECTURE.md §3.7), but the
 /// integration tests need to reach a handful of their internals to drive the diff protocol. This
@@ -124,16 +124,19 @@ pub use reconcile_store::ReconcileStore;
 #[doc(hidden)]
 #[cfg(any(test, feature = "internal-testing"))]
 pub mod testing {
-    pub use rsos::hash;
+    pub use rsos::lift;
 
-    pub use crate::proto::{diff_round, start_diff, DiffRange, HashSegment};
+    pub use crate::proto::{diff_round, start_diff, DiffRange, RangeAggregate};
 
-    /// Range fingerprint of a [`FingerprintTree`](crate::FingerprintTree), exposed for the
-    /// integration-test oracles: the `Σ(S)` half of `FingerprintTree::aggregate`, which is `pub`
+    /// Range fingerprint of a [`FingerprintTreeMap`](crate::FingerprintTreeMap), exposed for the
+    /// integration-test oracles: the `Σ(S)` half of `FingerprintTreeMap::aggregate`, which is `pub`
     /// on the `rsos` crate (it had to be, to stay reachable from `proto.rs`'s new home across the
     /// crate boundary). This wrapper is kept only for source compatibility with the existing test
     /// call sites, which care about the fingerprint alone.
-    pub fn range_hash<K, V, R>(tree: &crate::FingerprintTree<K, V>, range: &R) -> crate::Fingerprint
+    pub fn range_fingerprint<K, V, R>(
+        tree: &crate::FingerprintTreeMap<K, V>,
+        range: &R,
+    ) -> crate::Fingerprint
     where
         K: std::hash::Hash + Ord,
         V: std::hash::Hash,

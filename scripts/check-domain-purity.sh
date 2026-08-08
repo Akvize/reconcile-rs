@@ -18,7 +18,8 @@ DOMAIN_FILES=(
     src/bounds.rs
     src/proto.rs
 )
-# `src/hrtree.rs`, `src/hrtree_iter.rs`, and `src/fingerprint.rs` moved to the standalone `rsos`
+# `src/hrtree.rs`, `src/hrtree_iter.rs` (now `rsos/src/fingerprint_tree_map{,_iter}.rs`) and
+# `src/fingerprint.rs` moved to the standalone `rsos`
 # crate (workspace split step A) — dropped from this list the same way `reconcilable.rs` was
 # dropped when `entry.rs` took its place. `rsos` has its own, stronger invariant (zero dependency
 # on anything reconciliation-domain-specific, enforced today by its Cargo.toml's dependency list

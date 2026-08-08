@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Module `hrtree_iter` provides iteration utilities for `FingerprintTree<K, V>`,
+//! Module `fingerprint_tree_map_iter` provides iteration utilities for `FingerprintTreeMap<K, V>`,
 //! including:
 //! - `IntoIter`: immutable in-order traversal consuming the tree and returning `(K, V)`;
 //! - `Iter`: immutable in-order traversal returning `(&K, &V)`;
@@ -25,9 +25,9 @@
 //!
 //! `IterMut` and `ValuesMut` are **`#[cfg(test)]` only** (compiled out of non-test builds, and not
 //! part of the public API) because they hand out `&mut V` without updating the per-element hash
-//! (`node.hashes[i]`) or the cumulative `tree_hash`, leaving stale fingerprints that break
-//! `check_invariants`, `hash(range)`, and the reconciliation protocol. The supported mutation path
-//! is [`FingerprintTree::with_mut`], which recomputes the element hash and propagates the signed delta to
+//! (`node.fingerprints[i]`) or the node's cached subtree aggregate, leaving stale summaries that break
+//! `check_invariants`, `aggregate(range)`, and the reconciliation protocol. The supported mutation path
+//! is [`FingerprintTreeMap::with_mut`], which recomputes the element hash and propagates the signed delta to
 //! every ancestor. A correct iterator-based mutation API is future work.
 //!
 //! # Future Work: Lazy Iterators
@@ -38,10 +38,10 @@
 
 use std::hash::Hash;
 
-use crate::hrtree::{FingerprintTree, Node};
+use crate::fingerprint_tree_map::{FingerprintTreeMap, Node};
 
-impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for FingerprintTree<K, V> {
-    /// Builds an [`FingerprintTree`] from an iterator of key-value pairs.
+impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for FingerprintTreeMap<K, V> {
+    /// Builds an [`FingerprintTreeMap`] from an iterator of key-value pairs.
     ///
     /// The pairs are collected, sorted by key, and then inserted one by one,
     /// ensuring the resulting tree is balanced according to the input order.
@@ -49,7 +49,7 @@ impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for FingerprintTree<K, V> {
     where
         T: IntoIterator<Item = (K, V)>,
     {
-        let mut tree = FingerprintTree::new();
+        let mut tree = FingerprintTreeMap::new();
         let mut items: Vec<_> = iter.into_iter().collect();
         items.sort_by(|a, b| a.0.cmp(&b.0));
         for (k, v) in items {
@@ -64,7 +64,7 @@ enum IntoIterLayer<K, V> {
     Element(K, V),
 }
 
-/// An in-order immutable iterator over a `FingerprintTree`.
+/// An in-order immutable iterator over a `FingerprintTreeMap`.
 ///
 /// Consumes the tree and yields keys and values in ascending key order.
 pub struct IntoIter<K, V> {
@@ -101,16 +101,16 @@ impl<K, V> Iterator for IntoIter<K, V> {
     }
 }
 
-impl<K, V> IntoIterator for FingerprintTree<K, V> {
+impl<K, V> IntoIterator for FingerprintTreeMap<K, V> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
-    /// Consumes the `FingerprintTree` and returns `(K, V)` pairs in-order.
+    /// Consumes the `FingerprintTreeMap` and returns `(K, V)` pairs in-order.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, "a"), (2, "b")]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.into_iter().collect();
     /// assert_eq!(pairs, vec![(1, "a"), (2, "b")]);
     /// ```
@@ -121,7 +121,7 @@ impl<K, V> IntoIterator for FingerprintTree<K, V> {
     }
 }
 
-/// An in-order immutable iterator over a `FingerprintTree`.
+/// An in-order immutable iterator over a `FingerprintTreeMap`.
 ///
 /// Yields references to keys and values in ascending key order.
 pub struct Iter<'a, K, V> {
@@ -152,7 +152,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> IntoIterator for &'a FingerprintTree<K, V> {
+impl<'a, K, V> IntoIterator for &'a FingerprintTreeMap<K, V> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
     fn into_iter(self) -> Self::IntoIter {
@@ -162,14 +162,14 @@ impl<'a, K, V> IntoIterator for &'a FingerprintTree<K, V> {
     }
 }
 
-impl<K, V> FingerprintTree<K, V> {
+impl<K, V> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `(&K, &V)` pairs.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, "a"), (2, "b")]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.iter().collect();
     /// assert_eq!(pairs, vec![(&1, &"a"), (&2, &"b")]);
     /// ```
@@ -179,9 +179,9 @@ impl<K, V> FingerprintTree<K, V> {
 }
 
 // The mutable iterator infrastructure below is gated to `#[cfg(test)]` because `IterMut` and
-// `ValuesMut` do not update per-element hashes or the cumulative `tree_hash` on mutation —
-// leaving stale fingerprints that break `check_invariants`, `hash(range)`, and the
-// reconciliation protocol. The supported public mutation path is `FingerprintTree::with_mut`.
+// `ValuesMut` do not update per-element fingerprints or the cached subtree aggregate on mutation —
+// leaving stale fingerprints that break `check_invariants`, `aggregate(range)`, and the
+// reconciliation protocol. The supported public mutation path is `FingerprintTreeMap::with_mut`.
 // These types are retained test-only so that the traversal logic and the read-only path remain
 // exercised; a correct iterator-based mutation design is future work.
 
@@ -196,7 +196,7 @@ struct Frame<'a, K, V> {
     children: Option<std::slice::IterMut<'a, Box<Node<K, V>>>>,
 }
 
-/// An in-order mutable iterator over a `FingerprintTree`.
+/// An in-order mutable iterator over a `FingerprintTreeMap`.
 ///
 /// Yields each key and a mutable reference to its associated value in ascending key order.
 ///
@@ -204,7 +204,7 @@ struct Frame<'a, K, V> {
 ///
 /// This iterator hands out `&mut V` directly; it does **not** recompute the per-element hash or
 /// propagate the delta to ancestor nodes. Callers that mutate through it will leave stale
-/// fingerprints. Use [`FingerprintTree::with_mut`] for hash-safe mutation. This type is `#[cfg(test)]`
+/// fingerprints. Use [`FingerprintTreeMap::with_mut`] for hash-safe mutation. This type is `#[cfg(test)]`
 /// until a correct design is implemented.
 #[cfg(test)]
 struct IterMut<'a, K, V> {
@@ -273,13 +273,13 @@ impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
+impl<'a, K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `(&K, &mut V)` pairs.
     ///
     /// # Warning — fingerprints not updated
     ///
-    /// Values mutated through this iterator leave stale per-element hashes and cumulative
-    /// `tree_hash` values. Use [`FingerprintTree::with_mut`] for hash-safe mutation.
+    /// Values mutated through this iterator leave stale per-element fingerprints and a stale
+    /// cached subtree aggregate. Use [`FingerprintTreeMap::with_mut`] for summary-safe mutation.
     /// This method is `#[cfg(test)]` until a correct design is implemented.
     fn iter_mut(&'a mut self) -> IterMut<'a, K, V> {
         let mut stack = Vec::new();
@@ -288,7 +288,7 @@ impl<'a, K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
     }
 }
 
-/// An in-order mutable iterator over a `FingerprintTree`.
+/// An in-order mutable iterator over a `FingerprintTreeMap`.
 ///
 /// Consumes the tree and yields its values in ascending key order.
 pub struct IntoValues<K, V> {
@@ -302,14 +302,14 @@ impl<K, V> Iterator for IntoValues<K, V> {
     }
 }
 
-impl<K, V> FingerprintTree<K, V> {
+impl<K, V> FingerprintTreeMap<K, V> {
     /// Consumes the tree and returns an in-order iterator over `V` values.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, "a"), (2, "b")]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.into_values().collect();
     /// assert_eq!(pairs, vec![("a"), ("b")]);
     /// ```
@@ -324,7 +324,7 @@ impl<K, V> FingerprintTree<K, V> {
 ///
 /// Yields references to values in ascending key order.
 ///
-/// Does not consume the `FingerprintTree`.
+/// Does not consume the `FingerprintTreeMap`.
 pub struct Values<'a, K, V> {
     inner: Iter<'a, K, V>,
 }
@@ -336,14 +336,14 @@ impl<'a, K, V> Iterator for Values<'a, K, V> {
     }
 }
 
-impl<K, V> FingerprintTree<K, V> {
+impl<K, V> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `&V` values.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, "a"), (2, "b")]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, "a"), (2, "b")]);
     /// let pairs: Vec<_> = tree.values().collect();
     /// assert_eq!(pairs, vec![(&"a"), (&"b")]);
     /// ```
@@ -358,8 +358,8 @@ impl<K, V> FingerprintTree<K, V> {
 ///
 /// # Warning — fingerprints not updated
 ///
-/// Values mutated through this iterator leave stale per-element hashes and cumulative
-/// `tree_hash` values. Use [`FingerprintTree::with_mut`] for hash-safe mutation.
+/// Values mutated through this iterator leave stale per-element fingerprints and a stale
+/// cached subtree aggregate. Use [`FingerprintTreeMap::with_mut`] for summary-safe mutation.
 /// This type is `#[cfg(test)]` until a correct design is implemented.
 #[cfg(test)]
 struct ValuesMut<'a, K, V> {
@@ -367,13 +367,13 @@ struct ValuesMut<'a, K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
+impl<'a, K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `&mut V` values.
     ///
     /// # Warning — fingerprints not updated
     ///
-    /// Values mutated through this iterator leave stale per-element hashes and cumulative
-    /// `tree_hash` values. Use [`FingerprintTree::with_mut`] for hash-safe mutation.
+    /// Values mutated through this iterator leave stale per-element fingerprints and a stale
+    /// cached subtree aggregate. Use [`FingerprintTreeMap::with_mut`] for summary-safe mutation.
     /// This method is `#[cfg(test)]` until a correct design is implemented.
     fn values_mut(&'a mut self) -> ValuesMut<'a, K, V> {
         ValuesMut {
@@ -405,14 +405,14 @@ impl<K, V> Iterator for IntoKeys<K, V> {
     }
 }
 
-impl<K, V> FingerprintTree<K, V> {
-    /// Consumes the `FingerprintTree` and returns `K` keys in-order.
+impl<K, V> FingerprintTreeMap<K, V> {
+    /// Consumes the `FingerprintTreeMap` and returns `K` keys in-order.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, 'a'), (2, 'b')]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, 'a'), (2, 'b')]);
     /// let ks: Vec<_> = tree.clone().into_keys().collect();
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
@@ -425,7 +425,7 @@ impl<K, V> FingerprintTree<K, V> {
 
 /// An iterator over shared references to keys in ascending key order.
 ///
-/// Does not consume the `FingerprintTree`.
+/// Does not consume the `FingerprintTreeMap`.
 pub struct Keys<'a, K, V> {
     inner: Iter<'a, K, V>,
 }
@@ -437,14 +437,14 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
     }
 }
 
-impl<K, V> FingerprintTree<K, V> {
+impl<K, V> FingerprintTreeMap<K, V> {
     /// Returns an iterator over references to keys in ascending order.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use rsos::FingerprintTree;
-    /// let tree = FingerprintTree::from_iter(vec![(1, 'a'), (2, 'b')]);
+    /// use rsos::FingerprintTreeMap;
+    /// let tree = FingerprintTreeMap::from_iter(vec![(1, 'a'), (2, 'b')]);
     /// let ks: Vec<_> = tree.keys().copied().collect();
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
@@ -457,7 +457,7 @@ impl<K, V> FingerprintTree<K, V> {
 mod tests {
     use rand::{Rng, SeedableRng};
 
-    use super::FingerprintTree;
+    use super::FingerprintTreeMap;
     use once_cell::sync::Lazy;
 
     const TREE_SIZE: usize = 1000;
@@ -469,8 +469,8 @@ mod tests {
             .collect()
     });
 
-    fn make_tree() -> FingerprintTree<u64, u64> {
-        FingerprintTree::from_iter(BASE_ITEMS.clone())
+    fn make_tree() -> FingerprintTreeMap<u64, u64> {
+        FingerprintTreeMap::from_iter(BASE_ITEMS.clone())
     }
 
     #[test]
@@ -492,7 +492,7 @@ mod tests {
     }
 
     // `iter_mut` / `values_mut` are `#[cfg(test)]` (test-only) because they do not update
-    // per-element hashes or `tree_hash` on mutation. These tests verify read-only traversal order
+    // per-element fingerprints or the cached subtree aggregate on mutation. These tests verify read-only traversal order
     // only; they do NOT call `check_invariants()` after mutation because hash corruption is the
     // documented limitation. The supported mutation path is `with_mut` — see
     // `test_with_mut_maintains_invariants`.
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_all_iterators_empty() {
-        let empty: FingerprintTree<i32, i32> = FingerprintTree::new();
+        let empty: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
         // immutable
         assert_eq!(empty.iter().next(), None);
         // consuming
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_all_iterators_single_leaf() {
-        let mut single = FingerprintTree::new();
+        let mut single = FingerprintTreeMap::new();
         single.insert(42, 99);
         single.check_invariants();
         // immutable

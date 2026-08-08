@@ -9,28 +9,33 @@
 //! The [`Rsos`] trait: the formal RSOS (Range-Summarizable Order-Statistics Store) contract,
 //! literally Def. 3.9 of E. G. Amparore, *Range-Based Set Reconciliation via Range-Summarizable
 //! Order-Statistics Stores* (arXiv:2603.19820). See the crate root docs for the full citation and
-//! [`FingerprintTree`](crate::FingerprintTree) for the one realization this crate ships.
+//! [`FingerprintTreeMap`](crate::FingerprintTreeMap) for the one realization this crate ships.
 
 use std::hash::Hash;
 use std::ops::RangeBounds;
 
 use crate::aggregate::Aggregate;
-use crate::hrtree::{FingerprintTree, ItemRange};
+use crate::fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
 
 /// The RSOS interface (Def. 3.9): the seven operations a *replica state* `X ⊆ U` must support to
 /// drive range-based set reconciliation — decoupled from any one realization. The paper itself
 /// treats RSOS as an abstraction with multiple possible realizations (an in-memory augmented tree
-/// and AELMDB, a persistent B-tree, are both realizations in the paper); [`FingerprintTree`] is
+/// and AELMDB, a persistent B-tree, are both realizations in the paper); [`FingerprintTreeMap`] is
 /// this crate's one realization, achieving the complexity bounds of Thm. 5.2.
 ///
 /// Method names are the paper's own terms (`size`, `aggregate`, `rank`, `select`, `enumerate`,
 /// `insert`, `delete`), not renamed to Rust idiom, so the mapping from spec to code stays legible
-/// side by side with the paper. `FingerprintTree` additionally keeps its pre-existing
+/// side by side with the paper. `FingerprintTreeMap` additionally keeps its pre-existing
 /// Rust-idiomatic inherent API (`len`, `get_range`, `is_empty`, ...) for ergonomic direct use —
 /// this trait is one more way to call it, not the only way.
 ///
 /// A few signatures adapt the paper's math to idiomatic Rust rather than a literal transliteration
 /// (documented per-method below); the *operation* semantics match Def. 3.9 exactly.
+///
+/// The two parameters are not a widening of the paper's single element space: **`X` is the set of
+/// keys**, so `K` is the paper's `U`, and `V` is the payload the Def. 3.4 lift consults. A map
+/// assigns exactly one value per key, which is exactly what makes `lift` total on `X`. See the
+/// crate root docs for the full argument.
 pub trait Rsos<K, V> {
     /// `size()` → `|X|`: the number of elements currently in the store.
     fn size(&self) -> usize;
@@ -47,7 +52,7 @@ pub trait Rsos<K, V> {
     fn rank(&self, z: &K) -> usize;
 
     /// `Select(r)` → `Select_X(r)`: the key at in-order position `r`. Panics if `r` is out of
-    /// bounds (matching `FingerprintTree::key_at`'s existing panic-on-out-of-bounds contract,
+    /// bounds (matching `FingerprintTreeMap::key_at`'s existing panic-on-out-of-bounds contract,
     /// rather than adding an `Option`/`Result` the paper's own signature doesn't have).
     fn select(&self, r: usize) -> &K;
 
@@ -60,22 +65,22 @@ pub trait Rsos<K, V> {
         K: Ord;
 
     /// `Insert(k, v)`: inserts (or overwrites) `k ↦ v`. Returns the previous value, if any,
-    /// matching `FingerprintTree::insert`'s existing return (idiomatic Rust map-insert semantics,
+    /// matching `FingerprintTreeMap::insert`'s existing return (idiomatic Rust map-insert semantics,
     /// which the paper's own `Insert` does not specify a return for).
     fn insert(&mut self, key: K, value: V) -> Option<V>;
 
     /// `Delete(k)`: removes `k` if present. Returns the removed value, if any, matching
-    /// `FingerprintTree::remove`'s existing return — same rationale as `insert`.
+    /// `FingerprintTreeMap::remove`'s existing return — same rationale as `insert`.
     fn delete(&mut self, key: &K) -> Option<V>;
 }
 
-impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTree<K, V> {
+impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTreeMap<K, V> {
     fn size(&self) -> usize {
         self.len()
     }
 
     fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
-        FingerprintTree::aggregate(self, range)
+        FingerprintTreeMap::aggregate(self, range)
     }
 
     fn rank(&self, z: &K) -> usize {
@@ -94,7 +99,7 @@ impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTree<K, V> {
     }
 
     fn insert(&mut self, key: K, value: V) -> Option<V> {
-        FingerprintTree::insert(self, key, value)
+        FingerprintTreeMap::insert(self, key, value)
     }
 
     fn delete(&mut self, key: &K) -> Option<V> {
