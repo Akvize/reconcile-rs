@@ -11,8 +11,9 @@
 >   architecture migration (one sub-issue per phase).
 
 - **Last updated:** 2026-08-08
-- **Baseline:** `claude/workspace-split-step-c` + Step D + the `Mirror` `Transport` pass (migration
-  steps 6 A–D and 7 landed; pending merge to main). Correctness baseline unchanged since the
+- **Baseline:** `claude/workspace-split-step-c` + Step D + the `ReadReplicaMap` `Transport` pass and
+  the `Mirror`→`ReadReplicaMap` rename (migration steps 6 A–D, 7 and 8 landed; pending merge to
+  main). Correctness baseline unchanged since the
   2026-06 sprint (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is
   behaviour-preserving.
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
@@ -27,7 +28,7 @@ The **algorithmic core** (FingerprintTreeMap + range fingerprint + RBSR diff) is
 fixed: the crate now has a collision-resistant 256-bit fingerprint, HLC-keyed conflict resolution,
 causal-stability tombstone GC, malformed-packet hardening, optional per-datagram authentication and
 payload encryption, pluggable persistence, runtime observability, and a lightweight dateless
-read-only mirror. A 2026-06 adversarial audit filed implementation-level correctness bugs as
+read replica. A 2026-06 adversarial audit filed implementation-level correctness bugs as
 [#195](https://github.com/Akvize/reconcile-rs/issues/195)–[#205](https://github.com/Akvize/reconcile-rs/issues/205)
 (tracking [#206](https://github.com/Akvize/reconcile-rs/issues/206)); the Phase-0 correctness
 findings ([#195](https://github.com/Akvize/reconcile-rs/issues/195),
@@ -113,7 +114,7 @@ all but one High resolved or mitigated.
 - ◯ Bound the `peers` map; cap messages/segments per datagram; bincode limit
   (F18 — [#150](https://github.com/Akvize/reconcile-rs/issues/150), F19 — [#151](https://github.com/Akvize/reconcile-rs/issues/151)).
 - ◯ Larger-than-datagram payloads — [#2](https://github.com/Akvize/reconcile-rs/issues/2).
-- ✅ Lightweight dateless read-only mirror (`Mirror`), #109-safe — PR #133 ([#128](https://github.com/Akvize/reconcile-rs/issues/128)).
+- ✅ Lightweight dateless read replica (`ReadReplicaMap`), #109-safe — PR #133 ([#128](https://github.com/Akvize/reconcile-rs/issues/128)).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — PR #130 ([#94](https://github.com/Akvize/reconcile-rs/issues/94)).
 
 ### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
@@ -147,9 +148,9 @@ and scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 Tracked in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and issue
 [#138](https://github.com/Akvize/reconcile-rs/issues/138) (hexagonal ports & adapters). Steps:
 bound bundles & encapsulation → dissolve diff traits → `Clock` port → `Entry`/`State` type →
-`Transport`/`Codec` ports → workspace split → `Mirror` onto the `Transport` port (all done). None of
-these change runtime behaviour except the `Entry`/`State` step (wire/on-disk format), and all
-preserve the invariants below.
+`Transport`/`Codec` ports → workspace split → `ReadReplicaMap` onto the `Transport` port →
+`Mirror`→`ReadReplicaMap` rename (all done). None of these change runtime behaviour except the
+`Entry`/`State` step (wire/on-disk format), and all preserve the invariants below.
 
 Refinements adopted after a `file:line` review of the sequence (see issue
 [#138](https://github.com/Akvize/reconcile-rs/issues/138)): the `Clock` port returns the concrete
@@ -183,10 +184,10 @@ Progress:
   (`is_tombstone`/`value`/`merge`/`project`) and direct `.stamp` field access. `replica.rs`
   and `replicated_map.rs` parameterize the engine over the plain `V` and construct
   `Entry<Timestamp, V>` (map) / `State<V>` (projection) internally; `add_pre_insert`,
-  `Mirror::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
+  `ReadReplicaMap::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
   the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
   — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
-  include — and is guarded by tests in `entry.rs` and `mirror.rs`. **Changes the wire and on-disk
+  include — and is guarded by tests in `entry.rs` and `read_replica_map.rs`. **Changes the wire and on-disk
   formats** (expected; the crate is unpublished, pre-1.0).
 - ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
   dissolved, ARCHITECTURE.md §2.4).
@@ -208,16 +209,26 @@ Progress:
   breakable, since with the dependency undeclared the import would not compile (ARCHITECTURE.md
   §2.2).
 
-- ✅ Step 7 — `Mirror` routed onto the `Transport` port, closing the item carried over from Step 5.
-  `Mirror` holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of an `Arc<UdpSocket>`, receives
-  via `Transport::recv_from` and decodes via `gossip::bincode::decode_stream` under the engine's
-  `MAX_MESSAGES_PER_DATAGRAM` bound, so `src/mirror.rs` imports neither `bincode` nor `tokio::net`.
-  `Mirror::new` is unchanged for real-socket users (it binds a `UdpTransport` internally) and the new
-  public `Mirror::new_with_transport` matches `ReplicatedMap::new_with_transport`. Authentication
-  still runs on raw datagram bytes ahead of any decode (invariant #5 below), and the mirror's
-  read-only / non-member semantics are untouched. Evidence:
-  `tests/mirror.rs::mirror_converges_with_dated_store_over_in_memory_transport` converges a mirror
-  with a dated `ReplicatedMap` over `InMemoryNetwork` with no sockets bound anywhere.
+- ✅ Step 7 — the dateless read replica routed onto the `Transport` port, closing the item carried
+  over from Step 5. It holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of an
+  `Arc<UdpSocket>`, receives via `Transport::recv_from` and decodes via
+  `gossip::bincode::decode_stream` under the engine's `MAX_MESSAGES_PER_DATAGRAM` bound, so
+  `src/read_replica_map.rs` imports neither `bincode` nor `tokio::net`. `ReadReplicaMap::new` is
+  unchanged for real-socket users (it binds a `UdpTransport` internally) and the new public
+  `ReadReplicaMap::new_with_transport` matches `ReplicatedMap::new_with_transport`. Authentication
+  still runs on raw datagram bytes ahead of any decode (invariant #5 below), and the read-only /
+  non-member semantics are untouched. Evidence:
+  `tests/read_replica_map.rs::read_replica_converges_with_dated_store_over_in_memory_transport`
+  converges a read replica with a dated `ReplicatedMap` over `InMemoryNetwork` with no sockets bound
+  anywhere.
+
+- ✅ Step 8 — `Mirror` renamed to `ReadReplicaMap` (`src/mirror.rs` → `src/read_replica_map.rs`,
+  `tests/mirror.rs` → `tests/read_replica_map.rs`), finishing the naming pass begun in Step 6C.
+  `Mirror` was the last public type named after a generic metaphor rather than domain or literature
+  vocabulary; the type is a passive, dateless, read-only replica of a dated `ReplicatedMap` — a
+  *read replica* in the standard database sense — so the name now says so and parallels
+  `ReplicatedMap`. No deprecated alias (pre-1.0, as with `ReconcileEngine`→`Replica` and
+  `ReconcileStore`→`ReplicatedMap`); pure rename, no behaviour, wire-format or on-disk change.
 
 **#138 is closed.** The structural migration was complete after Step 6 — six crates, ports on the
 correct side of each boundary, domain purity enforced by the compiler and by
@@ -240,8 +251,9 @@ Any change must preserve these (they encode the fixes above):
 6. Causal-stability tombstone gate before GC.
 7. `version_hash` determinism.
 8. Value-only projection hash is timestamp-less — the dated cell keeps a timestamp-**inclusive**
-   `Hash` (used by `version_hash`), while its value-only projection (the dateless mirror channel)
-   hashes the value alone, so a dated store and a dateless mirror agree on per-element fingerprints.
+   `Hash` (used by `version_hash`), while its value-only projection (the dateless read-replica
+   channel) hashes the value alone, so a dated store and a dateless read replica agree on per-element
+   fingerprints.
 
 ---
 

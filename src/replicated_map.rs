@@ -510,7 +510,7 @@ impl<K: Key, V: Value> ReplicatedMap<K, V> {
     /// Fingerprint of the **value-only projection** over a range — the timestamp-less counterpart of
     /// [`fingerprint`](Self::fingerprint).
     ///
-    /// A [`Mirror`](crate::mirror::Mirror) that has converged with this
+    /// A [`ReadReplicaMap`](crate::read_replica_map::ReadReplicaMap) that has converged with this
     /// store computes the same value over the same range, even though it never stores timestamps.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.value_fingerprint(range)
@@ -1037,8 +1037,8 @@ pub struct Config {
     /// depth for unauthenticated deployments, a hard ceiling for authenticated ones. Default 1024
     /// — see [`with_max_peers`](Config::with_max_peers).
     ///
-    /// Applies to read-only mirrors too, which never become members: a saturated set also blocks
-    /// new mirrors from syncing. Size for members *plus* expected mirrors.
+    /// Applies to read replicas too, which never become members: a saturated set also blocks
+    /// new read replicas from syncing. Size for members *plus* expected read replicas.
     pub max_peers: usize,
     /// Maximum number of concurrently active paced bulk dumps across all peers.
     ///

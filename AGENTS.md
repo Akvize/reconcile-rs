@@ -121,8 +121,8 @@ bugs.
 - The cluster key is a **single shared secret** — no per-peer identity, no forward secrecy; don't
   design features assuming otherwise without flagging the gap.
 - Never commit a real key/credential — README's examples are placeholders, keep them that way.
-- `mirror.rs` and the `zeroize` feature reduce key exposure in memory; extend them rather than adding
-  new places that hold the raw key.
+- `read_replica_map.rs` and the `zeroize` feature reduce key exposure in memory; extend them rather
+  than adding new places that hold the raw key.
 - Per-peer replay protection ([`gossip/src/replay.rs`](./gossip/src/replay.rs)) deliberately outlives peer
   membership (see module docs) — don't "clean up" a decommissioned peer's entry, that reopens replay.
 
@@ -138,7 +138,7 @@ dependency order:
 | `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |
 | `snapshot` | `FileSnapshot` + the versioned on-disk header | infrastructure; depends on `lww-register` |
-| `reconcile` | `replica.rs`, `replicated_map.rs`, `mirror.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all five and re-exports their public types |
+| `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all five and re-exports their public types |
 
 The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.rs`, `pub use` in
 `src/lib.rs`) so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`,
