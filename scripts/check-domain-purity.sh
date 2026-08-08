@@ -33,7 +33,8 @@ DOMAIN_FILES=(
 # `bounds.rs` moved there wholesale, `clock.rs` contributed `Timestamp`/`Clock`/the HLC ordering
 # arithmetic (the chrono-reading `HlcClock` adapter stayed behind in `src/clock.rs`), and
 # `persistence.rs` contributed the `Persistence` port, `PersistedState` and `InMemoryPersistence`
-# (the `std::fs`-touching `FileSnapshot` went to the `snapshot` crate).
+# (the `std::fs`-touching `FileSnapshot` stayed on the adapter side, in `reconcile`'s
+# `src/snapshot.rs`).
 #
 # `lww-register/Cargo.toml` already blocks the crate-level edge — it names no infrastructure
 # dependency, so `use tokio::…` there would not compile. This script covers what that manifest
@@ -100,7 +101,7 @@ manifest_status=0
 # dependency to the manifest — so that is what is gated here.
 #
 # Deliberately scoped to these three manifests only. The workspace root (`reconcile`) and
-# `gossip`/`snapshot` legitimately carry infrastructure dependencies; they are adapters, that is
+# `gossip` legitimately carry infrastructure dependencies; they are adapters, that is
 # their job.
 STANDALONE_MANIFESTS=(
     rsos/Cargo.toml
@@ -112,16 +113,6 @@ STANDALONE_MANIFESTS=(
 # plus the two that only ever appear as dependencies (`socket2`, `async-trait`).
 FORBIDDEN_DEPS='tokio|bincode|chrono|ipnet|mio|reqwest|hyper|socket2|async-trait'
 
-# One documented exemption, and only in a `[dev-dependencies]` table: `rbsr` may name `bincode`.
-# `rbsr` owns no encoding — nothing in its shipped artifact touches the codec, and a dev-dependency
-# never reaches a consumer. What it does own is `RangeAggregate`, whose *field declaration order*
-# is load-bearing for wire compatibility (`rsos::Aggregate` must serialize `fingerprint` before
-# `size`). `diff.rs`'s `wire_format_is_unchanged_by_the_aggregate_collapse` pins that with a golden
-# byte vector under the same `bincode::DefaultOptions` configuration `gossip`'s codec uses, and it
-# has to live next to the declaration it guards: `KeyRange`/`StartBound`/`EndBound` are
-# `pub(crate)`, so the vector cannot be constructed from another crate.
-# Format: `<crate-dir>:<dep-name>`. Keep this list at exactly the entries argued for in prose.
-DEV_DEP_EXEMPTIONS='rbsr:bincode'
 
 # Section-scoped scan, no TOML parser: track the current `[section]`, and inside any
 # `[…dependencies]` table flag a forbidden key (`tokio = …`, `tokio.workspace = true`) or a
@@ -136,10 +127,7 @@ for m in "${STANDALONE_MANIFESTS[@]}"; do
     fi
     crate_dir=$(dirname "$m")
     if ! awk -v forb="^(${FORBIDDEN_DEPS})\$" \
-             -v crate="$crate_dir" -v exempt="$DEV_DEP_EXEMPTIONS" '
-        function allowed(name) {
-            return (index(" " exempt " ", " " crate ":" name " ") > 0)
-        }
+             -v crate="$crate_dir" '
         { line = $0; sub(/#.*$/, "", line) }
         line ~ /^[[:space:]]*\[/ {
             hdr = line
@@ -147,11 +135,10 @@ for m in "${STANDALONE_MANIFESTS[@]}"; do
             sub(/\]+.*$/, "", hdr)
             gsub(/[[:space:]"'"'"']/, "", hdr)
             insec = (hdr ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)$/)
-            isdev = (hdr ~ /(^|\.)dev-dependencies($|\.)/)
             if (hdr ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)\.[A-Za-z0-9_.-]+$/) {
                 nm = hdr
                 sub(/^.*dependencies\./, "", nm)
-                if (nm ~ forb && !(isdev && allowed(nm))) {
+                if (nm ~ forb) {
                     printf "  line %d: [%s]\n", NR, hdr; bad = 1
                 }
             }
@@ -162,14 +149,14 @@ for m in "${STANDALONE_MANIFESTS[@]}"; do
             sub(/=.*$/, "", key)
             gsub(/[[:space:]"'"'"']/, "", key)
             sub(/\..*$/, "", key)
-            if (key ~ forb && !(isdev && allowed(key))) {
+            if (key ~ forb) {
                 printf "  line %d: %s\n", NR, key; bad = 1
             }
             if (match(line, /package[[:space:]]*=[[:space:]]*"[^"]+"/)) {
                 pkg = substr(line, RSTART, RLENGTH)
                 sub(/^[^"]*"/, "", pkg)
                 sub(/".*$/, "", pkg)
-                if (pkg ~ forb && !(isdev && allowed(pkg))) {
+                if (pkg ~ forb) {
                     printf "  line %d: %s (renamed dependency)\n", NR, pkg; bad = 1
                 }
             }
@@ -185,7 +172,7 @@ if [ "$manifest_status" -ne 0 ]; then
     echo >&2
     echo "rsos/rbsr/lww-register must stay standalone: no async runtime, socket, wire codec or" >&2
     echo "wall clock in their manifests (ARCHITECTURE.md §2.2, AGENTS.md §9.2). Put the adapter" >&2
-    echo "in gossip/snapshot/reconcile instead." >&2
+    echo "in gossip or reconcile instead." >&2
     status=1
 fi
 

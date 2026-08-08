@@ -12,7 +12,7 @@
 //! not opt-in. What varies is *which* backend is plugged in. The default is
 //! [`InMemoryPersistence`], which keeps the latest snapshot in RAM and therefore **loses everything
 //! when the process restarts** — i.e. the historical, pre-persistence behaviour. Swapping in a
-//! durable backend such as `snapshot::FileSnapshot` via `ReplicatedMap::with_persistence` makes a
+//! durable backend such as `reconcile::FileSnapshot` via `ReplicatedMap::with_persistence` makes a
 //! restart recover the previous state instead of looking like a brand-new replica.
 //!
 //! Why this matters: a node that restarts with an empty map loses its **tombstones** too. Losing
@@ -39,9 +39,10 @@
 //!
 //! Everything in this module is infrastructure-free: the port, the snapshot value type, and the
 //! in-memory default that trivially implements the port it sits next to. The file-backed adapter —
-//! `snapshot::FileSnapshot`, with its versioned on-disk header — touches `std::fs` and a wire
-//! codec, so it lives in the separate `snapshot` crate. Keeping [`InMemoryPersistence`] here means
-//! the default backend costs no extra crate.
+//! `reconcile::FileSnapshot`, with its versioned on-disk header — touches `std::fs` and a wire
+//! codec, so it cannot live here at all: this crate's manifest declares neither, and the domain-purity
+//! gate keeps it that way. It sits on the adapter side, in `reconcile`'s `src/snapshot.rs`. Keeping
+//! [`InMemoryPersistence`] here means the default backend costs no extra crate.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -93,7 +94,7 @@ pub trait Persistence<K, V>: Send + Sync + 'static {
 ///
 /// Within a running process a save followed by a load round-trips faithfully, but the snapshot
 /// lives only in memory, so **a process restart loses everything** — exactly the historical
-/// behaviour of a store with no on-disk durability. Use `snapshot::FileSnapshot` (or another
+/// behaviour of a store with no on-disk durability. Use `reconcile::FileSnapshot` (or another
 /// durable backend) when a restart must recover the previous state.
 pub struct InMemoryPersistence<K, V> {
     state: Mutex<Option<PersistedState<K, V>>>,
@@ -135,7 +136,7 @@ mod tests {
 
     /// A representative snapshot: a live entry, a tombstone, two members, one ack.
     ///
-    /// Shared with the `snapshot` crate's own tests only by duplication — the two crates test
+    /// Shared with `reconcile`'s `src/snapshot.rs` tests only by duplication — the two sides test
     /// different halves of the split (the port here, the on-disk format there), and a shared
     /// fixture would mean exporting test-only construction from this crate.
     fn sample_state() -> PersistedState<i32, String> {

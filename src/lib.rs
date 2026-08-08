@@ -66,6 +66,10 @@ pub mod clock;
 pub mod persistence;
 pub mod read_replica_map;
 pub mod replicated_map;
+// The file-backed `Persistence` adapter (`FileSnapshot` + the versioned on-disk header). Private:
+// its one public type is re-exported through [`persistence`] and the crate root, the paths it has
+// always been reachable by.
+pub(crate) mod snapshot;
 
 // Modules that moved out to sibling crates in the workspace split (ARCHITECTURE.md §3.9), re-exported
 // under their historical paths so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`

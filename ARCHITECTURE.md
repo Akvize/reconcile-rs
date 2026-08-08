@@ -8,8 +8,9 @@ instances. This document describes the **current architecture** and the **target
 [`PROGRESS.md`](./PROGRESS.md) and are assumed here as the baseline; the state-of-the-art
 positioning is in [`SOTA.md`](./SOTA.md).
 
-The crate is unpublished (`0.0.0-git`); the public API and the on-wire / on-disk formats are not yet
-stable and may change. Code locations are given as `file:line` against the current tree.
+`reconcile` is published on crates.io (`0.2.1`) alongside its four sibling crates (AGENTS.md §11);
+it is pre-1.0, so the public API and the on-wire / on-disk formats are not yet stable and may
+change. Code locations are given as `file:line` against the current tree.
 
 ---
 
@@ -50,7 +51,7 @@ converge. The design rests on five mechanisms:
 | `gossip/src/transport.rs` | The `Transport` port (datagram I/O) and its `UdpTransport` / `InMemoryTransport` adapters (migration step 5, done). |
 | `gossip/src/bincode.rs` | The wire-encoding functions (no adapter type — migration step 5, done; see §2.4). |
 | `gossip/src/discovery.rs`, `gossip/src/gen_ip.rs` | The `Discovery` port with its `RandomProbe`/`DnsDiscovery` adapters, and the address generation the former probes over. |
-| `snapshot/src/lib.rs` (standalone `snapshot` crate, Step C, done) | `FileSnapshot`: the durable, atomically-replaced file adapter for the `Persistence` port, with its versioned on-disk header. |
+| `src/snapshot.rs` | `FileSnapshot`: the durable, atomically-replaced file adapter for the `Persistence` port, with its versioned on-disk header. Briefly a standalone `snapshot` crate (Step C); folded back into `reconcile` afterwards — see §3.9. |
 | `src/clock.rs` | Hybrid Logical Clock, adapter half: `HlcClock`, the sole physical-time read, feeding `lww-register`'s ordering arithmetic. |
 | `src/replica.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `bincode` wire-encoding functions. |
 | `src/replicated_map.rs` | Public facade tying the engine, the map, and timeouts together. |
@@ -88,8 +89,9 @@ dependency, and that is what gets caught. Conversely a manifest cannot see an in
 reached through a *re-export* of an allowed dependency, which compiles fine and silently breaches the
 boundary; the source grep covers that intra-crate sub-boundary, and lists every file in the crate
 rather than a hand-picked subset — a new module in `lww-register` is domain by construction.
-`gossip`, `snapshot` and the root `reconcile` package are deliberately outside the manifest gate:
-they are the adapters, and carrying infrastructure dependencies is their job.
+`gossip` and the root `reconcile` package (which holds the file-persistence adapter, `src/snapshot.rs`)
+are deliberately outside the manifest gate: they are the adapters, and carrying infrastructure
+dependencies is their job.
 
 The source grep carries one documented carve-out: `std::net`'s
 plain address *value* types (`IpAddr`, `SocketAddr`, …) are allowed, because `PersistedState`'s
@@ -114,7 +116,7 @@ decode_stream}`. The remaining infrastructure dependencies:
 | `gossip/src/transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
 | `gossip/src/bincode.rs` | `bincode` | The wire-encoding functions — likewise intended; not a port (§2.4). |
 | `gossip/src/auth.rs`, `gossip/src/replay.rs` | `chrono::Utc`, MAC/AEAD backends | Datagram sealing and per-sender freshness stamps — intended, in the adapter layer. |
-| `snapshot/src/lib.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
+| `src/snapshot.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
 | `src/replica.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
 | `src/replicated_map.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
 | `src/read_replica_map.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Same three as `replica.rs`, for the same reasons. The read replica's socket and codec coupling is **closed**: it holds an `Arc<dyn Transport<Addr = SocketAddr>>` like the engine, drives both directions over that port and over `gossip::bincode::{encode, decode_stream}`, and names `tokio::net` only through `UdpTransport::bind` in its default constructor. `ReadReplicaMap::new_with_transport` mirrors `ReplicatedMap::new_with_transport`, so a read replica converges against a dated peer with no real sockets (`tests/read_replica_map.rs::read_replica_converges_with_dated_store_over_in_memory_transport`). |
@@ -130,7 +132,7 @@ the last open item — has since been routed onto the same `Transport` port, so 
 
 ### 2.4 Trait landscape
 
-Nine traits exist across the six crates. They fall into four groups:
+Nine traits exist across the five crates. They fall into four groups:
 
 - **Boundary abstractions — genuine ports (4).** `Persistence` (`lww-register/src/persistence.rs`):
   two implementations (`InMemoryPersistence`, `snapshot::FileSnapshot`). `Clock`
@@ -422,12 +424,23 @@ gossip         // ADAPTERS + I/O PORT: Transport (trait); UdpTransport / InMemor
                //   encode / decode_stream wire functions (no adapter type — §2.4), Authenticator,
                //   replay protection, the Discovery port with RandomProbe / DnsDiscovery
                //   (gen_ip / ipnet / rand). Does NOT depend on lww-register.
-snapshot       // ADAPTERS: FileSnapshot, the durable half of persistence. Depends on lww-register.
 reconcile      // WIRING + driving API: ReplicatedMap, Replica, ReadReplicaMap, configuration, the
-               //   HlcClock
-               //   adapter (which holds the chrono read), the tombstone wheel, observability.
-               //   Depends on all five, and re-exports their public types.
+               //   HlcClock adapter (which holds the chrono read), FileSnapshot (the durable half
+               //   of persistence, src/snapshot.rs), the tombstone wheel, observability.
+               //   Depends on all four, and re-exports their public types.
 ```
+
+**`snapshot` was a sixth crate, briefly.** Step C carved `FileSnapshot` out alongside `gossip`, and a
+follow-up folded it back into `reconcile` as `src/snapshot.rs`. That is a decision, not a mistake
+being undone: a crate boundary has to buy something, and this one bought nothing. `FileSnapshot` is a
+single type with no reuse value away from this workspace (it persists `PersistedState`, and nothing
+else), no consumer that would take it without `reconcile`, and — once publishing became concrete
+(#204) — no available name on crates.io either. The other four boundaries each pay for themselves:
+`rsos` and `rbsr` are genuinely reusable on their own terms, `lww-register` buys the compiler-enforced
+infrastructure-free domain (§2.2), `gossip` buys the "knows nothing about `Entry`" property above.
+Persistence keeps its architectural split regardless — the `Persistence` port and `PersistedState`
+stay in `lww-register`, so the domain still touches no filesystem, and the file adapter still cannot
+be imported into it. Only the packaging changed.
 
 The `Clock` and `Persistence` ports are defined in `lww-register` (the domain-adjacent logic injects
 them). The **`Transport` port is defined in `gossip`**, not the domain crate: it is consumed by the
@@ -463,7 +476,7 @@ a single crate could not provide.
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
-| Single crate | ✅ six-crate workspace `rsos` / `rbsr` / `lww-register` / `gossip` / `snapshot` / `reconcile` (steps A–D done; §3.9, §6) |
+| Single crate | ✅ five-crate workspace `rsos` / `rbsr` / `lww-register` / `gossip` / `reconcile` (steps A–D done; §3.9, §6). Step C's sixth crate, `snapshot`, was deliberately folded back into `reconcile` as `src/snapshot.rs` — §3.9 |
 
 ---
 
@@ -572,7 +585,8 @@ owning
      `PersistedState` + `InMemoryPersistence`) went to `lww-register`; the adapter layer
      (`transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs`) to
      `gossip`, which deliberately took **no** `lww-register` dependency; `FileSnapshot` to
-     `snapshot`. Landed together, since the three are interdependent. The type renames
+     `snapshot` (a boundary later withdrawn on purpose — step 9 below). Landed together, since the
+     three are interdependent. The type renames
      `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` rode
      along in the same pass, the files being moved anyway. (`Mirror` was itself renamed again, to
      `ReadReplicaMap`, in the follow-up naming pass — step 8 below.)
@@ -609,9 +623,28 @@ owning
    `ReconcileEngine`→`Replica` / `ReconcileStore`→`ReplicatedMap`). No behaviour, wire format or
    on-disk format changed.
 
+9. ✅ **Fold `snapshot` back into `reconcile`** (done) — the workspace went from six crates to five.
+   `snapshot/src/lib.rs` became `src/snapshot.rs`, a private module of the facade whose one public
+   type is re-exported exactly where it always was (`reconcile::FileSnapshot`,
+   `reconcile::persistence::FileSnapshot`); its six unit tests came along, including the two that
+   need `bincode` — free in `reconcile`, and the reason they could never live in `lww-register`.
+   Nothing about the public surface, the wire format or the on-disk format changed.
+
+   This is a deliberate follow-up decision, not a step-6 mistake being reverted. Step 6 was right to
+   *separate* the durable adapter from the domain — that separation still stands, it is what keeps
+   `std::fs` and `bincode` out of `lww-register`. What did not survive scrutiny was giving that
+   adapter its own **crate**: a crate boundary should buy compiler-enforced independence, reuse, or
+   a publishable identity, and this one bought none of the three. `FileSnapshot` is a single type
+   that serializes `PersistedState` and is useful to nobody who is not already using `reconcile`;
+   the boundary it needed was a module boundary. Making publishing concrete (#204) sharpened the
+   point — `snapshot` is taken on crates.io, and the workspace would have been renaming a crate that
+   should not have been published in the first place. The other four boundaries were re-examined the
+   same way and all kept: see §3.9.
+
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
 done); step 5 is done; step 6 completed the boundary extraction and now enforces it at the crate
-level; step 7 closed the last residual coupling; step 8 was a naming-only follow-up.
+level; step 7 closed the last residual coupling; step 8 was a naming-only follow-up; step 9 tuned
+step 6's crate granularity back down by one.
 
 **Is #138 complete?** Yes. The structural migration was complete after step 6 — every layer is its
 own crate, every port is defined on the right side of the boundary, and the domain's

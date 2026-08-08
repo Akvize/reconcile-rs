@@ -16,8 +16,12 @@
   main). Correctness baseline unchanged since the
   2026-06 sprint (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is
   behaviour-preserving.
-- **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
-  [#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- **Manifest:** `reconcile` `0.2.1` (published on crates.io); the four siblings `0.1.0`, not yet
+  published. Publish policy settled under
+  [#204](https://github.com/Akvize/reconcile-rs/issues/204) — all five publish, `gossip` as
+  `reconcile-gossip`, `lww-register`/`reconcile-gossip` as non-public implementation detail; see
+  AGENTS.md §11. The next `reconcile` version is a maintainer release decision (the recent renames
+  are breaking, so likely `0.3.0`) and is deliberately **not** bumped in the preparation PR.
 
 ---
 
@@ -81,7 +85,9 @@ all but one High resolved or mitigated.
 - [x] Malformed-packet fuzz harness (`fuzz_packets.rs`)
 - [x] Security model documented (README "Security model")
 - [x] Pluggable persistence documented (README "Persistence")
-- [ ] Semver and publish policy — `0.2.1` exists but policy is not yet settled ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- [x] Publish policy settled and the release pipeline prepared — all five crates publish, in
+      dependency order, `gossip` as `reconcile-gossip` ([#204](https://github.com/Akvize/reconcile-rs/issues/204), AGENTS.md §11). Semver
+      cadence (and the next `reconcile` version) still a per-release maintainer call.
 - [ ] `CHANGELOG.md`
 - [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
@@ -140,7 +146,10 @@ and HLC far-future stamp / counter wrap ([#198](https://github.com/Akvize/reconc
 [#201](https://github.com/Akvize/reconcile-rs/issues/201) DNS decommission vs GC gate,
 [#202](https://github.com/Akvize/reconcile-rs/issues/202) persistence robustness,
 [#203](https://github.com/Akvize/reconcile-rs/issues/203) CI gaps,
-[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline/version drift,
+[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline/version drift — **now
+addressed**: the publish policy is settled and `tags.yml` rewritten to publish all five crates in
+dependency order (AGENTS.md §11); cutting the actual release, and choosing `reconcile`'s next
+version, remain maintainer decisions —
 [#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch) are security/robustness-grade
 and scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 
@@ -188,7 +197,7 @@ Progress:
   the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
   — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
   include — and is guarded by tests in `entry.rs` and `read_replica_map.rs`. **Changes the wire and on-disk
-  formats** (expected; the crate is unpublished, pre-1.0).
+  formats** (expected; pre-1.0).
 - ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
   dissolved, ARCHITECTURE.md §2.4).
 - ✅ Step 6 — workspace split, done in four sub-steps (ARCHITECTURE.md §6):
@@ -199,7 +208,8 @@ Progress:
   `rbsr::RsosView<K>`, blanket-implemented for every `rsos::Rsos` implementor, with `Rsos<K, V>`
   becoming `Rsos<K>` + associated `Value`);
   **C** split out `lww-register` (domain), `gossip` (network adapters, deliberately with no
-  `lww-register` dependency) and `snapshot` (file persistence adapter), plus the
+  `lww-register` dependency) and `snapshot` (file persistence adapter — later folded back into
+  `reconcile` as `src/snapshot.rs`, Step 9 below), plus the
   `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` renames;
   **D** reassembled `reconcile` as a thin re-exporting facade and swept CI/scripts/docs — `--all` →
   `--workspace` across `main.yml`/`pre-commit`/`AGENTS.md` §3, and
@@ -230,7 +240,18 @@ Progress:
   `ReplicatedMap`. No deprecated alias (pre-1.0, as with `ReconcileEngine`→`Replica` and
   `ReconcileStore`→`ReplicatedMap`); pure rename, no behaviour, wire-format or on-disk change.
 
-**#138 is closed.** The structural migration was complete after Step 6 — six crates, ports on the
+- ✅ Step 9 — the `snapshot` crate folded back into `reconcile` as `src/snapshot.rs`, taking the
+  workspace from six crates to five. A deliberate follow-up decision on Step 6C's granularity, not a
+  revert: the domain/adapter *separation* stands (the `Persistence` port and `PersistedState` stay in
+  `lww-register`, so nothing there touches a filesystem), but `FileSnapshot` — one type, useful to
+  nobody outside this workspace, and with its name already taken on crates.io — did not need a crate
+  of its own. Its six unit tests moved with it, including the two needing `bincode`, which was the
+  reason they could not live in `lww-register`. `reconcile::FileSnapshot` and
+  `reconcile::persistence::FileSnapshot` resolve exactly as before; no public-surface, wire-format or
+  on-disk change. See ARCHITECTURE.md §3.9.
+
+**#138 is closed.** The structural migration was complete after Step 6 — a multi-crate workspace
+(six then, five now: Step 9), ports on the
 correct side of each boundary, domain purity enforced by the compiler and by
 `check-domain-purity.sh` — and Step 7 removed the last residual infrastructure coupling. A grep of
 the `reconcile` crate for `tokio::net`/`UdpSocket`/`bincode` now returns only `#[cfg(test)]` code and
