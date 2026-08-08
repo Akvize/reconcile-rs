@@ -193,25 +193,58 @@ required-file-pairs, and structural invariants almost always are.
 
 ## 11. Publishing
 
-`cargo package` runs in CI for `rsos`, `lww-register` and `gossip` to catch packaging breakage (see
-`Cargo.toml`'s `exclude` list — repo-only docs and `examples/k8s/` are excluded from the published
-crate). Actual publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run
-`cargo publish` outside that flow.
+**Policy (#204, settled).** All five members publish. `rsos` and `rbsr` are the genuinely reusable
+pieces — a range-summarizable ordered store and the RBSR algorithm over any such store, both useful
+away from this project. `lww-register` and `reconcile-gossip` publish only because **cargo has no
+vendoring**: `reconcile` cannot be published unless every crate it depends on is on crates.io. They
+are **implementation detail with no stability guarantee**, and both say so in their `description`,
+their `README.md` and their crate-root docs — the `serde_derive` / `pin-project-internal` /
+`tracing-attributes` pattern. Nobody should depend on them directly; keep that warning prominent if
+you touch those files.
 
-The check covers **only the crates with no intra-workspace dependency**. Cargo refuses to package
-any crate holding a path dependency that carries no version requirement, until that dependency is
-itself on crates.io. `rsos`, `lww-register` and `gossip` each depend on nothing else in the
-workspace, so all three can be packaged; `rbsr` (→ `rsos`) and the
-top-level `reconcile` package (→ all four) hit that wall. Whether and how to publish a multi-crate
-workspace is an open policy question (#204) — until it is settled, do **not** "fix" this by
-inventing version requirements for the internal crates or by publishing them ad hoc. The internal
-crates carry `publish = false` deliberately; `cargo package` is used rather than
-`cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
-packaged crate. A new crate becomes checkable here only once it has no unpublished path dependency
-of its own.
+**`gossip` publishes as `reconcile-gossip`** — the plain name is taken on crates.io. Every dependent
+renames it straight back:
 
-**Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
-tag today, for the same path-dependency reason — loudly, at release time, not silently. That is
-deliberate: resolving it means deciding what the workspace publishes (one facade crate with the
-internals vendored? every crate, versioned in lockstep? only some?), which is #204's question, not
-something to patch around here.
+```toml
+gossip = { package = "reconcile-gossip", version = "0.1.0", path = "gossip" }
+```
+
+so **no Rust source anywhere says anything but `use gossip::…`**, and the directory stays `gossip/`.
+The published name is a registry detail, not an API one. Don't "fix" the mismatch by renaming the
+directory or the imports.
+
+**Every intra-workspace dependency carries a `version` alongside its `path`** (`0.1.0` for the four
+siblings). Cargo strips `path` at publish time and resolves the requirement from crates.io, so
+without it packaging is refused outright. Add both whenever you add such an edge.
+
+**Publish order is a hard constraint**, encoded in `.github/workflows/tags.yml` with a comment
+saying so: `rsos` → (`rbsr`, `lww-register`) → `reconcile-gossip` → `reconcile`. A crate cannot be
+published before everything it depends on is on crates.io *and indexed*, so the workflow polls the
+sparse index after each upload before moving on. `--no-verify` is not the answer to that lag and
+must not be used — it would skip compiling the packaged crate, the one breakage worth catching at
+release time. The workflow is idempotent: a version already on crates.io is skipped, which is the
+normal path for the four siblings, whose versions change far less often than `reconcile`'s.
+Publishing happens **only** from that workflow, on a `v*` tag; never hand-run `cargo publish`.
+
+**`reconcile`'s version is not this repo's to bump casually.** It is 0.2.1 on crates.io; a release
+picks the next number, and the renames in the recent stack (`Mirror` → `ReadReplicaMap`, the crate
+reshuffle) are breaking, so it is likely 0.3.0. That is a maintainer release decision, made when the
+tag is cut — not something a feature PR decides. The tag and the manifest version must match;
+`tags.yml` checks that first and fails the release if they don't.
+
+**CI packaging check.** `main.yml` runs `cargo package --workspace --allow-dirty` on every PR,
+covering all five members (see the root `Cargo.toml`'s `exclude` list — repo-only docs and
+`examples/k8s/` stay out of the published package). `--workspace` is load-bearing: a *per-crate*
+`cargo package -p rbsr` still fails with "no matching package named `rsos`" until `rsos` is really
+on crates.io, so one-at-a-time only ever covers `rsos`, `lww-register` and `reconcile-gossip`.
+Packaged together, cargo resolves the `path` + `version` pairs against a local temporary registry
+and `rbsr` and `reconcile` are covered too. Keep it as one invocation.
+
+**Local gotcha with that check.** `cargo package --workspace` verifies each member by resolving its
+siblings out of a temporary registry, and cargo caches an *extracted* dependency source under
+`~/.cargo/registry/src/<hash>/<name>-<version>/`, keyed by name and version alone. The four siblings
+sit at `0.1.0` while their contents change every commit, so a second local run can verify a
+**stale** extraction and fail with a nonsensical error — typically `unresolved import` for an item
+you just added. CI never sees this (fresh `CARGO_HOME`). If it happens, delete the offending
+`~/.cargo/registry/src/<hash>/` directory, or re-run with a throwaway `CARGO_HOME=$(mktemp -d)` to
+confirm the tree is actually fine before chasing a phantom bug.

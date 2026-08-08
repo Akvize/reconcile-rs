@@ -8,8 +8,9 @@ instances. This document describes the **current architecture** and the **target
 [`PROGRESS.md`](./PROGRESS.md) and are assumed here as the baseline; the state-of-the-art
 positioning is in [`SOTA.md`](./SOTA.md).
 
-The crate is unpublished (`0.0.0-git`); the public API and the on-wire / on-disk formats are not yet
-stable and may change. Code locations are given as `file:line` against the current tree.
+`reconcile` is published on crates.io (`0.2.1`) alongside its four sibling crates (AGENTS.md §11);
+it is pre-1.0, so the public API and the on-wire / on-disk formats are not yet stable and may
+change. Code locations are given as `file:line` against the current tree.
 
 ---
 
@@ -115,7 +116,7 @@ decode_stream}`. The remaining infrastructure dependencies:
 | `gossip/src/transport.rs` | `tokio::net::UdpSocket`, `socket2` | The `Transport` port's adapter — this is the *intended* location for this dependency, not residual coupling. |
 | `gossip/src/bincode.rs` | `bincode` | The wire-encoding functions — likewise intended; not a port (§2.4). |
 | `gossip/src/auth.rs`, `gossip/src/replay.rs` | `chrono::Utc`, MAC/AEAD backends | Datagram sealing and per-sender freshness stamps — intended, in the adapter layer. |
-| `snapshot/src/lib.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
+| `src/snapshot.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
 | `src/replica.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
 | `src/replicated_map.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
 | `src/read_replica_map.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Same three as `replica.rs`, for the same reasons. The read replica's socket and codec coupling is **closed**: it holds an `Arc<dyn Transport<Addr = SocketAddr>>` like the engine, drives both directions over that port and over `gossip::bincode::{encode, decode_stream}`, and names `tokio::net` only through `UdpTransport::bind` in its default constructor. `ReadReplicaMap::new_with_transport` mirrors `ReplicatedMap::new_with_transport`, so a read replica converges against a dated peer with no real sockets (`tests/read_replica_map.rs::read_replica_converges_with_dated_store_over_in_memory_transport`). |

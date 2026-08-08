@@ -5,7 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A Range-Summarizable Order-Statistics Store (RSOS): the Rsos<K> trait and its FingerprintTreeMap<K, V> realization"
 repository = "https://github.com/Akvize/reconcile-rs"
-publish = false
+readme = "README.md"
+keywords = ["rsos", "fingerprint", "btree", "range", "blake3"]
+categories = ["data-structures"]
 
 [dependencies]
 arrayvec = "0.7.4"

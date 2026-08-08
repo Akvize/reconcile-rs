@@ -17,12 +17,117 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Set version
-        run: echo "VERSION=${GITHUB_REF##*\/v}" >> $GITHUB_ENV
       - uses: actions/checkout@v4
-      - name: Set Cargo.toml version
-        run: sed "s/0\\.0\\.0-git/$VERSION/" -i Cargo.toml Cargo.lock
+
+      # Versions live in the manifests and are committed, not injected here: the tag must match
+      # what `Cargo.toml` already says. The `v*` tag names the `reconcile` release; the four
+      # sibling crates carry their own versions and are only re-published when theirs changed
+      # (`publish_crate` below skips a version already on crates.io, which is the normal case for
+      # them — see AGENTS.md §11).
+      - name: Check the tag matches the reconcile version in Cargo.toml
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF##*/v}"
+          manifest_version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="reconcile"))')
+          if [ "$tag_version" != "$manifest_version" ]; then
+            echo "::error::tag v$tag_version does not match reconcile $manifest_version in Cargo.toml" >&2
+            exit 1
+          fi
+
+      # Cheap pre-flight: package (and compile) every member together before touching the registry.
+      # `--workspace` resolves the intra-workspace `path` + `version` dependencies against a local
+      # temporary registry, so it verifies crates that a per-crate `cargo package` cannot until
+      # their dependencies are actually on crates.io. Same check main.yml runs on every PR.
+      - name: Verify the whole workspace packages cleanly
+        run: cargo package --workspace
+
       - name: Login on crates repository
         run: echo ${{ secrets.CARGO_REGISTRY_TOKEN }} | cargo login
-      - name: Publish crate
-        run: cargo publish --allow-dirty
+
+      # ---------------------------------------------------------------------------------------
+      # PUBLISH ORDER IS A HARD CONSTRAINT — DO NOT REORDER.
+      #
+      # `cargo publish` strips the `path` from each dependency and resolves it from crates.io, so a
+      # crate cannot be published until everything it depends on is *already there and indexed*.
+      # The dependency graph forces exactly this order:
+      #
+      #     rsos  →  rbsr ─┐
+      #                    ├→  reconcile
+      #     lww-register ──┤
+      #     reconcile-gossip ┘
+      #
+      #   1. rsos               — leaf, no workspace dependencies
+      #   2. rbsr               — needs rsos
+      #      lww-register       — leaf, no workspace dependencies (independent of rbsr)
+      #   3. reconcile-gossip   — leaf, no workspace dependencies; kept ahead of the facade
+      #   4. reconcile          — needs all four
+      #
+      # Note `gossip` publishes as `reconcile-gossip` (the plain name is taken on crates.io); the
+      # dependents rename it back with `package = "reconcile-gossip"`, so no Rust source changes.
+      #
+      # crates.io does not make a freshly published version resolvable the instant the upload
+      # returns — it has to land in the sparse index first. `cargo publish` waits for that itself,
+      # but the wait is best-effort and cross-crate resolution has been observed to lag it, so
+      # `publish_crate` polls the sparse index until the exact version is visible before returning.
+      # `--no-verify` is NOT the fix for this and must not be used: it would skip compiling the
+      # packaged crate, which is precisely the breakage worth catching at release time.
+      # ---------------------------------------------------------------------------------------
+      - name: Publish the workspace to crates.io, in dependency order
+        run: |
+          set -euo pipefail
+
+          # Sparse-index path for a crate name (crates.io's 1/2/3/first2-next2 layout).
+          index_url() {
+            local name="$1"
+            case "${#name}" in
+              1) echo "https://index.crates.io/1/$name" ;;
+              2) echo "https://index.crates.io/2/$name" ;;
+              3) echo "https://index.crates.io/3/${name:0:1}/$name" ;;
+              *) echo "https://index.crates.io/${name:0:2}/${name:2:2}/$name" ;;
+            esac
+          }
+
+          # Is <name> <version> already visible in the sparse index?
+          indexed() {
+            local name="$1" version="$2"
+            curl -sS --fail "$(index_url "$name")" 2>/dev/null | python3 -c \
+              "import json,sys; sys.exit(0 if any(json.loads(l).get('vers') == sys.argv[1] for l in sys.stdin if l.strip()) else 1)" \
+              "$version"
+          }
+
+          # Publish one crate, then block until crates.io can actually resolve it.
+          # Idempotent: a version already on the registry is skipped rather than failing the
+          # release. That is the normal path for the four sibling crates, whose versions change far
+          # less often than `reconcile`'s.
+          publish_crate() {
+            local name="$1"
+            local version
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]==sys.argv[1]))' "$name")
+
+            if indexed "$name" "$version"; then
+              echo "==> $name $version is already on crates.io — skipping"
+              return 0
+            fi
+
+            echo "==> publishing $name $version"
+            cargo publish -p "$name"
+
+            echo "--> waiting for $name $version to appear in the sparse index"
+            for _ in $(seq 1 60); do
+              if indexed "$name" "$version"; then
+                echo "--> $name $version is indexed"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::$name $version did not appear in the crates.io index within 10 minutes" >&2
+            return 1
+          }
+
+          publish_crate rsos
+          publish_crate rbsr
+          publish_crate lww-register
+          publish_crate reconcile-gossip
+          publish_crate reconcile

@@ -16,8 +16,12 @@
   main). Correctness baseline unchanged since the
   2026-06 sprint (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is
   behaviour-preserving.
-- **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
-  [#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- **Manifest:** `reconcile` `0.2.1` (published on crates.io); the four siblings `0.1.0`, not yet
+  published. Publish policy settled under
+  [#204](https://github.com/Akvize/reconcile-rs/issues/204) — all five publish, `gossip` as
+  `reconcile-gossip`, `lww-register`/`reconcile-gossip` as non-public implementation detail; see
+  AGENTS.md §11. The next `reconcile` version is a maintainer release decision (the recent renames
+  are breaking, so likely `0.3.0`) and is deliberately **not** bumped in the preparation PR.
 
 ---
 
@@ -81,7 +85,9 @@ all but one High resolved or mitigated.
 - [x] Malformed-packet fuzz harness (`fuzz_packets.rs`)
 - [x] Security model documented (README "Security model")
 - [x] Pluggable persistence documented (README "Persistence")
-- [ ] Semver and publish policy — `0.2.1` exists but policy is not yet settled ([#204](https://github.com/Akvize/reconcile-rs/issues/204))
+- [x] Publish policy settled and the release pipeline prepared — all five crates publish, in
+      dependency order, `gossip` as `reconcile-gossip` ([#204](https://github.com/Akvize/reconcile-rs/issues/204), AGENTS.md §11). Semver
+      cadence (and the next `reconcile` version) still a per-release maintainer call.
 - [ ] `CHANGELOG.md`
 - [x] CI code coverage + doc-tests ([#97](https://github.com/Akvize/reconcile-rs/issues/97)) — Codecov (`cargo llvm-cov`) + `cargo test --doc` in CI
 - [ ] `cargo audit` / `cargo deny` in CI ([#151](https://github.com/Akvize/reconcile-rs/issues/151))
@@ -140,7 +146,10 @@ and HLC far-future stamp / counter wrap ([#198](https://github.com/Akvize/reconc
 [#201](https://github.com/Akvize/reconcile-rs/issues/201) DNS decommission vs GC gate,
 [#202](https://github.com/Akvize/reconcile-rs/issues/202) persistence robustness,
 [#203](https://github.com/Akvize/reconcile-rs/issues/203) CI gaps,
-[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline/version drift,
+[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline/version drift — **now
+addressed**: the publish policy is settled and `tags.yml` rewritten to publish all five crates in
+dependency order (AGENTS.md §11); cutting the actual release, and choosing `reconcile`'s next
+version, remain maintainer decisions —
 [#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch) are security/robustness-grade
 and scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 
@@ -188,7 +197,7 @@ Progress:
   the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
   — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
   include — and is guarded by tests in `entry.rs` and `read_replica_map.rs`. **Changes the wire and on-disk
-  formats** (expected; the crate is unpublished, pre-1.0).
+  formats** (expected; pre-1.0).
 - ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
   dissolved, ARCHITECTURE.md §2.4).
 - ✅ Step 6 — workspace split, done in four sub-steps (ARCHITECTURE.md §6):

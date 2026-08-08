@@ -5,14 +5,19 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Range-Based Set Reconciliation (Meyer, arXiv:2212.13567) over any RSOS backend"
 repository = "https://github.com/Akvize/reconcile-rs"
-publish = false
+readme = "README.md"
+keywords = ["rbsr", "reconciliation", "anti-entropy", "set", "gossip"]
+categories = ["algorithms", "network-programming"]
 
 [dependencies]
 # `serde` is load-bearing: `RangeAggregate` and its bound types are wire messages, exchanged
 # verbatim between peers. `tracing` carries the one `debug!` on the malformed-segment drop path.
 # `rsos` supplies `Aggregate` and the `Rsos` trait the blanket `RsosView` impl is written over —
 # the dependency edge points `rbsr` → `rsos` only, never the reverse.
-rsos = { path = "../rsos" }
+#
+# The `version` alongside `path` is what makes this crate publishable: cargo strips `path` at
+# publish time and resolves the requirement from crates.io (#204, AGENTS.md §11).
+rsos = { version = "0.1.0", path = "../rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 

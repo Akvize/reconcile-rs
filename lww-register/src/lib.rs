@@ -8,6 +8,20 @@
 
 //! `lww-register`: the state-based LWW-Register CRDT domain of `reconcile-rs`.
 //!
+//! # ⚠ Implementation detail — no stability guarantee
+//!
+//! **Do not depend on this crate directly — depend on
+//! [`reconcile`](https://crates.io/crates/reconcile),** which re-exports everything here that is
+//! meant for consumers (`reconcile::Entry`, `reconcile::Timestamp`, `reconcile::Persistence`, …).
+//! It is on crates.io for one reason: cargo has no vendoring, so `reconcile` cannot be published
+//! unless every crate it depends on is published too. That is the same reason `serde_derive`,
+//! `pin-project-internal` and `tracing-attributes` are on the registry, and it carries the same
+//! warning: **anything here may change or disappear in any release**, including in a patch
+//! release, without a deprecation period and without appearing in `reconcile`'s changelog. It is
+//! not offered as a general-purpose LWW-Register; it is shaped entirely by what `reconcile` needs.
+//!
+//! # What it holds
+//!
 //! A *last-write-wins register* is the simplest useful state-based CRDT: a cell holding one value
 //! plus the timestamp it was written at, merged by keeping the entry with the greater timestamp.
 //! Because the merge is a join on a total order, it is commutative, associative and idempotent —
