@@ -1,5 +1,6 @@
-use std::hash::Hash;
 use std::ops::Bound;
+
+use serde::Serialize;
 
 use rbsr::{diff_round, start_diff, DiffRange};
 use rsos::FingerprintTreeMap;
@@ -13,8 +14,8 @@ pub fn diff<K, V>(
     remote: &FingerprintTreeMap<K, V>,
 ) -> (Vec<DiffRange<K>>, Vec<DiffRange<K>>)
 where
-    K: Clone + Hash + Ord,
-    V: Hash,
+    K: Clone + Serialize + Ord,
+    V: Serialize,
 {
     let mut local_diff_ranges = Vec::new();
     let mut remote_diff_ranges = Vec::new();
@@ -39,8 +40,8 @@ where
 
 pub fn reconcile<K, V>(local: &mut FingerprintTreeMap<K, V>, remote: &mut FingerprintTreeMap<K, V>)
 where
-    K: Clone + Hash + Ord,
-    V: Clone + Hash,
+    K: Clone + Serialize + Ord,
+    V: Clone + Serialize,
 {
     let (diff_ranges1, diff_ranges2) = diff(local, remote);
     for diff in diff_ranges1 {

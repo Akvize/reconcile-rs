@@ -40,7 +40,7 @@ converge. The design rests on five mechanisms:
 | Module | Responsibility |
 |---|---|
 | `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, the bundled `Aggregate` (Def. 3.5), plus the `Rsos<K>` trait (Def. 3.9, `Value` associated type) it implements. |
-| `rsos/src/fingerprint.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
+| `rsos/src/fingerprint.rs`, `rsos/src/canonical.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶), and the canonical serde encoding its per-element bytes come from — see §3.10. |
 | `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
 | `lww-register/src/entry.rs` (standalone `lww-register` crate, migration step 6 Step C, done) | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `lww-register/src/bounds.rs` | The `Key`/`Value` data-bound bundles (§3.8). |
@@ -67,7 +67,7 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 
 | Module | Infrastructure imported |
 |---|---|
-| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — the crate's own minimal `Cargo.toml` dependency list (`arrayvec` + `blake3` + `range-cmp` + `serde` + `tracing`) makes an infrastructure import a compile error; the manifest itself is gated, see below. |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/canonical.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — the crate's own minimal `Cargo.toml` dependency list (`arrayvec` + `blake3` + `range-cmp` + `serde` + `tracing`) makes an infrastructure import a compile error; the manifest itself is gated, see below. |
 | `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — likewise, from `Cargo.toml` (`rsos` + `serde` + `tracing`). |
 | `lww-register/src/*.rs` (standalone `lww-register` crate) | none — its `Cargo.toml` names exactly one dependency, `serde` (derive only, for data shapes *other* crates encode), so `use tokio::…` there does not compile. |
 
@@ -372,9 +372,9 @@ Today the engine keeps a second tree `FingerprintTreeMap<K, V::Projected>` fed t
 into a `ValueOnly<V>(Option<V>)` cell whose `Hash` is timestamp-less by construction. `State<V>` is
 isomorphic to that cell (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), so the projection becomes
 `Entry::project(&self) -> State<V>` (= `self.state.clone()`) and the projection tree becomes
-`FingerprintTreeMap<K, State<V>>`; the `Projectable` trait and `ValueOnly` type are dissolved. The two hashes
-must stay distinct — the dated `Entry` hashes **with** its stamp (for `version_hash`), the projected
-`State<V>` hashes the value **alone** — which is invariant 8 in §5. Because a `ValueOnly(Some(v))`
+`FingerprintTreeMap<K, State<V>>`; the `Projectable` trait and `ValueOnly` type are dissolved. The two summaries
+must stay distinct — the dated `Entry` summarizes **with** its stamp (for `version_hash`), the projected
+`State<V>` summarizes the value **alone** — which is invariant 8 in §5. Because a `ValueOnly(Some(v))`
 and a `State::Present(v)` do not encode to the same bytes, this step also breaks the value-only wire
 format, alongside the dated wire and on-disk formats (acceptable while the formats are unstable).
 
@@ -391,12 +391,20 @@ The repeated multi-bound constraints are expressed once, as supertrait bundles w
 so implementation sites read `impl<K: Key, V: Value>`:
 
 ```rust
-pub trait Key:   Clone + Debug + Hash + Ord + Send + Sync + Serialize + DeserializeOwned + 'static {}
+pub trait Key:   Clone + Debug + Ord + Send + Sync + Serialize + DeserializeOwned + 'static {}
 impl<T> Key for T where T: /* same */ {}
 
-pub trait Value: Clone + Debug + Hash + Send + Sync + Serialize + DeserializeOwned + 'static {}
+pub trait Value: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static {}
 impl<T> Value for T where T: /* same */ {}
 ```
+
+Neither bundle carries `Hash`. It was there only because range fingerprints used to take their bytes
+from `std::hash::Hash`; `rsos` now owns a canonical serde encoding (`rsos::canonical`, §3.10) and
+derives every fingerprint from `Serialize`, which both bundles already require. Dropping it is a
+pure loosening — and it makes `HashMap`/`HashSet` usable as values, which `Hash` forbade outright.
+The remaining `Hash` bounds in the facade are genuine `HashMap`-key requirements, spelled out
+locally where the `HashMap` is (`ReplicatedMap`/`Replica`'s peer and tombstone indexes,
+`TimeoutWheel`, the snapshot codec) rather than smuggled in through a domain bundle.
 
 Entry semantics travel with `Entry`, not with the `V` bound. `Value` carries no `PartialEq`: the
 receive path's only "did this change?" question is a stamp comparison (`Entry::merge` returns
@@ -458,6 +466,28 @@ and the pure HLC advance stay in `lww-register`, so the domain carries no `chron
 on `lww-register`; infrastructure cannot be imported into it without a compile error — the guarantee
 a single crate could not provide.
 
+### 3.10 The canonical encoding: where fingerprint bytes come from
+
+A `Fingerprint` is a wire token, so both halves of "the same element gives the same 256 bits
+everywhere, forever" have to be owned here. Pinning the *hash function* to BLAKE3 was only the first
+half. The second is the byte stream fed into it, and it used to come from `std::hash::Hash` — whose
+per-impl byte sequences Rust explicitly does not stabilize. A future `Hash for str` or
+`Hash for Option<T>` would have moved every fingerprint in every cluster; `Hash` also does not exist
+for `HashMap`/`HashSet`, so those were unusable as keys or values.
+
+`rsos::canonical` closes that: a `serde::Serializer` writing an injective, length-prefixed byte
+stream straight into BLAKE3. Fixed-width little-endian integers (`usize`/`isize` as 64-bit), `u64`
+length prefixes on strings, bytes and sequences, `u32` variant indices for enums, struct fields in
+declaration order with no names, and map entries **sorted by their encoded key** — which is what
+makes a `HashMap` summarize deterministically and identically to the `BTreeMap` with the same
+entries. It adds no dependency (`serde` was already there) and no codec crate, so `rsos` stays the
+zero-infrastructure leaf §2.2 requires. `lift(&k, &v)` is that encoding of key then value; `digest`
+is the single-value form `version_hash` uses.
+
+The move is a **wire-format break**: every element fingerprint changes, so a node on the new
+encoding and a node on the old one never agree on a range and re-exchange indefinitely. It is not a
+rolling upgrade, and it had to land before any release tag.
+
 ---
 
 ## 4. Current → target mapping
@@ -499,11 +529,14 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
    earned by an authenticated dated datagram, so a discovered (unverified) address can neither block
    GC nor be the subject of a GC release. Decommissioning a member that has vanished from discovery
    uses the same `decommission_peer` escape hatch as `forget_peer`.
-7. **`version_hash` determinism** (`replica.rs:55`) — preserved as `Entry` derives `Hash`.
-8. **Value-only projection hash is timestamp-less** — the dated `Entry` hashes with its `stamp`
-   (feeding `version_hash`), while its `State<V>` projection hashes the value alone, so a dated
-   store and a dateless `ReadReplicaMap` compute identical per-element fingerprints. Guarded by
-   `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
+7. **`version_hash` determinism** (`replica.rs`) — now the low 64 bits of `rsos::digest`, the same
+   canonical serde encoding fingerprints use (§3.10), so it is deterministic across toolchains and
+   not merely across nodes on the same one. It was `DefaultHasher`, whose keys are fixed but whose
+   algorithm std does not stabilize.
+8. **Value-only projection summary is timestamp-less** — the dated `Entry` summarizes with its
+   `stamp` (feeding `version_hash`), while its `State<V>` projection has no timestamp field at all,
+   so a dated store and a dateless `ReadReplicaMap` compute identical per-element fingerprints.
+   Guarded by `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
 
 ---
 

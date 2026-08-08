@@ -60,7 +60,7 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F5 | High | physical-clock LWW (lossy + non-commutative) | ✅ | #110 — Hybrid Logical Clock + total order |
 | F6 | High | 64-bit XOR fingerprint (weak, craftable) | ✅ | #111 — 256-bit additive BLAKE3 |
 | F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
-| F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 — wire fingerprint is BLAKE3 (`version_hash` still fixed-key `DefaultHasher`) |
+| F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 — wire fingerprint is BLAKE3; closed the other half by owning the *input* encoding too (`rsos::canonical`), and `version_hash` now derives from it instead of `DefaultHasher` — see §4.x below |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
 | F10 | High | IP-scan discovery, O(N²) membership | ◐ | [#147](https://github.com/Akvize/reconcile-rs/issues/147) — `Discovery` port + `DnsDiscovery` (k8s headless-Service DNS, no IP-scan) lands a cloud-native discovery path; bounded-fan-out membership (SWIM/HyParView) still open |
 | F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_fingerprint_tree_map.rs`, `tests/fuzz_packets.rs` |
@@ -194,9 +194,10 @@ Progress:
   and `replicated_map.rs` parameterize the engine over the plain `V` and construct
   `Entry<Timestamp, V>` (map) / `State<V>` (projection) internally; `add_pre_insert`,
   `ReadReplicaMap::add_on_update` and `PersistedState` now carry `Entry`/`State` directly instead of
-  the tuple. Invariant 8 (value-only projection hash is timestamp-independent) holds by construction
-  — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
-  include — and is guarded by tests in `entry.rs` and `read_replica_map.rs`. **Changes the wire and on-disk
+  the tuple. Invariant 8 (value-only projection summary is timestamp-independent) holds by
+  construction — `Entry` has a `stamp` field, `State` has no `Timestamp` field at all, so no
+  field-by-field content summary of the projection can include one — and is guarded by tests in
+  `entry.rs` and `read_replica_map.rs`. **Changes the wire and on-disk
   formats** (expected; pre-1.0).
 - ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
   dissolved, ARCHITECTURE.md §2.4).
@@ -250,6 +251,35 @@ Progress:
   `reconcile::persistence::FileSnapshot` resolve exactly as before; no public-surface, wire-format or
   on-disk change. See ARCHITECTURE.md §3.9.
 
+- ✅ **Canonical fingerprint encoding** — element fingerprints no longer take their bytes from
+  `std::hash::Hash`. `rsos` gained `rsos/src/canonical.rs`: an injective, length-prefixed
+  `serde::Serializer` that writes canonical bytes straight into BLAKE3 (fixed-width little-endian
+  integers, `usize`/`isize` as 64-bit, `u64` length prefixes on strings/bytes/sequences, `u32`
+  variant indices, struct fields in declaration order, **map entries sorted by encoded key**). No new
+  dependency — `serde` was already there — and no codec crate, so the crate stays the
+  zero-infrastructure leaf `check-domain-purity.sh` gates.
+
+  *Why.* The module claimed a fingerprint was stable "across Rust versions, platforms and
+  endianness", but only the *hasher* was pinned. The bytes fed into it came from std's `Hash`
+  impls, whose exact sequences Rust explicitly does not stabilize — a future `Hash for str` or
+  `Hash for Option<T>` would have moved every fingerprint in every cluster and left a mixed-version
+  cluster re-exchanging forever. `Hash` is also unimplemented for `HashMap`/`HashSet`, so those were
+  unusable as keys or values. The claim is true only now that `rsos` owns both halves.
+
+  *Fallout.* `lift`'s bound became `Serialize`; the `impl Hasher for Blake3Hasher` is gone;
+  `Key`/`Value` (`lww-register/src/bounds.rs`) **dropped `Hash`** — a pure loosening, since both
+  already required `Serialize + DeserializeOwned`. The `Hash` bounds that remain are genuine
+  `HashMap`-key requirements and are spelled out locally (`TimeoutWheel`, `src/snapshot.rs`,
+  `ReplicatedMap`/`Replica`'s peer and tombstone indexes). `version_hash` moved off `DefaultHasher`
+  — whose algorithm std does not stabilize either — onto `rsos::digest`, closing the remaining half
+  of finding F8. Golden vectors in `rsos/src/fingerprint.rs` were **replaced**, not adjusted; the
+  old constants are gone on purpose.
+
+  > **⚠️ Deliberate wire break, pre-release.** Every element fingerprint changes. A node on this
+  > code and a node on an earlier build never agree on a range fingerprint and re-exchange
+  > indefinitely without converging. **Not a rolling upgrade**: stop the cluster, upgrade every
+  > node, restart. This had to land before any release tag, and did.
+
 **#138 is closed.** The structural migration was complete after Step 6 — a multi-crate workspace
 (six then, five now: Step 9), ports on the
 correct side of each boundary, domain purity enforced by the compiler and by
@@ -264,17 +294,19 @@ the `UdpTransport` default-adapter constructions. The infrastructure that remain
 
 Any change must preserve these (they encode the fixes above):
 
-1. Fingerprint format & arithmetic (`[u64;4]`, per-element BLAKE3, add/sub mod 2²⁵⁶) + golden vectors.
+1. Fingerprint format & arithmetic (`[u64;4]`, per-element BLAKE3 over `rsos::canonical`'s injective
+   encoding, add/sub mod 2²⁵⁶) + golden vectors. Both halves are load-bearing: changing the encoding
+   is as much a wire break as changing the hash.
 2. HLC total order `(wall_ms, counter, node_id)`; merge uses strict `>`.
 3. Range emptiness/equality decided on `size`, never on `hash`.
 4. `diff_round` validates incoming bounds (`checked_sub`, no `unimplemented!`).
 5. Authenticate-before-deserialize (MAC on raw bytes before decoding).
 6. Causal-stability tombstone gate before GC.
-7. `version_hash` determinism.
-8. Value-only projection hash is timestamp-less — the dated cell keeps a timestamp-**inclusive**
-   `Hash` (used by `version_hash`), while its value-only projection (the dateless read-replica
-   channel) hashes the value alone, so a dated store and a dateless read replica agree on per-element
-   fingerprints.
+7. `version_hash` determinism — via `rsos::digest` (the canonical encoding), not `DefaultHasher`.
+8. Value-only projection summary is timestamp-less — the dated cell keeps a timestamp-**inclusive**
+   encoding (which `version_hash` reads), while its value-only projection (the dateless read-replica
+   channel) has no timestamp field at all, so a dated store and a dateless read replica agree on
+   per-element fingerprints.
 
 ---
 
