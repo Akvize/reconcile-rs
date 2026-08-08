@@ -28,7 +28,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use rbsr::{diff_round, start_diff, DiffRange, RangeAggregate};
+use rbsr::{initial_ranges, protocol_round, EnumerationRange, RangeAggregate};
 use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
 // ---------------------------------------------------------------------------
@@ -141,18 +141,18 @@ fn run_diff(
     a: &Tree,
     b: &Tree,
     perturb: &mut dyn FnMut(&mut Vec<RangeAggregate<u64>>),
-) -> (Vec<DiffRange<u64>>, Vec<DiffRange<u64>>) {
+) -> (Vec<EnumerationRange<u64>>, Vec<EnumerationRange<u64>>) {
     let mut a_diffs = Vec::new();
     let mut b_diffs = Vec::new();
-    let mut a_seg = start_diff(a);
+    let mut a_seg = initial_ranges(a);
     let mut b_seg = Vec::new();
 
     let mut guard = 0;
     while !a_seg.is_empty() {
         perturb(&mut a_seg);
-        diff_round(b, std::mem::take(&mut a_seg), &mut b_seg, &mut b_diffs);
+        protocol_round(b, std::mem::take(&mut a_seg), &mut b_seg, &mut b_diffs);
         perturb(&mut b_seg);
-        diff_round(a, std::mem::take(&mut b_seg), &mut a_seg, &mut a_diffs);
+        protocol_round(a, std::mem::take(&mut b_seg), &mut a_seg, &mut a_diffs);
 
         guard += 1;
         // Bounded number of refinement rounds: the protocol fans out by 16 per
@@ -163,7 +163,7 @@ fn run_diff(
 }
 
 /// Collect the (key, value) pairs that `tree` holds inside any of `ranges`.
-fn items_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<(u64, u64)> {
+fn items_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
         .flat_map(|r| tree.range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
@@ -174,7 +174,7 @@ fn items_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<(u64, u64)> {
 }
 
 /// Keys of `tree` covered by `ranges`.
-fn keys_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<u64> {
+fn keys_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<u64> {
     items_in(tree, ranges).into_iter().map(|(k, _)| k).collect()
 }
 
@@ -227,7 +227,12 @@ fn universe_strategy() -> impl Strategy<Value = Vec<(u64, u64, bool, bool)>> {
 }
 
 /// Apply both sides of a diff result, reconciling the two trees in place.
-fn apply_full(a: &mut Tree, b: &mut Tree, a_diffs: &[DiffRange<u64>], b_diffs: &[DiffRange<u64>]) {
+fn apply_full(
+    a: &mut Tree,
+    b: &mut Tree,
+    a_diffs: &[EnumerationRange<u64>],
+    b_diffs: &[EnumerationRange<u64>],
+) {
     let a_items = items_in(a, a_diffs);
     let b_items = items_in(b, b_diffs);
     for (k, v) in a_items {

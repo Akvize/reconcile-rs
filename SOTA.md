@@ -217,7 +217,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   if *d* is mis-guessed) and **ordered-range reconciliation** (partial sync by prefix/subspace —
   what Willow exploits in 3D). Sketches reconcile an *opaque* set.
 - **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a sketch (Rateless IBLT) to
-  drain divergent leaves in one shot — would beat pure FingerprintTreeMap on latency without losing
+  drain the still-unresolved leaf ranges in one shot — would beat pure FingerprintTreeMap on latency without losing
   adaptiveness.
 
 ### 2.3 Real differentiators of the approach (structural strengths)
@@ -236,7 +236,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    price of these two invariants, not an anomaly.
 4. **A single structure stores AND reconciles**: no separate Merkle tree to maintain (contrast
    Cassandra which builds the tree at repair time). The store *is* the reconciliation index.
-5. **Avoids Cassandra's over-streaming** (16-way recursion tightened onto real diffs).
+5. **Avoids Cassandra's over-streaming**: the SPLIT recursion tightens onto the ranges that
+   actually differ instead of streaming a whole fixed partition. (The split fan-out here is
+   `√n` by rank, not a fixed branching factor — arXiv:2603.19820's Algorithm 2 is stated for a
+   fixed `b`, and Negentropy's default is `b = 16`; neither is what this implementation does.)
 6. **Rust-native, in-process, embeddable**: a real ecosystem niche (mature equivalents = JVM).
 
 ### 2.4 The design axes of a *true* SOTA RSOS
@@ -323,7 +326,7 @@ surrounding system.
 
 | Term | Definition |
 |---|---|
-| **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): recursive partition of an ordered set, exchange of range fingerprints, descent into divergent ranges. What reconcile-rs implements. O(log n) RTT. |
+| **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): the peers maintain a family of pairwise disjoint **active ranges**, initially one **outer range**; each **protocol round**, a peer answers every active range it was asked about with **SKIP** (aggregates match → *resolved*), **IDLIST** (send the range's ordered contents outright) or **SPLIT** (replace it by a balanced family of **child ranges**). The result is the **symmetric difference** Δ(X, Y). Vocabulary and Algorithm 1 as formalized in arXiv:2603.19820 §4. What reconcile-rs implements. O(log n) RTT. |
 | **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026): an ordered set offering **composable** range summaries + rank/select navigation. An augmented B+-tree realizes it → **the FingerprintTreeMap is an RSOS**. |
 | **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the FingerprintTreeMap. |
 | **MST** (*Merkle Search Tree*) | Auvolat & Taïani, SRDS 2019. A B-tree whose key level derives from the **hash of the key** ⇒ history-independent. Diffs **nodes**. Vulnerable to the leading-zeros attack. Usage: Bluesky/atproto. |

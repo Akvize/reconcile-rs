@@ -314,7 +314,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
     /// kicking off / continuing a value-only reconciliation round.
     pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
-        let segments = rbsr::start_diff(&*self.tree.read());
+        let segments = rbsr::initial_ranges(&*self.tree.read());
         send_buf.clear();
         for segment in segments {
             gossip::bincode::encode(
@@ -330,7 +330,10 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         let addr = gen_ip(&mut *self.rng.write(), net);
         peers.push(addr);
         for peer in peers {
-            trace!("read replica start_diff {} bytes to {peer}", send_buf.len());
+            trace!(
+                "read replica initial_ranges {} bytes to {peer}",
+                send_buf.len()
+            );
             if let Err(err) = send_to_retry(
                 &*self.transport,
                 &self.authenticator,
@@ -394,7 +397,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
             let mut differences = Vec::new();
             {
                 let guard = self.tree.read();
-                rbsr::diff_round(
+                rbsr::protocol_round(
                     &*guard,
                     value_in_comparison,
                     &mut out_comparison,

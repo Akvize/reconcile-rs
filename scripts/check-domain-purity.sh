@@ -46,7 +46,7 @@ DOMAIN_FILES=(
 # `src/hrtree.rs`, `src/hrtree_iter.rs` and `src/fingerprint.rs` moved to the standalone `rsos`
 # crate (step A, where the first two are now `rsos/src/fingerprint_tree_map{,_iter}.rs`, joined by
 # `rsos/src/aggregate.rs`), and `src/proto.rs` to the standalone `rbsr` crate (step B, now
-# `rbsr/src/diff.rs` + `rbsr/src/rsos_view.rs`). Both carry their own, stronger invariant (zero
+# `rbsr/src/protocol.rs` + `rbsr/src/rsos_view.rs`). Both carry their own, stronger invariant (zero
 # dependency on anything reconciliation-domain-specific, enforced today by their Cargo.toml
 # dependency lists alone); a grep-based analog for `rsos`/`rbsr` is tracked as a later step, not
 # added here.

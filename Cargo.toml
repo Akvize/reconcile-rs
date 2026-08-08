@@ -107,7 +107,7 @@ metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
 parking_lot = "0.12.1"
 rand = "0.8.5"
-# The anti-entropy algorithm (`start_diff`/`diff_round`/`RangeAggregate`), generic over any RSOS
+# The anti-entropy algorithm (`initial_ranges`/`protocol_round`/`RangeAggregate`), generic over any RSOS
 # backend — see `rbsr/src/lib.rs`.
 rbsr = { version = "0.1.0", path = "rbsr" }
 # The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K>`, `Fingerprint`,

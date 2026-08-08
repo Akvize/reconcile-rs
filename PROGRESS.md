@@ -125,7 +125,7 @@ all but one High resolved or mitigated.
 
 ### Remaining gaps to SOTA (see [`SOTA.md`](./SOTA.md) §2.4)
 - Reconciliation latency: RBSR uses O(log n) sequential RTTs; a Rateless-IBLT pass to drain
-  divergent leaves in one shot would cut WAN latency. Design choice, not a defect.
+  still-unresolved leaf ranges in one shot would cut WAN latency. Design choice, not a defect.
 - API ergonomics: `Result`-returning constructors ✅ (F13 — [#148](https://github.com/Akvize/reconcile-rs/issues/148), `f1423ce`);
   `pre_insert` outside the write-lock ✅ (F14 — [#149](https://github.com/Akvize/reconcile-rs/issues/149), `f4b5028`);
   post-insert hooks ([#79](https://github.com/Akvize/reconcile-rs/issues/79)).
@@ -175,8 +175,8 @@ Progress:
 - ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
   `HashRangeQueryable` / `Diffable` removed; range querying is now inherent on `FingerprintTreeMap`
   (today `aggregate` / `rank` / `select`, all public since the `rsos` extraction; `len` / `is_empty`
-  public) and `start_diff` / `diff_round` became free functions over the local set in the
-  then-`pub(crate)` `proto` module, with `RangeAggregate` / `DiffRange` no longer on the `reconcile`
+  public) and `initial_ranges` / `protocol_round` became free functions over the local set in the
+  then-`pub(crate)` `proto` module, with `RangeAggregate` / `EnumerationRange` no longer on the `reconcile`
   public surface (they now live in the standalone `rbsr` crate, generic over the `RsosView<K>`
   backend trait — migration step 6 Step B). Iso-functional; invariants 3–4
   preserved byte-for-byte.
@@ -205,7 +205,7 @@ Progress:
   **A** extracted the `rsos` crate (`FingerprintTreeMap` — renamed from `HRTree` via
   `FingerprintTree` — `Fingerprint`, the `Rsos` trait, and the Def. 3.5 bundled `Aggregate`
   returned by `aggregate`);
-  **B** extracted the `rbsr` crate (`start_diff`/`diff_round`/`RangeAggregate`, generic over
+  **B** extracted the `rbsr` crate (`initial_ranges`/`protocol_round`/`RangeAggregate`, generic over
   `rbsr::RsosView<K>`, blanket-implemented for every `rsos::Rsos` implementor, with `Rsos<K, V>`
   becoming `Rsos<K>` + associated `Value`);
   **C** split out `lww-register` (domain), `gossip` (network adapters, deliberately with no
@@ -299,7 +299,7 @@ Any change must preserve these (they encode the fixes above):
    is as much a wire break as changing the hash.
 2. HLC total order `(wall_ms, counter, node_id)`; merge uses strict `>`.
 3. Range emptiness/equality decided on `size`, never on `hash`.
-4. `diff_round` validates incoming bounds (`checked_sub`, no `unimplemented!`).
+4. `protocol_round` validates incoming bounds (`checked_sub`, no `unimplemented!`).
 5. Authenticate-before-deserialize (MAC on raw bytes before decoding).
 6. Causal-stability tombstone gate before GC.
 7. `version_hash` determinism — via `rsos::digest` (the canonical encoding), not `DefaultHasher`.

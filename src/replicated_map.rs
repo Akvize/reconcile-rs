@@ -1921,7 +1921,7 @@ mod replicated_map_tests {
         use serde::Serialize as _;
 
         let tree = FingerprintTreeMap::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
-        let segments = rbsr::start_diff(&tree);
+        let segments = rbsr::initial_ranges(&tree);
         let mut buf = Vec::new();
         for seg in segments {
             Message::<
