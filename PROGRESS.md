@@ -10,10 +10,11 @@
 > - **Issue [#138](https://github.com/Akvize/reconcile-rs/issues/138)** — execution tracking of the
 >   architecture migration (one sub-issue per phase).
 
-- **Last updated:** 2026-08-07
-- **Baseline:** `claude/workspace-split-step-c` + Step D (migration step 6 A–D landed; pending merge
-  to main). Correctness baseline unchanged since the 2026-06 sprint
-  (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is behaviour-preserving.
+- **Last updated:** 2026-08-08
+- **Baseline:** `claude/workspace-split-step-c` + Step D + the `Mirror` `Transport` pass (migration
+  steps 6 A–D and 7 landed; pending merge to main). Correctness baseline unchanged since the
+  2026-06 sprint (`claude/determined-franklin-s3tvt1` @ `f1423ce`) — the split is
+  behaviour-preserving.
 - **Manifest:** `0.2.1` (unpublished; semver and publish policy tracked in
   [#204](https://github.com/Akvize/reconcile-rs/issues/204))
 
@@ -146,8 +147,9 @@ and scheduled per [#206](https://github.com/Akvize/reconcile-rs/issues/206).
 Tracked in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and issue
 [#138](https://github.com/Akvize/reconcile-rs/issues/138) (hexagonal ports & adapters). Steps:
 bound bundles & encapsulation → dissolve diff traits → `Clock` port → `Entry`/`State` type →
-`Transport`/`Codec` ports → workspace split. None of these change runtime behaviour except the
-`Entry`/`State` step (wire/on-disk format), and all preserve the invariants below.
+`Transport`/`Codec` ports → workspace split → `Mirror` onto the `Transport` port (all done). None of
+these change runtime behaviour except the `Entry`/`State` step (wire/on-disk format), and all
+preserve the invariants below.
 
 Refinements adopted after a `file:line` review of the sequence (see issue
 [#138](https://github.com/Akvize/reconcile-rs/issues/138)): the `Clock` port returns the concrete
@@ -206,13 +208,23 @@ Progress:
   breakable, since with the dependency undeclared the import would not compile (ARCHITECTURE.md
   §2.2).
 
-**#138 is not yet closed.** The structural migration is complete — six crates, ports on the correct
-side of each boundary, domain purity enforced by the compiler and by `check-domain-purity.sh`. What
-remains is the one item carried over from Step 5: `src/mirror.rs` still binds and owns its own
-`tokio::net::UdpSocket` and calls `bincode`'s `Serializer`/`Deserializer` directly on its receive
-path (its *send* path already goes through the shared `Transport` helpers). Giving `Mirror` an
-injectable `Transport` is the last piece of residual infrastructure coupling; see ARCHITECTURE.md
-§2.3/§6.
+- ✅ Step 7 — `Mirror` routed onto the `Transport` port, closing the item carried over from Step 5.
+  `Mirror` holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of an `Arc<UdpSocket>`, receives
+  via `Transport::recv_from` and decodes via `gossip::bincode::decode_stream` under the engine's
+  `MAX_MESSAGES_PER_DATAGRAM` bound, so `src/mirror.rs` imports neither `bincode` nor `tokio::net`.
+  `Mirror::new` is unchanged for real-socket users (it binds a `UdpTransport` internally) and the new
+  public `Mirror::new_with_transport` matches `ReplicatedMap::new_with_transport`. Authentication
+  still runs on raw datagram bytes ahead of any decode (invariant #5 below), and the mirror's
+  read-only / non-member semantics are untouched. Evidence:
+  `tests/mirror.rs::mirror_converges_with_dated_store_over_in_memory_transport` converges a mirror
+  with a dated `ReplicatedMap` over `InMemoryNetwork` with no sockets bound anywhere.
+
+**#138 is closed.** The structural migration was complete after Step 6 — six crates, ports on the
+correct side of each boundary, domain purity enforced by the compiler and by
+`check-domain-purity.sh` — and Step 7 removed the last residual infrastructure coupling. A grep of
+the `reconcile` crate for `tokio::net`/`UdpSocket`/`bincode` now returns only `#[cfg(test)]` code and
+the `UdpTransport` default-adapter constructions. The infrastructure that remains unported by design
+(`tokio::time`, `rand::StdRng`, `ipnet`) is not a swappable boundary; see ARCHITECTURE.md §2.3/§6.
 
 ---
 
