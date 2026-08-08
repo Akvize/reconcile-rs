@@ -21,7 +21,7 @@
 //! published on Arxiv in February 2023:
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
-//! [`FingerprintTree`] exposes the range-hash queries (`hash`/`range_aggregate`,
+//! [`FingerprintTree`] exposes the range-aggregate queries (`aggregate`,
 //! `insertion_position`, `key_at`, `len`) that a range-based-set-reconciliation anti-entropy
 //! protocol (such as this workspace's `rbsr`-to-be) needs to drive range reconciliation. It also
 //! implements the [`Rsos`](crate::Rsos) trait — see the crate root docs.
@@ -34,6 +34,7 @@ use arrayvec::ArrayVec;
 use range_cmp::{RangeOrd, RangeOrdering};
 use tracing::trace;
 
+use crate::aggregate::Aggregate;
 use crate::fingerprint::{hash, Fingerprint};
 
 const B: usize = 6;
@@ -590,13 +591,17 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for FingerprintTree
 }
 
 impl<K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
-    /// Bundled `(count, Fingerprint)` aggregate over a range of keys: Def. 3.5's `A(S) = (|S|,
-    /// Σ(S))`, answered in a single `O(log n)` tree walk from the per-subtree cached
-    /// `tree_size`/`tree_hash` (see the internal `Node` type), which are already updated together in lockstep on
-    /// every mutation. This is [`Rsos::aggregate`](crate::Rsos::aggregate)'s realization; `hash`
-    /// below is a thin wrapper discarding the count half for callers that only need the
-    /// [`Fingerprint`].
-    pub fn range_aggregate<R: RangeBounds<K>>(&self, range: &R) -> (usize, Fingerprint) {
+    /// Bundled [`Aggregate`] over a range of keys: Def. 3.5's `A(S) = (|S|, Σ(S))`, answered in a
+    /// single `O(log n)` tree walk from the per-subtree cached `tree_size`/`tree_hash` (see the
+    /// internal `Node` type), which are already updated together in lockstep on every mutation.
+    /// This is [`Rsos::aggregate`](crate::Rsos::aggregate)'s realization, under the same name.
+    ///
+    /// `pub` — it is reconciliation mechanism (it drives range-based-set-reconciliation protocols
+    /// such as this workspace's `rbsr`-to-be), not general-purpose public API, but reachable
+    /// across the crate boundary now that `FingerprintTree` lives in its own crate. Callers that
+    /// only need `Σ(S)` write `.aggregate(range).fingerprint()`: identical cost, the same single
+    /// tree walk.
+    pub fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
             range: &R,
@@ -657,20 +662,8 @@ impl<K: Hash + Ord, V: Hash> FingerprintTree<K, V> {
             }
             (cum_size, cum_hash)
         }
-        aux(&self.root, range, None, None)
-    }
-
-    /// Cumulated [`Fingerprint`] over a range of keys: the 256-bit additive combination
-    /// (see [`crate::fingerprint`]) of the per-element hashes of every element in the range,
-    /// answered in `O(log n)` from the per-subtree cached hashes. `pub` — it is reconciliation
-    /// mechanism (drives range-based-set-reconciliation protocols such as this workspace's
-    /// `rbsr`-to-be), not general-purpose public API, but reachable across the crate boundary now
-    /// that `FingerprintTree` lives in its own crate.
-    ///
-    /// Thin wrapper over [`range_aggregate`](Self::range_aggregate), keeping this exact signature
-    /// and return value for existing simple callers that only need the fingerprint.
-    pub fn hash<R: RangeBounds<K>>(&self, range: &R) -> Fingerprint {
-        self.range_aggregate(range).1
+        let (size, fingerprint) = aux(&self.root, range, None, None);
+        Aggregate::new(size, fingerprint)
     }
 
     /// Position of `key` in the in-order sequence if present, or the position it would occupy
@@ -828,6 +821,7 @@ mod tests {
 
     use rand::{seq::SliceRandom, Rng, SeedableRng};
 
+    use crate::aggregate::Aggregate;
     use crate::fingerprint::Fingerprint;
 
     use super::FingerprintTree;
@@ -843,38 +837,44 @@ mod tests {
     }
 
     #[test]
-    fn test_hash() {
+    fn test_aggregate() {
         // empty
         let mut tree = FingerprintTree::new();
-        assert_eq!(tree.hash(&..), Fingerprint::ZERO);
+        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
         tree.check_invariants();
 
         // 1 value
         tree.insert(50, "Hello");
         tree.check_invariants();
-        let hash1 = tree.hash(&..);
-        assert_ne!(hash1, Fingerprint::ZERO);
+        let agg1 = tree.aggregate(&..);
+        assert_eq!(agg1.size(), 1);
+        // The `assert_ne!`s below compare *fingerprints*, not whole aggregates: with different
+        // element counts an aggregate-level `!=` would hold trivially on the size half and stop
+        // saying anything about Σ(S), which is what these assertions exist to check.
+        assert_ne!(agg1.fingerprint(), Fingerprint::ZERO);
 
         // 2 values
         tree.insert(25, "World!");
         tree.check_invariants();
-        let hash2 = tree.hash(&..);
-        assert_ne!(hash2, Fingerprint::ZERO);
-        assert_ne!(hash2, hash1);
+        let agg2 = tree.aggregate(&..);
+        assert_eq!(agg2.size(), 2);
+        assert_ne!(agg2.fingerprint(), Fingerprint::ZERO);
+        assert_ne!(agg2.fingerprint(), agg1.fingerprint());
 
         // 3 values
         tree.insert(75, "Everyone!");
         tree.check_invariants();
-        let hash3 = tree.hash(&..);
-        assert_ne!(hash3, Fingerprint::ZERO);
-        assert_ne!(hash3, hash1);
-        assert_ne!(hash3, hash2);
+        let agg3 = tree.aggregate(&..);
+        assert_eq!(agg3.size(), 3);
+        assert_ne!(agg3.fingerprint(), Fingerprint::ZERO);
+        assert_ne!(agg3.fingerprint(), agg1.fingerprint());
+        assert_ne!(agg3.fingerprint(), agg2.fingerprint());
 
-        // back to 2 values
+        // back to 2 values: both halves must return to their earlier state, so this one compares
+        // the whole aggregate.
         tree.remove(&75);
         tree.check_invariants();
-        let hash4 = tree.hash(&..);
-        assert_eq!(hash4, hash2);
+        assert_eq!(tree.aggregate(&..), agg2);
     }
 
     #[test]
@@ -883,7 +883,9 @@ mod tests {
         let mut tree1 = FingerprintTree::new();
         let mut key_values = Vec::new();
 
-        let mut expected_hash = Fingerprint::ZERO;
+        // Independently accumulated expectation for the *whole* bundled aggregate: every insert
+        // composes one more single-element aggregate `(1, hash(k, v))` through `⊗`.
+        let mut expected = Aggregate::ZERO;
 
         // add some
         for _ in 0..1000 {
@@ -892,8 +894,8 @@ mod tests {
             let old = tree1.insert(key, value);
             assert!(old.is_none());
             tree1.check_invariants();
-            expected_hash += super::hash(&key, &value);
-            assert_eq!(tree1.hash(&..), expected_hash);
+            expected += Aggregate::new(1, super::hash(&key, &value));
+            assert_eq!(tree1.aggregate(&..), expected);
             key_values.push((key, value));
         }
 
@@ -908,7 +910,7 @@ mod tests {
         tree1.insert(key, value1);
         tree1.with_mut(&key, |v| *v.unwrap() = value2);
         tree1.check_invariants();
-        expected_hash += super::hash(&key, &value2);
+        expected += Aggregate::new(1, super::hash(&key, &value2));
         key_values.push((key, value2));
 
         // in the tree, the items should now be sorted
@@ -919,9 +921,22 @@ mod tests {
 
         // check for partial ranges
         let mid = key_values[key_values.len() / 2].0;
-        assert_ne!(tree1.hash(&(mid..)), tree1.hash(&..));
-        assert_ne!(tree1.hash(&..mid), tree1.hash(&..));
-        assert_eq!(tree1.hash(&..mid) + tree1.hash(&(mid..)), tree1.hash(&..));
+        // Proper sub-ranges: compare fingerprints, since the sizes differ anyway and an
+        // aggregate-level `!=` would say nothing about Σ(S).
+        assert_ne!(
+            tree1.aggregate(&(mid..)).fingerprint(),
+            tree1.aggregate(&..).fingerprint()
+        );
+        assert_ne!(
+            tree1.aggregate(&..mid).fingerprint(),
+            tree1.aggregate(&..).fingerprint()
+        );
+        // The Def. 3.5 monoid homomorphism, over *both* halves at once: composing the aggregates
+        // of a partition of the key space with `⊗` must reproduce the aggregate of the whole.
+        assert_eq!(
+            tree1.aggregate(&..mid) + tree1.aggregate(&(mid..)),
+            tree1.aggregate(&..)
+        );
 
         for _ in 0..100 {
             let index = rng.gen::<usize>() % key_values.len();
@@ -977,18 +992,23 @@ mod tests {
             let value2 = tree1.remove(&key);
             tree1.check_invariants();
             assert_eq!(value2, Some(value));
-            expected_hash -= super::hash(&key, &value);
-            assert_eq!(tree1.hash(&..), expected_hash);
+            // `Aggregate` is a monoid, not a group (no `Sub`) — removal decomposes into the
+            // count and the fingerprint, the latter of which *is* an abelian group.
+            expected = Aggregate::new(
+                expected.size() - 1,
+                expected.fingerprint() - super::hash(&key, &value),
+            );
+            assert_eq!(tree1.aggregate(&..), expected);
         }
     }
 
-    /// The bundled `range_aggregate(range).0` (Def. 3.5's `A(S) = (|S|, Σ(S))`, the count half)
-    /// must agree with the pre-existing, independently-computed `get_range(range).count()` — the
-    /// two-call approach `range_aggregate` replaces — over a handful of ranges (empty, full,
-    /// partial) on a tree with several dozen inserted keys. Also checks that the fingerprint half
-    /// still matches `hash(range)` exactly, since `hash` is now a thin wrapper over it.
+    /// The bundled [`Aggregate`]'s count half (Def. 3.5's `A(S) = (|S|, Σ(S))`) must agree with
+    /// the independently-computed `get_range(range).count()` over a handful of ranges (empty,
+    /// full, partial) on a tree with several dozen inserted keys. The fingerprint half is checked
+    /// the same independent way: against the per-element hashes of `get_range`'s own contents,
+    /// summed by hand.
     #[test]
-    fn range_aggregate_count_matches_get_range_count() {
+    fn aggregate_count_matches_get_range_count() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
         let mut tree: FingerprintTree<u32, u32> = FingerprintTree::new();
         let mut keys = Vec::new();
@@ -1003,16 +1023,24 @@ mod tests {
 
         let check = |range: &dyn Fn() -> (std::ops::Bound<u32>, std::ops::Bound<u32>)| {
             let range = range();
-            let (count, agg_hash) = tree.range_aggregate(&range);
+            let aggregate = tree.aggregate(&range);
             assert_eq!(
-                count,
+                aggregate.size(),
                 tree.get_range(&range).count(),
-                "range_aggregate count disagrees with get_range().count() for {range:?}"
+                "aggregate size disagrees with get_range().count() for {range:?}"
             );
             assert_eq!(
-                agg_hash,
-                tree.hash(&range),
-                "range_aggregate fingerprint disagrees with hash() for {range:?}"
+                aggregate.is_empty(),
+                tree.get_range(&range).next().is_none(),
+                "aggregate is_empty disagrees with get_range() for {range:?}"
+            );
+            let expected_fingerprint = tree
+                .get_range(&range)
+                .fold(Fingerprint::ZERO, |acc, (k, v)| acc + super::hash(k, v));
+            assert_eq!(
+                aggregate.fingerprint(),
+                expected_fingerprint,
+                "aggregate fingerprint disagrees with the summed element hashes for {range:?}"
             );
         };
 
@@ -1035,8 +1063,6 @@ mod tests {
         check(&|| (std::ops::Bound::Included(lo), std::ops::Bound::Unbounded));
         // an empty tree
         let empty: FingerprintTree<u32, u32> = FingerprintTree::new();
-        let (count, hash) = empty.range_aggregate(&..);
-        assert_eq!(count, 0);
-        assert_eq!(hash, Fingerprint::ZERO);
+        assert_eq!(empty.aggregate(&..), Aggregate::ZERO);
     }
 }

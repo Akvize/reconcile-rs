@@ -22,12 +22,14 @@
 //!   constraints (in-memory speed vs. durability/content-addressing). This crate ships exactly
 //!   one realization, [`FingerprintTree`] — an in-memory augmented tree, closer in spirit to the
 //!   paper's first example.
-//! - **Def. 3.5** defines the *bundled aggregate* `A(S) = (|S|, Σ(S))`: one query answering both
-//!   "how many elements" and "what is their combined summary" in a single pass, rather than two
-//!   independent queries. [`FingerprintTree::range_aggregate`] (and `Rsos::aggregate`, its trait
-//!   form) realize this directly — the tree already caches `tree_size` and `tree_hash` together,
-//!   in lockstep, on every node, so bundling them into one walk is a genuine implementation of
-//!   Def. 3.5, not just an API convenience.
+//! - **Def. 3.5** defines the *bundled aggregate* `A(S) = (|S|, Σ(S))` — and defines it as a
+//!   monoid `A := (ℕ×M, ⊗, (0, 0_M))`, not as a loose pair: one query answering both "how many
+//!   elements" and "what is their combined summary" in a single pass, rather than two independent
+//!   queries. [`Aggregate`] is that monoid as a named type, and
+//!   [`FingerprintTree::aggregate`] (and [`Rsos::aggregate`], its trait form) realize the query
+//!   directly — the tree already caches `tree_size` and `tree_hash` together, in lockstep, on
+//!   every node, so bundling them into one walk is a genuine implementation of Def. 3.5, not just
+//!   an API convenience.
 //! - **Thm. 5.2** gives the complexity bounds an aggregate-augmented B+-tree realization achieves:
 //!   `Rank`/`Select` in `O(h)`, `Aggregate` in `O(Bh) = O(h)` under bounded page size,
 //!   `Enumerate` in `O(h + k)`, `Insert`/`Delete` in `O(h)` (`h` = tree height, `B`/page size
@@ -71,11 +73,13 @@
 //!   bits, which the paper describes as only "probabilistically sound" rather than
 //!   information-theoretically exact. `rsos` does not make that tradeoff.
 
+pub mod aggregate;
 pub mod fingerprint;
 pub mod hrtree;
 pub mod hrtree_iter;
 mod rsos_trait;
 
+pub use aggregate::Aggregate;
 pub use fingerprint::{hash, Fingerprint};
 pub use hrtree::FingerprintTree;
 pub use hrtree_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};

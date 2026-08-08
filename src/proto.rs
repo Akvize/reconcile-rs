@@ -13,7 +13,7 @@
 //! public surface (see `ARCHITECTURE.md` §3.7). The whole module is `pub(crate)`, so although the
 //! items below are declared `pub`, they are unreachable through the public path — the gated
 //! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-hash
-//! queries the algorithm relies on ([`FingerprintTree::hash`], [`FingerprintTree::insertion_position`],
+//! queries the algorithm relies on ([`FingerprintTree::aggregate`], [`FingerprintTree::insertion_position`],
 //! [`FingerprintTree::key_at`], [`FingerprintTree::len`]) are inherent methods on `FingerprintTree`.
 
 use std::ops::{Bound, RangeBounds};
@@ -67,7 +67,7 @@ impl<K> From<EndBound<K>> for Bound<K> {
 /// A [`HashSegment`]'s range: `(StartBound<K>, EndBound<K>)`, wrapped in a local tuple struct
 /// (rather than a bare tuple) so it can implement the foreign [`RangeBounds`] trait directly —
 /// Rust's orphan rules require the outermost type to be local, and a plain tuple never qualifies.
-/// This lets a segment's range feed straight into [`FingerprintTree::hash`] / [`FingerprintTree::get_range`] like
+/// This lets a segment's range feed straight into [`FingerprintTree::aggregate`] / [`FingerprintTree::get_range`] like
 /// any other `RangeBounds<K>`, with no intermediate conversion.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct SegmentRange<K>(StartBound<K>, EndBound<K>);
@@ -162,7 +162,7 @@ where
 {
     vec![HashSegment {
         range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-        hash: tree.hash(&..),
+        hash: tree.aggregate(&..).fingerprint(),
         size: tree.len(),
     }]
 }
@@ -189,9 +189,11 @@ pub fn diff_round<K, V>(
             size,
         } = segment;
         // Safe on any bound combination — including a not-yet-validated inverted range —
-        // because `FingerprintTree::hash` walks the tree via point/range comparisons, never index
+        // because `FingerprintTree::aggregate` walks the tree via point/range comparisons, never index
         // arithmetic (see its doc comment).
-        let local_hash = tree.hash(&SegmentRange::new(start.clone(), end.clone()));
+        let local_hash = tree
+            .aggregate(&SegmentRange::new(start.clone(), end.clone()))
+            .fingerprint();
         // The bound *shapes* are already guaranteed by `StartBound`/`EndBound`: a peer sending
         // anything else fails to deserialize before `diff_round` ever runs (see their doc
         // comments). The one remaining way a wire segment can be malformed is an inverted range
@@ -260,7 +262,7 @@ pub fn diff_round<K, V>(
                 if next_index >= end_index {
                     let range = SegmentRange::new(cur_bound, end_bound);
                     out_comparison.push(HashSegment {
-                        hash: tree.hash(&range),
+                        hash: tree.aggregate(&range).fingerprint(),
                         range,
                         size: end_index - cur_index,
                     });
@@ -269,7 +271,7 @@ pub fn diff_round<K, V>(
                     let next_key = tree.key_at(next_index);
                     let range = SegmentRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
                     out_comparison.push(HashSegment {
-                        hash: tree.hash(&range),
+                        hash: tree.aggregate(&range).fingerprint(),
                         range,
                         size: next_index - cur_index,
                     });
@@ -390,7 +392,7 @@ mod tests {
         let store = tree(&[10, 20, 30]);
         let segment = HashSegment {
             range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: store.hash(&..),
+            hash: store.aggregate(&..).fingerprint(),
             size: store.len(),
         };
         let (out_comparison, differences) = round(&store, segment);
@@ -406,8 +408,8 @@ mod tests {
         let store = tree(&[10, 20, 30, 40, 50]);
         let segment = HashSegment {
             range: SegmentRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            hash: store.hash(&..), // hashes collide ...
-            size: store.len() + 7, // ... but the advertised size is wrong
+            hash: store.aggregate(&..).fingerprint(), // hashes collide ...
+            size: store.len() + 7,                    // ... but the advertised size is wrong
         };
         let (out_comparison, differences) = round(&store, segment);
         // Not concluded in sync: the range is subdivided and bounced back for refinement.

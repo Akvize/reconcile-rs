@@ -14,7 +14,7 @@
 use std::hash::Hash;
 use std::ops::RangeBounds;
 
-use crate::fingerprint::Fingerprint;
+use crate::aggregate::Aggregate;
 use crate::hrtree::{FingerprintTree, ItemRange};
 
 /// The RSOS interface (Def. 3.9): the seven operations a *replica state* `X ⊆ U` must support to
@@ -35,11 +35,12 @@ pub trait Rsos<K, V> {
     /// `size()` → `|X|`: the number of elements currently in the store.
     fn size(&self) -> usize;
 
-    /// `Aggregate(l, u)` → `A(X ∩ [l, u))`: the bundled `(count, Fingerprint)` aggregate (Def.
-    /// 3.5's `A(S) = (|S|, Σ(S))`) over a range of keys, in one tree walk. Concrete
-    /// `(usize, Fingerprint)` rather than a generic-monoid associated type — see the crate root
-    /// docs' "lifting monoid" note on why that generalization is deliberately out of scope today.
-    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> (usize, Fingerprint);
+    /// `Aggregate(l, u)` → `A(X ∩ [l, u))`: the bundled [`Aggregate`] (Def. 3.5's
+    /// `A(S) = (|S|, Σ(S))`, the monoid `(ℕ×M, ⊗, (0, 0_M))`) over a range of keys, in one tree
+    /// walk. Concrete [`Aggregate`] over [`Fingerprint`](crate::Fingerprint) rather than a
+    /// generic-monoid associated type — see the crate root docs' "lifting monoid" note on why
+    /// that generalization is deliberately out of scope today.
+    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate;
 
     /// `Rank(z)` → `Rank_X(z)`: the position `z` occupies (or would occupy) in the in-order
     /// sequence of keys.
@@ -73,8 +74,8 @@ impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTree<K, V> {
         self.len()
     }
 
-    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> (usize, Fingerprint) {
-        self.range_aggregate(range)
+    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
+        FingerprintTree::aggregate(self, range)
     }
 
     fn rank(&self, z: &K) -> usize {

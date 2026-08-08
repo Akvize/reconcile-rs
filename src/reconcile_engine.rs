@@ -454,7 +454,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.map.read().hash(&range)
+        self.map.read().aggregate(&range).fingerprint()
     }
 
     /// Fingerprint of the value-only [`projection`](Self::projection) over a range.
@@ -462,7 +462,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     /// This is the timestamp-less counterpart of [`fingerprint`](Self::fingerprint); a dateless
     /// mirror that has converged with this store computes the same value over the same range.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.projection.read().hash(&range)
+        self.projection.read().aggregate(&range).fingerprint()
     }
 
     /// Insert into the dated `map` **and** mirror the value-only projection (and the

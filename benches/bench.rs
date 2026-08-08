@@ -1,4 +1,4 @@
-// The benchmark drives the range-fingerprint via `FingerprintTree::hash`. Like the
+// The benchmark drives the range-fingerprint via `FingerprintTree::aggregate`. Like the
 // integration-test oracles it reaches it through the gated `reconcile::testing` seam (the
 // `range_hash` shim), so the real bench body only compiles with the `internal-testing` feature.
 // Without it we fall back to an empty `main` so the target still links.
@@ -218,7 +218,7 @@ mod imp {
         let key_values = &key_values;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("FingerprintTree::hash");
+        let mut group = c.benchmark_group("FingerprintTree::aggregate");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= key_values.len() {

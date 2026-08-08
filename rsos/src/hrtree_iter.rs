@@ -583,7 +583,7 @@ mod tests {
         let mut tree = make_tree();
         tree.check_invariants();
 
-        let hash_before = tree.hash(&..);
+        let aggregate_before = tree.aggregate(&..);
 
         // Mutate several keys at random positions; each must leave the tree consistent.
         for _ in 0..20 {
@@ -594,22 +594,31 @@ mod tests {
             tree.check_invariants();
         }
 
-        // After all mutations the global hash must differ from the pre-mutation snapshot
-        // (astronomically unlikely to collide for random u64 values).
-        let hash_after = tree.hash(&..);
+        // After all mutations the global fingerprint must differ from the pre-mutation snapshot
+        // (astronomically unlikely to collide for random u64 values). `with_mut` overwrites
+        // values in place and so must *not* change the element count — hence the fingerprint-only
+        // comparison here, plus an explicit check that the size half held still.
+        let aggregate_after = tree.aggregate(&..);
         assert_ne!(
-            hash_before, hash_after,
-            "tree hash unchanged after with_mut mutations — fingerprints not updated"
+            aggregate_before.fingerprint(),
+            aggregate_after.fingerprint(),
+            "tree fingerprint unchanged after with_mut mutations — fingerprints not updated"
+        );
+        assert_eq!(
+            aggregate_before.size(),
+            aggregate_after.size(),
+            "with_mut changed the element count"
         );
 
-        // A partial-range hash must still satisfy the additive identity:
-        // hash(..mid) + hash(mid..) == hash(..)
+        // The Def. 3.5 monoid homomorphism must still hold over *both* halves of the aggregate:
+        // aggregate(..mid) ⊗ aggregate(mid..) == aggregate(..)
         let mid = BASE_ITEMS[TREE_SIZE / 2].0;
         assert_eq!(
-            tree.hash(&(..mid)) + tree.hash(&(mid..)),
-            tree.hash(&..),
-            "partial-range hashes do not sum to the global hash"
+            tree.aggregate(&(..mid)) + tree.aggregate(&(mid..)),
+            tree.aggregate(&..),
+            "partial-range aggregates do not compose into the global aggregate"
         );
+        assert_eq!(tree.aggregate(&..), aggregate_after);
     }
 
     #[test]

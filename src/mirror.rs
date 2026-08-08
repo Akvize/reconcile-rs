@@ -237,7 +237,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
     /// [`value_fingerprint`](crate::ReconcileStore::value_fingerprint) over the same range.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.tree.read().hash(&range)
+        self.tree.read().aggregate(&range).fingerprint()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -508,7 +508,10 @@ mod tests {
         reference.insert(1, State::Present("a".to_string()));
         reference.insert(2, State::Tombstone);
 
-        assert_eq!(mirror.fingerprint(..), reference.hash(&..));
+        assert_eq!(
+            mirror.fingerprint(..),
+            reference.aggregate(&..).fingerprint()
+        );
     }
 
     /// A live value and its `State` projection hash identically only via the value-only basis:

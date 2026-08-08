@@ -104,7 +104,8 @@ pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport}
 // `tree_hash`, so exposing them publicly would silently corrupt fingerprints. The supported
 // mutation path is `FingerprintTree::with_mut`. A correct iterator-based design is future work.
 pub use rsos::{
-    Fingerprint, FingerprintTree, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos, Values,
+    Aggregate, Fingerprint, FingerprintTree, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos,
+    Values,
 };
 
 pub use mirror::ReconcileMirror;
@@ -128,16 +129,17 @@ pub mod testing {
     pub use crate::proto::{diff_round, start_diff, DiffRange, HashSegment};
 
     /// Range fingerprint of a [`FingerprintTree`](crate::FingerprintTree), exposed for the
-    /// integration-test oracles. `FingerprintTree::hash` is now `pub` on the `rsos` crate (it had
-    /// to be, to stay reachable from `proto.rs`'s new home across the crate boundary), so this
-    /// wrapper is kept only for source compatibility with the existing test call sites.
+    /// integration-test oracles: the `Σ(S)` half of `FingerprintTree::aggregate`, which is `pub`
+    /// on the `rsos` crate (it had to be, to stay reachable from `proto.rs`'s new home across the
+    /// crate boundary). This wrapper is kept only for source compatibility with the existing test
+    /// call sites, which care about the fingerprint alone.
     pub fn range_hash<K, V, R>(tree: &crate::FingerprintTree<K, V>, range: &R) -> crate::Fingerprint
     where
         K: std::hash::Hash + Ord,
         V: std::hash::Hash,
         R: std::ops::RangeBounds<K>,
     {
-        tree.hash(range)
+        tree.aggregate(range).fingerprint()
     }
 
     /// Seal `payload` with MAC authentication (not encryption): `tag(32) || seq(8 LE) || stamp(8
