@@ -51,22 +51,21 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bincode::{DefaultOptions, Deserializer, Serializer};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use serde::{Deserialize, Serialize};
-use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::{Entry, State};
-use crate::replica::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
+use crate::replica::{
+    send_messages_to, send_to_retry, Message, PeerCap, SendPorts, MAX_MESSAGES_PER_DATAGRAM,
+};
 use crate::replicated_map::Config;
-use crate::transport::UdpTransport;
+use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
 use gossip::auth;
 use gossip::gen_ip::{gen_ip, net_of};
@@ -100,7 +99,10 @@ pub struct Mirror<K, V> {
     /// [`State`]), matching a dated peer's value-only projection.
     tree: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
     port: u16,
-    socket: Arc<UdpSocket>,
+    /// The datagram-I/O port (default adapter: [`UdpTransport`]), shared with every clone. The
+    /// mirror sends and receives exclusively through it, exactly like
+    /// [`Replica`](crate::Replica) — no `tokio::net` call sites of its own.
+    transport: Arc<dyn Transport<Addr = SocketAddr>>,
     /// The single network this read-only mirror probes for discovery. A mirror is a
     /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
     /// containing its listen address, else the first declared network, else the loopback default.
@@ -124,7 +126,7 @@ impl<K, V> Clone for Mirror<K, V> {
         Mirror {
             tree: self.tree.clone(),
             port: self.port,
-            socket: self.socket.clone(),
+            transport: self.transport.clone(),
             net: self.net.clone(),
             rng: self.rng.clone(),
             peers: self.peers.clone(),
@@ -151,8 +153,41 @@ impl<K: Key, V: Value> Mirror<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
-        let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
-        debug!("Mirror listening on: {}", socket.local_addr()?);
+        // The mirror keeps the OS default socket buffer sizes (`None`/`None`) rather than reading
+        // `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and a port
+        // refactor is not the place to change how much kernel memory a mirror claims.
+        let transport =
+            UdpTransport::bind(SocketAddr::new(config.listen_addr, config.port), None, None)
+                .await?;
+        debug!("Mirror listening on: {}", transport.local_addr()?);
+        Ok(Self::build(config, Arc::new(transport)))
+    }
+
+    /// Create a mirror over a caller-supplied [`Transport`] adapter instead of the default UDP one,
+    /// mirroring [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport).
+    ///
+    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
+    /// which the caller has already done, or does not need to do at all. This is what lets a
+    /// mirror be driven against a dated peer over an
+    /// [`InMemoryNetwork`](crate::InMemoryNetwork), with no real sockets anywhere.
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use reconcile::{replicated_map::Config, InMemoryNetwork, Mirror};
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
+    /// let mirror = Mirror::<String, String>::new_with_transport(Config::default(), transport);
+    /// ```
+    pub fn new_with_transport(
+        config: Config,
+        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    ) -> Self {
+        Self::build(config, transport)
+    }
+
+    /// Assemble a mirror from an already-constructed [`Transport`]. Pure wiring — no I/O — so it is
+    /// infallible; the fallible socket bind lives in [`new`](Self::new).
+    fn build(config: Config, transport: Arc<dyn Transport<Addr = SocketAddr>>) -> Self {
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
@@ -167,10 +202,10 @@ impl<K: Key, V: Value> Mirror<K, V> {
         let net = net_of(&nets, config.listen_addr)
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
-        Ok(Mirror {
+        Mirror {
             tree: Arc::new(RwLock::new(FingerprintTreeMap::<K, State<V>>::new())),
             port: config.port,
-            socket: Arc::new(socket),
+            transport,
             net: Arc::new(RwLock::new(net)),
             rng: Arc::new(RwLock::new(StdRng::from_entropy())),
             peers: Arc::new(RwLock::new(HashMap::new())),
@@ -182,7 +217,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
             )),
             on_update: Arc::new(RwLock::new(Box::new(|_, _| {}))),
             max_peers: PeerCap::new(config.max_peers),
-        })
+        }
     }
 
     /// Provide the address of a known dated peer, reducing the time to first sync.
@@ -264,15 +299,27 @@ impl<K: Key, V: Value> Mirror<K, V> {
         }
     }
 
+    /// Bundle the outbound ports the batched-send helpers need, exactly as
+    /// [`Replica`](crate::Replica) does. See [`SendPorts`].
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
+        SendPorts {
+            transport: &*self.transport,
+            authenticator: &self.authenticator,
+            sender_counter: &self.sender_counter,
+        }
+    }
+
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
     /// kicking off / continuing a value-only reconciliation round.
     pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
         let segments = rbsr::start_diff(&*self.tree.read());
         send_buf.clear();
         for segment in segments {
-            Message::ValueComparisonItem::<K, WireDated<V>, State<V>>(segment)
-                .serialize(&mut Serializer::new(&mut *send_buf, DefaultOptions::new()))
-                .unwrap();
+            gossip::bincode::encode(
+                &Message::ValueComparisonItem::<K, WireDated<V>, State<V>>(segment),
+                send_buf,
+            )
+            .unwrap();
         }
         let mut peers = self.get_peers();
         // A random address out of the peer network, for discovery — like the dated store, we do not
@@ -283,7 +330,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
         for peer in peers {
             trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
-                &UdpTransport::new(Arc::clone(&self.socket)),
+                &*self.transport,
                 &self.authenticator,
                 &self.sender_counter,
                 send_buf,
@@ -308,26 +355,27 @@ impl<K: Key, V: Value> Mirror<K, V> {
         trace!("mirror received {} bytes from {peer}", payload.len());
         let mut value_in_comparison = Vec::new();
         let mut value_updates: Vec<(K, State<V>)> = Vec::new();
-        let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
-        loop {
-            match Message::<K, WireDated<V>, State<V>>::deserialize(&mut deserializer) {
-                Err(ref kind) => {
-                    if let bincode::ErrorKind::Io(err) = kind.as_ref() {
-                        if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                            break;
-                        }
-                    }
-                    // Never panic on network input (remote-DoS hardening, like the dated engine).
+        // Decode the whole datagram through `gossip::bincode`, like the dated engine.
+        // `MAX_MESSAGES_PER_DATAGRAM` bounds the message count so a crafted datagram cannot be
+        // expanded without limit, and a malformed datagram is dropped whole rather than panicking
+        // the receive loop (remote-DoS hardening).
+        let messages: Vec<Message<K, WireDated<V>, State<V>>> =
+            match gossip::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
+                Ok(messages) => messages,
+                Err(kind) => {
                     warn!(
                         "mirror failed to deserialize datagram from {peer}, dropping it: {kind:?}"
                     );
-                    break;
+                    return;
                 }
-                Ok(Message::ValueComparisonItem(segment)) => value_in_comparison.push(segment),
-                Ok(Message::ValueUpdate(update)) => value_updates.push(update),
+            };
+        for message in messages {
+            match message {
+                Message::ValueComparisonItem(segment) => value_in_comparison.push(segment),
+                Message::ValueUpdate(update) => value_updates.push(update),
                 // The dated channel is meaningless to a mirror (it cannot store dated values nor
                 // participate in causal stability). Ignore it.
-                Ok(Message::ComparisonItem(_)) | Ok(Message::Update(_)) | Ok(Message::Ack(_)) => {}
+                Message::ComparisonItem(_) | Message::Update(_) | Message::Ack(_) => {}
             }
         }
 
@@ -357,13 +405,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
                     .into_iter()
                     .map(Message::<K, WireDated<V>, State<V>>::ValueComparisonItem)
                     .collect();
-                let transport = UdpTransport::new(Arc::clone(&self.socket));
-                let ports = SendPorts {
-                    transport: &transport,
-                    authenticator: &self.authenticator,
-                    sender_counter: &self.sender_counter,
-                };
-                send_messages_to(&messages, &ports, &peer, send_buf).await;
+                send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
         }
     }
@@ -375,7 +417,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
         let mut send_buf = Vec::new();
         self.start_reconciliation(&mut send_buf).await;
         loop {
-            match timeout(ACTIVITY_TIMEOUT, self.socket.recv_from(&mut recv_buf)).await {
+            match timeout(ACTIVITY_TIMEOUT, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     debug!("mirror: no recent activity; initiating value-only diff");
                     self.start_reconciliation(&mut send_buf).await;

@@ -146,7 +146,7 @@ The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
-load-bearing for the in-progress ports/adapters migration (#138).
+load-bearing for the completed ports/adapters migration (#138).
 `./scripts/check-domain-purity.sh` gates it in `./pre-commit` and CI (§3), in **two parts that
 answer two different questions**:
 

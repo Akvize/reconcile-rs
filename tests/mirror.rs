@@ -15,9 +15,11 @@
 //! 2. **Causal-stability safety**: a read-only mirror is never counted as a causal-stability member, so it
 //!    cannot block the dated store's tombstone garbage collection.
 
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
-use reconcile::{replicated_map::Config, Mirror, ReplicatedMap};
+use reconcile::{replicated_map::Config, InMemoryNetwork, Mirror, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..200 {
@@ -155,6 +157,76 @@ async fn mirror_does_not_block_tombstone_gc() {
     // mirror's periodic value-only diff observes it, so the mirror may retain the pre-deletion
     // value — the documented consequence of GC outrunning mirror propagation. Reliable deletion
     // propagation (with a normal timeout) is covered by `mirror_converges_with_dated_store`.
+
+    dated_task.abort();
+    mirror_task.abort();
+}
+
+/// The same convergence contract as `mirror_converges_with_dated_store`, but with **no real
+/// sockets anywhere**: both the dated store and the mirror are wired to an
+/// [`InMemoryNetwork`](reconcile::InMemoryNetwork) through the public `_with_transport`
+/// constructors. This is the seam that `Mirror` gained when its receive loop was moved off
+/// `tokio::net::UdpSocket` onto the `Transport` port (issue #138) — before that, a mirror could not
+/// be exercised at all without binding a UDP port.
+///
+/// It asserts the full value-only protocol round-trip over the injected transport, not merely that
+/// construction succeeds: the mirror drives the diff, receives live values with their timestamps
+/// dropped, keeps hashing identically to the dated store's value-only projection, picks up a write
+/// made after convergence, and reflects a deletion as a tombstone.
+#[tokio::test(flavor = "multi_thread")]
+async fn mirror_converges_with_dated_store_over_in_memory_transport() {
+    let network = InMemoryNetwork::new();
+    let port = 5300u16;
+    let net = "127.0.0.1/8".parse().unwrap();
+    let dated_ip: IpAddr = "127.0.0.94".parse().unwrap();
+    let mirror_ip: IpAddr = "127.0.0.95".parse().unwrap();
+
+    let config = |ip: IpAddr| {
+        Config::default()
+            .with_port(port)
+            .with_listen_addr(ip)
+            .with_net(net)
+    };
+    let dated = ReplicatedMap::<String, String>::new_with_transport(
+        config(dated_ip),
+        Arc::new(network.bind(SocketAddr::new(dated_ip, port))),
+    );
+    // As with real sockets, only the mirror needs a seed: it drives the value-only channel and the
+    // dated store answers reactively to the sender address.
+    let mirror = Mirror::<String, String>::new_with_transport(
+        config(mirror_ip),
+        Arc::new(network.bind(SocketAddr::new(mirror_ip, port))),
+    )
+    .with_seed(dated_ip);
+
+    for i in 0..50 {
+        dated.insert(format!("k{i:02}"), format!("v{i:02}"));
+    }
+    dated.insert("doomed".to_string(), "to be deleted".to_string());
+
+    let dated_task = tokio::spawn(dated.clone().run());
+    let mirror_task = tokio::spawn(mirror.clone().run());
+
+    // Values arrive, timestamps dropped.
+    assert_until!(mirror.get(&"k00".to_string()).as_deref() == Some(&"v00".to_string()));
+    assert_until!(mirror.get(&"k49".to_string()).as_deref() == Some(&"v49".to_string()));
+    assert_until!(
+        mirror.get(&"doomed".to_string()).as_deref() == Some(&"to be deleted".to_string())
+    );
+    // The dateless mirror hashes identically to the dated store's value-only projection.
+    assert_until!(mirror.fingerprint(..) == dated.value_fingerprint(..));
+    assert_eq!(mirror.len(), 51);
+
+    // A write made after convergence still propagates over the injected transport.
+    dated.insert("late".to_string(), "arrival".to_string());
+    assert_until!(mirror.get(&"late".to_string()).as_deref() == Some(&"arrival".to_string()));
+
+    // A deletion is mirrored as a tombstone: `get` stops returning the value, the key stays as an
+    // entry, and the value-only fingerprints reconverge.
+    dated.remove(&"doomed".to_string());
+    assert_until!(mirror.get(&"doomed".to_string()).is_none());
+    assert!(!mirror.contains_key(&"doomed".to_string()));
+    assert_until!(mirror.fingerprint(..) == dated.value_fingerprint(..));
 
     dated_task.abort();
     mirror_task.abort();

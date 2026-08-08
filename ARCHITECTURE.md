@@ -117,14 +117,16 @@ decode_stream}`. The remaining infrastructure dependencies:
 | `snapshot/src/lib.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
 | `src/replica.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
 | `src/replicated_map.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
-| `src/mirror.rs` | `tokio::net::UdpSocket`, `bincode` | **Residual coupling** (tracked under issue #138): `Mirror` binds and owns its own UDP socket and calls `bincode`'s `Serializer`/`Deserializer` directly for its own receive loop. Its *send* path was rewired onto the shared `send_messages_to`/`send_to_retry` helpers (so it does construct a `UdpTransport` and go through `gossip::bincode::encode` per send), but the mirror was never given its own injectable `Transport` — out of scope for step 5, left for a future pass. |
+| `src/mirror.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Same three as `replica.rs`, for the same reasons. The mirror's socket and codec coupling is **closed**: it holds an `Arc<dyn Transport<Addr = SocketAddr>>` like the engine, drives both directions over that port and over `gossip::bincode::{encode, decode_stream}`, and names `tokio::net` only through `UdpTransport::bind` in its default constructor. `Mirror::new_with_transport` mirrors `ReplicatedMap::new_with_transport`, so a mirror converges against a dated peer with no real sockets (`tests/mirror.rs::mirror_converges_with_dated_store_over_in_memory_transport`). |
 
 There is no longer an abstraction boundary missing between the dated engine and the transport: it is
 a substitutable adapter, and the in-memory `Transport` (`InMemoryNetwork`/`InMemoryTransport`) paired
 with the wire-encoding functions makes the engine's gossip protocol exercisable with no real sockets.
 Wire encoding itself has a single implementation and is not behind a port (§2.4). Step C closed the
-wall-clock item by splitting `clock.rs` along the port boundary; the mirror's socket stack remains
-the open one.
+wall-clock item by splitting `clock.rs` along the port boundary, and the mirror's socket stack —
+the last open item — has since been routed onto the same `Transport` port, so no module in
+`reconcile` reaches for `tokio::net` or `bincode` outside of `#[cfg(test)]` code and the default
+`UdpTransport::bind` call in each constructor.
 
 ### 2.4 Trait landscape
 
@@ -536,11 +538,9 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    rather than caching it separately. `Value` dropped its `PartialEq` bound: the receive path's
    post-merge change detection is now a stamp comparison (`remote.stamp > local.stamp`, equivalent
    to `Entry::merge` under LWW) rather than an `Entry`/value equality check, which needed no bound on
-   `V` and avoids a clone on the hot path. **Residual coupling**: `Mirror` (`mirror.rs`)
-   still binds and owns its own UDP socket and calls `bincode` directly for its own receive loop —
-   only its *send* calls were rewired onto the shared `Transport`-generic, `gossip::bincode::encode`-using
-   helpers. Routing the mirror's own socket onto an injectable `Transport` is deferred (tracked
-   under issue #138, same as the workspace split below).
+   `V` and avoids a clone on the hot path. The one item this step left open — `Mirror` still owning
+   a raw `tokio::net::UdpSocket` and calling `bincode` directly on its receive path, with only its
+   *send* calls rewired onto the shared helpers — was closed in step 7 below.
 6. ✅ **Workspace split** (done) — promote the layers to a multi-crate workspace so the inward
    dependency direction is enforced by the compiler rather than by review. The crate names replace
    the earlier `reconcile-core` / `-net` / `-store` sketch: each says what the crate *is* rather than
@@ -580,15 +580,29 @@ the wire and on-disk formats (acceptable while the formats are unstable).
      manifest gate over `rsos` / `rbsr` / `lww-register` (§2.2); this section and §2.4 were brought
      up to date.
 
+7. ✅ **Route `Mirror` onto the `Transport` port** (done) — the last item carried over from step 5.
+   `Mirror` now holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of an `Arc<UdpSocket>`,
+   receives through `Transport::recv_from`, decodes through `gossip::bincode::decode_stream` under
+   the same `MAX_MESSAGES_PER_DATAGRAM` bound as the engine, and reuses the engine's `SendPorts` /
+   `send_messages_to` / `send_to_retry` on the way out; `mirror.rs` imports neither `bincode` nor
+   `tokio::net`. `Mirror::new` keeps its signature (it binds a `UdpTransport` internally), and the
+   new `Mirror::new_with_transport` matches `ReplicatedMap::new_with_transport`. The authentication
+   ordering is unchanged — `Authenticator::open` still runs on the raw datagram bytes before any
+   decode (invariant #5, §5) — as are the mirror's read-only semantics. Two behavioural details
+   moved deliberately: a *malformed* datagram is now dropped whole instead of applying its
+   well-formed prefix (the engine's long-standing policy, strictly more conservative), and message
+   count per datagram is now explicitly bounded.
+
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
 done); step 5 is done; step 6 completed the boundary extraction and now enforces it at the crate
-level.
+level; step 7 closed the last residual coupling.
 
-**Is #138 complete?** Not quite — the *structural* migration is. Every layer is its own crate, every
-port is defined on the right side of the boundary, and the domain's infrastructure-freedom is a
-compile error rather than a convention (§2.2). One item from step 5 remains open, and it is the
-reason the issue stays open: **`src/mirror.rs` still binds and owns its own `tokio::net::UdpSocket`
-and calls `bincode`'s `Serializer` / `Deserializer` directly for its receive loop** (§2.3). Its send
-path already goes through the shared `Transport`-based helpers, but the mirror was never given its
-own injectable `Transport`. That is the last piece of residual infrastructure coupling in the
-codebase; closing it closes #138.
+**Is #138 complete?** Yes. The structural migration was complete after step 6 — every layer is its
+own crate, every port is defined on the right side of the boundary, and the domain's
+infrastructure-freedom is a compile error rather than a convention (§2.2) — and step 7 closed the
+one remaining item, `src/mirror.rs`'s own socket and codec calls. Grepping the `reconcile` crate for
+`tokio::net` / `UdpSocket` / `bincode` now returns only `#[cfg(test)]` code and the `UdpTransport`
+default-adapter constructions, which are the intended locations. What remains outside the port
+system (`tokio::time` timers, `rand::StdRng` discovery randomness, `ipnet` CIDR geography in
+`replica.rs` / `replicated_map.rs` / `mirror.rs`) is deliberately not ported: these are not
+swappable infrastructure boundaries the way datagram I/O is (§2.3).
