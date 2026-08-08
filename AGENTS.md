@@ -29,20 +29,24 @@ Link the pre-commit gate once: `ln -sf ../../pre-commit .git/hooks/pre-commit`.
 Exact commands, in CI's order (`.github/workflows/main.yml`) — run all before declaring work done:
 
 ```bash
-cargo fmt --check                                         # formatting
-./scripts/check-domain-purity.sh                          # hexagonal boundary, see §9.2
-cargo clippy --all --features internal-testing             # lint, default-relevant feature set
-cargo clippy --all --all-features                          # lint, full feature set
-cargo build --all
-cargo test --all --features internal-testing               # unit + integration tests
-cargo test --all --all-features
-cargo test --doc --all --features internal-testing         # doctests
+cargo fmt --check                                          # formatting
+./scripts/check-domain-purity.sh                           # hexagonal boundary, see §9.2
+cargo clippy --workspace --features internal-testing        # lint, default-relevant feature set
+cargo clippy --workspace --all-features                     # lint, full feature set
+cargo build --workspace
+cargo test --workspace --features internal-testing          # unit + integration tests
+cargo test --workspace --all-features
+cargo test --doc --workspace --features internal-testing    # doctests
 cargo bench --no-run --features internal-testing            # benches must still compile
-cargo doc --all --all-features                              # docs must build warning-free
+cargo doc --workspace --all-features                        # docs must build warning-free
 ```
 
+`--workspace` throughout (not the deprecated `--all` alias): with six members, the distinction is
+worth being unambiguous about. `.github/workflows/main.yml`, `./pre-commit` and this listing are
+kept in sync — change one, change all three.
+
 CI sets `RUSTFLAGS=-Dwarnings`/`RUSTDOCFLAGS=-Dwarnings`: warnings fail the build. `./pre-commit`
-runs `cargo fmt --check`, `cargo clippy --all -- --deny warnings`, and
+runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 `./scripts/check-domain-purity.sh` on the staged tree before every commit (§10).
 
 ## 4. Type safety and domain modeling
@@ -142,15 +146,28 @@ The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
-load-bearing for the in-progress ports/adapters migration (#138). Since the split, the *crate-level*
-edge is enforced by `lww-register/Cargo.toml` itself: it names no infrastructure dependency, so
-`use tokio::…` there does not compile. `./scripts/check-domain-purity.sh` covers what a manifest
-cannot — an infrastructure type reached through a re-export of an allowed dependency — by grepping
-every `lww-register/src/*.rs` file for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/`hyper`/
-`std::net` imports; it runs in `./pre-commit` and CI (§3). One documented carve-out: `std::net`'s
-plain address *value* types (`IpAddr` & co.) are allowed, since `PersistedState`'s membership set is
-a set of peer identities; socket types are not. Widening/narrowing the domain set means updating
-`DOMAIN_FILES` in the script **and** `ARCHITECTURE.md` §2.1/§2.2 together.
+load-bearing for the in-progress ports/adapters migration (#138).
+`./scripts/check-domain-purity.sh` gates it in `./pre-commit` and CI (§3), in **two parts that
+answer two different questions**:
+
+1. **Manifest gate — "can the forbidden thing be reached at all?"** The
+   `[dependencies]`/`[dev-dependencies]`/`[build-dependencies]` tables of `rsos/Cargo.toml`,
+   `rbsr/Cargo.toml` and `lww-register/Cargo.toml` must name none of `tokio`, `bincode`, `chrono`,
+   `ipnet`, `mio`, `reqwest`, `hyper`, `socket2`, `async-trait` (renamed `package = "…"` targets
+   included). This is where the invariant is actually breakable: with the dependency undeclared,
+   `use tokio::…` in those crates does not compile — so *adding the dependency* is the step that
+   has to be caught. `gossip`, `snapshot` and the root `reconcile` package are deliberately out of
+   scope; they are adapters and carry infrastructure deps by design.
+2. **Source grep — "is an *allowed* dependency being used to reach something forbidden?"** Every
+   `lww-register/src/*.rs` file is grepped for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/
+   `hyper`/`std::net` imports. A manifest cannot see this: an infrastructure type re-exported by an
+   allowed dependency compiles fine and silently breaches the boundary. One documented carve-out:
+   `std::net`'s plain address *value* types (`IpAddr` & co.) are allowed, since `PersistedState`'s
+   membership set is a set of peer identities; socket types are not.
+
+Neither part subsumes the other — part 1 is about the dependency edge, part 2 about how a permitted
+edge is used. Widening/narrowing either set means updating `DOMAIN_FILES` / `STANDALONE_MANIFESTS`
+in the script **and** `ARCHITECTURE.md` §2.1/§2.2 together.
 
 **9.3 Docs that change with code vs. not.** `README.md`, `ARCHITECTURE.md` §1–§4, this file: same PR
 as the change they describe. `PROGRESS.md`: living status, update as findings/phases change.

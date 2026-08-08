@@ -429,7 +429,7 @@ mod tests {
     /// this code and a node running the previous release reconcile without either noticing.
     ///
     /// The bytes below were captured from that earlier layout, with the `bincode`
-    /// `DefaultOptions` configuration `reconcile`'s wire codec (`reconcile::bincode`) uses, before
+    /// `DefaultOptions` configuration the wire codec (`gossip::bincode`) uses, before
     /// the two fields were collapsed into one nested `Aggregate`. bincode writes struct fields
     /// sequentially with no framing or field names, so the nested struct is inlined and the
     /// encoding is unchanged — *provided* `Aggregate` declares `fingerprint` before `size`.
@@ -438,9 +438,10 @@ mod tests {
     ///
     /// `bincode` is a **dev**-dependency of this crate and appears nowhere outside this test:
     /// `rbsr` itself owns no encoding (the crate root says so), it only has to keep the type it
-    /// hands to `reconcile`'s codec byte-stable. Pinning that here rather than in `reconcile` is
-    /// what keeps the check next to the declaration order it is guarding, and `KeyRange`/
-    /// `StartBound`/`EndBound` are `pub(crate)` so the vector cannot be built from outside.
+    /// hands to `gossip`'s codec byte-stable. Pinning that here rather than in `reconcile` is what
+    /// keeps the check next to the declaration order it is guarding, and `KeyRange`/`StartBound`/
+    /// `EndBound` are `pub(crate)` so the vector cannot be built from outside.
+    /// `scripts/check-domain-purity.sh` exempts exactly this one dev-dependency.
     ///
     /// Reading the vector: `1` = `StartBound::Included` discriminant, `7` = the start key; `1` =
     /// `EndBound::Excluded` discriminant, `42` = the end key; then the four `u64` fingerprint
