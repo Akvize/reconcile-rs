@@ -1,0 +1,24 @@
+[package]
+name = "lww-register"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The state-based LWW-Register CRDT domain: Entry/State, HLC Timestamp + Clock port, and the Persistence port"
+repository = "https://github.com/Akvize/reconcile-rs"
+publish = false
+
+# Infrastructure-free by construction. This dependency list *is* the boundary: no async runtime
+# (`tokio`), no wire codec (`bincode`), no wall clock (`chrono`), no network types (`ipnet`) — the
+# same set `scripts/check-domain-purity.sh` greps this crate's sources for, and the reason that
+# script still exists (it catches an import added inside the crate that the manifest alone would
+# not). `serde` is a derive-only data-shape dependency, not infrastructure: `Entry`/`State`/
+# `Timestamp`/`PersistedState` are values that cross a wire or a file written by *other* crates,
+# which choose the codec.
+#
+# Note there is deliberately no `rbsr`/`rsos` edge either. The migration plan pencilled one in, but
+# nothing here needs it: `Entry`/`State`/`Timestamp`/`Key`/`Value`/`Persistence` are pure data and
+# pure contracts. It is the `reconcile` facade that combines this domain with `rbsr`'s diff walk
+# over an `rsos` tree, so the edge belongs there. Leaving it out keeps this crate a true leaf
+# alongside `rsos` and makes the "zero infrastructure" claim structural rather than conventional.
+[dependencies]
+serde = { version = "1.0.192", features = ["derive"] }

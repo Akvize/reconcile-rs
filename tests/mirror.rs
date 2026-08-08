@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Interop between a dated [`ReconcileStore`] and a dateless [`ReconcileMirror`].
+//! Interop between a dated [`ReplicatedMap`] and a dateless [`Mirror`].
 //!
 //! These cover the two properties the lightweight-mirror design must guarantee:
 //! 1. **Convergence**: the mirror receives the dated store's current values (timestamps dropped),
@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use reconcile::{reconcile_store::Config, ReconcileMirror, ReconcileStore};
+use reconcile::{replicated_map::Config, Mirror, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..200 {
@@ -45,7 +45,7 @@ async fn mirror_converges_with_dated_store() {
     let dated_addr = "127.0.0.90".parse().unwrap();
     let mirror_addr = "127.0.0.91".parse().unwrap();
 
-    let dated = ReconcileStore::<String, String>::new(
+    let dated = ReplicatedMap::<String, String>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
@@ -55,7 +55,7 @@ async fn mirror_converges_with_dated_store() {
     .expect("bind failed");
     // Seed the mirror with the dated store's address: the mirror *drives* reconciliation over the
     // value-only channel, so it just needs to know where to send.
-    let mirror = ReconcileMirror::<String, String>::new(
+    let mirror = Mirror::<String, String>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)
@@ -112,7 +112,7 @@ async fn mirror_does_not_block_tombstone_gc() {
     let mirror_addr = "127.0.0.93".parse().unwrap();
 
     // Aggressive tombstone expiry so GC would fire quickly *if* it is not gated.
-    let dated = ReconcileStore::<i32, i32>::new(
+    let dated = ReplicatedMap::<i32, i32>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
@@ -121,7 +121,7 @@ async fn mirror_does_not_block_tombstone_gc() {
     .await
     .expect("bind failed")
     .with_tombstone_timeout(Duration::from_millis(50));
-    let mirror = ReconcileMirror::<i32, i32>::new(
+    let mirror = Mirror::<i32, i32>::new(
         Config::default()
             .with_port(port)
             .with_listen_addr(mirror_addr)

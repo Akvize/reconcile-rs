@@ -609,6 +609,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
+name = "gossip"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "blake3",
+ "chacha20poly1305",
+ "chrono",
+ "hmac",
+ "ipnet",
+ "parking_lot",
+ "rand 0.8.5",
+ "serde",
+ "sha2",
+ "socket2",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -884,6 +905,13 @@ name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+
+[[package]]
+name = "lww-register"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "memchr"
@@ -1302,32 +1330,28 @@ dependencies = [
 name = "reconcile"
 version = "0.2.1"
 dependencies = [
- "async-trait",
  "bincode",
- "blake3",
- "chacha20poly1305",
  "chrono",
  "clap",
  "criterion",
- "hmac",
+ "gossip",
  "ipnet",
+ "lww-register",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
- "once_cell",
  "parking_lot",
  "proptest",
  "rand 0.8.5",
  "rbsr",
  "rsos",
  "serde",
- "sha2",
+ "snapshot",
  "socket2",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -1514,6 +1538,16 @@ name = "smallvec"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8917285742e9f3e1683f0a9c4e6b57960b7314d0b08d30d1ecd426713ee2eee9"
+
+[[package]]
+name = "snapshot"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "lww-register",
+ "serde",
+ "tempfile",
+]
 
 [[package]]
 name = "socket2"

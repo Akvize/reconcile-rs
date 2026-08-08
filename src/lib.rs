@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! This crate provides a key-data map structure [`FingerprintTreeMap`] (from the [`rsos`] crate) that
-//! can be used together with the reconciliation [`ReconcileStore`]. Different instances can talk
+//! This crate provides a key-data map structure [`FingerprintTreeMap`] (from the [`rsos`] crate)
+//! that can be used together with the reconciliation [`ReplicatedMap`]. Different instances can talk
 //! together over UDP to efficiently reconcile their differences.
 
 //! All the data is available locally in all instances, and the user can be
@@ -48,7 +48,7 @@
 //! against both attacks; it is suitable only for fully trusted network underlays.
 //!
 //! To close the forgery and replay vectors, configure a shared cluster secret with
-//! [`Config::with_cluster_key`](reconcile_store::Config::with_cluster_key) on **every** node: this
+//! [`Config::with_cluster_key`](replicated_map::Config::with_cluster_key) on **every** node: this
 //! enables per-datagram MAC authentication and per-sender replay protection. Every datagram carries
 //! a monotonically increasing sequence number and a sender wall-clock stamp (both inside the
 //! authenticated region); the receiver maintains per-peer state and rejects duplicates, stale
@@ -60,34 +60,28 @@
 // compile error.
 #![forbid(unsafe_code)]
 
-pub mod bounds;
+// Modules that still live here: the replicated-map facade and the per-node driver behind it, the
+// wall-clock adapter behind the `Clock` port, tombstone expiry, and metrics.
 pub mod clock;
-pub mod discovery;
-pub mod entry;
 pub mod mirror;
 pub mod persistence;
-pub mod reconcile_store;
-pub mod transport;
+pub mod replicated_map;
+
+// Modules that moved out to sibling crates in the workspace split (ARCHITECTURE.md §3.9), re-exported
+// under their historical paths so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`
+// and friends keep resolving unchanged for existing consumers.
+pub use gossip::{discovery, transport};
+pub use lww_register::{bounds, entry};
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
 #[cfg(feature = "metrics-prometheus")]
 pub mod prometheus;
 
-pub(crate) mod auth;
-// `bincode.rs` holds the crate's wire-encoding functions, not a port: unlike `Transport`
-// (`ARCHITECTURE.md` §3.4/§3.5) there is a single implementation and no plausible swap (compression
-// interacts with authenticate-before-decode; cross-language interop needs a published wire spec,
-// not a Rust trait) — see the module doc comment for the full reasoning. Named after the external
-// `bincode` crate it wraps, since there is no abstraction left to name; references to the crate
-// itself from inside (or near) this module use `::bincode::…` to disambiguate.
-pub(crate) mod bincode;
-// Internal reconciliation mechanism. Demoted to `pub(crate)` (ARCHITECTURE.md §3.7): these are
-// implementation details, not part of the supported public surface. The few internals the
-// integration-test oracles need are re-exported through the gated [`testing`] module below.
-pub(crate) mod gen_ip;
+// Internal reconciliation mechanism. `pub(crate)` (ARCHITECTURE.md §3.7): these are implementation
+// details, not part of the supported public surface. The few internals the integration-test oracles
+// need are re-exported through the gated [`testing`] module below.
 pub(crate) mod observability;
-pub(crate) mod reconcile_engine;
-pub(crate) mod replay;
+pub(crate) mod replica;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
@@ -107,9 +101,9 @@ pub use rsos::{
     Values,
 };
 
-pub use mirror::ReconcileMirror;
+pub use mirror::Mirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
-pub use reconcile_store::ReconcileStore;
+pub use replicated_map::ReplicatedMap;
 
 /// Internal seam for the external integration tests (today: `tests/service.rs`).
 ///
@@ -131,10 +125,10 @@ pub mod testing {
     /// LE) || payload`. Lets integration tests craft legitimate datagrams to exercise the
     /// anti-replay pipeline over a raw UDP socket.
     pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
-        crate::auth::Authenticator::new(Some(key), false)
+        gossip::auth::Authenticator::new(Some(key), false)
             .seal(
-                crate::replay::Seq::new(seq),
-                crate::replay::Stamp::new(stamp),
+                gossip::replay::Seq::new(seq),
+                gossip::replay::Stamp::new(stamp),
                 payload,
             )
             .expect("Enabled authenticator always seals")
@@ -146,7 +140,7 @@ pub mod testing {
     /// tombstone garbage collection via causal stability. Exposed so integration tests can
     /// assert that a decommissioned peer was not re-added to membership by a replayed datagram.
     pub fn members_snapshot<K, V>(
-        store: &crate::ReconcileStore<K, V>,
+        store: &crate::ReplicatedMap<K, V>,
     ) -> std::collections::HashSet<std::net::IpAddr>
     where
         K: crate::bounds::Key,
@@ -159,7 +153,7 @@ pub mod testing {
     ///
     /// Exposed for integration-test assertions so the peer-cap tests can verify that no new
     /// gossip-peer record is created for a capped-out sender.
-    pub fn peers_map_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    pub fn peers_map_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
         K: crate::bounds::Key,
         V: crate::bounds::Value,
@@ -171,7 +165,7 @@ pub mod testing {
     ///
     /// Exposed for integration-test assertions so the peer-cap tests can verify that no new
     /// replay-filter entry is created for a capped-out sender.
-    pub fn replay_filter_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    pub fn replay_filter_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
         K: crate::bounds::Key,
         V: crate::bounds::Value,
@@ -183,7 +177,7 @@ pub mod testing {
     ///
     /// Exposed for integration-test assertions so tests can verify that acks for
     /// non-tombstone keys are dropped without growing bookkeeping.
-    pub fn tombstone_acks_len<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    pub fn tombstone_acks_len<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
         K: crate::bounds::Key,
         V: crate::bounds::Value,
@@ -195,7 +189,7 @@ pub mod testing {
     ///
     /// Exposed for integration-test assertions so tests can verify that the global dump
     /// budget is respected and slots are released after completion.
-    pub fn bulk_dumps_in_flight_count<K, V>(store: &crate::ReconcileStore<K, V>) -> usize
+    pub fn bulk_dumps_in_flight_count<K, V>(store: &crate::ReplicatedMap<K, V>) -> usize
     where
         K: crate::bounds::Key,
         V: crate::bounds::Value,

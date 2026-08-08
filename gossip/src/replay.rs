@@ -57,7 +57,7 @@ use parking_lot::Mutex;
 /// Length of the replay header prepended to the authenticated portion of every datagram.
 ///
 /// `seq (8 bytes) || stamp (8 bytes)`.
-pub(crate) const REPLAY_HEADER_LEN: usize = 16;
+pub const REPLAY_HEADER_LEN: usize = 16;
 
 /// Default freshness window: datagrams whose sender wall-clock stamp deviates from local physical
 /// time by more than this value in either direction are rejected.
@@ -74,25 +74,25 @@ const WINDOW_SIZE: u64 = 1024;
 /// to detect replays and restarts live here rather than being reconstructed from a bare `u64` at
 /// each call site (see `AGENTS.md`, "entities own their own validation").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct Seq(u64);
+pub struct Seq(u64);
 
 impl Seq {
     /// The first sequence number a [`SenderCounter`] issues in authenticated mode.
-    pub(crate) const FIRST: Seq = Seq(1);
+    pub const FIRST: Seq = Seq(1);
     /// Sentinel carried on a [`crate::auth::Payload`] produced in unauthenticated mode, where no
     /// replay header exists.
-    pub(crate) const NONE: Seq = Seq(0);
+    pub const NONE: Seq = Seq(0);
 
     #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
-    pub(crate) const fn new(value: u64) -> Seq {
+    pub const fn new(value: u64) -> Seq {
         Seq(value)
     }
 
-    pub(crate) fn to_le_bytes(self) -> [u8; 8] {
+    pub fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
-    pub(crate) fn from_le_bytes(bytes: [u8; 8]) -> Seq {
+    pub fn from_le_bytes(bytes: [u8; 8]) -> Seq {
         Seq(u64::from_le_bytes(bytes))
     }
 }
@@ -116,27 +116,27 @@ impl Sub for Seq {
 /// A sender wall-clock stamp (milliseconds since the Unix epoch) carried in the replay header.
 ///
 /// This module is the sole owner of `stamp`'s semantics: its wire encoding and the freshness
-/// check ([`is_fresh`](Stamp::is_fresh)) that decides whether a stamp is acceptable both live here,
+/// check (`is_fresh`) that decides whether a stamp is acceptable both live here,
 /// rather than [`ReplayFilter`] reaching into a bare `u64` to redo that arithmetic itself (see
 /// `AGENTS.md`, "entities own their own validation").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct Stamp(u64);
+pub struct Stamp(u64);
 
 impl Stamp {
     /// Sentinel carried on a [`crate::auth::Payload`] produced in unauthenticated mode, where no
     /// replay header exists.
-    pub(crate) const NONE: Stamp = Stamp(0);
+    pub const NONE: Stamp = Stamp(0);
 
     #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
-    pub(crate) const fn new(value: u64) -> Stamp {
+    pub const fn new(value: u64) -> Stamp {
         Stamp(value)
     }
 
-    pub(crate) fn to_le_bytes(self) -> [u8; 8] {
+    pub fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
-    pub(crate) fn from_le_bytes(bytes: [u8; 8]) -> Stamp {
+    pub fn from_le_bytes(bytes: [u8; 8]) -> Stamp {
         Stamp(u64::from_le_bytes(bytes))
     }
 
@@ -349,13 +349,20 @@ fn phys_now_ms() -> u64 {
 /// the process lifetime — [`next_stamp`](Self::next_stamp) returns
 /// `max(Utc::now().timestamp_millis(), previous_stamp)` — which is the guarantee the receiver's
 /// tail guard relies on (module docs). The floor is lost on restart; see the residual there.
-pub(crate) struct SenderCounter {
+pub struct SenderCounter {
     seq: AtomicU64,
     stamp_floor: AtomicU64,
 }
 
+impl Default for SenderCounter {
+    fn default() -> Self {
+        SenderCounter::new()
+    }
+}
+
 impl SenderCounter {
-    pub(crate) fn new() -> Self {
+    /// A fresh counter: sequence numbers start at [`Seq::FIRST`], the stamp floor at 0.
+    pub fn new() -> Self {
         SenderCounter {
             seq: AtomicU64::new(Seq::FIRST.0),
             stamp_floor: AtomicU64::new(0),
@@ -363,7 +370,7 @@ impl SenderCounter {
     }
 
     /// Allocate the next sequence number (strictly increasing).
-    pub(crate) fn next_seq(&self) -> Seq {
+    pub fn next_seq(&self) -> Seq {
         Seq(self.seq.fetch_add(1, Ordering::Relaxed))
     }
 
@@ -371,12 +378,12 @@ impl SenderCounter {
     ///
     /// Each call returns `max(Utc::now().timestamp_millis().max(0), floor)` and advances the
     /// internal floor so subsequent calls never return a smaller value.
-    pub(crate) fn next_stamp(&self) -> Stamp {
+    pub fn next_stamp(&self) -> Stamp {
         self.next_stamp_at(phys_now_ms())
     }
 
     /// Inner implementation with an injectable `now_ms` for unit-testing backward clock steps.
-    pub(crate) fn next_stamp_at(&self, now_ms: u64) -> Stamp {
+    pub fn next_stamp_at(&self, now_ms: u64) -> Stamp {
         // `fetch_max` atomically sets floor = max(floor, now_ms) and returns the OLD value.
         // The stamp we return is the maximum of the returned old floor and now_ms, which equals
         // the new floor value after the update.
@@ -387,7 +394,7 @@ impl SenderCounter {
 
 /// Receiver-side per-peer replay filter.
 ///
-/// Maintains per-peer [`PeerState`] and enforces the freshness window. Entries are purged
+/// Maintains per-peer `PeerState` and enforces the freshness window. Entries are purged
 /// opportunistically once `now - stamp_at_max > window`: at that point any replayable datagram
 /// (stamp ≤ `stamp_at_max`) would fail the freshness check, so no replay can pass and the entry is
 /// safe to drop, reclaiming memory automatically.
@@ -398,14 +405,14 @@ impl SenderCounter {
 /// never has to ask another object whether replay-checking even applies; a disabled filter simply
 /// accepts everything ("parse, don't validate": the filter owns the answer to "is this datagram
 /// fresh", including the degenerate case where the question doesn't apply).
-pub(crate) struct ReplayFilter {
+pub struct ReplayFilter {
     peers: Mutex<HashMap<IpAddr, PeerState>>,
     freshness_window: Duration,
     enabled: bool,
 }
 
 impl ReplayFilter {
-    pub(crate) fn new(freshness_window: Duration, enabled: bool) -> Self {
+    pub fn new(freshness_window: Duration, enabled: bool) -> Self {
         ReplayFilter {
             peers: Mutex::new(HashMap::new()),
             freshness_window,
@@ -421,7 +428,7 @@ impl ReplayFilter {
     ///
     /// Always `true` when the filter is disabled (unauthenticated mode carries no replay header
     /// to check) — the caller does not need to ask separately.
-    pub(crate) fn check_and_record(&self, sender: IpAddr, seq: Seq, stamp: Stamp) -> bool {
+    pub fn check_and_record(&self, sender: IpAddr, seq: Seq, stamp: Stamp) -> bool {
         if !self.enabled {
             return true;
         }
@@ -459,9 +466,13 @@ impl ReplayFilter {
 
     /// Number of peers currently tracked by the filter.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
-    pub(crate) fn len(&self) -> usize {
+    /// Exposed for test assertions. It used to be gated on the `internal-testing` feature, back
+    /// when the filter and its assertions lived in one crate; that feature belongs to `reconcile`,
+    /// which is where the gate still sits (`reconcile::testing::replay_filter_len`). Leaving the
+    /// accessor ungated here keeps the gate in one place instead of duplicating the feature across
+    /// crates — everything on this crate is internal API anyway (see the crate docs).
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
         self.peers.lock().len()
     }
 
@@ -470,7 +481,7 @@ impl ReplayFilter {
     /// This is an explicit escape hatch for tests. Production code does not call this — per-peer
     /// state is reclaimed automatically by the staleness purge in [`check_and_record`].
     #[cfg(test)]
-    pub(crate) fn evict(&self, peer: IpAddr) {
+    pub fn evict(&self, peer: IpAddr) {
         self.peers.lock().remove(&peer);
     }
 }

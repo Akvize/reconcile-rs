@@ -6,15 +6,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`ReconcileMirror`], a lightweight, **dateless, read-only mirror** of a dated
-//! [`ReconcileStore`](crate::ReconcileStore).
+//! Provides the [`Mirror`], a lightweight, **dateless, read-only mirror** of a dated
+//! [`ReplicatedMap`](crate::ReplicatedMap).
 //!
 //! # What it is for
 //!
 //! A dated store keeps a [`Timestamp`] next to every value so it can resolve conflicts
 //! (last-write-wins) and run the tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
-//! bytes per entry that the replica never needs. A `ReconcileMirror` stores only
+//! bytes per entry that the replica never needs. A `Mirror` stores only
 //! [`State<V>`] — the value or a tombstone, no timestamp — and still converges with a dated peer
 //! over the **existing range-based diff protocol**, on the same UDP port.
 //!
@@ -61,16 +61,16 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
-use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::{Entry, State};
-use crate::gen_ip::{gen_ip, net_of};
-use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
-use crate::reconcile_store::Config;
-use crate::replay;
+use crate::replica::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
+use crate::replicated_map::Config;
 use crate::transport::UdpTransport;
 use crate::FingerprintTreeMap;
+use gossip::auth;
+use gossip::gen_ip::{gen_ip, net_of};
+use gossip::replay;
 use rsos::Fingerprint;
 
 const BUFFER_SIZE: usize = 65507;
@@ -84,7 +84,7 @@ type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &State<V>)>;
 /// ignores) and so the value-only projection type resolves to [`State<V>`].
 type WireDated<V> = Entry<Timestamp, V>;
 
-/// A lightweight, dateless, read-only mirror of a dated [`ReconcileStore`](crate::ReconcileStore).
+/// A lightweight, dateless, read-only mirror of a dated [`ReplicatedMap`](crate::ReplicatedMap).
 ///
 /// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
 ///
@@ -95,7 +95,7 @@ type WireDated<V> = Entry<Timestamp, V>;
 /// authoritative dated peer already resolved the conflict under last-write-wins before sending the
 /// projection. Under any other conflict-resolution policy, last-writer-by-arrival would be wrong
 /// and the mirror would need redesigning.
-pub struct ReconcileMirror<K, V> {
+pub struct Mirror<K, V> {
     /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
     /// [`State`]), matching a dated peer's value-only projection.
     tree: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
@@ -119,9 +119,9 @@ pub struct ReconcileMirror<K, V> {
     max_peers: PeerCap,
 }
 
-impl<K, V> Clone for ReconcileMirror<K, V> {
+impl<K, V> Clone for Mirror<K, V> {
     fn clone(&self) -> Self {
-        ReconcileMirror {
+        Mirror {
             tree: self.tree.clone(),
             port: self.port,
             socket: self.socket.clone(),
@@ -137,7 +137,7 @@ impl<K, V> Clone for ReconcileMirror<K, V> {
     }
 }
 
-impl<K: Key, V: Value> ReconcileMirror<K, V> {
+impl<K: Key, V: Value> Mirror<K, V> {
     /// Create a new mirror bound to the configured UDP socket.
     ///
     /// The mirror honours the same [`Config`] as a dated store, including
@@ -152,7 +152,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
         let socket = UdpSocket::bind(SocketAddr::new(config.listen_addr, config.port)).await?;
-        debug!("ReconcileMirror listening on: {}", socket.local_addr()?);
+        debug!("Mirror listening on: {}", socket.local_addr()?);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
@@ -167,7 +167,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
         let net = net_of(&nets, config.listen_addr)
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
-        Ok(ReconcileMirror {
+        Ok(Mirror {
             tree: Arc::new(RwLock::new(FingerprintTreeMap::<K, State<V>>::new())),
             port: config.port,
             socket: Arc::new(socket),
@@ -234,7 +234,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
     }
 
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
-    /// [`value_fingerprint`](crate::ReconcileStore::value_fingerprint) over the same range.
+    /// [`value_fingerprint`](crate::ReplicatedMap::value_fingerprint) over the same range.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.tree.read().aggregate(&range).fingerprint()
     }
@@ -438,7 +438,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reconcile_store::Config;
+    use crate::replicated_map::Config;
 
     fn ephemeral_config() -> Config {
         // Port 0 (ephemeral) on the loopback default network.
@@ -448,7 +448,7 @@ mod tests {
     /// `get` returns the live value, and absent keys are `None`.
     #[tokio::test]
     async fn get_returns_integrated_value() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+        let mirror = Mirror::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
         assert!(mirror.get(&1).is_none());
@@ -461,7 +461,7 @@ mod tests {
     /// A mirrored tombstone (`State::Tombstone`) hides the value but is still a stored entry.
     #[tokio::test]
     async fn mirrors_tombstones() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+        let mirror = Mirror::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
         mirror.integrate(vec![(1, State::Present("v".to_string()))]);
@@ -479,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn on_update_hook_fires() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let mirror = ReconcileMirror::<i32, i32>::new(ephemeral_config())
+        let mirror = Mirror::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed");
         let count = Arc::new(AtomicUsize::new(0));
@@ -495,7 +495,7 @@ mod tests {
     /// content — i.e. timestamps genuinely play no part in the hash.
     #[tokio::test]
     async fn value_fingerprint_is_timestamp_independent() {
-        let mirror = ReconcileMirror::<i32, String>::new(ephemeral_config())
+        let mirror = Mirror::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
         mirror.integrate(vec![

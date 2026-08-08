@@ -1,10 +1,18 @@
 [workspace]
-# Workspace split (migration step 6, Steps A and B): `rsos` is the leaf crate holding the
-# data-structure/fingerprint mechanism (`FingerprintTreeMap` + the `Rsos<K>` trait); `rbsr` holds
-# the Range-Based Set Reconciliation algorithm over any `rsos` backend; `.` is this still-monolithic
-# `reconcile` package, which depends on both by path below. See ARCHITECTURE.md §3.9 for the target
-# multi-crate shape these are the first steps of.
-members = ["rsos", "rbsr", "."]
+# Workspace split (migration step 6, Steps A–C). In dependency order:
+#   rsos          — data structure + range fingerprint (`FingerprintTreeMap`, the `Aggregate`
+#                   bundle, the `Rsos<K>` trait)
+#   rbsr          — Range-Based Set Reconciliation over any `rsos` backend (`RsosView<K>`)
+#   lww-register  — the LWW-Register CRDT domain (`Entry`/`State`, `Timestamp`/`Clock`,
+#                   `Persistence`, `Key`/`Value`), infrastructure-free
+#   gossip        — the network adapter layer (`Transport`, wire encoding, `Authenticator`,
+#                   replay protection, `Discovery`); deliberately independent of `lww-register`
+#   snapshot      — the file-backed `Persistence` adapter (`FileSnapshot`)
+#   .             — the `reconcile` facade: `Replica`, `ReplicatedMap`, `Mirror`, observability
+#                   and the `HlcClock` adapter; depends on all five and re-exports their public
+#                   types, so `reconcile::*` keeps resolving for existing consumers.
+# See ARCHITECTURE.md §3.9 for the target multi-crate shape.
+members = ["rsos", "rbsr", "lww-register", "gossip", "snapshot", "."]
 resolver = "2"
 
 [package]
@@ -36,23 +44,25 @@ harness = false
 
 [features]
 default = ["mac-blake3"]
-# Per-datagram MAC authentication backends (see `src/auth.rs`).
-# Exactly one backend is used at build time; `mac-blake3` takes precedence if
-# both are enabled. At least one must be enabled or the crate fails to compile.
-# (BLAKE3 itself is always pulled in: it backs the range fingerprint, see
-# `src/fingerprint.rs`.)
-mac-blake3 = []
-mac-hmac = ["dep:hmac", "dep:sha2"]
+# Per-datagram MAC authentication and payload confidentiality moved to the `gossip` crate together
+# with `auth.rs`, so the five entries below are **unification entries**: enabling one here enables
+# the identically-named feature on `gossip`, which owns the `cfg`s and the optional dependencies.
+# Semantics are unchanged — exactly one MAC backend is used at build time, `mac-blake3` takes
+# precedence if both are enabled, and the build fails if neither is (`gossip/src/auth.rs`).
+# (BLAKE3 itself is always pulled in: it backs the range fingerprint, see the `rsos` crate.)
+mac-blake3 = ["gossip/mac-blake3"]
+mac-hmac = ["gossip/mac-hmac"]
 # Wipe the cluster key from memory on drop (defense in depth).
-zeroize = ["dep:zeroize"]
+zeroize = ["gossip/zeroize"]
 # Per-datagram payload confidentiality via authenticated encryption (AEAD).
 # When enabled, `Config::with_encryption` upgrades the keyed protocol from a
 # plaintext-payload MAC to XChaCha20-Poly1305 over the same cluster key. See
-# `src/auth.rs` and issue #96.
-encryption = ["dep:chacha20poly1305"]
+# `gossip/src/auth.rs` and issue #96. Note this one is both forwarded *and* read locally:
+# `replica.rs` and `replicated_map.rs` still carry their own `#[cfg(feature = "encryption")]` arms.
+encryption = ["gossip/encryption"]
 # Emit runtime metrics via the `metrics` facade. Off by default: when disabled, every
 # metric call site compiles to a no-op (see `src/observability.rs`), so the default build
-# keeps its lean dependency footprint.
+# keeps its lean dependency footprint. Stays on this crate — `observability.rs` did not move.
 metrics = ["dep:metrics"]
 # Install a Prometheus recorder and expose a `/metrics` HTTP endpoint (see
 # `src/prometheus.rs`). Pulls the exporter's HTTP listener stack; opt-in only. Implies
@@ -61,7 +71,7 @@ metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
 # Reserved for a future `hickory-resolver`-backed DNS discovery adapter (SRV records, explicit
 # TTL/ndots control, robust resolution in static/musl images). Not implemented yet: the default
 # `DnsDiscovery` uses the system resolver via `tokio::net::lookup_host` and needs no extra crate.
-dns-hickory = []
+dns-hickory = ["gossip/dns-hickory"]
 # Exposes the `crate::testing` seam (re-exports of `pub(crate)` reconciliation internals) so the
 # external integration-test oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) can reach them.
 # No deps; not part of the supported public API.
@@ -77,16 +87,19 @@ path = "examples/k8s/main.rs"
 required-features = ["metrics-prometheus"]
 
 [dependencies]
-async-trait = "0.1"
 bincode = "1.3.3"
-blake3 = "1.5"
-chacha20poly1305 = { version = "0.10", optional = true }
 chrono = { version = "0.4.31", features = ["serde"] }
-hmac = { version = "0.12", optional = true }
+# The gossip adapter layer (`Transport`/`UdpTransport`, the wire-encoding functions,
+# `Authenticator`, replay protection, `Discovery`) — see `gossip/src/lib.rs`.
+# `default-features = false` so this crate's own `mac-blake3` default is the single place the MAC
+# backend gets chosen; the unification entries above forward it.
+gossip = { path = "gossip", default-features = false }
 ipnet = "2.9.0"
+# The LWW-Register CRDT domain (`Entry`/`State`, `Timestamp`/`Clock`, `Persistence`, `Key`/`Value`)
+# — see `lww-register/src/lib.rs`. Infrastructure-free by construction.
+lww-register = { path = "lww-register" }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
-once_cell = "1.21.3"
 parking_lot = "0.12.1"
 rand = "0.8.5"
 # The anti-entropy algorithm (`start_diff`/`diff_round`/`RangeAggregate`), generic over any RSOS
@@ -96,13 +109,10 @@ rbsr = { path = "rbsr" }
 # `rsos/src/lib.rs` for what it is. Path dependencies: not published (workspace-internal for now).
 rsos = { path = "rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
-sha2 = { version = "0.10", optional = true }
-# Sizes the gossip UDP socket's SO_RCVBUF / SO_SNDBUF (issue #169). Already in the tree as a
-# transitive dependency of tokio, so this is essentially free.
-socket2 = "0.5"
+# The file-backed `Persistence` adapter (`FileSnapshot`) — see `snapshot/src/lib.rs`.
+snapshot = { path = "snapshot" }
 tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros", "sync"] }
 tracing = "0.1.40"
-zeroize = { version = "1.7", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 clap = { version = "4.4.6", features = ["derive"] }
@@ -110,6 +120,9 @@ criterion = "0.5.1"
 metrics-util = { version = "0.19", default-features = false, features = ["debugging"] }
 proptest = "1.11.0"
 rand = "0.8.5"
+# Only the socket-option unit tests in `src/replica.rs` still reach for it, now that `UdpTransport`
+# lives in `gossip` (which keeps it as a real dependency, for SO_RCVBUF/SO_SNDBUF sizing, #169).
+socket2 = "0.5"
 tempfile = "3"
 tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"

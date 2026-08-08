@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`ReconcileEngine`], the inner layer of the [`ReconcileStore`](crate::reconcile_store::ReconcileStore)
+//! Provides the [`Replica`], the inner layer of the [`ReplicatedMap`](crate::replicated_map::ReplicatedMap)
 //! that handles communication between instances at the network level.
 
 use std::collections::hash_map::DefaultHasher;
@@ -29,17 +29,17 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use crate::auth;
 use crate::bounds::{Key, Value};
 use crate::clock::{Clock, HlcClock, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
-use crate::gen_ip::{host_net, net_of};
 use crate::observability;
-use crate::reconcile_store::{Config, MAX_NETS};
-use crate::replay;
+use crate::replicated_map::{Config, MAX_NETS};
 use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
+use gossip::auth;
+use gossip::gen_ip::{host_net, net_of};
+use gossip::replay;
 use rbsr::RangeAggregate;
 use rsos::Fingerprint;
 
@@ -78,7 +78,7 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
 /// from a sender is admitted while that sender is already known, or while the tracked-peer count
 /// is under the cap. Centralizing the rule here means it is defined exactly once instead of being
 /// re-derived (and risking drift) at each receive loop. Sourced from
-/// [`Config::max_peers`](crate::reconcile_store::Config::max_peers).
+/// [`Config::max_peers`](crate::replicated_map::Config::max_peers).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PeerCap(usize);
 
@@ -113,7 +113,7 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
             "listen address {listen_addr} is contained in none of the configured networks \
              {nets:?}; cannot identify the local network — treating only this node as local, so \
              every peer is remote and reconciled on the throttled cross-network cadence. Declare \
-             the network containing {listen_addr} via Config::with_net or ReconcileStore::add_net.",
+             the network containing {listen_addr} via Config::with_net or ReplicatedMap::add_net.",
         );
         host_net(listen_addr)
     })
@@ -121,16 +121,16 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
 
 /// The internal reconciliation engine at the network level.
 /// This struct does not handle removals, which are managed by the external layer.
-/// For more information, see [`ReconcileStore`](crate::reconcile_store::ReconcileStore).
+/// For more information, see [`ReplicatedMap`](crate::replicated_map::ReplicatedMap).
 ///
 /// `V` is the plain user value type; the engine internally stores and exchanges the dated
 /// [`Entry<Timestamp, V>`](crate::entry::Entry) domain type (see `ARCHITECTURE.md` §3.6).
 ///
 /// The datagram-I/O [`Transport`] port is carried as `Arc<dyn Transport<Addr = SocketAddr>>` inside
 /// [`Inner`], since it is always reached behind a trait object. Wire encoding goes through the
-/// free functions in [`crate::bincode`] (not a port), so the engine names no codec type
+/// free functions in [`gossip::bincode`] (not a port), so the engine names no codec type
 /// parameter.
-pub(crate) struct ReconcileEngine<K, V> {
+pub(crate) struct Replica<K, V> {
     /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
     /// shares the same maps, peers, clock, …) is a single refcount bump. Cloning is therefore
     /// cheap and bound-free, and the previously hand-written `Clone` impl reduces to a derive.
@@ -139,7 +139,7 @@ pub(crate) struct ReconcileEngine<K, V> {
     inner: Arc<Inner<K, V>>,
 }
 
-/// Shared, refcounted state of a [`ReconcileEngine`]; see that struct for the rationale.
+/// Shared, refcounted state of a [`Replica`]; see that struct for the rationale.
 pub(crate) struct Inner<K, V> {
     pub(crate) map: Arc<RwLock<FingerprintTreeMap<K, Entry<Timestamp, V>>>>,
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
@@ -178,7 +178,7 @@ pub(crate) struct Inner<K, V> {
     /// reconciliation round — the effective gossip cadence. Shared so it can be retuned at runtime.
     reconcile_interval: Arc<RwLock<Duration>>,
     /// Rate (bytes/sec) at which a single bulk anti-entropy value transfer to one peer is paced, or
-    /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::reconcile_store::Config::bulk_send_rate)
+    /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::replicated_map::Config::bulk_send_rate)
     /// and is read by [`spawn_paced_send`](Self::spawn_paced_send).
     bulk_send_rate: Option<usize>,
     /// Peers with a bulk value transfer currently in flight. At most one paced dump
@@ -233,8 +233,8 @@ pub(crate) struct Inner<K, V> {
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
     /// The set of keys this node currently holds as a tombstone, maintained at the single map
-    /// mutation sink ([`map_insert`](ReconcileEngine::map_insert) /
-    /// [`gc_remove`](ReconcileEngine::gc_remove)). It lets each reconciliation round enumerate
+    /// mutation sink ([`map_insert`](Replica::map_insert) /
+    /// [`gc_remove`](Replica::gc_remove)). It lets each reconciliation round enumerate
     /// held tombstones in O(1) (without scanning the map) and resend an ack for each of them to
     /// every member every round, so causal-stability acknowledgments keep flowing until a
     /// tombstone is collected — without which the acknowledgment matrix never completes in a
@@ -242,11 +242,11 @@ pub(crate) struct Inner<K, V> {
     pub(crate) live_tombstones: Arc<RwLock<HashSet<K>>>,
     /// This node's clock, reached only through the [`Clock`] port so the engine never reads
     /// physical time itself ([`HlcClock`] is the default adapter; a test injects a deterministic
-    /// stub via [`new_with_clock`](ReconcileEngine::new_with_clock)). Shared across all clones so
+    /// stub via [`new_with_clock`](Replica::new_with_clock)). Shared across all clones so
     /// that every write and every received timestamp advances the same clock.
     clock: Arc<dyn Clock>,
     /// `true` when the node id was generated at random (i.e. `Config::node_id` was `None`).
-    /// Exposed via [`node_id_is_random`](ReconcileEngine::node_id_is_random) so that the store
+    /// Exposed via [`node_id_is_random`](Replica::node_id_is_random) so that the store
     /// layer can warn operators when persistence is configured but the identity is ephemeral.
     pub(crate) node_id_is_random: bool,
     /// Hard cap on the number of tracked remote peers. Datagrams from unknown senders are dropped
@@ -254,15 +254,15 @@ pub(crate) struct Inner<K, V> {
     max_peers: PeerCap,
 }
 
-impl<K, V> Clone for ReconcileEngine<K, V> {
+impl<K, V> Clone for Replica<K, V> {
     fn clone(&self) -> Self {
-        ReconcileEngine {
+        Replica {
             inner: Arc::clone(&self.inner),
         }
     }
 }
 
-impl<K, V> std::ops::Deref for ReconcileEngine<K, V> {
+impl<K, V> std::ops::Deref for Replica<K, V> {
     type Target = Inner<K, V>;
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -302,9 +302,9 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
-impl<K: Key, V: Value> ReconcileEngine<K, V> {
+impl<K: Key, V: Value> Replica<K, V> {
     /// Create a new engine over the default transport adapter: a [`UdpTransport`] bound to the
-    /// gossip socket. Wire encoding always goes through [`crate::bincode`].
+    /// gossip socket. Wire encoding always goes through [`gossip::bincode`].
     ///
     /// # Errors
     ///
@@ -371,7 +371,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 }
 
-impl<K: Key, V: Value> ReconcileEngine<K, V> {
+impl<K: Key, V: Value> Replica<K, V> {
     /// Assemble an engine from an already-constructed [`Transport`] and a clock. Pure wiring — no
     /// I/O — so it is infallible; the fallible socket bind lives in [`new`](Self::new).
     fn build(
@@ -416,7 +416,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let rng = Arc::new(RwLock::new(StdRng::from_entropy()));
         let probe: Arc<dyn Discovery> =
             Arc::new(RandomProbe::new(Arc::clone(&nets), Arc::clone(&rng)));
-        ReconcileEngine {
+        Replica {
             inner: Arc::new(Inner {
                 map: Arc::new(RwLock::new(map)),
                 projection: Arc::new(RwLock::new(projection)),
@@ -535,7 +535,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 
     /// (runtime) Declare an additional network. Idempotent; returns `false` (and logs) if the
-    /// [`MAX_NETS`](crate::reconcile_store::MAX_NETS) cap is reached.
+    /// [`MAX_NETS`](crate::replicated_map::MAX_NETS) cap is reached.
     pub(crate) fn add_net(&self, net: IpNet) -> bool {
         let mut guard = self.nets.write();
         if guard.contains(&net) {
@@ -606,7 +606,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         (self.pre_insert.read())(&key, &value);
 
         // A tombstone value is a removal; a live value is an insertion. Counting here (rather
-        // than in `ReconcileStore`) keeps every local mutation path covered.
+        // than in `ReplicatedMap`) keeps every local mutation path covered.
         if value.is_tombstone() {
             observability::record_remove();
         } else {
@@ -744,7 +744,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 
     /// Broadcast a single locally-mutated entry to peers, mirroring [`insert`](Self::insert)'s
-    /// propagation. Used by in-place mutation paths (`ReconcileStore::get_mut`) that write the map
+    /// propagation. Used by in-place mutation paths (`ReplicatedMap::get_mut`) that write the map
     /// directly and must still notify peers so the edit reconciles, without re-applying it locally.
     pub(crate) fn broadcast_update(&self, key: K, value: Entry<Timestamp, V>) {
         self.broadcast(vec![Message::Update::<K, Entry<Timestamp, V>, State<V>>((
@@ -897,7 +897,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         };
         send_buf.clear();
         for segment in segments {
-            crate::bincode::encode(
+            gossip::bincode::encode(
                 &Message::ComparisonItem::<K, Entry<Timestamp, V>, State<V>>(segment),
                 send_buf,
             )
@@ -1018,7 +1018,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             // Re-confirm against the map: the tombstone may have been resurrected or GC'd since
             // we snapshotted the index, and only the live tombstone's version is a valid ack.
             if let Some(v) = map_guard.get(key).filter(|v| v.is_tombstone()) {
-                crate::bincode::encode(
+                gossip::bincode::encode(
                     &Message::Ack::<K, Entry<Timestamp, V>, State<V>>((
                         key.clone(),
                         version_hash(v),
@@ -1063,12 +1063,12 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         let mut updates: Vec<(K, Entry<Timestamp, V>)> = Vec::new();
         let mut acks: Vec<(K, u64)> = Vec::new();
         let mut value_in_comparison = Vec::new();
-        // Decode the whole datagram through `crate::bincode`. `MAX_MESSAGES_PER_DATAGRAM` bounds the
+        // Decode the whole datagram through `gossip::bincode`. `MAX_MESSAGES_PER_DATAGRAM` bounds the
         // message count (a datagram can hold no more one-byte messages than its byte length), so a
         // crafted datagram cannot be expanded without limit. A malformed datagram is dropped whole —
         // never panicking the receive loop, an unauthenticated remote-DoS hazard.
         let messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>> =
-            match crate::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
+            match gossip::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
                 Ok(messages) => messages,
                 Err(kind) => {
                     warn!("failed to deserialize datagram from {peer}, dropping it: {kind:?}");
@@ -1356,7 +1356,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
     }
 
     /// Register (or refresh) a known peer at runtime, the `&self` counterpart of the
-    /// [`with_seed`](crate::ReconcileStore::with_seed) builder.
+    /// [`with_seed`](crate::ReplicatedMap::with_seed) builder.
     ///
     /// Inserting into [`peers`](Self::peers) (re)arms the `PEER_EXPIRATION` window and makes the
     /// address a gossip target on the next round. This is what a dynamic discovery source (e.g.
@@ -1413,10 +1413,10 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
 
 /// Bundles the outbound [`Transport`] port and per-node send state that a batched-message send
 /// needs: the transport, the datagram authenticator, and the per-sender replay counter. Wire
-/// encoding itself goes through the free functions in [`crate::bincode`], which need no state to
+/// encoding itself goes through the free functions in [`gossip::bincode`], which need no state to
 /// bundle here. These three pieces always travel together into [`send_messages_to`] and
 /// [`send_messages_paced`] from both call sites (the engine and
-/// [`ReconcileMirror`](crate::mirror::ReconcileMirror)); bundling them into one reference keeps
+/// [`Mirror`](crate::mirror::Mirror)); bundling them into one reference keeps
 /// each helper's signature short instead of repeating the same three parameters everywhere.
 pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) transport: &'a T,
@@ -1460,7 +1460,7 @@ pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
 ///
 /// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
 /// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead;
-/// see [`send_messages_paced`] and [`ReconcileEngine::spawn_paced_send`].
+/// see [`send_messages_paced`] and [`Replica::spawn_paced_send`].
 pub(crate) async fn send_messages_to<K, V, P, T>(
     messages: &[Message<K, V, P>],
     ports: &SendPorts<'_, T>,
@@ -1481,7 +1481,7 @@ pub(crate) async fn send_messages_to<K, V, P, T>(
 /// `rate = Some(bytes_per_sec)` the function sleeps between datagrams so the average send rate stays
 /// at or below that bound — used for bulk anti-entropy value transfers so the burst cannot overrun
 /// the receiver's socket buffer. Because it sleeps, it must run **off** the receive
-/// loop (see [`ReconcileEngine::spawn_paced_send`]); pacing inline in `handle_messages` would stall
+/// loop (see [`Replica::spawn_paced_send`]); pacing inline in `handle_messages` would stall
 /// reception of every other peer for the duration of the transfer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
 pub(crate) async fn send_messages_paced<K, V, P, T>(
@@ -1505,7 +1505,7 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
     let mut sent_bytes: usize = 0;
     for message in messages {
         let last_size = send_buf.len();
-        crate::bincode::encode(message, send_buf)
+        gossip::bincode::encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
         if send_buf.len() > max_payload {
             trace!("sending {} bytes to {peer}", last_size);
@@ -1560,7 +1560,7 @@ async fn pace(rate: Option<usize>, start: Instant, sent_bytes: usize) {
 /// rather than at the end of the send task's body — guarantees the in-flight mark is cleared even if
 /// the send task panics, so a transient failure can never wedge a peer into "permanently
 /// transferring" (which would silently stop it from ever syncing again). See
-/// [`ReconcileEngine::spawn_paced_send`].
+/// [`Replica::spawn_paced_send`].
 struct BulkInFlightGuard {
     set: Arc<RwLock<HashSet<SocketAddr>>>,
     peer: SocketAddr,
@@ -1574,7 +1574,7 @@ impl Drop for BulkInFlightGuard {
 
 /// RAII counter-decrement for the global concurrent-dump budget. Decrements the shared atomic on
 /// `Drop`, guaranteeing the slot is freed even if the task holding it panics or is aborted. See
-/// [`ReconcileEngine::try_claim_dump_slot`].
+/// [`Replica::try_claim_dump_slot`].
 struct BulkDumpCountGuard {
     counter: Arc<AtomicUsize>,
 }
@@ -1588,12 +1588,12 @@ impl Drop for BulkDumpCountGuard {
 #[cfg(test)]
 mod deadlock_regressions {
 
-    use crate::auth;
     use crate::clock::Timestamp;
     use crate::entry::{Entry, State};
-    use crate::reconcile_engine::ReconcileEngine;
-    use crate::{reconcile_store::Config, ReconcileStore};
+    use crate::replica::Replica;
+    use crate::{replicated_map::Config, ReplicatedMap};
     use bincode::{DefaultOptions, Serializer};
+    use gossip::auth;
     use serde::Serialize;
     use std::net::SocketAddr;
     use std::sync::{
@@ -1610,7 +1610,7 @@ mod deadlock_regressions {
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
         // let tree = FingerprintTreeMap::from_iter(vec![(1, 10), (2, 20)]);
-        let svc = ReconcileStore::new(config).await.expect("bind failed");
+        let svc = ReplicatedMap::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 
         let flag = Arc::new(AtomicBool::new(false));
@@ -1672,9 +1672,7 @@ mod deadlock_regressions {
                 let config = Config::default()
                     .with_port(8083)
                     .with_listen_addr("127.0.0.50".parse().unwrap());
-                let engine = ReconcileEngine::<i32, u8>::new(config)
-                    .await
-                    .expect("bind failed");
+                let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");
 
                 // The same re-entrant hook as the direct-path test, registered on the engine whose
                 // map `handle_messages` writes to: it calls back into `just_insert` on that engine.
@@ -1743,7 +1741,8 @@ mod auth_attack {
     use super::Message;
     use crate::clock::Timestamp;
     use crate::entry::{Entry, State};
-    use crate::{auth, reconcile_store::Config, ReconcileStore};
+    use crate::{replicated_map::Config, ReplicatedMap};
+    use gossip::auth;
 
     /// Serialize the F3 attack payload: an `Update` with a far-future timestamp that, if merged,
     /// would win against every legitimate write forever.
@@ -1771,7 +1770,7 @@ mod auth_attack {
             .with_port(port)
             .with_listen_addr(victim_addr.parse().unwrap())
             .with_cluster_key(key);
-        let store = ReconcileStore::<i32, String>::new(config)
+        let store = ReplicatedMap::<i32, String>::new(config)
             .await
             .expect("bind failed");
         store.just_insert(0, "legit".to_string());
@@ -1786,8 +1785,8 @@ mod auth_attack {
         // (b) forged update sealed with the WRONG key
         let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false)
             .seal(
-                crate::replay::Seq::new(1),
-                crate::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
+                gossip::replay::Seq::new(1),
+                gossip::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
                 &forged,
             )
             .expect("enabled");
@@ -1812,16 +1811,16 @@ mod causal_stability {
 
     use crate::clock::Timestamp;
     use crate::entry::{Entry, State};
-    use crate::reconcile_engine::{version_hash, Message, ReconcileEngine};
-    use crate::reconcile_store::Config;
+    use crate::replica::{version_hash, Message, Replica};
+    use crate::replicated_map::Config;
 
     type Tombstoned = Entry<Timestamp, i32>;
 
-    async fn engine(addr: &str) -> ReconcileEngine<i32, i32> {
+    async fn engine(addr: &str) -> Replica<i32, i32> {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr(addr.parse().unwrap());
-        ReconcileEngine::new(config).await.expect("bind failed")
+        Replica::new(config).await.expect("bind failed")
     }
 
     #[tokio::test]
@@ -1993,8 +1992,8 @@ mod clock_port {
     use std::sync::Arc;
 
     use crate::clock::{ManualClock, Timestamp};
-    use crate::reconcile_engine::ReconcileEngine;
-    use crate::reconcile_store::Config;
+    use crate::replica::Replica;
+    use crate::replicated_map::Config;
 
     /// The engine mints timestamps only through the injected [`Clock`](crate::clock::Clock) port, so
     /// a deterministic adapter makes `clock_now()` fully reproducible — no wall-clock time involved.
@@ -2005,7 +2004,7 @@ mod clock_port {
             .with_port(8080)
             .with_listen_addr("127.0.0.70".parse().unwrap());
         let clock = Arc::new(ManualClock::new(42));
-        let eng: ReconcileEngine<i32, i32> = ReconcileEngine::new_with_clock(config, clock)
+        let eng: Replica<i32, i32> = Replica::new_with_clock(config, clock)
             .await
             .expect("bind failed");
 
@@ -2022,10 +2021,10 @@ mod pacing {
 
     use tokio::net::UdpSocket;
 
-    use crate::auth::Authenticator;
     use crate::entry::State;
-    use crate::reconcile_engine::{send_messages_paced, Message, SendPorts};
+    use crate::replica::{send_messages_paced, Message, SendPorts};
     use crate::transport::UdpTransport;
+    use gossip::auth::Authenticator;
 
     type Msg = Message<u64, Vec<u8>, State<u8>>;
 
@@ -2042,7 +2041,7 @@ mod pacing {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let transport = UdpTransport::new(socket);
         let authenticator = Authenticator::new(None, false);
-        let sender_counter = crate::replay::SenderCounter::new();
+        let sender_counter = gossip::replay::SenderCounter::new();
         let ports = SendPorts {
             transport: &transport,
             authenticator: &authenticator,
@@ -2139,20 +2138,20 @@ mod tombstone_ack_bounds {
     use serde::Serialize;
 
     use super::Message;
-    use crate::auth;
     use crate::clock::Timestamp;
     use crate::entry::{Entry, State};
-    use crate::reconcile_engine::{version_hash, ReconcileEngine};
-    use crate::reconcile_store::Config;
+    use crate::replica::{version_hash, Replica};
+    use crate::replicated_map::Config;
+    use gossip::auth;
 
     type Tombstoned = Entry<Timestamp, i32>;
 
-    async fn engine(addr: &str) -> ReconcileEngine<i32, i32> {
+    async fn engine(addr: &str) -> Replica<i32, i32> {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
             .with_port(0)
             .with_listen_addr(addr.parse().unwrap());
-        ReconcileEngine::new(config).await.expect("bind failed")
+        Replica::new(config).await.expect("bind failed")
     }
 
     fn ack_bytes(key: i32, version: u64) -> Vec<u8> {
@@ -2260,7 +2259,7 @@ mod tombstone_ack_bounds {
 
 #[cfg(test)]
 mod dump_budget {
-    use crate::reconcile_store::Config;
+    use crate::replicated_map::Config;
 
     /// Default budget is 4, matching DEFAULT_MAX_CONCURRENT_BULK_DUMPS.
     #[test]
@@ -2279,15 +2278,13 @@ mod dump_budget {
     /// After the first slot is dropped its count returns to zero and a fresh claim succeeds.
     #[tokio::test]
     async fn budget_guard_limits_and_releases_slots() {
-        use crate::reconcile_engine::ReconcileEngine;
+        use crate::replica::Replica;
 
         let config = Config::default()
             .with_port(0)
             .with_listen_addr("127.0.0.99".parse().unwrap())
             .with_max_concurrent_bulk_dumps(1);
-        let eng = ReconcileEngine::<i32, i32>::new(config)
-            .await
-            .expect("bind failed");
+        let eng = Replica::<i32, i32>::new(config).await.expect("bind failed");
 
         let peer_a: std::net::SocketAddr = "127.0.0.100:9001".parse().unwrap();
         let peer_b: std::net::SocketAddr = "127.0.0.101:9001".parse().unwrap();
@@ -2331,12 +2328,12 @@ mod in_memory_convergence {
 
     use crate::clock::ManualClock;
     use crate::entry::Entry;
-    use crate::reconcile_engine::ReconcileEngine;
-    use crate::reconcile_store::Config;
+    use crate::replica::Replica;
+    use crate::replicated_map::Config;
     use crate::transport::InMemoryNetwork;
 
     /// Live (value-only) view of an engine's map, for comparing convergence regardless of stamps.
-    fn live_view(eng: &ReconcileEngine<u32, u32>) -> BTreeMap<u32, u32> {
+    fn live_view(eng: &Replica<u32, u32>) -> BTreeMap<u32, u32> {
         eng.map
             .read()
             .iter()
@@ -2357,12 +2354,12 @@ mod in_memory_convergence {
                 .with_port(port)
                 .with_reconcile_interval(Duration::from_millis(5))
         };
-        let a: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+        let a: Replica<u32, u32> = Replica::new_with_transport(
             cfg(a_ip),
             Arc::new(net.bind(SocketAddr::new(a_ip, port))),
             Arc::new(ManualClock::new(1)),
         );
-        let b: ReconcileEngine<u32, u32> = ReconcileEngine::new_with_transport(
+        let b: Replica<u32, u32> = Replica::new_with_transport(
             cfg(b_ip),
             Arc::new(net.bind(SocketAddr::new(b_ip, port))),
             Arc::new(ManualClock::new(2)),

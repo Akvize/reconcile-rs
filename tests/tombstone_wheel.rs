@@ -14,7 +14,7 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use reconcile::{reconcile_store::Config, Fingerprint, ReconcileStore};
+use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
 
 /// Poll `f` up to 300 times, sleeping 10 ms between tries (~3 seconds total).
 /// Returns `true` as soon as `f` becomes true, `false` if it never does.
@@ -54,8 +54,8 @@ async fn isolated_store(
     probe_net: &str,
     port: u16,
     tombstone_timeout: Duration,
-) -> ReconcileStore<i32, i32> {
-    ReconcileStore::new(
+) -> ReplicatedMap<i32, i32> {
+    ReplicatedMap::new(
         Config::default()
             .with_listen_addr(listen_addr)
             .with_net(probe_net.parse().unwrap())

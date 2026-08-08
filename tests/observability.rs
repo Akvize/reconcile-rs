@@ -12,11 +12,11 @@
 //! `tracing::subscriber::set_default` and `metrics::with_local_recorder` are both
 //! thread-local, so events emitted on `tokio::spawn`-ed tasks (the `run()` loop) are out of
 //! scope here. Running on a `current_thread` runtime keeps the `async` work on the test thread
-//! so the lifecycle events of `ReconcileStore::new` are captured.
+//! so the lifecycle events of `ReplicatedMap::new` are captured.
 
 use std::sync::{Arc, Mutex};
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -82,7 +82,7 @@ async fn startup_emits_info_and_security_warning_without_cluster_key() {
     let subscriber = Registry::default().with(layer);
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let _store = ReconcileStore::<String, String>::new(local_config())
+    let _store = ReplicatedMap::<String, String>::new(local_config())
         .await
         .expect("bind failed");
 
@@ -111,7 +111,7 @@ async fn cluster_key_suppresses_the_security_warning() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let config = local_config().with_cluster_key([7u8; 32]);
-    let _store = ReconcileStore::<String, String>::new(config)
+    let _store = ReplicatedMap::<String, String>::new(config)
         .await
         .expect("bind failed");
 
@@ -143,7 +143,7 @@ async fn local_mutations_increment_metric_counters() {
     // `info!("Listening on")` emission from poisoning the shared callsite cache for the other
     // tests (see that helper).
     keep_callsites_hot();
-    let store = ReconcileStore::<i32, i32>::new(local_config())
+    let store = ReplicatedMap::<i32, i32>::new(local_config())
         .await
         .expect("bind failed");
 
