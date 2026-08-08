@@ -74,7 +74,7 @@ pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
 
 /// Hard cap on the number of distinct tracked peers a receive loop admits.
 ///
-/// Owns the single admission rule shared by the dated engine and the dateless mirror: a datagram
+/// Owns the single admission rule shared by the dated engine and the dateless read replica: a datagram
 /// from a sender is admitted while that sender is already known, or while the tracked-peer count
 /// is under the cap. Centralizing the rule here means it is defined exactly once instead of being
 /// re-derived (and risking drift) at each receive loop. Sourced from
@@ -145,7 +145,7 @@ pub(crate) struct Inner<K, V> {
     /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
     ///
     /// Its range fingerprints are timestamp-less by construction (see
-    /// [`State`](crate::entry::State)), which is what lets a dateless mirror
+    /// [`State`](crate::entry::State)), which is what lets a dateless read replica
     /// converge with this dated store over the existing range-diff protocol. It is read-only state
     /// for the dated↔dated path and never touches the causal-stability bookkeeping.
     pub(crate) projection: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
@@ -274,7 +274,7 @@ impl<K, V> std::ops::Deref for Replica<K, V> {
 /// The three original variants form the **dated** channel (`ComparisonItem` / `Update` / `Ack`),
 /// exchanged between full dated stores exactly as before — their bincode tags (0, 1, 2) and wire
 /// bytes are unchanged. The two trailing variants form the additive **value-only** channel used by
-/// lightweight dateless mirrors: they are tagged 3 and 4, so a node that does not
+/// lightweight dateless read replicas: they are tagged 3 and 4, so a node that does not
 /// understand them simply fails to deserialize and drops the datagram (the receive loop is hardened
 /// against that), keeping the protocol backward compatible on a single port.
 ///
@@ -297,7 +297,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// fingerprints were computed over timestamp-less values. A dated store answers these by
     /// diffing against its value-only *projection* tree, never its dated map.
     ValueComparisonItem(RangeAggregate<K>),
-    /// An individual timestamp-less update sent to a dateless mirror once the value-only diff has
+    /// An individual timestamp-less update sent to a dateless read replica once the value-only diff
     /// identified a difference. Carries the projected payload only (no [`Timestamp`]).
     ValueUpdate((K, P)),
 }
@@ -460,7 +460,7 @@ impl<K: Key, V: Value> Replica<K, V> {
     /// Fingerprint of the value-only [`projection`](Self::projection) over a range.
     ///
     /// This is the timestamp-less counterpart of [`fingerprint`](Self::fingerprint); a dateless
-    /// mirror that has converged with this store computes the same value over the same range.
+    /// read replica that has converged with this store computes the same value over the same range.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.projection.read().aggregate(&range).fingerprint()
     }
@@ -867,9 +867,9 @@ impl<K: Key, V: Value> Replica<K, V> {
                                 // unauthenticated mode `open` always succeeds, so this is unchanged.
                                 //
                                 // Crucially, a sender that spoke *only* the value-only channel is a
-                                // dateless read-only mirror: it never acknowledges tombstones, so it
+                                // dateless read replica: it never acknowledges tombstones, so it
                                 // must NOT join the causal-stability membership set or it would block GC
-                                // forever (the very regression we must avoid). Such a mirror is
+                                // forever (the very regression we must avoid). Such a replica is
                                 // served reactively off `peer` and is not tracked as a peer/member.
                                 if spoke_dated {
                                     self.peers.write().insert(sender, Instant::now());
@@ -1048,7 +1048,7 @@ impl<K: Key, V: Value> Replica<K, V> {
     /// Returns `true` if the datagram contained at least one **dated** protocol message
     /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
     /// the sender in the causal-stability membership set: a sender that spoke only the value-only channel is a
-    /// read-only mirror and must not gate tombstone GC.
+    /// read replica and must not gate tombstone GC.
     #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
         &self,
@@ -1082,7 +1082,7 @@ impl<K: Key, V: Value> Replica<K, V> {
                 Message::Update(update) => updates.push(update),
                 Message::Ack(ack) => acks.push(ack),
                 Message::ValueComparisonItem(segment) => value_in_comparison.push(segment),
-                // A dated store is authoritative and never integrates a value-only update; mirrors
+                // A dated store is authoritative and never integrates a value-only update; read replicas
                 // are the only consumers of `ValueUpdate`. Ignore it defensively.
                 Message::ValueUpdate(_) => {}
             }
@@ -1241,7 +1241,7 @@ impl<K: Key, V: Value> Replica<K, V> {
                 send_messages_to(&acks_to_send, &self.send_ports(), &peer, send_buf).await;
             }
         }
-        // Value-only channel: answer a dateless mirror by diffing against the value-only
+        // Value-only channel: answer a dateless read replica by diffing against the value-only
         // *projection* tree (never the dated map) and replying with `ValueUpdate`s carrying only
         // the projected payload. This path is entirely independent of the dated channel and of the
         // causal-stability state — no acks, no membership, no GC interaction.
@@ -1266,7 +1266,7 @@ impl<K: Key, V: Value> Replica<K, V> {
                     .collect();
                 send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
-            // Bulk value-only payload — a dateless mirror pulling the dataset. Rate-pace it on a
+            // Bulk value-only payload — a dateless read replica pulling the dataset. Rate-pace it on a
             // background task, exactly like the dated bulk path.
             if !differences.is_empty() {
                 if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
@@ -1416,7 +1416,7 @@ impl<K: Key, V: Value> Replica<K, V> {
 /// encoding itself goes through the free functions in [`gossip::bincode`], which need no state to
 /// bundle here. These three pieces always travel together into [`send_messages_to`] and
 /// [`send_messages_paced`] from both call sites (the engine and
-/// [`Mirror`](crate::mirror::Mirror)); bundling them into one reference keeps
+/// [`ReadReplicaMap`](crate::read_replica_map::ReadReplicaMap)); bundling them into one reference keeps
 /// each helper's signature short instead of repeating the same three parameters everywhere.
 pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) transport: &'a T,

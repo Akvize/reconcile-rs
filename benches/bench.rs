@@ -233,18 +233,19 @@ mod imp {
         }
     }
 
-    /// Compare the in-memory cost of a **naive dated mirror** (`FingerprintTreeMap<K, Entry<Timestamp, V>>`, which
-    /// drags along a timestamp it never uses) against the **lightweight value-only mirror**
-    /// (`FingerprintTreeMap<K, State<V>>`) that the lightweight-mirror design introduces.
+    /// Compare the in-memory cost of a **naive dated replica**
+    /// (`FingerprintTreeMap<K, Entry<Timestamp, V>>`, which drags along a timestamp it never uses)
+    /// against the **lightweight value-only replica** (`FingerprintTreeMap<K, State<V>>`) that the
+    /// `ReadReplicaMap` design introduces.
     ///
     /// Criterion times the *fill* of each tree at growing sizes; the value-only tree both builds faster
     /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
     /// entry — the whole point of the optimization for fleets with many passive read replicas.
-    fn mirror_memory(c: &mut Criterion) {
+    fn read_replica_memory(c: &mut Criterion) {
         let dated = std::mem::size_of::<Entry<Timestamp, u32>>();
         let light = std::mem::size_of::<State<u32>>();
         println!(
-            "[mirror memory] per-entry value size: dated Entry<Timestamp, u32> = {dated} B, \
+            "[read replica memory] per-entry value size: dated Entry<Timestamp, u32> = {dated} B, \
          value-only State<u32> = {light} B, saved = {} B/entry",
             dated - light
         );
@@ -257,7 +258,7 @@ mod imp {
         let keys = &keys;
 
         let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
-        let mut group = c.benchmark_group("mirror_memory::fill");
+        let mut group = c.benchmark_group("read_replica_memory::fill");
         group.plot_config(plot_config);
         let mut size = 10;
         while size <= keys.len() {
@@ -439,7 +440,7 @@ mod imp {
         fingerprint_tree_map_insert,
         fingerprint_tree_map_remove,
         fingerprint_tree_map_range_fingerprint,
-        mirror_memory,
+        read_replica_memory,
         service_send,
         service_reconcile,
     );

@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`Mirror`], a lightweight, **dateless, read-only mirror** of a dated
+//! Provides the [`ReadReplicaMap`], a lightweight, **dateless, read-only replica** of a dated
 //! [`ReplicatedMap`](crate::ReplicatedMap).
 //!
 //! # What it is for
@@ -14,35 +14,34 @@
 //! A dated store keeps a [`Timestamp`] next to every value so it can resolve conflicts
 //! (last-write-wins) and run the tombstone causal-stability machinery. For a fleet with many
 //! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
-//! bytes per entry that the replica never needs. A `Mirror` stores only
+//! bytes per entry that the replica never needs. A `ReadReplicaMap` stores only
 //! [`State<V>`] — the value or a tombstone, no timestamp — and still converges with a dated peer
 //! over the **existing range-based diff protocol**, on the same UDP port.
 //!
 //! # How it stays causal-stability-safe
 //!
-//! The mirror speaks only the **value-only channel** of the protocol (the `ValueComparisonItem` /
-//! `ValueUpdate` messages). A
-//! dated peer answers those by diffing against its value-only *projection* tree, so the mirror never
-//! sees a timestamp and the dated↔dated path is untouched. Crucially, the mirror **never
-//! acknowledges tombstones and is never added to a dated peer's causal-stability membership set**, so it cannot
-//! block tombstone garbage collection — the regression the naive "single value-only hash" design
-//! would have caused.
+//! A read replica speaks only the **value-only channel** of the protocol (the `ValueComparisonItem`
+//! / `ValueUpdate` messages). A dated peer answers those by diffing against its value-only
+//! *projection* tree, so the read replica never sees a timestamp and the dated↔dated path is
+//! untouched. Crucially, a read replica **never acknowledges tombstones and is never added to a
+//! dated peer's causal-stability membership set**, so it cannot block tombstone garbage collection —
+//! the regression the naive "single value-only hash" design would have caused.
 //!
 //! # Read-only
 //!
-//! The mirror **always integrates** inbound updates (plain overwrite — it holds no timestamp to
+//! A read replica **always integrates** inbound updates (plain overwrite — it holds no timestamp to
 //! compare) and **never sends authoritative values**: it drives the diff by exchanging comparison
 //! items but ignores any difference it is asked to push back. It is a sink, not a source.
 //!
 //! # Limitations
 //!
-//! - A mirror reflects a deletion as a tombstone only if it observes the tombstone before the dated
-//!   store **garbage-collects** it. With the default tombstone timeout (60 s) a mirror polling on
-//!   the order of a second has ample time; but if GC is configured to outrun mirror propagation,
-//!   the mirror may retain the pre-deletion value. Likewise, once a dated store GC's a tombstone the
-//!   mirror keeps its own value-only entry for that key (it never pushes data back), so `get` may
-//!   still return the stale value. Both are consequences of the mirror being a passive, read-only
-//!   replica with no causal-stability bookkeeping of its own.
+//! - A read replica reflects a deletion as a tombstone only if it observes the tombstone before the
+//!   dated store **garbage-collects** it. With the default tombstone timeout (60 s) a read replica
+//!   polling on the order of a second has ample time; but if GC is configured to outrun read-replica
+//!   propagation, the read replica may retain the pre-deletion value. Likewise, once a dated store
+//!   GC's a tombstone the read replica keeps its own value-only entry for that key (it never pushes
+//!   data back), so `get` may still return the stale value. Both are consequences of the read
+//!   replica being a passive, read-only replica with no causal-stability bookkeeping of its own.
 
 use std::collections::HashMap;
 use std::io;
@@ -78,32 +77,33 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &State<V>)>;
 
-/// The wire value type a mirror names for (de)serialization. The mirror never stores a dated value;
-/// it only needs the type so the shared [`Message`] enum has a concrete `Update` payload (which it
-/// ignores) and so the value-only projection type resolves to [`State<V>`].
+/// The wire value type a read replica names for (de)serialization. A read replica never stores a
+/// dated value; it only needs the type so the shared [`Message`] enum has a concrete `Update`
+/// payload (which it ignores) and so the value-only projection type resolves to [`State<V>`].
 type WireDated<V> = Entry<Timestamp, V>;
 
-/// A lightweight, dateless, read-only mirror of a dated [`ReplicatedMap`](crate::ReplicatedMap).
+/// A lightweight, dateless, read-only replica of a dated [`ReplicatedMap`](crate::ReplicatedMap).
 ///
-/// See the [module documentation](crate::mirror) for the design and the causal-stability-safety guarantees.
+/// See the [module documentation](crate::read_replica_map) for the design and the
+/// causal-stability-safety guarantees.
 ///
 /// # Correct only under last-write-wins
 ///
-/// A mirror stores no timestamps, so it cannot resolve a conflict: inbound updates are applied by
-/// plain overwrite (its internal `integrate` step). That is correct *only* because the
+/// A read replica stores no timestamps, so it cannot resolve a conflict: inbound updates are applied
+/// by plain overwrite (its internal `integrate` step). That is correct *only* because the
 /// authoritative dated peer already resolved the conflict under last-write-wins before sending the
 /// projection. Under any other conflict-resolution policy, last-writer-by-arrival would be wrong
-/// and the mirror would need redesigning.
-pub struct Mirror<K, V> {
-    /// The value-only mirror. Its range fingerprints are timestamp-less by construction (see
-    /// [`State`]), matching a dated peer's value-only projection.
+/// and `ReadReplicaMap` would need redesigning.
+pub struct ReadReplicaMap<K, V> {
+    /// The value-only tree mirroring the dated store. Its range fingerprints are timestamp-less by
+    /// construction (see [`State`]), matching a dated peer's value-only projection.
     tree: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
     port: u16,
-    /// The datagram-I/O port (default adapter: [`UdpTransport`]), shared with every clone. The
-    /// mirror sends and receives exclusively through it, exactly like
+    /// The datagram-I/O port (default adapter: [`UdpTransport`]), shared with every clone. A read
+    /// replica sends and receives exclusively through it, exactly like
     /// [`Replica`](crate::Replica) — no `tokio::net` call sites of its own.
     transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    /// The single network this read-only mirror probes for discovery. A mirror is a
+    /// The single network this read-only replica probes for discovery. A read replica is a
     /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
     /// containing its listen address, else the first declared network, else the loopback default.
     /// Shared so it can be retuned at runtime (see [`set_net`](Self::set_net)).
@@ -115,15 +115,15 @@ pub struct Mirror<K, V> {
     replay_filter: Arc<replay::ReplayFilter>,
     /// Invoked just before each inbound value is integrated, so callers can be notified of changes.
     on_update: Arc<RwLock<OnUpdateCallback<K, V>>>,
-    /// Hard cap on the number of dated-cluster peers the mirror tracks. Datagrams from unknown
+    /// Hard cap on the number of dated-cluster peers the read replica tracks. Datagrams from unknown
     /// senders are dropped before any per-sender state is allocated when the peers map reaches
     /// this size. Sourced from [`Config::max_peers`].
     max_peers: PeerCap,
 }
 
-impl<K, V> Clone for Mirror<K, V> {
+impl<K, V> Clone for ReadReplicaMap<K, V> {
     fn clone(&self) -> Self {
-        Mirror {
+        ReadReplicaMap {
             tree: self.tree.clone(),
             port: self.port,
             transport: self.transport.clone(),
@@ -139,12 +139,12 @@ impl<K, V> Clone for Mirror<K, V> {
     }
 }
 
-impl<K: Key, V: Value> Mirror<K, V> {
-    /// Create a new mirror bound to the configured UDP socket.
+impl<K: Key, V: Value> ReadReplicaMap<K, V> {
+    /// Create a new read replica bound to the configured UDP socket.
     ///
-    /// The mirror honours the same [`Config`] as a dated store, including
-    /// [`with_cluster_key`](Config::with_cluster_key): to mirror an authenticated cluster it must
-    /// share the cluster key. The Hybrid-Logical-Clock `node_id` is ignored (a mirror mints no
+    /// A read replica honours the same [`Config`] as a dated store, including
+    /// [`with_cluster_key`](Config::with_cluster_key): to replicate an authenticated cluster it must
+    /// share the cluster key. The Hybrid-Logical-Clock `node_id` is ignored (a read replica mints no
     /// timestamps).
     ///
     /// # Errors
@@ -153,30 +153,31 @@ impl<K: Key, V: Value> Mirror<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
-        // The mirror keeps the OS default socket buffer sizes (`None`/`None`) rather than reading
-        // `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and a port
-        // refactor is not the place to change how much kernel memory a mirror claims.
+        // The read replica keeps the OS default socket buffer sizes (`None`/`None`) rather than
+        // reading `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and
+        // a port refactor is not the place to change how much kernel memory it claims.
         let transport =
             UdpTransport::bind(SocketAddr::new(config.listen_addr, config.port), None, None)
                 .await?;
-        debug!("Mirror listening on: {}", transport.local_addr()?);
+        debug!("ReadReplicaMap listening on: {}", transport.local_addr()?);
         Ok(Self::build(config, Arc::new(transport)))
     }
 
-    /// Create a mirror over a caller-supplied [`Transport`] adapter instead of the default UDP one,
-    /// mirroring [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport).
+    /// Create a read replica over a caller-supplied [`Transport`] adapter instead of the default UDP
+    /// one, mirroring [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport).
     ///
     /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
     /// which the caller has already done, or does not need to do at all. This is what lets a
-    /// mirror be driven against a dated peer over an
+    /// read replica be driven against a dated peer over an
     /// [`InMemoryNetwork`](crate::InMemoryNetwork), with no real sockets anywhere.
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
-    /// # use reconcile::{replicated_map::Config, InMemoryNetwork, Mirror};
+    /// # use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap};
     /// let network = InMemoryNetwork::new();
     /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
-    /// let mirror = Mirror::<String, String>::new_with_transport(Config::default(), transport);
+    /// let read_replica =
+    ///     ReadReplicaMap::<String, String>::new_with_transport(Config::default(), transport);
     /// ```
     pub fn new_with_transport(
         config: Config,
@@ -185,24 +186,24 @@ impl<K: Key, V: Value> Mirror<K, V> {
         Self::build(config, transport)
     }
 
-    /// Assemble a mirror from an already-constructed [`Transport`]. Pure wiring — no I/O — so it is
-    /// infallible; the fallible socket bind lives in [`new`](Self::new).
+    /// Assemble a read replica from an already-constructed [`Transport`]. Pure wiring — no I/O — so
+    /// it is infallible; the fallible socket bind lives in [`new`](Self::new).
     fn build(config: Config, transport: Arc<dyn Transport<Addr = SocketAddr>>) -> Self {
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
-                "SECURITY: no cluster key set — the lightweight mirror accepts UNAUTHENTICATED \
-                 datagrams. Set Config::with_cluster_key to match the dated cluster."
+                "SECURITY: no cluster key set — the lightweight read replica accepts \
+                 UNAUTHENTICATED datagrams. Set Config::with_cluster_key to match the dated cluster."
             );
         }
         let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
-        // A mirror tracks a single network: the one containing its listen address, else the first
-        // declared network, else the historical loopback default.
+        // A read replica tracks a single network: the one containing its listen address, else the
+        // first declared network, else the historical loopback default.
         let nets: Vec<IpNet> = config.nets.iter().flatten().copied().collect();
         let net = net_of(&nets, config.listen_addr)
             .or_else(|| nets.first().copied())
             .unwrap_or_else(|| "127.0.0.1/8".parse().unwrap());
-        Mirror {
+        ReadReplicaMap {
             tree: Arc::new(RwLock::new(FingerprintTreeMap::<K, State<V>>::new())),
             port: config.port,
             transport,
@@ -226,31 +227,32 @@ impl<K: Key, V: Value> Mirror<K, V> {
         self
     }
 
-    /// (runtime) Retune the network this mirror probes for discovery, visible to all clones.
+    /// (runtime) Retune the network this read replica probes for discovery, visible to all clones.
     pub fn set_net(&self, net: IpNet) {
         *self.net.write() = net;
     }
 
-    /// The network this mirror currently probes for discovery.
+    /// The network this read replica currently probes for discovery.
     pub fn net(&self) -> IpNet {
         *self.net.read()
     }
 
     /// Register a hook invoked (outside the map lock) just before each inbound value is integrated.
     ///
-    /// Useful to be notified of changes mirrored from the dated cluster. The tombstone case is
+    /// Useful to be notified of changes replicated from the dated cluster. The tombstone case is
     /// `State::Tombstone`.
     pub fn add_on_update<F: Send + Sync + Fn(&K, &State<V>) + 'static>(&self, on_update: F) {
         *self.on_update.write() = Box::new(on_update);
     }
 
-    /// Get the live value for a key, or `None` if the key is absent or holds a mirrored tombstone.
+    /// Get the live value for a key, or `None` if the key is absent or holds a replicated tombstone.
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.tree.read();
         RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|state| state.as_value())).ok()
     }
 
-    /// Whether the mirror currently holds a live value for the key (a tombstone counts as absent).
+    /// Whether the read replica currently holds a live value for the key (a tombstone counts as
+    /// absent).
     pub fn contains_key(&self, k: &K) -> bool {
         self.tree
             .read()
@@ -258,12 +260,12 @@ impl<K: Key, V: Value> Mirror<K, V> {
             .is_some_and(|state| !state.is_tombstone())
     }
 
-    /// Number of entries currently stored, **including mirrored tombstones**.
+    /// Number of entries currently stored, **including replicated tombstones**.
     pub fn len(&self) -> usize {
         self.tree.read().len()
     }
 
-    /// Whether the mirror is empty (no entries at all, tombstones included).
+    /// Whether the read replica is empty (no entries at all, tombstones included).
     pub fn is_empty(&self) -> bool {
         self.tree.read().is_empty()
     }
@@ -280,9 +282,9 @@ impl<K: Key, V: Value> Mirror<K, V> {
         guard.keys().cloned().collect()
     }
 
-    /// Integrate inbound value-only updates by plain overwrite (the mirror holds no timestamp to
+    /// Integrate inbound value-only updates by plain overwrite (a read replica holds no timestamp to
     /// compare against — it trusts the authoritative dated peer). Hooks run outside the map lock,
-    /// so a hook may safely call back into the mirror.
+    /// so a hook may safely call back into the read replica.
     fn integrate(&self, updates: Vec<(K, State<V>)>) {
         if updates.is_empty() {
             return;
@@ -328,7 +330,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
         let addr = gen_ip(&mut *self.rng.write(), net);
         peers.push(addr);
         for peer in peers {
-            trace!("mirror start_diff {} bytes to {peer}", send_buf.len());
+            trace!("read replica start_diff {} bytes to {peer}", send_buf.len());
             if let Err(err) = send_to_retry(
                 &*self.transport,
                 &self.authenticator,
@@ -339,7 +341,8 @@ impl<K: Key, V: Value> Mirror<K, V> {
             .await
             {
                 warn!(
-                    "mirror failed to send reconciliation initiation to {peer}: {err}; continuing"
+                    "read replica failed to send reconciliation initiation to {peer}: {err}; \
+                     continuing"
                 );
             }
         }
@@ -352,7 +355,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
         send_buf: &mut Vec<u8>,
     ) {
         let payload = payload.as_bytes();
-        trace!("mirror received {} bytes from {peer}", payload.len());
+        trace!("read replica received {} bytes from {peer}", payload.len());
         let mut value_in_comparison = Vec::new();
         let mut value_updates: Vec<(K, State<V>)> = Vec::new();
         // Decode the whole datagram through `gossip::bincode`, like the dated engine.
@@ -364,7 +367,8 @@ impl<K: Key, V: Value> Mirror<K, V> {
                 Ok(messages) => messages,
                 Err(kind) => {
                     warn!(
-                        "mirror failed to deserialize datagram from {peer}, dropping it: {kind:?}"
+                        "read replica failed to deserialize datagram from {peer}, dropping it: \
+                         {kind:?}"
                     );
                     return;
                 }
@@ -373,8 +377,8 @@ impl<K: Key, V: Value> Mirror<K, V> {
             match message {
                 Message::ValueComparisonItem(segment) => value_in_comparison.push(segment),
                 Message::ValueUpdate(update) => value_updates.push(update),
-                // The dated channel is meaningless to a mirror (it cannot store dated values nor
-                // participate in causal stability). Ignore it.
+                // The dated channel is meaningless to a read replica (it cannot store dated values
+                // nor participate in causal stability). Ignore it.
                 Message::ComparisonItem(_) | Message::Update(_) | Message::Ack(_) => {}
             }
         }
@@ -383,7 +387,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
 
         if !value_in_comparison.is_empty() {
             debug!(
-                "mirror received {} value-only segments",
+                "read replica received {} value-only segments",
                 value_in_comparison.len()
             );
             let mut out_comparison = Vec::new();
@@ -397,9 +401,9 @@ impl<K: Key, V: Value> Mirror<K, V> {
                     &mut differences,
                 );
             }
-            // `differences` are ranges this mirror would owe the peer. A read-only mirror never
-            // sends authoritative values, so we deliberately drop them and only bounce back the
-            // refined comparison items that keep the peer's side of the diff progressing.
+            // `differences` are ranges this read replica would owe the peer. A read-only replica
+            // never sends authoritative values, so we deliberately drop them and only bounce back
+            // the refined comparison items that keep the peer's side of the diff progressing.
             if !out_comparison.is_empty() {
                 let messages: Vec<_> = out_comparison
                     .into_iter()
@@ -410,8 +414,8 @@ impl<K: Key, V: Value> Mirror<K, V> {
         }
     }
 
-    /// Run the mirror's reconciliation loop forever. Spawn this on a task; the mirror converges to
-    /// the dated cluster's current values and reflects deletions as tombstones.
+    /// Run the read replica's reconciliation loop forever. Spawn this on a task; the read replica
+    /// converges to the dated cluster's current values and reflects deletions as tombstones.
     pub async fn run(self) {
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
@@ -419,19 +423,19 @@ impl<K: Key, V: Value> Mirror<K, V> {
         loop {
             match timeout(ACTIVITY_TIMEOUT, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
-                    debug!("mirror: no recent activity; initiating value-only diff");
+                    debug!("read replica: no recent activity; initiating value-only diff");
                     self.start_reconciliation(&mut send_buf).await;
                 }
-                Ok(Err(err)) => warn!("mirror network error in recv_from: {err}"),
+                Ok(Err(err)) => warn!("read replica network error in recv_from: {err}"),
                 Ok(Ok((size, peer))) => {
                     if peer.port() != self.port {
                         warn!(
-                            "mirror received message from {peer}, but protocol port is {}",
+                            "read replica received message from {peer}, but protocol port is {}",
                             self.port
                         );
                     }
                     if size == recv_buf.len() {
-                        warn!("mirror buffer too small for message, discarded");
+                        warn!("read replica buffer too small for message, discarded");
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
@@ -445,7 +449,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
                                         (guard.contains_key(&sender), guard.len());
                                     if !self.max_peers.admits(known, current_len) {
                                         trace!(
-                                            "mirror dropped datagram from {peer}: peer cap \
+                                            "read replica dropped datagram from {peer}: peer cap \
                                              reached ({current_len}/{})",
                                             self.max_peers.max()
                                         );
@@ -457,7 +461,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
                                     payload.verify_replay(&self.replay_filter, sender)
                                 else {
                                     trace!(
-                                        "mirror dropped replayed datagram from {peer}: \
+                                        "read replica dropped replayed datagram from {peer}: \
                                          seq={seq} stamp={stamp}"
                                     );
                                     continue;
@@ -467,7 +471,7 @@ impl<K: Key, V: Value> Mirror<K, V> {
                                 self.peers.write().insert(sender, Instant::now());
                             }
                             None => trace!(
-                                "mirror dropped datagram from {peer}: missing or invalid MAC"
+                                "read replica dropped datagram from {peer}: missing or invalid MAC"
                             ),
                         }
                     }
@@ -490,57 +494,61 @@ mod tests {
     /// `get` returns the live value, and absent keys are `None`.
     #[tokio::test]
     async fn get_returns_integrated_value() {
-        let mirror = Mirror::<i32, String>::new(ephemeral_config())
+        let read_replica = ReadReplicaMap::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
-        assert!(mirror.get(&1).is_none());
-        mirror.integrate(vec![(1, State::Present("hello".to_string()))]);
-        assert_eq!(mirror.get(&1).as_deref(), Some(&"hello".to_string()));
-        assert!(mirror.contains_key(&1));
-        assert_eq!(mirror.len(), 1);
+        assert!(read_replica.get(&1).is_none());
+        read_replica.integrate(vec![(1, State::Present("hello".to_string()))]);
+        assert_eq!(read_replica.get(&1).as_deref(), Some(&"hello".to_string()));
+        assert!(read_replica.contains_key(&1));
+        assert_eq!(read_replica.len(), 1);
     }
 
-    /// A mirrored tombstone (`State::Tombstone`) hides the value but is still a stored entry.
+    /// A replicated tombstone (`State::Tombstone`) hides the value but is still a stored entry.
     #[tokio::test]
-    async fn mirrors_tombstones() {
-        let mirror = Mirror::<i32, String>::new(ephemeral_config())
+    async fn replicates_tombstones() {
+        let read_replica = ReadReplicaMap::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
-        mirror.integrate(vec![(1, State::Present("v".to_string()))]);
-        assert_eq!(mirror.get(&1).as_deref(), Some(&"v".to_string()));
+        read_replica.integrate(vec![(1, State::Present("v".to_string()))]);
+        assert_eq!(read_replica.get(&1).as_deref(), Some(&"v".to_string()));
 
         // A later tombstone overwrites it: the value disappears from `get`, but the key is retained
-        // as a tombstone (the mirror has no timestamp and trusts the authoritative peer).
-        mirror.integrate(vec![(1, State::Tombstone)]);
-        assert!(mirror.get(&1).is_none());
-        assert!(!mirror.contains_key(&1));
-        assert_eq!(mirror.len(), 1, "the tombstone is retained as an entry");
+        // as a tombstone (a read replica has no timestamp and trusts the authoritative peer).
+        read_replica.integrate(vec![(1, State::Tombstone)]);
+        assert!(read_replica.get(&1).is_none());
+        assert!(!read_replica.contains_key(&1));
+        assert_eq!(
+            read_replica.len(),
+            1,
+            "the tombstone is retained as an entry"
+        );
     }
 
     /// The on-update hook fires for every integrated value, including tombstones.
     #[tokio::test]
     async fn on_update_hook_fires() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let mirror = Mirror::<i32, i32>::new(ephemeral_config())
+        let read_replica = ReadReplicaMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed");
         let count = Arc::new(AtomicUsize::new(0));
         let count2 = count.clone();
-        mirror.add_on_update(move |_, _| {
+        read_replica.add_on_update(move |_, _| {
             count2.fetch_add(1, Ordering::SeqCst);
         });
-        mirror.integrate(vec![(1, State::Present(10)), (2, State::Tombstone)]);
+        read_replica.integrate(vec![(1, State::Present(10)), (2, State::Tombstone)]);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
-    /// The mirror's value-only fingerprint matches an independently-built tree of the same logical
-    /// content — i.e. timestamps genuinely play no part in the hash.
+    /// The read replica's value-only fingerprint matches an independently-built tree of the same
+    /// logical content — i.e. timestamps genuinely play no part in the hash.
     #[tokio::test]
     async fn value_fingerprint_is_timestamp_independent() {
-        let mirror = Mirror::<i32, String>::new(ephemeral_config())
+        let read_replica = ReadReplicaMap::<i32, String>::new(ephemeral_config())
             .await
             .expect("bind failed");
-        mirror.integrate(vec![
+        read_replica.integrate(vec![
             (1, State::Present("a".to_string())),
             (2, State::Tombstone),
         ]);
@@ -550,13 +558,14 @@ mod tests {
         reference.insert(2, State::Tombstone);
 
         assert_eq!(
-            mirror.fingerprint(..),
+            read_replica.fingerprint(..),
             reference.aggregate(&..).fingerprint()
         );
     }
 
     /// A live value and its `State` projection hash identically only via the value-only basis:
-    /// per-entry, the dateless mirror saves the whole `Timestamp` (the point of the dateless mirror).
+    /// per-entry, the dateless read replica saves the whole `Timestamp` (the point of the dateless
+    /// read replica).
     #[test]
     fn value_only_is_smaller_per_entry() {
         let dated = std::mem::size_of::<Entry<Timestamp, u64>>();
