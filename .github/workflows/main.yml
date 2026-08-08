@@ -54,11 +54,12 @@ jobs:
       run: cargo doc --all --verbose
     - name: Generate the documentation (all features)
       run: cargo doc --all --all-features --verbose
-    # Only the leaf crates can be checked today: the `reconcile` package now depends on `rsos`
-    # by path, and cargo rejects a path dependency carrying no version requirement until that
-    # dependency is itself on crates.io. Publishing the workspace is a policy question tracked
-    # under #204; until it is settled, this keeps real packaging-breakage detection on the
-    # crates where it still works rather than dropping the check entirely.
+    # `rsos` only: cargo rejects packaging any crate with a path dependency that carries no
+    # version requirement, until that dependency is itself on crates.io. `rsos` is the one true
+    # leaf (no intra-workspace deps); `rbsr` depends on it by path and `reconcile` on both, so
+    # neither can be checked. Publishing the workspace is a policy question tracked under #204;
+    # until it is settled, this keeps real packaging-breakage detection where it still works
+    # rather than dropping the check entirely.
     # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate,
     # which is the breakage this check exists to catch, and unlike `publish --dry-run` it does
     # not additionally demand `package.publish = true` — so `rsos` keeps `publish = false` as a

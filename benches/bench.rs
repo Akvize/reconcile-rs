@@ -1,14 +1,8 @@
-// The benchmark drives the range-fingerprint via `FingerprintTreeMap::aggregate`. Like the
-// integration-test oracles it reaches it through the gated `reconcile::testing` seam (the
-// `range_fingerprint` shim), so the real bench body only compiles with the `internal-testing` feature.
-// Without it we fall back to an empty `main` so the target still links.
-#[cfg(not(feature = "internal-testing"))]
-fn main() {}
-
-#[cfg(feature = "internal-testing")]
+// The benchmark drives the range-fingerprint via `FingerprintTreeMap::aggregate`, which is public
+// on the standalone `rsos` crate — so, unlike when it went through the gated `reconcile::testing`
+// seam, the bench body needs no feature gate at all.
 use imp::main;
 
-#[cfg(feature = "internal-testing")]
 mod imp {
     use std::collections::BTreeMap;
     use std::time::Duration;
@@ -20,7 +14,6 @@ mod imp {
         Throughput,
     };
 
-    use reconcile::testing::range_fingerprint;
     use reconcile::{
         reconcile_store::Config, Entry, FingerprintTreeMap, ReconcileStore, State, Timestamp,
     };
@@ -233,7 +226,7 @@ mod imp {
                     let k1: u32 = rng.gen();
                     let k2: u32 = rng.gen();
                     let range = if k1 < k2 { k1..k2 } else { k2..k1 };
-                    range_fingerprint(&tree, &range);
+                    tree.aggregate(&range);
                 })
             });
             size *= 10;

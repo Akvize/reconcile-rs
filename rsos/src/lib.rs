@@ -62,8 +62,8 @@
 //! map after a set. The same convention is already held elsewhere in this workspace
 //! (`ReplicatedMap`). Only the container-kind suffix was added; the sourced stem is untouched.
 //!
-//! `FingerprintTreeMap` implements [`Rsos<K, V>`], delegating each trait method to the matching
-//! inherent method, and *also* keeps its own pre-existing, Rust-idiomatic inherent API (`len`,
+//! `FingerprintTreeMap` implements [`Rsos<K>`] (with `Value = V`), delegating each trait method to
+//! the matching inherent method, and *also* keeps its own pre-existing, Rust-idiomatic API (`len`,
 //! `insert`, `range`, `is_empty`, iterators, ...) side by side — the trait is one more way to
 //! call it, not the only way.
 //!

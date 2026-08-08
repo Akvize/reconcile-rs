@@ -20,8 +20,6 @@
 //!    key sets, and convergence survives reordered, duplicated and dropped
 //!    messages — modelling the lossy UDP transport.
 
-#![cfg(feature = "internal-testing")]
-
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
@@ -30,7 +28,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use reconcile::testing::{diff_round, range_fingerprint, start_diff, DiffRange, RangeAggregate};
+use rbsr::{diff_round, start_diff, DiffRange, RangeAggregate};
 use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
 // ---------------------------------------------------------------------------
@@ -92,7 +90,7 @@ proptest! {
         let expected_fingerprint = oracle
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(range_fingerprint(&tree, &..), expected_fingerprint);
+        prop_assert_eq!(tree.aggregate(&..).fingerprint(), expected_fingerprint);
     }
 
     #[test]
@@ -118,7 +116,7 @@ proptest! {
         let expected = want
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(range_fingerprint(&tree, &range), expected);
+        prop_assert_eq!(tree.aggregate(&range).fingerprint(), expected);
     }
 }
 

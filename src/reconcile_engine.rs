@@ -36,11 +36,11 @@ use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::gen_ip::{host_net, net_of};
 use crate::observability;
-use crate::proto::{self, RangeAggregate};
 use crate::reconcile_store::{Config, MAX_NETS};
 use crate::replay;
 use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
+use rbsr::RangeAggregate;
 use rsos::Fingerprint;
 
 const BUFFER_SIZE: usize = 65507;
@@ -893,7 +893,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
         observability::record_reconcile_round();
         let segments = {
             let guard = self.map.read();
-            proto::start_diff(&guard)
+            rbsr::start_diff(&*guard)
         };
         send_buf.clear();
         for segment in segments {
@@ -1124,7 +1124,12 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             let mut out_comparison = Vec::new();
             {
                 let guard = self.map.read();
-                proto::diff_round(&guard, in_comparison, &mut out_comparison, &mut differences);
+                rbsr::diff_round(
+                    &*guard,
+                    in_comparison,
+                    &mut out_comparison,
+                    &mut differences,
+                );
             }
             // Refinement comparison items are small and latency-sensitive: send them inline, now.
             if !out_comparison.is_empty() {
@@ -1246,8 +1251,8 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
             let mut out_comparison = Vec::new();
             {
                 let guard = self.projection.read();
-                proto::diff_round(
-                    &guard,
+                rbsr::diff_round(
+                    &*guard,
                     value_in_comparison,
                     &mut out_comparison,
                     &mut differences,

@@ -38,9 +38,9 @@ converge. The design rests on five mechanisms:
 
 | Module | Responsibility |
 |---|---|
-| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, plus the `Rsos<K, V>` trait (Def. 3.9) it implements. |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate, migration step 6 Step A, done) | `FingerprintTreeMap`: ordered map + range-fingerprint data structure and its iterators, the bundled `Aggregate` (Def. 3.5), plus the `Rsos<K>` trait (Def. 3.9, `Value` associated type) it implements. |
 | `rsos/src/fingerprint.rs` (standalone `rsos` crate) | 256-bit additive fingerprint (`[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶). |
-| `diff.rs` | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types. |
+| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`start_diff`, `diff_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
 | `entry.rs` | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `clock.rs` | Hybrid Logical Clock: timestamp type, ordering, and the clock that mints/observes stamps. |
 | `auth.rs` | Per-datagram message authentication (MAC). |
@@ -58,8 +58,9 @@ no async runtime, no socket, no codec, no wall clock (outside `#[cfg(test)]`):
 
 | Module | Infrastructure imported |
 |---|---|
-| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs` (standalone `rsos` crate) | none — enforced today by the crate's own minimal `Cargo.toml` dependency list, not just by grep. |
-| `diff.rs`, `entry.rs` | none |
+| `rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs` (standalone `rsos` crate) | none — enforced today by the crate's own minimal `Cargo.toml` dependency list, not just by grep. |
+| `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate) | none — enforced by the crate's own `Cargo.toml` (`rsos` + `serde` + `tracing`), not just by grep. |
+| `entry.rs` | none |
 
 This is, in effect, the interior of the hexagon and it exists today.
 
@@ -367,7 +368,7 @@ without a compile error — the guarantee a single crate cannot provide.
 | `Persistence` | unchanged (the model port) |
 | `gen_ip` random IP-scan inline in the engine | `Discovery` port; `RandomProbe` (speculative, the default) + `DnsDiscovery` (authoritative, k8s-native) adapters |
 | Multi-bound `where` blocks | `Key` / `Value` supertrait bundles |
-| Single crate | `reconcile-core` / `-net` / `-store` / `reconcile` workspace |
+| Single crate | `reconcile-core` / `-net` / `-store` / `reconcile` workspace (steps A/B done: `rsos` and `rbsr` split out below the domain layer) |
 
 ---
 
@@ -380,8 +381,8 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
    golden vectors in `fingerprint.rs` hold.
 2. **HLC total order** `(wall_ms, counter, node_id)` (`clock.rs:44-54`) — the derived ordering *is* the
    conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and merge uses strict `>`.
-3. **Size-not-hash emptiness/equality** in `diff_round` (`diff.rs:135-141`).
-4. **Malformed-bound / inverted-range hardening** in `diff_round` (`diff.rs:100-134`).
+3. **Size-not-hash emptiness/equality** in `diff_round` (`rbsr/src/diff.rs`).
+4. **Malformed-bound / inverted-range hardening** in `diff_round` (`rbsr/src/diff.rs`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs;
    `bincode.rs`'s `decode_stream` never absorbs authentication.
 6. **Causal-stability tombstone gate** — a tombstone is garbage-collected only after every monotonic

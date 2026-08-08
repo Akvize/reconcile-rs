@@ -16,15 +16,15 @@ cd "$SCRIPT_DIR/.."
 DOMAIN_FILES=(
     src/entry.rs
     src/bounds.rs
-    src/proto.rs
 )
-# `src/hrtree.rs`, `src/hrtree_iter.rs` (now `rsos/src/fingerprint_tree_map{,_iter}.rs`) and
-# `src/fingerprint.rs` moved to the standalone `rsos`
-# crate (workspace split step A) — dropped from this list the same way `reconcilable.rs` was
-# dropped when `entry.rs` took its place. `rsos` has its own, stronger invariant (zero dependency
-# on anything reconciliation-domain-specific, enforced today by its Cargo.toml's dependency list
-# alone); a grep-based analog for `rsos`/the future `rbsr` crate is tracked as a later step, not
-# added here.
+# `src/hrtree.rs`, `src/hrtree_iter.rs` and `src/fingerprint.rs` moved to the standalone `rsos`
+# crate (workspace split step A, where the first two are now
+# `rsos/src/fingerprint_tree_map{,_iter}.rs`), and `src/proto.rs` moved to the standalone `rbsr`
+# crate (step B, now `rbsr/src/diff.rs` + `rbsr/src/rsos_view.rs`) — all dropped from this list the
+# same way `reconcilable.rs` was dropped when `entry.rs` took its place. Both crates carry their
+# own, stronger invariant (zero dependency on anything reconciliation-domain-specific, enforced
+# today by their Cargo.toml dependency lists alone); a grep-based analog for `rsos`/`rbsr` is
+# tracked as a later step, not added here.
 
 # Infrastructure crates/modules the domain must never import directly.
 FORBIDDEN='^\s*use\s+(tokio|bincode|chrono|ipnet|mio|reqwest|hyper|std::net)\b'

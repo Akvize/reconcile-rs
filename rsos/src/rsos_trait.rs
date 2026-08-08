@@ -15,7 +15,7 @@ use std::hash::Hash;
 use std::ops::RangeBounds;
 
 use crate::aggregate::Aggregate;
-use crate::fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
+use crate::fingerprint_tree_map::FingerprintTreeMap;
 
 /// The RSOS interface (Def. 3.9): the seven operations a *replica state* `X ⊆ U` must support to
 /// drive range-based set reconciliation — decoupled from any one realization. The paper itself
@@ -32,11 +32,28 @@ use crate::fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
 /// A few signatures adapt the paper's math to idiomatic Rust rather than a literal transliteration
 /// (documented per-method below); the *operation* semantics match Def. 3.9 exactly.
 ///
-/// The two parameters are not a widening of the paper's single element space: **`X` is the set of
-/// keys**, so `K` is the paper's `U`, and `V` is the payload the Def. 3.4 lift consults. A map
-/// assigns exactly one value per key, which is exactly what makes `lift` total on `X`. See the
-/// crate root docs for the full argument.
-pub trait Rsos<K, V> {
+/// # Why a key parameter and a value type are not a widening of `U`
+///
+/// Naming both a key type and a stored value type is not a widening of the paper's single element
+/// space: **`X` is the set of keys**, so `K` is the paper's `U`, and the value is the payload the
+/// Def. 3.4 lift consults. A map assigns exactly one value per key, which is exactly what makes
+/// `lift` total on `X`. See the crate root docs for the full argument.
+///
+/// # Why the stored value is an associated type, not a type parameter
+///
+/// The value type is [`Rsos::Value`], an *associated* type, so the trait is parameterized by the
+/// key type alone. A store realizes RSOS for a given key ordering in exactly one way — there is no
+/// meaningful "same store, two different value types" implementation to disambiguate between —
+/// which is the textbook criterion for an associated type over a type parameter. It also keeps
+/// downstream blanket implementations expressible: `rbsr`'s
+/// `impl<K, T: Rsos<K>> RsosView<K> for T` (RBSR needs the key-side operations only, never the
+/// values) would not compile against an `Rsos<K, V>` shape, since `V` would appear in neither the
+/// implemented trait nor the self type (rustc E0207).
+pub trait Rsos<K> {
+    /// The type stored against each key. Associated rather than a trait type parameter — see the
+    /// trait-level docs.
+    type Value;
+
     /// `size()` → `|X|`: the number of elements currently in the store.
     fn size(&self) -> usize;
 
@@ -56,25 +73,37 @@ pub trait Rsos<K, V> {
     /// rather than adding an `Option`/`Result` the paper's own signature doesn't have).
     fn select(&self, r: usize) -> &K;
 
-    /// `Enumerate(l, u)` → the ordered contents of `X ∩ [l, u)`. Returns a concrete iterator type
-    /// (over `(&K, &V)` pairs) rather than the paper's set-valued return, since Rust has no
+    /// `Enumerate(l, u)` → the ordered contents of `X ∩ [l, u)`. Returns an iterator (over
+    /// `(&K, &Self::Value)` pairs) rather than the paper's set-valued return, since Rust has no
     /// built-in notion of returning "a set" other than an iterator/collection — an iterator is the
     /// idiomatic, zero-copy Rust shape for "ordered contents of a range".
-    fn enumerate<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R>
+    ///
+    /// The return type is an anonymous `impl Iterator` (RPITIT, stable since Rust 1.75), not a
+    /// named concrete type: this trait is the realization-*independent* RSOS contract, so naming
+    /// [`FingerprintTreeMap`]'s own `ItemRange` here would tie the abstraction to one realization's
+    /// iterator. The cost is that `Rsos` is not object-safe — deliberate and free today, since
+    /// every call site uses a concrete, monomorphized store.
+    fn enumerate<'a, R: RangeBounds<K>>(
+        &'a self,
+        range: &'a R,
+    ) -> impl Iterator<Item = (&'a K, &'a Self::Value)> + 'a
     where
-        K: Ord;
+        K: Ord + 'a,
+        Self::Value: 'a;
 
     /// `Insert(k, v)`: inserts (or overwrites) `k ↦ v`. Returns the previous value, if any,
-    /// matching `FingerprintTreeMap::insert`'s existing return (idiomatic Rust map-insert semantics,
-    /// which the paper's own `Insert` does not specify a return for).
-    fn insert(&mut self, key: K, value: V) -> Option<V>;
+    /// matching `FingerprintTreeMap::insert`'s existing return (idiomatic Rust map-insert
+    /// semantics, which the paper's own `Insert` does not specify a return for).
+    fn insert(&mut self, key: K, value: Self::Value) -> Option<Self::Value>;
 
     /// `Delete(k)`: removes `k` if present. Returns the removed value, if any, matching
     /// `FingerprintTreeMap::remove`'s existing return — same rationale as `insert`.
-    fn delete(&mut self, key: &K) -> Option<V>;
+    fn delete(&mut self, key: &K) -> Option<Self::Value>;
 }
 
-impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTreeMap<K, V> {
+impl<K: Hash + Ord, V: Hash> Rsos<K> for FingerprintTreeMap<K, V> {
+    type Value = V;
+
     fn size(&self) -> usize {
         self.len()
     }
@@ -91,9 +120,13 @@ impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTreeMap<K, V> {
         FingerprintTreeMap::select(self, r)
     }
 
-    fn enumerate<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R>
+    fn enumerate<'a, R: RangeBounds<K>>(
+        &'a self,
+        range: &'a R,
+    ) -> impl Iterator<Item = (&'a K, &'a V)> + 'a
     where
-        K: Ord,
+        K: Ord + 'a,
+        V: 'a,
     {
         self.range(range)
     }

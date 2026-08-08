@@ -1,0 +1,24 @@
+[package]
+name = "rbsr"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Range-Based Set Reconciliation (Meyer, arXiv:2212.13567) over any RSOS backend"
+repository = "https://github.com/Akvize/reconcile-rs"
+publish = false
+
+[dependencies]
+# `serde` is load-bearing: `RangeAggregate` and its bound types are wire messages, exchanged
+# verbatim between peers. `tracing` carries the one `debug!` on the malformed-segment drop path.
+# `rsos` supplies `Aggregate` and the `Rsos` trait the blanket `RsosView` impl is written over —
+# the dependency edge points `rbsr` → `rsos` only, never the reverse.
+rsos = { path = "../rsos" }
+serde = { version = "1.0.192", features = ["derive"] }
+tracing = "0.1.40"
+
+[dev-dependencies]
+# Test-only, and deliberately not a real dependency: `rbsr` owns no encoding. `diff.rs`'s
+# `wire_format_is_unchanged_by_the_aggregate_collapse` golden-vector test pins `RangeAggregate`'s
+# bytes under the same `DefaultOptions` configuration `reconcile`'s codec uses, next to the field
+# declaration order it guards.
+bincode = "1.3.3"
