@@ -1917,14 +1917,13 @@ mod reconcile_store_tests {
     /// `ComparisonItem` as a dated message, so `spoke_dated` becomes `true` and the receive path
     /// would add the sender to `members` — unless the cap fires first.
     fn dated_comparison_payload() -> Vec<u8> {
-        use crate::proto;
         use crate::reconcile_engine::Message;
         use crate::FingerprintTreeMap;
         use bincode::{DefaultOptions, Serializer};
         use serde::Serialize as _;
 
         let tree = FingerprintTreeMap::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
-        let segments = proto::start_diff(&tree);
+        let segments = rbsr::start_diff(&tree);
         let mut buf = Vec::new();
         for seg in segments {
             Message::<

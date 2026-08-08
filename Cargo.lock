@@ -1289,6 +1289,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rbsr"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "rsos",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "reconcile"
 version = "0.2.1"
 dependencies = [
@@ -1308,6 +1318,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rand 0.8.5",
+ "rbsr",
  "rsos",
  "serde",
  "sha2",

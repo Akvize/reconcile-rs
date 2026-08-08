@@ -66,7 +66,6 @@ use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::{Entry, State};
 use crate::gen_ip::{gen_ip, net_of};
-use crate::proto;
 use crate::reconcile_engine::{send_messages_to, send_to_retry, Message, PeerCap, SendPorts};
 use crate::reconcile_store::Config;
 use crate::replay;
@@ -268,7 +267,7 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
     /// kicking off / continuing a value-only reconciliation round.
     pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
-        let segments = proto::start_diff(&self.tree.read());
+        let segments = rbsr::start_diff(&*self.tree.read());
         send_buf.clear();
         for segment in segments {
             Message::ValueComparisonItem::<K, WireDated<V>, State<V>>(segment)
@@ -343,8 +342,8 @@ impl<K: Key, V: Value> ReconcileMirror<K, V> {
             let mut differences = Vec::new();
             {
                 let guard = self.tree.read();
-                proto::diff_round(
-                    &guard,
+                rbsr::diff_round(
+                    &*guard,
                     value_in_comparison,
                     &mut out_comparison,
                     &mut differences,

@@ -160,9 +160,11 @@ Progress:
 - ✅ Step 1 — bound bundles & encapsulation ([#140](https://github.com/Akvize/reconcile-rs/issues/140), PR #155).
 - ✅ Step 2 — dissolve the diff traits ([#141](https://github.com/Akvize/reconcile-rs/issues/141), PR #156):
   `HashRangeQueryable` / `Diffable` removed; range querying is now inherent on `FingerprintTreeMap`
-  (today `aggregate` / `rank` / `select`, all public since the `rsos` extraction; `len` / `is_empty` public) and
-  `start_diff` / `diff_round` are free functions in the `pub(crate) proto` module over `&FingerprintTreeMap`,
-  with `RangeAggregate` / `DiffRange` no longer on the public surface. Iso-functional; invariants 3–4
+  (today `aggregate` / `rank` / `select`, all public since the `rsos` extraction; `len` / `is_empty`
+  public) and `start_diff` / `diff_round` became free functions over the local set in the
+  then-`pub(crate)` `proto` module, with `RangeAggregate` / `DiffRange` no longer on the `reconcile`
+  public surface (they now live in the standalone `rbsr` crate, generic over the `RsosView<K>`
+  backend trait — migration step 6 Step B). Iso-functional; invariants 3–4
   preserved byte-for-byte.
 - ✅ Step 3 — `Clock` port ([#142](https://github.com/Akvize/reconcile-rs/issues/142), PR #158): `pub trait Clock`
   (`now`/`observe`, returning the concrete `Timestamp`) is the domain's time seam; `HlcClock` is the
@@ -182,7 +184,14 @@ Progress:
   — `Entry` derives `Hash` including `stamp`, `State` derives `Hash` with no `Timestamp` field to
   include — and is guarded by tests in `entry.rs` and `mirror.rs`. **Changes the wire and on-disk
   formats** (expected; the crate is unpublished, pre-1.0).
-- ◯ Steps 5–6 — `Transport`/`Codec` → workspace split.
+- ✅ Step 5 — `Transport` port + `bincode.rs` wire-encoding functions (the `Codec` trait itself was
+  dissolved, ARCHITECTURE.md §2.4).
+- ◑ Step 6 — workspace split, in progress: Step A extracted the `rsos` crate (`FingerprintTreeMap`,
+  `Fingerprint`, `Aggregate`, the `Rsos<K>` trait); Step B extracted the `rbsr` crate
+  (`start_diff`/`diff_round`/`RangeAggregate`, generic over `rbsr::RsosView<K>`,
+  blanket-implemented for every `rsos::Rsos`
+  implementor). Steps C (`lww-register`/`gossip`/`snapshot` + the type renames) and D (facade
+  reassembly, CI/docs) remain.
 
 ---
 
