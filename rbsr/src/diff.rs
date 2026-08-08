@@ -108,8 +108,9 @@ impl<K> RangeBounds<K> for KeyRange<K> {
 /// `{range, aggregate: {fingerprint, size}}` is byte-for-byte the old `{range, hash, size}` —
 /// which is why [`Aggregate`] declares `fingerprint` before `size` (see its own note). The exact
 /// bytes are pinned by a golden vector in `reconcile`'s `tests/wire_format.rs`, built through
-/// [`RangeAggregate::for_testing`] — the codec lives in the adapter layer, so the byte-level test
-/// lives there too rather than dragging a codec dependency into this crate.
+/// `RangeAggregate::for_testing` (the `internal-testing` seam below, hence not linked here — it
+/// does not exist without that feature) — the codec lives in the adapter layer, so the byte-level
+/// test lives there too rather than dragging a codec dependency into this crate.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RangeAggregate<K> {
     range: KeyRange<K>,

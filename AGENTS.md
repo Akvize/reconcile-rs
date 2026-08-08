@@ -38,8 +38,13 @@ cargo test --workspace --features internal-testing          # unit + integration
 cargo test --workspace --all-features
 cargo test --doc --workspace --features internal-testing    # doctests
 cargo bench --no-run --features internal-testing            # benches must still compile
-cargo doc --workspace --all-features                        # docs must build warning-free
+cargo doc --workspace                                       # docs must build warning-free…
+cargo doc --workspace --all-features                        # …in both feature sets
 ```
+
+Both `cargo doc` lines matter, and the bare one is easy to forget: an intra-doc link to a
+feature-gated item resolves under `--all-features` and dangles without it, so only the first
+invocation catches it — as `-Dwarnings` promotes a dangling link to an error.
 
 `--workspace` throughout (not the deprecated `--all` alias): with five members, the distinction is
 worth being unambiguous about. `.github/workflows/main.yml`, `./pre-commit` and this listing are
