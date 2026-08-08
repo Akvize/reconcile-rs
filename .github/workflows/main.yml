@@ -54,21 +54,20 @@ jobs:
       run: cargo doc --workspace --verbose
     - name: Generate the documentation (all features)
       run: cargo doc --workspace --all-features --verbose
-    # Cargo rejects packaging any crate holding a path dependency that carries no version
-    # requirement, until that dependency is itself on crates.io. So only the crates with no
-    # intra-workspace dependency can be checked: `rsos`, `lww-register` and `gossip`. `rbsr`
-    # (→ rsos), `snapshot` (→ lww-register) and `reconcile` (→ all five) cannot. Publishing the
-    # workspace is a policy question tracked under #204; until it is settled, this keeps real
-    # packaging-breakage detection where it still works rather than dropping the check entirely.
+    # Packaging check for the whole workspace — all five members, the release path end to end
+    # (#204, AGENTS.md §11). `--workspace` is what makes that possible: cargo strips `path` at
+    # publish time and resolves each intra-workspace dependency from crates.io, so a *per-crate*
+    # `cargo package -p rbsr` still fails with "no matching package named `rsos`" until `rsos` is
+    # actually published — only `rsos`, `lww-register` and `reconcile-gossip` (the members with no
+    # intra-workspace dependency) can be checked one at a time today. `--workspace` packages them
+    # together and resolves the `path` + `version` pairs against a local temporary registry
+    # instead, which covers `rbsr` and `reconcile` too. Keep it as one invocation for that reason;
+    # splitting it back into per-crate steps silently drops two crates from the check.
+    #
     # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate,
-    # which is the breakage this check exists to catch, and unlike `publish --dry-run` it does
-    # not additionally demand `package.publish = true` — so these crates keep `publish = false`
-    # as a guard against being released before #204 is settled.
-    - name: Check that the dependency-free crates package cleanly
-      run: |
-        cargo package -p rsos --allow-dirty
-        cargo package -p lww-register --allow-dirty
-        cargo package -p gossip --allow-dirty
+    # which is the breakage this check exists to catch, without contacting the registry to upload.
+    - name: Check that the whole workspace packages cleanly
+      run: cargo package --workspace --allow-dirty
 
   coverage:
     runs-on: ubuntu-latest

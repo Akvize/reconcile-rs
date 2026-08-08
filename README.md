@@ -397,15 +397,30 @@ runs over any store that can answer the four range/order-statistics queries it n
 
 ### Workspace layout
 
-`reconcile` is the published facade over five internal crates, layered so the compiler enforces the
+`reconcile` is the facade over four sibling crates, layered so the compiler enforces the
 dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the diff walk) →
 `lww-register` (the LWW-Register CRDT domain: `Entry`/`State`, `Timestamp`, the `Clock` and
-`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it) → `snapshot`
-(the file-backed persistence adapter), with `gossip` (UDP transport, wire encoding, datagram
-authentication, replay protection, peer discovery) as a domain-independent sibling. Everything the
+`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it), with `gossip`
+(UDP transport, wire encoding, datagram authentication, replay protection, peer discovery) as a
+domain-independent sibling. The file-backed persistence adapter (`FileSnapshot`) lives in the facade
+itself, `src/snapshot.rs`. Everything the
 facade re-exports keeps resolving at `reconcile::*` — `reconcile::ReplicatedMap`,
 `reconcile::Entry`, `reconcile::FingerprintTreeMap`, `reconcile::UdpTransport` and so on — so the
 layout is an implementation detail unless you want to depend on one layer directly.
+
+All five are published, but they are not all offered on the same terms:
+
+- **`rsos`** and **`rbsr`** stand on their own — a range-summarizable ordered store, and the RBSR
+  algorithm over any such store. Depend on them directly if you want the data structure or the
+  algorithm without the replication.
+- **`lww-register`** and **`reconcile-gossip`** are **implementation detail with no stability
+  guarantee**. They are on crates.io only because cargo has no vendoring: `reconcile` cannot be
+  published unless its dependencies are, the same reason `serde_derive` and `tracing-attributes`
+  are there. Depend on `reconcile`, which re-exports what you need.
+
+(`gossip` publishes as `reconcile-gossip` because the plain name is taken. Dependents rename it
+back with `gossip = { package = "reconcile-gossip", … }`, so the source everywhere still says
+`use gossip::…`.)
 
 Our implementation of this data structure is based on a B-Trees that we wrote
 ourselves. Although we put a limited amount of effort in this

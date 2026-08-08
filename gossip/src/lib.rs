@@ -8,6 +8,24 @@
 
 //! `gossip`: the network adapter layer of `reconcile-rs`.
 //!
+//! # ⚠ Implementation detail — no stability guarantee
+//!
+//! **Published as `reconcile-gossip`. Do not depend on this crate directly — depend on
+//! [`reconcile`](https://crates.io/crates/reconcile).** It is on crates.io for one reason: cargo
+//! has no vendoring, so `reconcile` cannot be published unless every crate it depends on is
+//! published too. That is the same reason `serde_derive`, `pin-project-internal` and
+//! `tracing-attributes` are on the registry, and it carries the same warning: **anything here may
+//! change or disappear in any release**, including in a patch release, without a deprecation
+//! period and without appearing in `reconcile`'s changelog. The API this crate is versioned
+//! against is `reconcile`'s, not its own.
+//!
+//! (The published name is a registry detail only: `gossip` was taken, so the manifest renames the
+//! package and every dependent renames it straight back with
+//! `gossip = { package = "reconcile-gossip", … }`. All Rust source, here and in `reconcile`, says
+//! `gossip`.)
+//!
+//! # What it holds
+//!
 //! Everything a replica needs to *talk* to its peers, and nothing about what it says:
 //!
 //! - [`transport`] — the [`transport::Transport`] port (`send_to`/`recv_from` over datagrams) plus

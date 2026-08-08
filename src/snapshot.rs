@@ -6,19 +6,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! `snapshot`: the file-backed [`Persistence`] adapter for a replicated map.
+//! The file-backed [`Persistence`] adapter for a replicated map.
 //!
-//! This crate holds the half of persistence that touches the outside world: [`FileSnapshot`], a
+//! This module holds the half of persistence that touches the outside world: [`FileSnapshot`], a
 //! durable backend that writes a whole [`PersistedState`] to one file as
 //! `magic || version || bincode(state)`, atomically. The port it implements
 //! ([`lww_register::persistence::Persistence`]), the snapshot value type, and the non-durable
 //! [`InMemoryPersistence`](lww_register::persistence::InMemoryPersistence) default live in the
-//! infrastructure-free `lww-register` crate — so a node that never persists to disk never pulls in
-//! this crate at all.
-
-// The entire crate is implemented in safe Rust; this turns any `unsafe` block into a hard
-// compile error.
-#![forbid(unsafe_code)]
+//! infrastructure-free `lww-register` crate — the domain owns the contract, this adapter owns the
+//! filesystem and the codec.
+//!
+//! It briefly lived in a standalone `snapshot` crate during the workspace split and was folded back
+//! into `reconcile` afterwards: one type with no standalone reuse value did not earn a published
+//! identity of its own (ARCHITECTURE.md §3.9). [`FileSnapshot`] is re-exported from
+//! [`crate::persistence`] and from the crate root, which is where consumers have always seen it.
 
 use std::fs;
 use std::io;

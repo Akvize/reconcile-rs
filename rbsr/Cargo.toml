@@ -5,21 +5,28 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Range-Based Set Reconciliation (Meyer, arXiv:2212.13567) over any RSOS backend"
 repository = "https://github.com/Akvize/reconcile-rs"
-publish = false
+readme = "README.md"
+keywords = ["rbsr", "reconciliation", "anti-entropy", "set", "gossip"]
+categories = ["algorithms", "network-programming"]
 
 [dependencies]
 # `serde` is load-bearing: `RangeAggregate` and its bound types are wire messages, exchanged
 # verbatim between peers. `tracing` carries the one `debug!` on the malformed-segment drop path.
 # `rsos` supplies `Aggregate` and the `Rsos` trait the blanket `RsosView` impl is written over —
 # the dependency edge points `rbsr` → `rsos` only, never the reverse.
-rsos = { path = "../rsos" }
+#
+# The `version` alongside `path` is what makes this crate publishable: cargo strips `path` at
+# publish time and resolves the requirement from crates.io (#204, AGENTS.md §11).
+rsos = { version = "0.1.0", path = "../rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 
-[dev-dependencies]
-# Test-only, and deliberately not a real dependency: `rbsr` owns no encoding. `diff.rs`'s
-# `wire_format_is_unchanged_by_the_aggregate_collapse` golden-vector test pins `RangeAggregate`'s
-# bytes under the same `DefaultOptions` configuration `gossip`'s codec uses, next to the field
-# declaration order it guards. Explicitly exempted in `scripts/check-domain-purity.sh` — see the
-# `DEV_DEP_EXEMPTIONS` note there.
-bincode = "1.3.3"
+[features]
+# Exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
+# vector is built through. Same role and same name as `reconcile`'s own `internal-testing`: a
+# test-only door, never reachable from non-test code, and not public API. `reconcile` turns it on
+# via its own `internal-testing = ["rbsr/internal-testing"]` unification entry.
+#
+# This is what keeps `rbsr` free of a codec dependency: the crate owns no encoding, so the
+# byte-level test lives where the codec is actually chosen (the adapter layer) rather than here.
+internal-testing = []

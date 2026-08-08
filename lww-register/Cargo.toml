@@ -3,9 +3,14 @@ name = "lww-register"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The state-based LWW-Register CRDT domain: Entry/State, HLC Timestamp + Clock port, and the Persistence port"
+# As with `reconcile-gossip`, the "implementation detail" wording is on the crates.io card on
+# purpose: this crate is published only so `reconcile` can be (cargo has no vendoring), not because
+# it is offered as a general-purpose LWW-Register. See AGENTS.md §11 and `src/lib.rs`.
+description = "Implementation detail of the `reconcile` crate — no stability guarantee; depend on `reconcile` instead. The state-based LWW-Register CRDT domain: Entry/State, HLC Timestamp + Clock port, and the Persistence port."
 repository = "https://github.com/Akvize/reconcile-rs"
-publish = false
+readme = "README.md"
+keywords = ["crdt", "lww", "register", "reconcile", "internal"]
+categories = ["data-structures"]
 
 # Infrastructure-free by construction. This dependency list *is* the boundary: no async runtime
 # (`tokio`), no wire codec (`bincode`), no wall clock (`chrono`), no network types (`ipnet`) — the

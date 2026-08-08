@@ -7,12 +7,15 @@
 #                   `Persistence`, `Key`/`Value`), infrastructure-free
 #   gossip        — the network adapter layer (`Transport`, wire encoding, `Authenticator`,
 #                   replay protection, `Discovery`); deliberately independent of `lww-register`
-#   snapshot      — the file-backed `Persistence` adapter (`FileSnapshot`)
-#   .             — the `reconcile` facade: `Replica`, `ReplicatedMap`, `ReadReplicaMap`, observability
-#                   and the `HlcClock` adapter; depends on all five and re-exports their public
-#                   types, so `reconcile::*` keeps resolving for existing consumers.
+#   .             — the `reconcile` facade: `Replica`, `ReplicatedMap`, `ReadReplicaMap`, the
+#                   file-backed `Persistence` adapter (`src/snapshot.rs`), observability and the
+#                   `HlcClock` adapter; depends on all four and re-exports their public types, so
+#                   `reconcile::*` keeps resolving for existing consumers.
+# The split briefly carried a sixth member, `snapshot`. It was folded back into this package
+# (`src/snapshot.rs`) as a deliberate follow-up: one type, no standalone reuse value, no separate
+# published identity to earn — see ARCHITECTURE.md §3.9.
 # See ARCHITECTURE.md §3.9 for the target multi-crate shape.
-members = ["rsos", "rbsr", "lww-register", "gossip", "snapshot", "."]
+members = ["rsos", "rbsr", "lww-register", "gossip", "."]
 resolver = "2"
 
 [package]
@@ -74,8 +77,10 @@ metrics-prometheus = ["metrics", "dep:metrics-exporter-prometheus"]
 dns-hickory = ["gossip/dns-hickory"]
 # Exposes the `crate::testing` seam (re-exports of `pub(crate)` reconciliation internals) so the
 # external integration-test oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) can reach them.
-# No deps; not part of the supported public API.
-internal-testing = []
+# Also forwards to `rbsr`'s feature of the same name, which opens `RangeAggregate::for_testing` for
+# `tests/wire_format.rs` — the golden vector lives here because this is where the codec (`bincode`)
+# is a legitimate dependency, and `rbsr` deliberately owns no encoding. Not public API.
+internal-testing = ["rbsr/internal-testing"]
 
 # The turnkey Kubernetes example. It is a multi-file example (`examples/k8s/main.rs`), so its
 # target is named after the directory: `cargo run --example k8s`. The metrics/readiness endpoint
@@ -93,24 +98,27 @@ chrono = { version = "0.4.31", features = ["serde"] }
 # `Authenticator`, replay protection, `Discovery`) — see `gossip/src/lib.rs`.
 # `default-features = false` so this crate's own `mac-blake3` default is the single place the MAC
 # backend gets chosen; the unification entries above forward it.
-gossip = { path = "gossip", default-features = false }
+gossip = { package = "reconcile-gossip", version = "0.1.0", path = "gossip", default-features = false }
 ipnet = "2.9.0"
 # The LWW-Register CRDT domain (`Entry`/`State`, `Timestamp`/`Clock`, `Persistence`, `Key`/`Value`)
 # — see `lww-register/src/lib.rs`. Infrastructure-free by construction.
-lww-register = { path = "lww-register" }
+lww-register = { version = "0.1.0", path = "lww-register" }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
 parking_lot = "0.12.1"
 rand = "0.8.5"
 # The anti-entropy algorithm (`start_diff`/`diff_round`/`RangeAggregate`), generic over any RSOS
 # backend — see `rbsr/src/lib.rs`.
-rbsr = { path = "rbsr" }
-# The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K>`, `Fingerprint`) — see
-# `rsos/src/lib.rs` for what it is. Path dependencies: not published (workspace-internal for now).
-rsos = { path = "rsos" }
+rbsr = { version = "0.1.0", path = "rbsr" }
+# The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K>`, `Fingerprint`,
+# `Aggregate`) — see `rsos/src/lib.rs` for what it is.
+#
+# Every intra-workspace dependency carries a `version` alongside its `path`: cargo strips `path` at
+# publish time and resolves the requirement from crates.io, so without it `cargo package`/`publish`
+# refuses the crate outright. That is what unblocks publishing the facade at all (#204, AGENTS.md
+# §11).
+rsos = { version = "0.1.0", path = "rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
-# The file-backed `Persistence` adapter (`FileSnapshot`) — see `snapshot/src/lib.rs`.
-snapshot = { path = "snapshot" }
 tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros", "sync"] }
 tracing = "0.1.40"
 

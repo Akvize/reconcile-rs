@@ -17,7 +17,7 @@ repo — read it, don't skim it. This file adds only what's specific to Claude C
   hold the same invariant via their own `Cargo.toml` dependency lists — and the *same* script now
   gates those manifests too: adding `tokio`, `bincode`, `chrono`, `ipnet`, `mio`, `reqwest`,
   `hyper`, `socket2` or `async-trait` to `rsos`, `rbsr` or `lww-register` fails the build. Don't
-  reach for one there; put the adapter in `gossip`/`snapshot`/`reconcile`.
+  reach for one there; put the adapter in `gossip` or `reconcile`.
 - `gossip` deliberately does **not** depend on `lww-register`: nothing in the transport/auth/replay/
   discovery layer knows what an `Entry`, a `Timestamp` or a `Key` is. If a change seems to need that
   edge, the code has probably landed in the wrong crate.

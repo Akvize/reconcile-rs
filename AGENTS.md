@@ -5,11 +5,11 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 
 ## 1. Project overview
 
-`reconcile-rs` is a six-crate Cargo workspace. `rsos` (`FingerprintTreeMap` + range fingerprint) is
+`reconcile-rs` is a five-crate Cargo workspace. `rsos` (`FingerprintTreeMap` + range fingerprint) is
 a standalone leaf; `rbsr` holds the Range-Based Set Reconciliation algorithm generic over any `rsos`
 backend; `lww-register` is the infrastructure-free LWW-Register CRDT domain; `gossip` is the network
-adapter layer; `snapshot` is the file-backed persistence adapter; and the published `reconcile`
-package is the facade over all five — an embedded, in-memory, eventually-consistent key-value store
+adapter layer; and the published `reconcile`
+package is the facade over all four — an embedded, in-memory, eventually-consistent key-value store
 whose replicas reconcile over UDP (anti-entropy gossip over `rbsr`/`rsos`, LWW over a Hybrid Logical
 Clock). See §9.1 for the full map. Edition 2021, no MSRV pin.
 
@@ -38,10 +38,15 @@ cargo test --workspace --features internal-testing          # unit + integration
 cargo test --workspace --all-features
 cargo test --doc --workspace --features internal-testing    # doctests
 cargo bench --no-run --features internal-testing            # benches must still compile
-cargo doc --workspace --all-features                        # docs must build warning-free
+cargo doc --workspace                                       # docs must build warning-free…
+cargo doc --workspace --all-features                        # …in both feature sets
 ```
 
-`--workspace` throughout (not the deprecated `--all` alias): with six members, the distinction is
+Both `cargo doc` lines matter, and the bare one is easy to forget: an intra-doc link to a
+feature-gated item resolves under `--all-features` and dangles without it, so only the first
+invocation catches it — as `-Dwarnings` promotes a dangling link to an error.
+
+`--workspace` throughout (not the deprecated `--all` alias): with five members, the distinction is
 worth being unambiguous about. `.github/workflows/main.yml`, `./pre-commit` and this listing are
 kept in sync — change one, change all three.
 
@@ -69,7 +74,7 @@ runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 
 ## 5. Code style guidelines
 
-- `#![forbid(unsafe_code)]` on **every** crate root (`src/lib.rs` and all five workspace crates) —
+- `#![forbid(unsafe_code)]` on **every** crate root (`src/lib.rs` and all four sibling crates) —
   no `unsafe`, ever; this is a compile error, not a lint. Carry it onto any new crate root: the
   workspace split briefly lost it on `rsos`, because moving code out of the monolithic `src/lib.rs`
   silently drops the attribute that used to cover it.
@@ -84,17 +89,24 @@ runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 
 `mac-blake3` (default MAC backend) vs `mac-hmac` — exactly one wins (`mac-blake3` if both set; build
 fails with a `compile_error!` if neither). `zeroize`, `encryption`, `metrics`, `metrics-prometheus`
-are opt-in. `internal-testing` exposes `crate::testing` (the `pub(crate)` reconciliation seam) for
-external test oracles/benches only — not public API.
+are opt-in. `internal-testing` exposes test-only seams (`reconcile::testing`, and `rbsr`'s
+`RangeAggregate::for_testing`) for external test oracles/benches only — not public API.
 
 Since the workspace split, the flags live where their code lives: `mac-blake3`, `mac-hmac`,
 `zeroize`, `encryption` and `dns-hickory` are **declared on `gossip`** (which owns `auth.rs` and
 `discovery.rs`) and re-exposed from `reconcile` as unification entries
 (`mac-blake3 = ["gossip/mac-blake3"]`). `metrics`/`metrics-prometheus` (for `observability.rs` /
-`prometheus.rs`) and `internal-testing` stay on `reconcile`. `reconcile` depends on `gossip` with
-`default-features = false`, so its own `default = ["mac-blake3"]` is the single place the MAC backend
-gets chosen. `encryption` is both forwarded *and* read locally — `replica.rs`/`replicated_map.rs`
-carry their own `#[cfg(feature = "encryption")]` arms.
+`prometheus.rs`) stay on `reconcile`. `internal-testing` is declared on **both** `reconcile` and
+`rbsr`, the latter forwarded as another unification entry
+(`internal-testing = ["rbsr/internal-testing"]`): on `reconcile` it opens `crate::testing`, on
+`rbsr` it opens `RangeAggregate::for_testing`, the seam `tests/wire_format.rs`'s golden vector is
+built through. That split is deliberate — it is what lets the byte-level test sit where the codec
+is chosen, so `rbsr` needs no codec dependency of its own, not even a dev one.
+
+`reconcile` depends on `gossip` with `default-features = false`, so its own
+`default = ["mac-blake3"]` is the single place the MAC backend gets chosen. `encryption` is both
+forwarded *and* read locally — `replica.rs`/`replicated_map.rs` carry their own
+`#[cfg(feature = "encryption")]` arms.
 
 Touching feature-gated code: run **both** the default and `--all-features` variants of
 `clippy`/`test` (§3) — CI gates them as separate required jobs because feature interactions hide
@@ -128,7 +140,7 @@ bugs.
 
 ## 9. Project structure and boundaries
 
-**9.1 Crates and modules** (full table: `ARCHITECTURE.md` §2.1). Six workspace members, in
+**9.1 Crates and modules** (full table: `ARCHITECTURE.md` §2.1). Five workspace members, in
 dependency order:
 
 | Crate | Holds | Kind |
@@ -137,12 +149,17 @@ dependency order:
 | `rbsr` | the RBSR diff walk + `RsosView<K>` (`diff.rs`, `rsos_view.rs`) | depends on `rsos` only |
 | `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |
-| `snapshot` | `FileSnapshot` + the versioned on-disk header | infrastructure; depends on `lww-register` |
-| `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all five and re-exports their public types |
+| `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `snapshot.rs` (`FileSnapshot` + the versioned on-disk header), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all four and re-exports their public types |
 
 The `reconcile` package keeps re-export shims (`src/persistence.rs`, `src/clock.rs`, `pub use` in
 `src/lib.rs`) so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`,
 `reconcile::FileSnapshot` and friends resolve exactly as before the split.
+
+`snapshot` was a sixth member for one step of the split and was folded back in on purpose
+(`src/snapshot.rs`): one type, no reuse away from this workspace, no published identity to earn —
+ARCHITECTURE.md §3.9 and migration step 9. The persistence *architecture* is unchanged: the
+`Persistence` port and `PersistedState` stay in `lww-register`, so the domain still touches no
+filesystem. Don't re-split it without a reason the other four boundaries can point to.
 
 **9.2 Enforced boundary.** `ARCHITECTURE.md` §2.2/§3.3: the domain mechanism carries no
 infrastructure dependency (no async runtime, socket, wire codec, wall clock) — true today, and
@@ -156,8 +173,9 @@ answer two different questions**:
    `ipnet`, `mio`, `reqwest`, `hyper`, `socket2`, `async-trait` (renamed `package = "…"` targets
    included). This is where the invariant is actually breakable: with the dependency undeclared,
    `use tokio::…` in those crates does not compile — so *adding the dependency* is the step that
-   has to be caught. `gossip`, `snapshot` and the root `reconcile` package are deliberately out of
-   scope; they are adapters and carry infrastructure deps by design.
+   has to be caught. `gossip` and the root `reconcile` package (which holds the file-persistence
+   adapter, `src/snapshot.rs`) are deliberately out of scope; they are adapters and carry
+   infrastructure deps by design.
 2. **Source grep — "is an *allowed* dependency being used to reach something forbidden?"** Every
    `lww-register/src/*.rs` file is grepped for `tokio`/`bincode`/`chrono`/`ipnet`/`mio`/`reqwest`/
    `hyper`/`std::net` imports. A manifest cannot see this: an infrastructure type re-exported by an
@@ -187,25 +205,58 @@ required-file-pairs, and structural invariants almost always are.
 
 ## 11. Publishing
 
-`cargo package` runs in CI for `rsos`, `lww-register` and `gossip` to catch packaging breakage (see
-`Cargo.toml`'s `exclude` list — repo-only docs and `examples/k8s/` are excluded from the published
-crate). Actual publishing happens from `.github/workflows/tags.yml` on `v*` tags; never hand-run
-`cargo publish` outside that flow.
+**Policy (#204, settled).** All five members publish. `rsos` and `rbsr` are the genuinely reusable
+pieces — a range-summarizable ordered store and the RBSR algorithm over any such store, both useful
+away from this project. `lww-register` and `reconcile-gossip` publish only because **cargo has no
+vendoring**: `reconcile` cannot be published unless every crate it depends on is on crates.io. They
+are **implementation detail with no stability guarantee**, and both say so in their `description`,
+their `README.md` and their crate-root docs — the `serde_derive` / `pin-project-internal` /
+`tracing-attributes` pattern. Nobody should depend on them directly; keep that warning prominent if
+you touch those files.
 
-The check covers **only the crates with no intra-workspace dependency**. Cargo refuses to package
-any crate holding a path dependency that carries no version requirement, until that dependency is
-itself on crates.io. `rsos`, `lww-register` and `gossip` each depend on nothing else in the
-workspace, so all three can be packaged; `rbsr` (→ `rsos`), `snapshot` (→ `lww-register`) and the
-top-level `reconcile` package (→ all five) hit that wall. Whether and how to publish a multi-crate
-workspace is an open policy question (#204) — until it is settled, do **not** "fix" this by
-inventing version requirements for the internal crates or by publishing them ad hoc. The internal
-crates carry `publish = false` deliberately; `cargo package` is used rather than
-`cargo publish --dry-run` precisely so that guard can stay in place while still compiling the
-packaged crate. A new crate becomes checkable here only once it has no unpublished path dependency
-of its own.
+**`gossip` publishes as `reconcile-gossip`** — the plain name is taken on crates.io. Every dependent
+renames it straight back:
 
-**Releases are blocked until #204 is settled.** `tags.yml`'s `cargo publish` would fail on a `v*`
-tag today, for the same path-dependency reason — loudly, at release time, not silently. That is
-deliberate: resolving it means deciding what the workspace publishes (one facade crate with the
-internals vendored? every crate, versioned in lockstep? only some?), which is #204's question, not
-something to patch around here.
+```toml
+gossip = { package = "reconcile-gossip", version = "0.1.0", path = "gossip" }
+```
+
+so **no Rust source anywhere says anything but `use gossip::…`**, and the directory stays `gossip/`.
+The published name is a registry detail, not an API one. Don't "fix" the mismatch by renaming the
+directory or the imports.
+
+**Every intra-workspace dependency carries a `version` alongside its `path`** (`0.1.0` for the four
+siblings). Cargo strips `path` at publish time and resolves the requirement from crates.io, so
+without it packaging is refused outright. Add both whenever you add such an edge.
+
+**Publish order is a hard constraint**, encoded in `.github/workflows/tags.yml` with a comment
+saying so: `rsos` → (`rbsr`, `lww-register`) → `reconcile-gossip` → `reconcile`. A crate cannot be
+published before everything it depends on is on crates.io *and indexed*, so the workflow polls the
+sparse index after each upload before moving on. `--no-verify` is not the answer to that lag and
+must not be used — it would skip compiling the packaged crate, the one breakage worth catching at
+release time. The workflow is idempotent: a version already on crates.io is skipped, which is the
+normal path for the four siblings, whose versions change far less often than `reconcile`'s.
+Publishing happens **only** from that workflow, on a `v*` tag; never hand-run `cargo publish`.
+
+**`reconcile`'s version is not this repo's to bump casually.** It is 0.2.1 on crates.io; a release
+picks the next number, and the renames in the recent stack (`Mirror` → `ReadReplicaMap`, the crate
+reshuffle) are breaking, so it is likely 0.3.0. That is a maintainer release decision, made when the
+tag is cut — not something a feature PR decides. The tag and the manifest version must match;
+`tags.yml` checks that first and fails the release if they don't.
+
+**CI packaging check.** `main.yml` runs `cargo package --workspace --allow-dirty` on every PR,
+covering all five members (see the root `Cargo.toml`'s `exclude` list — repo-only docs and
+`examples/k8s/` stay out of the published package). `--workspace` is load-bearing: a *per-crate*
+`cargo package -p rbsr` still fails with "no matching package named `rsos`" until `rsos` is really
+on crates.io, so one-at-a-time only ever covers `rsos`, `lww-register` and `reconcile-gossip`.
+Packaged together, cargo resolves the `path` + `version` pairs against a local temporary registry
+and `rbsr` and `reconcile` are covered too. Keep it as one invocation.
+
+**Local gotcha with that check.** `cargo package --workspace` verifies each member by resolving its
+siblings out of a temporary registry, and cargo caches an *extracted* dependency source under
+`~/.cargo/registry/src/<hash>/<name>-<version>/`, keyed by name and version alone. The four siblings
+sit at `0.1.0` while their contents change every commit, so a second local run can verify a
+**stale** extraction and fail with a nonsensical error — typically `unresolved import` for an item
+you just added. CI never sees this (fresh `CARGO_HOME`). If it happens, delete the offending
+`~/.cargo/registry/src/<hash>/` directory, or re-run with a throwaway `CARGO_HOME=$(mktemp -d)` to
+confirm the tree is actually fine before chasing a phantom bug.

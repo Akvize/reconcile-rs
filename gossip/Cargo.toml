@@ -1,11 +1,21 @@
 [package]
-name = "gossip"
+# Published as `reconcile-gossip`: the plain name `gossip` is taken on crates.io. Every dependent in
+# this workspace renames it straight back with `gossip = { package = "reconcile-gossip", … }`, so no
+# Rust source anywhere says anything but `use gossip::…` — the published name is a registry detail,
+# not an API one. The directory stays `gossip/`.
+name = "reconcile-gossip"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The gossip adapter layer of reconcile-rs: UDP transport, wire encoding, datagram authentication, replay protection and peer discovery"
+# The "implementation detail" wording is deliberate and belongs on the crates.io card itself: this
+# crate is published only because cargo has no vendoring — `reconcile` cannot be published unless
+# every one of its dependencies is on crates.io. Same pattern as `serde_derive`,
+# `pin-project-internal` or `tracing-attributes`. See AGENTS.md §11 and `src/lib.rs`.
+description = "Implementation detail of the `reconcile` crate — no stability guarantee; depend on `reconcile` instead. The gossip adapter layer: UDP transport, wire encoding, datagram authentication, replay protection and peer discovery."
 repository = "https://github.com/Akvize/reconcile-rs"
-publish = false
+readme = "README.md"
+keywords = ["gossip", "udp", "reconcile", "internal"]
+categories = ["network-programming"]
 
 [features]
 default = ["mac-blake3"]
