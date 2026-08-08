@@ -84,17 +84,24 @@ runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 
 `mac-blake3` (default MAC backend) vs `mac-hmac` — exactly one wins (`mac-blake3` if both set; build
 fails with a `compile_error!` if neither). `zeroize`, `encryption`, `metrics`, `metrics-prometheus`
-are opt-in. `internal-testing` exposes `crate::testing` (the `pub(crate)` reconciliation seam) for
-external test oracles/benches only — not public API.
+are opt-in. `internal-testing` exposes test-only seams (`reconcile::testing`, and `rbsr`'s
+`RangeAggregate::for_testing`) for external test oracles/benches only — not public API.
 
 Since the workspace split, the flags live where their code lives: `mac-blake3`, `mac-hmac`,
 `zeroize`, `encryption` and `dns-hickory` are **declared on `gossip`** (which owns `auth.rs` and
 `discovery.rs`) and re-exposed from `reconcile` as unification entries
 (`mac-blake3 = ["gossip/mac-blake3"]`). `metrics`/`metrics-prometheus` (for `observability.rs` /
-`prometheus.rs`) and `internal-testing` stay on `reconcile`. `reconcile` depends on `gossip` with
-`default-features = false`, so its own `default = ["mac-blake3"]` is the single place the MAC backend
-gets chosen. `encryption` is both forwarded *and* read locally — `replica.rs`/`replicated_map.rs`
-carry their own `#[cfg(feature = "encryption")]` arms.
+`prometheus.rs`) stay on `reconcile`. `internal-testing` is declared on **both** `reconcile` and
+`rbsr`, the latter forwarded as another unification entry
+(`internal-testing = ["rbsr/internal-testing"]`): on `reconcile` it opens `crate::testing`, on
+`rbsr` it opens `RangeAggregate::for_testing`, the seam `tests/wire_format.rs`'s golden vector is
+built through. That split is deliberate — it is what lets the byte-level test sit where the codec
+is chosen, so `rbsr` needs no codec dependency of its own, not even a dev one.
+
+`reconcile` depends on `gossip` with `default-features = false`, so its own
+`default = ["mac-blake3"]` is the single place the MAC backend gets chosen. `encryption` is both
+forwarded *and* read locally — `replica.rs`/`replicated_map.rs` carry their own
+`#[cfg(feature = "encryption")]` arms.
 
 Touching feature-gated code: run **both** the default and `--all-features` variants of
 `clippy`/`test` (§3) — CI gates them as separate required jobs because feature interactions hide

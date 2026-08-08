@@ -106,12 +106,38 @@ impl<K> RangeBounds<K> for KeyRange<K> {
 /// The encoding is **unchanged** by that collapse. bincode writes struct fields sequentially with
 /// no framing or field names, so the nested `Aggregate` is inlined and
 /// `{range, aggregate: {fingerprint, size}}` is byte-for-byte the old `{range, hash, size}` —
-/// which is why [`Aggregate`] declares `fingerprint` before `size` (see its own note) and why
-/// `wire_format_is_unchanged_by_the_aggregate_collapse` below pins the exact bytes.
+/// which is why [`Aggregate`] declares `fingerprint` before `size` (see its own note). The exact
+/// bytes are pinned by a golden vector in `reconcile`'s `tests/wire_format.rs`, built through
+/// [`RangeAggregate::for_testing`] — the codec lives in the adapter layer, so the byte-level test
+/// lives there too rather than dragging a codec dependency into this crate.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RangeAggregate<K> {
     range: KeyRange<K>,
     aggregate: Aggregate,
+}
+
+/// Test-only seam for wire-format oracles living outside this crate, behind `internal-testing`
+/// (the same pattern `reconcile::testing` uses, and never reachable from non-test code).
+///
+/// `RangeAggregate`'s fields are private and `KeyRange`/`StartBound`/`EndBound` are `pub(crate)`,
+/// so a segment with *chosen* bounds cannot otherwise be built from another crate —
+/// and chosen bounds are the point: a golden vector has to exercise `Included`/`Excluded`, which
+/// [`start_diff`] alone never produces.
+///
+/// The bound *shapes* stay unrepresentable-if-wrong by construction, exactly as on the wire:
+/// `None` means unbounded, `Some(k)` means `Included(k)` on the start and `Excluded(k)` on the
+/// end. There is deliberately no way to spell an excluded start or an included end.
+#[cfg(feature = "internal-testing")]
+impl<K> RangeAggregate<K> {
+    pub fn for_testing(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
+        RangeAggregate {
+            range: KeyRange::new(
+                start.map_or(StartBound::Unbounded, StartBound::Included),
+                end.map_or(EndBound::Unbounded, EndBound::Excluded),
+            ),
+            aggregate,
+        }
+    }
 }
 
 pub type DiffRange<K> = (Bound<K>, Bound<K>);
@@ -422,58 +448,5 @@ mod tests {
         // Not concluded in sync: the range is subdivided and bounced back for refinement.
         assert!(!out_comparison.is_empty());
         assert!(differences.is_empty());
-    }
-
-    /// Golden vector: `RangeAggregate`'s encoding must be **byte-for-byte** what the pre-
-    /// `Aggregate` layout `{range, hash: Fingerprint, size: usize}` produced, so a node running
-    /// this code and a node running the previous release reconcile without either noticing.
-    ///
-    /// The bytes below were captured from that earlier layout, with the `bincode`
-    /// `DefaultOptions` configuration the wire codec (`gossip::bincode`) uses, before
-    /// the two fields were collapsed into one nested `Aggregate`. bincode writes struct fields
-    /// sequentially with no framing or field names, so the nested struct is inlined and the
-    /// encoding is unchanged — *provided* `Aggregate` declares `fingerprint` before `size`.
-    /// Reordering those two declarations breaks this test, which is the point (see
-    /// `rsos::Aggregate`'s own note).
-    ///
-    /// `bincode` is a **dev**-dependency of this crate and appears nowhere outside this test:
-    /// `rbsr` itself owns no encoding (the crate root says so), it only has to keep the type it
-    /// hands to `gossip`'s codec byte-stable. Pinning that here rather than in `reconcile` is what
-    /// keeps the check next to the declaration order it is guarding, and `KeyRange`/`StartBound`/
-    /// `EndBound` are `pub(crate)` so the vector cannot be built from outside.
-    /// `scripts/check-domain-purity.sh` exempts exactly this one dev-dependency.
-    ///
-    /// Reading the vector: `1` = `StartBound::Included` discriminant, `7` = the start key; `1` =
-    /// `EndBound::Excluded` discriminant, `42` = the end key; then the four `u64` fingerprint
-    /// limbs as bincode varints; then `251, 44, 1` = the varint for `size == 300`.
-    #[test]
-    fn wire_format_is_unchanged_by_the_aggregate_collapse() {
-        use ::bincode::{DefaultOptions, Deserializer, Serializer};
-
-        const GOLDEN: &[u8] = &[
-            1, 7, 1, 42, 253, 239, 205, 171, 137, 103, 69, 35, 1, 253, 16, 50, 84, 118, 152, 186,
-            220, 254, 1, 2, 251, 44, 1,
-        ];
-
-        let segment = RangeAggregate {
-            range: KeyRange::new(StartBound::Included(7u32), EndBound::Excluded(42u32)),
-            aggregate: Aggregate::new(
-                300,
-                Fingerprint([0x0123456789abcdef, 0xfedcba9876543210, 1, 2]),
-            ),
-        };
-
-        let mut buf = Vec::new();
-        segment
-            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
-            .unwrap();
-        assert_eq!(
-            buf, GOLDEN,
-            "RangeAggregate's wire encoding changed — this is a protocol break, not a refactor"
-        );
-
-        let mut deserializer = Deserializer::from_slice(GOLDEN, DefaultOptions::new());
-        let decoded = RangeAggregate::<u32>::deserialize(&mut deserializer).unwrap();
-        assert_eq!(decoded, segment);
     }
 }

@@ -21,10 +21,12 @@ rsos = { version = "0.1.0", path = "../rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 
-[dev-dependencies]
-# Test-only, and deliberately not a real dependency: `rbsr` owns no encoding. `diff.rs`'s
-# `wire_format_is_unchanged_by_the_aggregate_collapse` golden-vector test pins `RangeAggregate`'s
-# bytes under the same `DefaultOptions` configuration `gossip`'s codec uses, next to the field
-# declaration order it guards. Explicitly exempted in `scripts/check-domain-purity.sh` — see the
-# `DEV_DEP_EXEMPTIONS` note there.
-bincode = "1.3.3"
+[features]
+# Exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
+# vector is built through. Same role and same name as `reconcile`'s own `internal-testing`: a
+# test-only door, never reachable from non-test code, and not public API. `reconcile` turns it on
+# via its own `internal-testing = ["rbsr/internal-testing"]` unification entry.
+#
+# This is what keeps `rbsr` free of a codec dependency: the crate owns no encoding, so the
+# byte-level test lives where the codec is actually chosen (the adapter layer) rather than here.
+internal-testing = []
