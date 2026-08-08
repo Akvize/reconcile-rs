@@ -8,7 +8,7 @@
 #   gossip        — the network adapter layer (`Transport`, wire encoding, `Authenticator`,
 #                   replay protection, `Discovery`); deliberately independent of `lww-register`
 #   snapshot      — the file-backed `Persistence` adapter (`FileSnapshot`)
-#   .             — the `reconcile` facade: `Replica`, `ReplicatedMap`, `Mirror`, observability
+#   .             — the `reconcile` facade: `Replica`, `ReplicatedMap`, `ReadReplicaMap`, observability
 #                   and the `HlcClock` adapter; depends on all five and re-exports their public
 #                   types, so `reconcile::*` keeps resolving for existing consumers.
 # See ARCHITECTURE.md §3.9 for the target multi-crate shape.

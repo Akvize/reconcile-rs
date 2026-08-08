@@ -54,7 +54,7 @@ converge. The design rests on five mechanisms:
 | `src/clock.rs` | Hybrid Logical Clock, adapter half: `HlcClock`, the sole physical-time read, feeding `lww-register`'s ordering arithmetic. |
 | `src/replica.rs` | Network orchestration: peer discovery, gossip, driving the `Transport` port and the `bincode` wire-encoding functions. |
 | `src/replicated_map.rs` | Public facade tying the engine, the map, and timeouts together. |
-| `src/mirror.rs` | The dateless read-only `Mirror`. |
+| `src/read_replica_map.rs` | The dateless read-only `ReadReplicaMap`. |
 | `src/timeout_wheel.rs` | Acknowledgement timeout tracking. |
 | `src/observability.rs`, `src/prometheus.rs` | Metric call sites (no-ops without the `metrics` feature) and the optional Prometheus recorder/endpoint. |
 | `src/persistence.rs`, `src/lib.rs` | Re-export shims keeping `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`, `reconcile::FileSnapshot` etc. resolving after the split. |
@@ -117,13 +117,13 @@ decode_stream}`. The remaining infrastructure dependencies:
 | `snapshot/src/lib.rs` | `std::fs`, `bincode` | The `Persistence` port's durable adapter — intended. |
 | `src/replica.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Timer/backoff, discovery randomness, and CIDR geography — not yet ported (no port is warranted: these are not swappable infrastructure boundaries the way I/O is). |
 | `src/replicated_map.rs` | `chrono`, `ipnet` | Tombstone-expiry wall-clock reads and CIDR geography. |
-| `src/mirror.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Same three as `replica.rs`, for the same reasons. The mirror's socket and codec coupling is **closed**: it holds an `Arc<dyn Transport<Addr = SocketAddr>>` like the engine, drives both directions over that port and over `gossip::bincode::{encode, decode_stream}`, and names `tokio::net` only through `UdpTransport::bind` in its default constructor. `Mirror::new_with_transport` mirrors `ReplicatedMap::new_with_transport`, so a mirror converges against a dated peer with no real sockets (`tests/mirror.rs::mirror_converges_with_dated_store_over_in_memory_transport`). |
+| `src/read_replica_map.rs` | `tokio::time`, `rand::StdRng`, `ipnet` | Same three as `replica.rs`, for the same reasons. The read replica's socket and codec coupling is **closed**: it holds an `Arc<dyn Transport<Addr = SocketAddr>>` like the engine, drives both directions over that port and over `gossip::bincode::{encode, decode_stream}`, and names `tokio::net` only through `UdpTransport::bind` in its default constructor. `ReadReplicaMap::new_with_transport` mirrors `ReplicatedMap::new_with_transport`, so a read replica converges against a dated peer with no real sockets (`tests/read_replica_map.rs::read_replica_converges_with_dated_store_over_in_memory_transport`). |
 
 There is no longer an abstraction boundary missing between the dated engine and the transport: it is
 a substitutable adapter, and the in-memory `Transport` (`InMemoryNetwork`/`InMemoryTransport`) paired
 with the wire-encoding functions makes the engine's gossip protocol exercisable with no real sockets.
 Wire encoding itself has a single implementation and is not behind a port (§2.4). Step C closed the
-wall-clock item by splitting `clock.rs` along the port boundary, and the mirror's socket stack —
+wall-clock item by splitting `clock.rs` along the port boundary, and the read replica's socket stack —
 the last open item — has since been routed onto the same `Transport` port, so no module in
 `reconcile` reaches for `tokio::net` or `bincode` outside of `#[cfg(test)]` code and the default
 `UdpTransport::bind` call in each constructor.
@@ -165,7 +165,8 @@ dissolved `BincodeCodec` itself (still issue #144): zero-sized and stateless, wi
 constructor just to call what were effectively two static functions. Wire encoding is now the plain
 `pub(crate) fn encode` / `fn decode_stream` in `bincode.rs` (renamed from `codec.rs`, since there is
 no abstraction left to name — it is just the code that talks to the `bincode` crate); the engine
-(`replica.rs`) and `mirror.rs` call `gossip::bincode::encode` / `gossip::bincode::decode_stream`
+(`replica.rs`) and `read_replica_map.rs` call `gossip::bincode::encode` /
+`gossip::bincode::decode_stream`
 directly. `Transport`, by contrast, remains a genuine port (§3.4/§3.5): object-safe, `pub`, and with
 two real implementations (`UdpTransport`, `InMemoryTransport`).
 
@@ -314,7 +315,8 @@ pub trait Discovery: Send + Sync + 'static {
 | `Discovery` | `RandomProbe` (default, speculative per-net probing); `DnsDiscovery` (authoritative, headless-Service DNS) | `gen_ip` / `tokio::net::lookup_host` |
 
 Wire encoding is not a port (`bincode::{DefaultOptions, ...}`, backed by `bincode` — see §2.4): the
-engine and `mirror.rs` call the plain `gossip::bincode::encode` / `gossip::bincode::decode_stream`
+engine and `read_replica_map.rs` call the plain `gossip::bincode::encode` /
+`gossip::bincode::decode_stream`
 functions directly rather than naming a `Codec` trait or a codec value.
 
 Message authentication (`Authenticator` / MAC) sits **ahead of** the codec: the MAC is verified on
@@ -363,7 +365,7 @@ resolution is **domain policy**, not an infrastructure port: last-write-wins is 
 default. A pluggable `Resolve` seam is warranted only if a second policy (e.g. a CRDT) becomes a
 real requirement.
 
-The same step also absorbs the **value-only projection** that powers the dateless `Mirror`.
+The same step also absorbs the **value-only projection** that powers the dateless `ReadReplicaMap`.
 Today the engine keeps a second tree `FingerprintTreeMap<K, V::Projected>` fed through the `Projectable` trait
 into a `ValueOnly<V>(Option<V>)` cell whose `Hash` is timestamp-less by construction. `State<V>` is
 isomorphic to that cell (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), so the projection becomes
@@ -421,7 +423,8 @@ gossip         // ADAPTERS + I/O PORT: Transport (trait); UdpTransport / InMemor
                //   replay protection, the Discovery port with RandomProbe / DnsDiscovery
                //   (gen_ip / ipnet / rand). Does NOT depend on lww-register.
 snapshot       // ADAPTERS: FileSnapshot, the durable half of persistence. Depends on lww-register.
-reconcile      // WIRING + driving API: ReplicatedMap, Replica, Mirror, configuration, the HlcClock
+reconcile      // WIRING + driving API: ReplicatedMap, Replica, ReadReplicaMap, configuration, the
+               //   HlcClock
                //   adapter (which holds the chrono read), the tombstone wheel, observability.
                //   Depends on all five, and re-exports their public types.
 ```
@@ -451,7 +454,7 @@ a single crate could not provide.
 | `(Timestamp, Option<V>)` tuple | ✅ `Entry<Timestamp, V>` + `State<V>` domain type (`entry.rs`) |
 | `MaybeTombstone`, `Timestamped` | ✅ inherent `Entry` methods / field access |
 | `Reconcilable` (LWW over tuple) | ✅ `Entry::merge` (LWW); no `Resolve` seam needed yet |
-| `Projectable` / `ValueOnly<V>` (dateless mirror) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
+| `Projectable` / `ValueOnly<V>` (dateless read replica) | ✅ `Entry::project` → `State<V>` (the projection cell *is* `State`) |
 | `HashRangeQueryable`, `Diffable` (public) | inherent `FingerprintTreeMap` methods + `pub(crate)` diff functions |
 | `pub mod diff` exposing wire types | `RangeAggregate` / `DiffRange`, with private fields, in `rbsr` |
 | `chrono::Utc` read in `clock.rs` | ✅ `Clock` port (`lww-register`); the `HlcClock` adapter in `src/clock.rs` holds the time read |
@@ -486,8 +489,8 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 7. **`version_hash` determinism** (`replica.rs:55`) — preserved as `Entry` derives `Hash`.
 8. **Value-only projection hash is timestamp-less** — the dated `Entry` hashes with its `stamp`
    (feeding `version_hash`), while its `State<V>` projection hashes the value alone, so a dated
-   store and a dateless `Mirror` compute identical per-element fingerprints. Guarded by
-   `mirror.rs::value_fingerprint_is_timestamp_independent`.
+   store and a dateless `ReadReplicaMap` compute identical per-element fingerprints. Guarded by
+   `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
 
 ---
 
@@ -507,7 +510,7 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); dissolve `MaybeTombstone` / `Timestamped` /
    `Reconcilable` / `Projectable` / `ValueOnly<V>`; `replica.rs` and `replicated_map.rs`
    now parameterize the engine over the plain `V` and construct `Entry<Timestamp, V>` /
-   `State<V>` internally; `add_pre_insert`, `Mirror::add_on_update` and `PersistedState`
+   `State<V>` internally; `add_pre_insert`, `ReadReplicaMap::add_on_update` and `PersistedState`
    carry `Entry<Timestamp, V>` / `State<V>` directly. *Changed the wire and on-disk formats*, as
    anticipated — acceptable pre-1.0.
 5. ✅ **`Transport` port + `bincode.rs` wire-encoding functions** (done, issue #144) — extract the
@@ -538,7 +541,8 @@ the wire and on-disk formats (acceptable while the formats are unstable).
    rather than caching it separately. `Value` dropped its `PartialEq` bound: the receive path's
    post-merge change detection is now a stamp comparison (`remote.stamp > local.stamp`, equivalent
    to `Entry::merge` under LWW) rather than an `Entry`/value equality check, which needed no bound on
-   `V` and avoids a clone on the hot path. The one item this step left open — `Mirror` still owning
+   `V` and avoids a clone on the hot path. The one item this step left open — `ReadReplicaMap` still
+owning
    a raw `tokio::net::UdpSocket` and calling `bincode` directly on its receive path, with only its
    *send* calls rewired onto the shared helpers — was closed in step 7 below.
 6. ✅ **Workspace split** (done) — promote the layers to a multi-crate workspace so the inward
@@ -570,39 +574,52 @@ the wire and on-disk formats (acceptable while the formats are unstable).
      `gossip`, which deliberately took **no** `lww-register` dependency; `FileSnapshot` to
      `snapshot`. Landed together, since the three are interdependent. The type renames
      `ReconcileEngine`→`Replica`, `ReconcileStore`→`ReplicatedMap`, `ReconcileMirror`→`Mirror` rode
-     along in the same pass, the files being moved anyway.
+     along in the same pass, the files being moved anyway. (`Mirror` was itself renamed again, to
+     `ReadReplicaMap`, in the follow-up naming pass — step 8 below.)
    - ✅ **D — reassemble `reconcile` as the facade; CI, scripts, docs.** What stayed: `replica.rs`,
-     `replicated_map.rs`, `mirror.rs`, `observability.rs`, `prometheus.rs`, `timeout_wheel.rs`, and
-     the chrono-reading `HlcClock` adapter split out of `clock.rs`; `lib.rs` plus the
+     `replicated_map.rs`, `read_replica_map.rs`, `observability.rs`, `prometheus.rs`,
+     `timeout_wheel.rs`, and the chrono-reading `HlcClock` adapter split out of `clock.rs`; `lib.rs` plus the
      `persistence.rs` / `clock.rs` shims became a re-export surface, so `reconcile::ReplicatedMap`,
      `reconcile::Entry`, `reconcile::FingerprintTreeMap` & co. keep resolving for existing consumers.
      CI and `./pre-commit` normalized `--all` → `--workspace`; `check-domain-purity.sh` gained the
      manifest gate over `rsos` / `rbsr` / `lww-register` (§2.2); this section and §2.4 were brought
      up to date.
 
-7. ✅ **Route `Mirror` onto the `Transport` port** (done) — the last item carried over from step 5.
-   `Mirror` now holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of an `Arc<UdpSocket>`,
+7. ✅ **Route the dateless read replica onto the `Transport` port** (done) — the last item carried
+   over from step 5. `ReadReplicaMap` now holds an `Arc<dyn Transport<Addr = SocketAddr>>` instead of
+   an `Arc<UdpSocket>`,
    receives through `Transport::recv_from`, decodes through `gossip::bincode::decode_stream` under
    the same `MAX_MESSAGES_PER_DATAGRAM` bound as the engine, and reuses the engine's `SendPorts` /
-   `send_messages_to` / `send_to_retry` on the way out; `mirror.rs` imports neither `bincode` nor
-   `tokio::net`. `Mirror::new` keeps its signature (it binds a `UdpTransport` internally), and the
-   new `Mirror::new_with_transport` matches `ReplicatedMap::new_with_transport`. The authentication
+   `send_messages_to` / `send_to_retry` on the way out; `read_replica_map.rs` imports neither
+   `bincode` nor `tokio::net`. `ReadReplicaMap::new` keeps its signature (it binds a `UdpTransport`
+   internally), and the new `ReadReplicaMap::new_with_transport` matches
+   `ReplicatedMap::new_with_transport`. The authentication
    ordering is unchanged — `Authenticator::open` still runs on the raw datagram bytes before any
-   decode (invariant #5, §5) — as are the mirror's read-only semantics. Two behavioural details
+   decode (invariant #5, §5) — as are the read replica's read-only semantics. Two behavioural details
    moved deliberately: a *malformed* datagram is now dropped whole instead of applying its
    well-formed prefix (the engine's long-standing policy, strictly more conservative), and message
    count per datagram is now explicitly bounded.
 
+8. ✅ **`Mirror` → `ReadReplicaMap`** (done) — a pure rename closing the naming pass that step 6
+   started. `Mirror` was the one public type named after a generic metaphor rather than domain or
+   literature vocabulary; the type *is* a passive, dateless, read-only replica of a dated
+   `ReplicatedMap` — a **read replica** in the standard database sense — so it now carries that name,
+   parallel to `ReplicatedMap`. `src/mirror.rs` → `src/read_replica_map.rs`, `tests/mirror.rs` →
+   `tests/read_replica_map.rs`; no deprecated alias (pre-1.0, same as
+   `ReconcileEngine`→`Replica` / `ReconcileStore`→`ReplicatedMap`). No behaviour, wire format or
+   on-disk format changed.
+
 Steps 1–3 are independent of the format change; step 4 is the single format-breaking step (now
 done); step 5 is done; step 6 completed the boundary extraction and now enforces it at the crate
-level; step 7 closed the last residual coupling.
+level; step 7 closed the last residual coupling; step 8 was a naming-only follow-up.
 
 **Is #138 complete?** Yes. The structural migration was complete after step 6 — every layer is its
 own crate, every port is defined on the right side of the boundary, and the domain's
 infrastructure-freedom is a compile error rather than a convention (§2.2) — and step 7 closed the
-one remaining item, `src/mirror.rs`'s own socket and codec calls. Grepping the `reconcile` crate for
+one remaining item, `src/read_replica_map.rs`'s own socket and codec calls. Grepping the `reconcile`
+crate for
 `tokio::net` / `UdpSocket` / `bincode` now returns only `#[cfg(test)]` code and the `UdpTransport`
 default-adapter constructions, which are the intended locations. What remains outside the port
 system (`tokio::time` timers, `rand::StdRng` discovery randomness, `ipnet` CIDR geography in
-`replica.rs` / `replicated_map.rs` / `mirror.rs`) is deliberately not ported: these are not
+`replica.rs` / `replicated_map.rs` / `read_replica_map.rs`) is deliberately not ported: these are not
 swappable infrastructure boundaries the way datagram I/O is (§2.3).

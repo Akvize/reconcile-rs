@@ -225,34 +225,34 @@ grep -A1 '^Udp:' /proc/net/snmp        # the RcvbufErrors column
 
 Set either field to `None` to leave the inherited OS default untouched.
 
-## Read-only mirror (`Mirror`)
+## Read replica (`ReadReplicaMap`)
 
 For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReplicatedMap`
 keeps (for last-write-wins and the issue-#109 tombstone machinery) is pure overhead — a replica that
-only consumes values never needs it. `Mirror` is a **dateless, read-only mirror** that
+only consumes values never needs it. `ReadReplicaMap` is a **dateless, read-only replica** that
 stores only the value (`State<V>`, ~24 bytes lighter per entry for a small payload) and still
 converges with a dated cluster over the **same range-diff protocol, on the same UDP port**.
 
 It stays issue-#109-safe: rather than replacing the timestamped reconciliation hash everywhere (which
 would break tombstone causal stability and block GC forever), each dated node maintains an *additional
-value-only projection* of its data and answers a mirror's value-only diff against that projection. A
-mirror keeps no tombstone bookkeeping, never acknowledges tombstones, and is never counted as a
-causal-stability member, so it cannot hold back a dated node's garbage collection.
+value-only projection* of its data and answers a read replica's value-only diff against that
+projection. A read replica keeps no tombstone bookkeeping, never acknowledges tombstones, and is
+never counted as a causal-stability member, so it cannot hold back a dated node's garbage collection.
 
 ```rust
-use reconcile::{replicated_map::Config, Mirror};
+use reconcile::{replicated_map::Config, ReadReplicaMap};
 
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
-let mirror = Mirror::<String, String>::new(Config::default())
+let read_replica = ReadReplicaMap::<String, String>::new(Config::default())
     .await
     .unwrap()
     .with_seed(dated_addr);
-tokio::spawn(mirror.clone().run());
-// `mirror.get(&key)` reflects the cluster's current values; deletions appear as `None`.
+tokio::spawn(read_replica.clone().run());
+// `read_replica.get(&key)` reflects the cluster's current values; deletions appear as `None`.
 ```
 
-A mirror **always integrates** inbound updates and **never sends authoritative values** — it is a
-sink, not a source. The dated↔dated path (and its wire format) is byte-for-byte unchanged.
+A read replica **always integrates** inbound updates and **never sends authoritative values** — it
+is a sink, not a source. The dated↔dated path (and its wire format) is byte-for-byte unchanged.
 
 ## Multiple geographical locations
 
@@ -320,7 +320,7 @@ anti-entropy — the worst case is suboptimal WAN traffic, never silent divergen
 *not* a security boundary (authentication is the cluster key); a declared net only tells the node
 which address range to send discovery probes into, so **only declare ranges you operate**. When
 migrating a region, prefer `add_net(new)` *before* `remove_net(old)` so discovery keeps the cluster
-well-connected throughout. `Mirror` exposes the analogous `set_net`.
+well-connected throughout. `ReadReplicaMap` exposes the analogous `set_net`.
 
 ## Kubernetes (DNS-based discovery)
 

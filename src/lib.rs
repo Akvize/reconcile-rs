@@ -63,8 +63,8 @@
 // Modules that still live here: the replicated-map facade and the per-node driver behind it, the
 // wall-clock adapter behind the `Clock` port, tombstone expiry, and metrics.
 pub mod clock;
-pub mod mirror;
 pub mod persistence;
+pub mod read_replica_map;
 pub mod replicated_map;
 
 // Modules that moved out to sibling crates in the workspace split (ARCHITECTURE.md §3.9), re-exported
@@ -101,8 +101,8 @@ pub use rsos::{
     Values,
 };
 
-pub use mirror::Mirror;
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
+pub use read_replica_map::ReadReplicaMap;
 pub use replicated_map::ReplicatedMap;
 
 /// Internal seam for the external integration tests (today: `tests/service.rs`).
