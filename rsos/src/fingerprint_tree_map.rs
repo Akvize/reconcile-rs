@@ -31,11 +31,11 @@
 //! table and the reasoning.
 
 use std::cmp::Ordering;
-use std::hash::Hash;
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
 use range_cmp::{RangeOrd, RangeOrdering};
+use serde::Serialize;
 use tracing::trace;
 
 use crate::aggregate::Aggregate;
@@ -328,7 +328,7 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
     }
 }
 
-impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
+impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     pub fn new() -> Self {
         Default::default()
     }
@@ -350,7 +350,7 @@ impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
     }
 
     pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
-        fn aux<K: Hash + Ord, V: Hash, F: FnOnce(Option<&mut V>)>(
+        fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
             key: &K,
             callback: F,
@@ -422,7 +422,7 @@ impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
         // - a key and node to be inserted after the current node
         // - the fingerprint difference
         // - the value that was at key, if any
-        fn aux<K: Hash + Ord, V: Hash>(
+        fn aux<K: Serialize + Ord, V: Serialize>(
             node: &mut Node<K, V>,
             key: K,
             value: V,
@@ -560,7 +560,7 @@ impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
         // return:
         // - the independently recomputed aggregate of the sub-tree
         // - the height of the sub-tree
-        fn aux<'a, K: Hash + Ord, V: Hash>(
+        fn aux<'a, K: Serialize + Ord, V: Serialize>(
             node: &'a Node<K, V>,
             mut min: Option<&'a K>,
             max: Option<&K>,
@@ -636,7 +636,7 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for FingerprintTree
     }
 }
 
-impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
+impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// Bundled [`Aggregate`] over a range of keys: Def. 3.5's `A(S) = (|S|, Σ(S))`, answered in a
     /// single `O(log n)` tree walk from each node's cached `subtree` aggregate (see the internal
     /// `Node` type), which *is* one [`Aggregate`] value rather than two separately-maintained

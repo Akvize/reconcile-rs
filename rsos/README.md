@@ -10,6 +10,11 @@ every subtree, a *range fingerprint*, so the hash of any key interval is availab
   `+`, with `Aggregate::ZERO` as its identity.
 - `Fingerprint` — a 256-bit summary (per-element BLAKE3, combined by addition modulo 2²⁵⁶), chosen
   over a 64-bit XOR for collision resistance and stability as a wire token.
+- `encoding` — the injective, length-prefixed byte encoding those per-element hashes are computed
+  from: a `serde::Serializer` writing straight into BLAKE3. It is what makes a fingerprint stable
+  across Rust versions, platforms and endianness, and the reason the element bound is `Serialize`
+  rather than `std::hash::Hash` (whose byte sequences Rust does not promise to keep stable, and
+  which `HashMap`/`HashSet` do not implement at all).
 - `Rsos<K>` — the trait stating the operations such a store must answer (Def. 3.9 of
   [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), Aljoscha Meyer, 2023), with an
   associated `Value` type so a backend names its own value type.

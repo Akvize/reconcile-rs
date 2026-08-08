@@ -36,11 +36,11 @@
 //! To match `BTreeMap` semantics more closely, we can remove even that pre-computation and make both forward and reverse traversal fully lazy,
 //! support `DoubleEndedIterator`, and implement precise lower/upper-bound seeks.
 
-use std::hash::Hash;
+use serde::Serialize;
 
 use crate::fingerprint_tree_map::{FingerprintTreeMap, Node};
 
-impl<K: Hash + Ord, V: Hash> FromIterator<(K, V)> for FingerprintTreeMap<K, V> {
+impl<K: Serialize + Ord, V: Serialize> FromIterator<(K, V)> for FingerprintTreeMap<K, V> {
     /// Builds an [`FingerprintTreeMap`] from an iterator of key-value pairs.
     ///
     /// The pairs are collected, sorted by key, and then inserted one by one,
@@ -246,7 +246,7 @@ impl<'a, K, V> IterMut<'a, K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
+impl<'a, K: 'a + Serialize + Ord, V: Serialize> Iterator for IterMut<'a, K, V> {
     type Item = (&'a K, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -273,7 +273,7 @@ impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for IterMut<'a, K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
+impl<'a, K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `(&K, &mut V)` pairs.
     ///
     /// # Warning — fingerprints not updated
@@ -367,7 +367,7 @@ struct ValuesMut<'a, K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
+impl<'a, K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// Returns an in-order iterator over `&mut V` values.
     ///
     /// # Warning — fingerprints not updated
@@ -383,7 +383,7 @@ impl<'a, K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
 }
 
 #[cfg(test)]
-impl<'a, K: 'a + Hash + Ord, V: Hash> Iterator for ValuesMut<'a, K, V> {
+impl<'a, K: 'a + Serialize + Ord, V: Serialize> Iterator for ValuesMut<'a, K, V> {
     type Item = &'a mut V;
 
     fn next(&mut self) -> Option<Self::Item> {

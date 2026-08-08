@@ -11,8 +11,9 @@
 //! Order-Statistics Stores* (arXiv:2603.19820). See the crate root docs for the full citation and
 //! [`FingerprintTreeMap`](crate::FingerprintTreeMap) for the one realization this crate ships.
 
-use std::hash::Hash;
 use std::ops::RangeBounds;
+
+use serde::Serialize;
 
 use crate::aggregate::Aggregate;
 use crate::fingerprint_tree_map::FingerprintTreeMap;
@@ -101,7 +102,7 @@ pub trait Rsos<K> {
     fn delete(&mut self, key: &K) -> Option<Self::Value>;
 }
 
-impl<K: Hash + Ord, V: Hash> Rsos<K> for FingerprintTreeMap<K, V> {
+impl<K: Serialize + Ord, V: Serialize> Rsos<K> for FingerprintTreeMap<K, V> {
     type Value = V;
 
     fn size(&self) -> usize {
