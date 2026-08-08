@@ -29,7 +29,7 @@ use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::bounds::{Key, Value};
-use crate::clock::{Clock, HlcClock, Timestamp};
+use crate::clock::{Clock, HlcClock, NodeId, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::observability;
@@ -318,7 +318,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
         let node_id_is_random = config.node_id.is_none();
-        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let node_id = config
+            .node_id
+            .unwrap_or_else(|| NodeId::new(rand::random()));
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
         let transport = Self::bind_udp(&config).await?;
         Ok(Self::build(config, transport, clock, node_id_is_random))
@@ -344,7 +346,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         transport: Arc<dyn Transport<Addr = SocketAddr>>,
     ) -> Self {
         let node_id_is_random = config.node_id.is_none();
-        let node_id = config.node_id.unwrap_or_else(rand::random);
+        let node_id = config
+            .node_id
+            .unwrap_or_else(|| NodeId::new(rand::random()));
         let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
         Self::build(config, transport, clock, node_id_is_random)
     }
@@ -523,7 +527,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// This node's Hybrid-Logical-Clock identity, read back from the clock adapter so it can never
     /// disagree with the `node_id` actually stamped onto minted timestamps.
-    pub(crate) fn node_id(&self) -> u64 {
+    pub(crate) fn node_id(&self) -> NodeId {
         self.clock.node_id()
     }
 
@@ -1591,7 +1595,7 @@ impl Drop for BulkDumpCountGuard {
 #[cfg(test)]
 mod deadlock_regressions {
 
-    use crate::clock::Timestamp;
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use crate::entry::{Entry, State};
     use crate::replica::Replica;
     use crate::{replicated_map::Config, ReplicatedMap};
@@ -1687,7 +1691,13 @@ mod deadlock_regressions {
                 *engine.pre_insert.write() = Box::new(move |&k: &i32, v: &Entry<Timestamp, u8>| {
                     if !guard.swap(true, Ordering::SeqCst) {
                         let inner = Entry::present(
-                            Timestamp::new(u64::MAX, 1, 0),
+                            Timestamp::new(
+                                Hlc::new(
+                                    PhysicalTime::from_millis(u64::MAX),
+                                    LogicalCounter::new(1),
+                                ),
+                                NodeId::new(0),
+                            ),
                             v.value().copied().unwrap_or_default() + 100,
                         );
                         let _ = hook_engine.just_insert(k + 100, inner);
@@ -1696,8 +1706,16 @@ mod deadlock_regressions {
 
                 // Feed an `Update` (future timestamp, so it is integrated) through the real network
                 // ingest path. No cluster key, so `open` clears the bytes unchanged into a `Payload`.
-                let bytes =
-                    update_message_bytes(42, Entry::present(Timestamp::new(u64::MAX, 0, 0), 99));
+                let bytes = update_message_bytes(
+                    42,
+                    Entry::present(
+                        Timestamp::new(
+                            Hlc::new(PhysicalTime::from_millis(u64::MAX), LogicalCounter::new(0)),
+                            NodeId::new(0),
+                        ),
+                        99,
+                    ),
+                );
                 let payload = auth::Authenticator::new(None, false)
                     .open(&bytes)
                     .expect("unauthenticated mode clears any datagram");
@@ -1742,7 +1760,7 @@ mod auth_attack {
     use tokio::net::UdpSocket;
 
     use super::Message;
-    use crate::clock::Timestamp;
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use crate::entry::{Entry, State};
     use crate::{replicated_map::Config, ReplicatedMap};
     use gossip::auth;
@@ -1750,7 +1768,10 @@ mod auth_attack {
     /// Serialize the F3 attack payload: an `Update` with a far-future timestamp that, if merged,
     /// would win against every legitimate write forever.
     fn forged_update() -> Vec<u8> {
-        let far_future = Timestamp::new(u64::MAX, 0, 0);
+        let far_future = Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(u64::MAX), LogicalCounter::new(0)),
+            NodeId::new(0),
+        );
         let message = Message::Update::<i32, Entry<Timestamp, String>, State<String>>((
             0,
             Entry::present(far_future, "evil".to_string()),
@@ -1812,7 +1833,7 @@ mod causal_stability {
     use bincode::{DefaultOptions, Deserializer};
     use serde::Deserialize;
 
-    use crate::clock::Timestamp;
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use crate::entry::{Entry, State};
     use crate::replica::{version_hash, Message, Replica};
     use crate::replicated_map::Config;
@@ -1832,7 +1853,10 @@ mod causal_stability {
         let peer_a: IpAddr = "127.0.0.61".parse().unwrap();
         let peer_b: IpAddr = "127.0.0.62".parse().unwrap();
         let key = 7;
-        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         let version = version_hash(&tombstone);
 
         // No member known yet: nothing could resurrect the value, so GC is allowed.
@@ -1878,8 +1902,20 @@ mod causal_stability {
         let live_key = 1;
         let tombstone_key = 2;
         // A live value's ack must NOT be resent; a tombstone's must be.
-        eng.just_insert(live_key, Entry::present(Timestamp::new(1, 0, 0), 11));
-        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
+        eng.just_insert(
+            live_key,
+            Entry::present(
+                Timestamp::new(
+                    Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                    NodeId::new(0),
+                ),
+                11,
+            ),
+        );
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         let expected_version = version_hash(&tombstone);
         eng.just_insert(tombstone_key, tombstone);
 
@@ -1912,7 +1948,10 @@ mod causal_stability {
         let live: IpAddr = "127.0.0.64".parse().unwrap();
         let gone: IpAddr = "127.0.0.65".parse().unwrap();
         let key = 9;
-        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         let version = version_hash(&tombstone);
 
         eng.members.write().insert(live);
@@ -1942,7 +1981,13 @@ mod causal_stability {
         let eng = engine("127.0.0.67").await;
         let peer: IpAddr = "127.0.0.68".parse().unwrap();
         let key = 3;
-        eng.just_insert(key, Entry::tombstone(Timestamp::new(1, 0, 0)));
+        eng.just_insert(
+            key,
+            Entry::tombstone(Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                NodeId::new(0),
+            )),
+        );
 
         assert!(
             eng.tombstone_acks.read().get(&key).is_none(),
@@ -1958,7 +2003,16 @@ mod causal_stability {
     async fn no_local_tombstones_is_never_pending() {
         let eng = engine("127.0.0.69").await;
         let peer: IpAddr = "127.0.0.70".parse().unwrap();
-        eng.just_insert(1, Entry::present(Timestamp::new(1, 0, 0), 42));
+        eng.just_insert(
+            1,
+            Entry::present(
+                Timestamp::new(
+                    Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                    NodeId::new(0),
+                ),
+                42,
+            ),
+        );
         assert!(!eng.has_pending_tombstone_acks(peer));
     }
 
@@ -1969,7 +2023,10 @@ mod causal_stability {
         let stale: IpAddr = "127.0.0.73".parse().unwrap();
         let silent: IpAddr = "127.0.0.74".parse().unwrap();
         let key = 5;
-        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(1, 0, 0));
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         let version = version_hash(&tombstone);
         eng.just_insert(key, tombstone);
 
@@ -1994,7 +2051,7 @@ mod causal_stability {
 mod clock_port {
     use std::sync::Arc;
 
-    use crate::clock::{ManualClock, Timestamp};
+    use crate::clock::{Hlc, LogicalCounter, ManualClock, NodeId, PhysicalTime, Timestamp};
     use crate::replica::Replica;
     use crate::replicated_map::Config;
 
@@ -2006,13 +2063,25 @@ mod clock_port {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.70".parse().unwrap());
-        let clock = Arc::new(ManualClock::new(42));
+        let clock = Arc::new(ManualClock::new(NodeId::new(42)));
         let eng: Replica<i32, i32> = Replica::new_with_clock(config, clock)
             .await
             .expect("bind failed");
 
-        assert_eq!(eng.clock_now(), Timestamp::new(0, 1, 42));
-        assert_eq!(eng.clock_now(), Timestamp::new(0, 2, 42));
+        assert_eq!(
+            eng.clock_now(),
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(0), LogicalCounter::new(1)),
+                NodeId::new(42)
+            )
+        );
+        assert_eq!(
+            eng.clock_now(),
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(0), LogicalCounter::new(2)),
+                NodeId::new(42)
+            )
+        );
     }
 }
 
@@ -2141,7 +2210,7 @@ mod tombstone_ack_bounds {
     use serde::Serialize;
 
     use super::Message;
-    use crate::clock::Timestamp;
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use crate::entry::{Entry, State};
     use crate::replica::{version_hash, Replica};
     use crate::replicated_map::Config;
@@ -2197,7 +2266,16 @@ mod tombstone_ack_bounds {
         let eng = engine("127.0.0.95").await;
         let key = 10;
         // Insert a live value (not a tombstone).
-        eng.just_insert(key, Entry::present(Timestamp::new(1, 0, 0), 42));
+        eng.just_insert(
+            key,
+            Entry::present(
+                Timestamp::new(
+                    Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                    NodeId::new(0),
+                ),
+                42,
+            ),
+        );
 
         let peer: SocketAddr = "127.0.0.96:9000".parse().unwrap();
         let bytes = ack_bytes(key, 123);
@@ -2223,7 +2301,10 @@ mod tombstone_ack_bounds {
     async fn ack_for_local_tombstone_is_recorded() {
         let eng = engine("127.0.0.97").await;
         let key = 20;
-        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(2, 0, 0));
+        let tombstone: Tombstoned = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         let version = version_hash(&tombstone);
         eng.just_insert(key, tombstone);
 
@@ -2329,7 +2410,7 @@ mod in_memory_convergence {
 
     use proptest::prelude::*;
 
-    use crate::clock::ManualClock;
+    use crate::clock::{ManualClock, NodeId};
     use crate::entry::Entry;
     use crate::replica::Replica;
     use crate::replicated_map::Config;
@@ -2360,12 +2441,12 @@ mod in_memory_convergence {
         let a: Replica<u32, u32> = Replica::new_with_transport(
             cfg(a_ip),
             Arc::new(net.bind(SocketAddr::new(a_ip, port))),
-            Arc::new(ManualClock::new(1)),
+            Arc::new(ManualClock::new(NodeId::new(1))),
         );
         let b: Replica<u32, u32> = Replica::new_with_transport(
             cfg(b_ip),
             Arc::new(net.bind(SocketAddr::new(b_ip, port))),
-            Arc::new(ManualClock::new(2)),
+            Arc::new(ManualClock::new(NodeId::new(2))),
         );
         // Seed each as the other's known gossip peer (no real discovery over the in-memory fabric).
         a.peers.write().insert(b_ip, Instant::now());

@@ -25,7 +25,7 @@ converge. The design rests on five mechanisms:
   exchange only the entries that actually differ. Equality and emptiness are decided by interval **size**, not
   by hash, to stay collision-safe.
 - **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock timestamp (`Timestamp`);
-  conflicts resolve by **last-write-wins** over the HLC total order `(wall_ms, counter, node_id)`.
+  conflicts resolve by **last-write-wins** over the HLC total order `(physical, logical, node_id)`.
 - **Deletion** — removals are **tombstones**; they are garbage-collected only once causally stable
   (every monotonic cluster member has acknowledged the exact version), which prevents resurrection.
 - **Transport & security** — messages travel as authenticated UDP datagrams (per-datagram MAC,
@@ -44,7 +44,7 @@ converge. The design rests on five mechanisms:
 | `rbsr/src/protocol.rs`, `rbsr/src/rsos_view.rs` (standalone `rbsr` crate, migration step 6 Step B, done) | Anti-entropy algorithm (`initial_ranges`, `protocol_round`) and its wire types, generic over the `RsosView<K>` read-only backend trait (four of Def. 3.9's seven operations), blanket-implemented for every `rsos::Rsos` implementor. |
 | `lww-register/src/entry.rs` (standalone `lww-register` crate, migration step 6 Step C, done) | The `Entry`/`State` domain type: value/tombstone semantics and the conflict-resolution policy (migration step 4, done). |
 | `lww-register/src/bounds.rs` | The `Key`/`Value` data-bound bundles (§3.8). |
-| `lww-register/src/clock.rs` | Hybrid Logical Clock, ordering half: the `Timestamp` type, the `Clock` port, and the `advance`/`advance_past` HLC arithmetic. Reads no clock of its own. |
+| `lww-register/src/clock.rs` | Hybrid Logical Clock, ordering half: the `Hlc` reading (the paper's `(physical, logical)` pair) and the `Timestamp` ordering key built from it, their `PhysicalTime`/`LogicalCounter`/`NodeId` components, the `ClockDrift` duration and the `AdmittedTime` clamp seam, the `Clock` port, and the HLC arithmetic (`Hlc::next_tick`/`Hlc::advance_past_remote`, identity-free). Reads no clock of its own. |
 | `lww-register/src/persistence.rs` | Durability boundary: the `Persistence` port, the `PersistedState` snapshot type, and the non-durable `InMemoryPersistence` default. |
 | `gossip/src/auth.rs` (standalone `gossip` crate, Step C, done) | Per-datagram message authentication (MAC) and optional AEAD encryption. |
 | `gossip/src/replay.rs` | Per-sender sequence/freshness state: the anti-replay half of the same envelope. |
@@ -266,7 +266,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 // parameter to the engine, store and Config. Only the physical-time read crosses the boundary.
 pub trait Clock: Send + Sync + 'static {
     fn now(&self) -> Timestamp;           // mint a strictly-monotonic local stamp
-    fn node_id(&self) -> u64;             // identity stamped onto every minted Timestamp
+    fn node_id(&self) -> NodeId;          // identity stamped onto every minted Timestamp
     fn observe(&self, remote: Timestamp);  // advance past a peer's stamp (causality)
 }
 
@@ -360,6 +360,38 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
     }
 }
 ```
+
+The stamp `Entry` is generic over is, in practice, always `Timestamp` — itself a domain type built
+from newtypes rather than raw integers, and split along the seam between *reading a clock* and
+*ordering writes*:
+
+```rust
+pub struct Hlc { physical: PhysicalTime, logical: LogicalCounter }  // the HLC of the paper
+pub struct Timestamp { hlc: Hlc, node_id: NodeId }                  // the LWW ordering key
+                             // declaration order, composed = conflict order
+pub struct PhysicalTime(u64);    // HLC physical time: an instant, ms since the Unix epoch
+pub struct LogicalCounter(u32);  // HLC logical counter, within one millisecond
+pub struct NodeId(u64);          // replica identity — the deterministic tie-break
+pub struct ClockDrift(u64);      // a *duration*, never comparable to an instant
+```
+
+An HLC in the sense of Kulkarni et al. (2014) *is* the pair `(physical, logical)`; the `node_id` is
+no part of a clock reading, but the tie-break that makes the LWW comparison a total order. So the
+arithmetic — `Hlc::next_tick` and `Hlc::advance_past_remote` — lives on `Hlc` and takes no `NodeId`
+at all, and the `Clock` adapter (which owns the node's identity) attaches it when it mints a reading
+into a `Timestamp`. That also means the identity is stored exactly once: `HlcClock`'s state is an
+`Hlc`, not a `Timestamp` carrying a second copy of a `node_id` it already holds as a field.
+Nesting costs nothing on the wire — both bincode and `rsos`'s canonical encoding write a struct as
+its fields in declaration order with no framing, so `{{physical, logical}, node_id}` encodes exactly
+as `{physical, logical, node_id}` (the property `RangeAggregate`/`Aggregate` also relies on).
+
+`Timestamp` is built from one further "parse, don't validate" type, `AdmittedTime` — a remote
+physical-time reading that has been admitted to the local clock state (past participle: the type is
+evidence the drift check *has run*, not that it could), obtainable only via
+`AdmittedTime::clamped_to_drift` (the untrusted path, which applies the far-future clamp of
+`MAX_CLOCK_DRIFT`) or the explicitly-named `AdmittedTime::trusted` (the self-authored-stamp path).
+`Hlc::advance_past_remote` accepts nothing else, so the clamp is a property of the type system
+rather than of a parameter name. See §4's invariant 2 and `AGENTS.md` §4.
 
 `Entry` carries the tombstone, timestamp, and merge semantics as a concrete domain type;
 `add_pre_insert` and `PersistedState` take `Entry<…>` rather than the bare tuple. Conflict
@@ -517,8 +549,17 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3, add/sub mod 2²⁵⁶; the
    golden vectors in `fingerprint.rs` hold.
-2. **HLC total order** `(wall_ms, counter, node_id)` (`clock.rs:44-54`) — the derived ordering *is* the
-   conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and merge uses strict `>`.
+2. **HLC total order** `(physical, logical, node_id)` (`lww-register/src/clock.rs`) — the derived
+   ordering *is* the conflict order; the `Clock` port mints `Timestamp` directly, preserving it, and
+   merge uses strict `>`. It is now composed of two derived orders: `Hlc` over
+   `(physical, logical)`, then `Timestamp` over `(hlc, node_id)`. The components are newtypes
+   (`PhysicalTime`/`LogicalCounter`/`NodeId`) declared in that order, so the field order cannot
+   drift and the components cannot be transposed at a call site; `tests/timestamp_wire_format.rs`
+   pins that neither the newtype wrapping nor the `Hlc` nesting costs anything on the wire (serde
+   encodes a newtype struct as its inner value alone, and a nested struct inlines positionally),
+   `lww-register/src/clock.rs`'s `total_order_is_physical_then_logical_then_node_id` pins the
+   composed order component by component and `hlc_order_is_physical_then_logical` pins the
+   reading's own half.
 3. **Size-not-hash emptiness/equality** in `protocol_round` (`rbsr/src/protocol.rs`).
 4. **Malformed-bound / inverted-range hardening** in `protocol_round` (`rbsr/src/protocol.rs`).
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs;

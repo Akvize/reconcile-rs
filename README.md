@@ -331,11 +331,11 @@ almost never lands on a live pod. Instead, point the store at a **headless `Serv
 a single lookup — the canonical StatefulSet pattern, with **no Kubernetes API access and no RBAC**.
 
 ```rust
-use reconcile::{replicated_map::Config, ReplicatedMap};
+use reconcile::{replicated_map::Config, NodeId, ReplicatedMap};
 
 let config = Config::default()
     .with_listen_addr(pod_ip)         // bind to the pod IP (downward API: status.podIP)
-    .with_node_id(node_id);           // stable id derived from the pod name
+    .with_node_id(NodeId::new(id));   // stable id derived from the pod name
 // Note: no `with_net` — discovery is purely DNS-driven in Kubernetes.
 let store = ReplicatedMap::<String, String>::new(config)
     .await
@@ -499,7 +499,7 @@ corresponding key-value pairs are exchanged and conflicts are resolved.
 Conflicts are resolved with last-write-wins (LWW), but keyed on a **Hybrid Logical Clock**
 (HLC, after Kulkarni et al. 2014) rather than a raw wall clock. Each value carries a `Timestamp`
 (the HLC stamp), and the winner is the one with the greater timestamp under the **total
-order** `(wall_ms, counter, node_id)`.
+order** `(physical, logical, node_id)`.
 
 This matters for correctness. A naive physical-clock LWW is unsafe on two counts:
 
@@ -516,9 +516,16 @@ remote timestamp, so a later local write is ordered strictly after everything it
 so every replica picks the *same* survivor — the merge is commutative, associative and
 idempotent, i.e. genuine Strong Eventual Consistency.
 
-Each node uses a random `node_id` by default; set an explicit one with
-`Config::with_node_id` for a stable, reproducible ordering (e.g. in tests). Each node in a
-cluster must use a distinct id.
+Each node uses a random `NodeId` by default; set an explicit one with
+`Config::with_node_id(NodeId::new(id))` for a stable, reproducible ordering (e.g. in tests). Each
+node in a cluster must use a distinct id. A `Timestamp`'s components are each their own type
+(`PhysicalTime`, `LogicalCounter`, `NodeId`) — the HLC paper's vocabulary — rather than two `u64`s
+and a `u32`, so they cannot be transposed at a call site. They are also grouped the way the paper
+groups them: the HLC proper is the pair `(physical, logical)`, spelled `Hlc`, and a `Timestamp` is
+that reading plus the `NodeId` tie-break, so
+`Timestamp::new(Hlc::new(physical, logical), node_id)`. Neither the newtypes nor the nesting costs
+anything on the wire: serde encodes a newtype struct as its inner value alone, and a nested struct
+inlines positionally.
 
 LWW still discards one of two *genuinely concurrent* writes by design; recovering both would
 require version vectors or a CRDT, which is out of scope.

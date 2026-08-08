@@ -89,7 +89,7 @@ pub(crate) mod replica;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
-pub use clock::{Clock, Timestamp};
+pub use clock::{Clock, Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use entry::{Entry, State};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};

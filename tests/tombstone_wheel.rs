@@ -1,7 +1,7 @@
 //! Regression test for the `TimeoutWheel` same-instant collision bug.
 //!
 //! When `remove_bulk` is called with ≥2 keys in the same millisecond their tombstone entries
-//! all share the same `wall_ms`-derived `DateTime<Utc>`.  Before the fix only one of them
+//! all share the same `physical`-derived `DateTime<Utc>`.  Before the fix only one of them
 //! would survive in the wheel, the rest being silently overwritten.  After the fix all
 //! tombstones must be individually tracked and, once the timeout elapses on a single-node
 //! store (empty membership ⇒ `is_tombstone_stable` returns `true`), all of them must be
@@ -98,9 +98,9 @@ async fn remove_bulk_same_millisecond_all_gc() {
 
     // Delete all keys in one bulk call.  The HLC's physical component is derived from
     // `Utc::now()` in milliseconds; any two calls within the same millisecond share the
-    // same `wall_ms`.  We cannot *force* a collision from outside the crate, but calling
+    // same `physical`.  We cannot *force* a collision from outside the crate, but calling
     // `remove_bulk` atomically is the most likely scenario and exercises the pre-insert hook
-    // code path that converts each tombstone's `wall_ms` to a `DateTime<Utc>` wheel instant.
+    // code path that converts each tombstone's `physical` to a `DateTime<Utc>` wheel instant.
     store.remove_bulk(&keys);
 
     // All keys should now be absent (tombstoned).

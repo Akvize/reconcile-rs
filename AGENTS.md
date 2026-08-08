@@ -59,16 +59,46 @@ runs `cargo fmt --check`, `cargo clippy --workspace -- --deny warnings`, and
 - **Strong-type every wire/domain entity.** A value meaningful to the protocol or domain (sequence
   number, timestamp, key, MAC tag, cluster secret) is its own newtype, never a bare
   `u64`/`[u8; N]`/`String` — two same-typed primitives let a caller swap them silently; two newtypes
-  make that a compile error. Precedent: [`Timestamp`](./lww-register/src/clock.rs), [`ClusterKey`]/[`Tag`]
-  (`gossip/src/auth.rs`), [`Seq`]/[`Stamp`] (`gossip/src/replay.rs`).
+  make that a compile error. Precedent:
+  [`PhysicalTime`]/[`LogicalCounter`]/[`NodeId`]/[`ClockDrift`](./lww-register/src/clock.rs) — the
+  components of a [`Timestamp`] (named for the HLC paper's own vocabulary), which used to be two
+  bare `u64`s and a `u32`, so transposing `physical` and `node_id` compiled and silently changed
+  LWW ordering — plus [`ClusterKey`]/[`Tag`] (`gossip/src/auth.rs`) and [`Seq`]/[`Stamp`]
+  (`gossip/src/replay.rs`). Note `ClockDrift`: a
+  *duration* is not the same type as the *instant* it is added to, even when both are "a number of
+  milliseconds".
+- **Group the components the way the domain groups them, and let the grouping carry the
+  arithmetic.** Worked example: `Hlc`/`Timestamp`. A Hybrid Logical Clock (Kulkarni et al.) *is* the
+  pair `(physical, logical)`; the `node_id` is not a clock component but the tie-break that makes
+  LWW a total order. While `Timestamp` was one flat triple, both arithmetic entry points took a
+  `NodeId` they never read — a pure passenger, present only in the value they constructed. Splitting
+  out [`Hlc`](./lww-register/src/clock.rs) let the arithmetic (`Hlc::next_tick`,
+  `Hlc::advance_past_remote`) drop the parameter entirely, and let the `Clock` adapter store the
+  node identity exactly once instead of both as a field and inside its clock state. The tell to
+  watch for: **a parameter that appears only in the constructed result, never in a comparison or a
+  computation, belongs to the caller's step, not this one.** Nesting is free on the wire — bincode
+  and `rsos`'s canonical encoding both write a struct as its fields in declaration order with no
+  framing — but prove it with a golden vector (`tests/timestamp_wire_format.rs`) rather than
+  asserting it.
 - **Every entity owns its own validation** — never the caller. Parsing/encoding lives on the type
   (`Seq::from_le_bytes`, not a free function); an "is this acceptable" check is a method on the type
   (e.g. [`Stamp::is_fresh`](./gossip/src/replay.rs)) — if the same validation arithmetic shows up at two
   call sites, it belongs on the type instead. Construction of an invalid instance should be
   structurally impossible or funneled through one fallible constructor. Same "parse, don't validate"
-  principle as [`Payload`](./gossip/src/auth.rs) (only obtainable via `Authenticator::open`) and
+  principle as [`Payload`](./gossip/src/auth.rs) (only obtainable via `Authenticator::open`),
+  [`AdmittedTime`](./lww-register/src/clock.rs) and
   [`Entry`](./ARCHITECTURE.md#36-domain-types-and-conflict-policy) — apply it to every entity, not
   just the security-critical ones.
+- **A safety property carried by a parameter name is not carried at all** — give it a type. Worked
+  example: `AdmittedTime`. The HLC's far-future clamp is what stops a forged remote stamp from
+  pinning every node's clock into the future; it used to be an `effective_remote_wall: u64`
+  parameter documented as "the clamped value on the adapter path, the raw value on the trusted
+  path", which no compiler checks. Note the past participle: `AdmittedTime` says the check *has
+  run*, which is the claim the type actually carries. `Hlc::advance_past_remote` now takes an
+  `AdmittedTime`, obtainable only through `AdmittedTime::clamped_to_drift` (which performs the
+  clamp) or the explicitly-named `AdmittedTime::trusted` escape hatch — so the trusted path has to *say* it is
+  trusting the value, and a raw datagram reading has no route in. Same shape as `Payload`: the type
+  exists precisely to be un-forgeable evidence that a check ran.
 - **New wire field or protocol value:** newtype it in the module that owns its semantics; put
   encode/decode and validation on that type; only touch a bare primitive at the actual wire boundary.
 
@@ -147,7 +177,7 @@ dependency order:
 |---|---|---|
 | `rsos` | `FingerprintTreeMap`, `Fingerprint`, `Aggregate`, the `Rsos<K>` trait (`fingerprint_tree_map.rs`, `fingerprint_tree_map_iter.rs`, `fingerprint.rs`, `encoding.rs`, `aggregate.rs`) | leaf, zero workspace deps |
 | `rbsr` | the RBSR protocol driver + `RsosView<K>` (`protocol.rs`, `rsos_view.rs`) | depends on `rsos` only |
-| `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
+| `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Hlc`/`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |
 | `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (the chrono-reading `HlcClock` adapter), `snapshot.rs` (`FileSnapshot` + the versioned on-disk header), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | the facade; depends on all four and re-exports their public types |
 

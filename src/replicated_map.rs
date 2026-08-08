@@ -23,7 +23,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
-use crate::clock::Timestamp;
+use crate::clock::{NodeId, Timestamp};
 use crate::discovery::{Discovery, DiscoveryKind, DnsDiscovery};
 use crate::entry::Entry;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
@@ -281,7 +281,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Set explicitly with [`Config::with_node_id`]; otherwise randomly generated at construction,
     /// in which case it changes on every restart. Reading it back is useful for diagnostics and for
     /// asserting that a durable deployment really did pin a stable identity.
-    pub fn node_id(&self) -> u64 {
+    pub fn node_id(&self) -> NodeId {
         self.engine.node_id()
     }
 
@@ -325,7 +325,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
             // Advance the clock past every persisted timestamp so that the first post-restart
             // write is strictly ordered after all pre-restart writes. Without this, the HLC
-            // starts cold at (wall_ms:0, counter:0); if the wall clock regressed across the
+            // starts cold at (physical:0, logical:0); if the wall clock regressed across the
             // restart (NTP step, VM resume — exactly the hazard HLC defends against), the first
             // post-restart now() could be ≤ the max persisted stamp, causing a fresh write to
             // silently lose last-write-wins to its own older persisted value.
@@ -334,8 +334,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             // far-future clamp that guards against hostile remote peers. Persisted stamps are
             // self-authored: this node wrote them, so there is no remote adversary to protect
             // against here. More importantly, after a wall-clock step BACKWARD by more than
-            // MAX_CLOCK_DRIFT_MS (NTP correction, VM resume — exactly the scenario we are
-            // defending against), an honest persisted stamp will exceed phys_now + MAX_CLOCK_DRIFT_MS
+            // MAX_CLOCK_DRIFT (NTP correction, VM resume — exactly the scenario we are
+            // defending against), an honest persisted stamp will exceed phys_now + MAX_CLOCK_DRIFT
             // and the clamped path would refuse to chase it, re-introducing the bug. The
             // far-future clamp protects the clock during live gossip; this restore path is not
             // live gossip. A poisoned stamp that made it into the snapshot is accepted here and
@@ -494,7 +494,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
                 // The timeout wheel ages tombstones by wall-clock time; use the HLC's
                 // physical component so all replicas expire a tombstone at the same logical
                 // wall time. GC is in any case gated on causal stability.
-                let when = DateTime::from_timestamp_millis(v.stamp.wall_ms() as i64)
+                let when = DateTime::from_timestamp_millis(v.stamp.physical().millis() as i64)
                     .unwrap_or_else(Utc::now);
                 tombstones.insert(k.clone(), when);
             }
@@ -964,7 +964,7 @@ pub struct Config {
     /// timestamps would no longer be resolved deterministically. A random 64-bit id makes
     /// collisions negligible; set an explicit id only when you need a stable, reproducible
     /// ordering (e.g. in tests).
-    pub node_id: Option<u64>,
+    pub node_id: Option<NodeId>,
     /// Whether to encrypt datagram payloads (not just authenticate them).
     ///
     /// Only ever set through `Config::with_encryption` (available with the `encryption` cargo
@@ -1184,7 +1184,7 @@ impl Config {
     ///
     /// Each node in a cluster must use a distinct id. Leave unset to use a random id (the
     /// default); set it for a stable, reproducible conflict ordering.
-    pub fn with_node_id(mut self, node_id: u64) -> Self {
+    pub fn with_node_id(mut self, node_id: NodeId) -> Self {
         self.node_id = Some(node_id);
         self
     }
@@ -1238,6 +1238,7 @@ impl Config {
 
 #[cfg(test)]
 mod replicated_map_tests {
+    use crate::clock::NodeId;
     use std::net::IpAddr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1275,10 +1276,11 @@ mod replicated_map_tests {
     /// value reported is the one the clock actually stamps onto minted timestamps.
     #[tokio::test]
     async fn node_id_is_readable_and_matches_the_minted_stamp() {
-        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config().with_node_id(0xABCD))
-            .await
-            .unwrap();
-        assert_eq!(store.node_id(), 0xABCD);
+        let store =
+            ReplicatedMap::<i32, i32>::new(ephemeral_config().with_node_id(NodeId::new(0xABCD)))
+                .await
+                .unwrap();
+        assert_eq!(store.node_id(), NodeId::new(0xABCD));
         store.insert(1, 1);
         let stamp = store.engine.map.read().get(&1).unwrap().stamp;
         assert_eq!(stamp.node_id(), store.node_id());
@@ -1301,7 +1303,7 @@ mod replicated_map_tests {
             ephemeral_config()
                 .with_listen_addr(ip)
                 .with_port(port)
-                .with_node_id(id)
+                .with_node_id(NodeId::new(id))
                 .with_reconcile_interval(Duration::from_millis(5))
         };
         let a = ReplicatedMap::<i32, i32>::new_with_transport(
@@ -1765,19 +1767,22 @@ mod replicated_map_tests {
     ///
     /// Technique: use a `ManualClock` whose counter starts at zero and then load a
     /// `PersistedState` whose max stamp is in the future relative to that clock (but within
-    /// MAX_CLOCK_DRIFT_MS, so the observe clamp does not interfere). After loading, the first
+    /// MAX_CLOCK_DRIFT, so the observe clamp does not interfere). After loading, the first
     /// `insert` must mint a timestamp strictly greater than the persisted max.
     #[tokio::test]
     async fn restart_clock_advanced_past_persisted_max_stamp() {
-        use crate::clock::ManualClock;
+        use crate::clock::{Hlc, LogicalCounter, ManualClock, NodeId, PhysicalTime};
         use crate::persistence::{InMemoryPersistence, PersistedState};
 
-        // Build a ManualClock starting at (wall_ms=0, counter=0).
-        let clock = Arc::new(ManualClock::new(1));
+        // Build a ManualClock starting at (physical=0, logical=0).
+        let clock = Arc::new(ManualClock::new(NodeId::new(1)));
 
         // Craft a PersistedState whose only entry carries a stamp well ahead of the clock.
-        // wall_ms=100 is in the "future" relative to the ManualClock's (0, 0) starting state.
-        let persisted_stamp = crate::clock::Timestamp::new(100, 0, 1);
+        // physical=100 is in the "future" relative to the ManualClock's (0, 0) starting state.
+        let persisted_stamp = crate::clock::Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(100), LogicalCounter::new(0)),
+            NodeId::new(1),
+        );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
             .save(&PersistedState {
@@ -1788,11 +1793,13 @@ mod replicated_map_tests {
             .unwrap();
 
         // Create a store with the ManualClock and load the persisted state.
-        let store =
-            ReplicatedMap::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
-                .await
-                .expect("bind failed")
-                .with_persistence(backend);
+        let store = ReplicatedMap::<i32, i32>::new_with_clock(
+            ephemeral_config().with_node_id(NodeId::new(1)),
+            clock,
+        )
+        .await
+        .expect("bind failed")
+        .with_persistence(backend);
 
         // Insert a new value; the minted timestamp must be strictly greater than persisted_stamp.
         store.insert(99, 1);
@@ -1824,14 +1831,17 @@ mod replicated_map_tests {
     /// This test FAILS without the observe-on-load fix and PASSES with it.
     #[tokio::test]
     async fn restart_insert_beats_persisted_tombstone() {
-        use crate::clock::ManualClock;
+        use crate::clock::{Hlc, LogicalCounter, ManualClock, NodeId, PhysicalTime};
         use crate::persistence::{InMemoryPersistence, PersistedState};
 
-        // ManualClock starting at (wall_ms=0, counter=0).
-        let clock = Arc::new(ManualClock::new(2));
+        // ManualClock starting at (physical=0, logical=0).
+        let clock = Arc::new(ManualClock::new(NodeId::new(2)));
 
         // A tombstone with a stamp in the "future" relative to the cold clock.
-        let tombstone_stamp = crate::clock::Timestamp::new(200, 0, 2);
+        let tombstone_stamp = crate::clock::Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(200), LogicalCounter::new(0)),
+            NodeId::new(2),
+        );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
             .save(&PersistedState {
@@ -1841,11 +1851,13 @@ mod replicated_map_tests {
             })
             .unwrap();
 
-        let store =
-            ReplicatedMap::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
-                .await
-                .expect("bind failed")
-                .with_persistence(backend);
+        let store = ReplicatedMap::<i32, i32>::new_with_clock(
+            ephemeral_config().with_node_id(NodeId::new(2)),
+            clock,
+        )
+        .await
+        .expect("bind failed")
+        .with_persistence(backend);
 
         // The tombstone was recovered (key 7 is absent from the live view).
         assert!(

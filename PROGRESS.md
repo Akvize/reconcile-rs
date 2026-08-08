@@ -187,6 +187,37 @@ Progress:
   deterministic `ManualClock` test adapter makes HLC behaviour reproducible without wall-clock time.
   Iso-functional; invariant 2 (HLC total order) preserved.
 - ✅ Naming cleanup alongside the port: type `Hlc`→`Timestamp` (#159) and module `hlc`→`clock` (#163).
+- ✅ Type-safety pass over `lww-register/src/clock.rs`, making the type the AGENTS.md §4 precedent
+  claims it is: `Timestamp`'s three interchangeable integers became
+  `PhysicalTime`/`LogicalCounter`/`NodeId` newtypes — the HLC paper's own vocabulary, so the type
+  names say what the docs say (`node_id` as a type also addresses #233) — the drift threshold
+  became a `ClockDrift` *duration* that cannot be compared to an instant, and the free functions
+  `advance`/`advance_past` became methods on the type owning their semantics. The far-future clamp — previously
+  a safety property carried by a parameter name (`effective_remote_wall`) — is now the
+  `AdmittedTime` type, obtainable only through `clamped_to_drift` (untrusted path) or the
+  explicitly-named `trusted` escape hatch (self-authored stamps) — past participle, because the
+  type is evidence the check *has run*. `Timestamp`'s members follow the same vocabulary
+  (`Timestamp::physical()`/`logical()`/`node_id()`), and `LogicalCounter::checked_next` is
+  crate-private so the counter-roll rule cannot leak out of `Hlc::next_tick`, its one owner —
+  the test `ManualClock` mints through `next_tick` rather than rebuilding the tick by hand.
+  The same pass separated the **clock reading from the tie-break identity**: an HLC in the sense of
+  Kulkarni et al. is the pair `(physical, logical)`, so that pair is now its own type,
+  `Hlc { physical, logical }`, and `Timestamp` is `{ hlc, node_id }` — the LWW ordering key. The
+  arithmetic moved onto `Hlc` (`Hlc::next_tick`, `Hlc::advance_past_remote`) and **lost its
+  `NodeId` parameter**, which both entry points previously took without ever reading it: it was a
+  pure passenger, appearing only in the constructed result, and it cannot be inferred from the
+  receiver either (a tick minted by node A while advancing past B's stamp must carry A's id), so it
+  belongs at the minting site rather than in the clock rule. `HlcClock`/`ManualClock` now hold an
+  `Hlc` as state and attach their own `NodeId` when minting, which also removes the duplicated id
+  they used to keep both as a field and inside `last.node_id`. `Timestamp::physical()`/`logical()`
+  delegate to `hlc()`, so existing call sites are untouched. Typing change only: the HLC arithmetic
+  is untouched, and the wire encoding and `Entry` fingerprints are pinned unchanged by
+  `tests/timestamp_wire_format.rs` — bincode and `rsos`'s canonical encoding both inline a nested
+  struct positionally, so `{{physical, logical}, node_id}` is byte-identical to the old flat triple,
+  with all three golden constants unmoved. Breaking API change
+  (`Config::with_node_id`, `ReplicatedMap::node_id`, `reconcile::clock`'s re-export list,
+  `MAX_CLOCK_DRIFT_MS` → `MAX_CLOCK_DRIFT`, `Timestamp::new` taking an `Hlc`), accepted for the
+  breaking release in preparation.
 - ✅ Step 4 — `Entry`/`State` domain type: the untyped `(Timestamp, Option<V>)` tuple is replaced by
   `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); `MaybeTombstone`, `Reconcilable`, `Timestamped`,
   `Projectable` and `ValueOnly<V>` are dissolved into `Entry`'s inherent methods
@@ -297,7 +328,11 @@ Any change must preserve these (they encode the fixes above):
 1. Fingerprint format & arithmetic (`[u64;4]`, per-element BLAKE3 over `rsos::encoding`'s injective
    encoding, add/sub mod 2²⁵⁶) + golden vectors. Both halves are load-bearing: changing the encoding
    is as much a wire break as changing the hash.
-2. HLC total order `(wall_ms, counter, node_id)`; merge uses strict `>`.
+2. HLC total order `(physical, logical, node_id)`; merge uses strict `>`. It is composed of two
+   derived orders — `Hlc` over `(physical, logical)`, then `Timestamp` over `(hlc, node_id)`. The
+   components are newtypes (`PhysicalTime`/`LogicalCounter`/`NodeId`) declared in that order — the
+   field order *is* the conflict order, and the wire bytes are unchanged by the wrapping *and* by
+   the `Hlc` nesting (`tests/timestamp_wire_format.rs`).
 3. Range emptiness/equality decided on `size`, never on `hash`.
 4. `protocol_round` validates incoming bounds (`checked_sub`, no `unimplemented!`).
 5. Authenticate-before-deserialize (MAC on raw bytes before decoding).
