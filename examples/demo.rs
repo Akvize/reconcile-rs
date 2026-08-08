@@ -8,7 +8,7 @@ use rand::{
 };
 use tracing::info;
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 #[derive(Parser)]
 struct Args {
@@ -47,7 +47,7 @@ async fn main() {
         key_values.push((key, value));
     }
     let key_values = key_values.as_slice();
-    let mut service = ReconcileStore::new(config)
+    let mut service = ReplicatedMap::new(config)
         .await
         .expect("failed to bind UDP socket");
     service.insert_bulk(key_values);

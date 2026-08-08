@@ -8,11 +8,11 @@
 
 //! Dynamic peer discovery, behind a single port.
 //!
-//! Every way a [`ReconcileStore`](crate::ReconcileStore) learns about peers goes through the
+//! Every way a `ReplicatedMap` learns about peers goes through the
 //! [`Discovery`] port. Two built-in adapters implement it:
 //!
 //! - [`RandomProbe`] — the **default, speculative** source: one random address per declared network
-//!   each round ([`Config::with_net`](crate::reconcile_store::Config::with_net)). The probed address
+//!   each round (`Config::with_net`). The probed address
 //!   might not be a live peer, so it is only used as a one-shot reconciliation target and is **not**
 //!   added to the known-peer set. This is what auto-discovers peers on a flat or geographically
 //!   partitioned CIDR. Its [`kind`](Discovery::kind) is [`Speculative`](DiscoveryKind::Speculative).
@@ -23,9 +23,9 @@
 //!   live pod.
 //!
 //! An **authoritative** result is treated as the current truth: each returned address is seeded into
-//! the known-peer set (via [`ReconcileStore::seed_peer`](crate::ReconcileStore::seed_peer)), and a
+//! the known-peer set (via `ReplicatedMap::seed_peer`), and a
 //! previously-seen member now absent is decommissioned after a grace period (see
-//! [`ReconcileStore::with_dns_discovery`](crate::ReconcileStore::with_dns_discovery)). A
+//! `ReplicatedMap::with_dns_discovery`). A
 //! non-authoritative result is speculative and only steers the current round's targets. In **all**
 //! cases discovery feeds the gossip-target set only; it never grants causal-stability *membership*,
 //! which a peer must still earn through a genuine authenticated, dated datagram.
@@ -101,7 +101,7 @@ pub struct RandomProbe {
 }
 
 impl RandomProbe {
-    pub(crate) fn new(nets: Arc<RwLock<Vec<IpNet>>>, rng: Arc<RwLock<StdRng>>) -> Self {
+    pub fn new(nets: Arc<RwLock<Vec<IpNet>>>, rng: Arc<RwLock<StdRng>>) -> Self {
         RandomProbe { nets, rng }
     }
 }

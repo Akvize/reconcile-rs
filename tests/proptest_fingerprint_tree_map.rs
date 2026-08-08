@@ -125,7 +125,7 @@ proptest! {
 //
 // We model a universe of (key, value) pairs and give each store an arbitrary
 // subset. Shared keys carry identical values (the diff algorithm reconciles the
-// *set* of keys; per-key conflict resolution is the job of `ReconcileStore`'s
+// *set* of keys; per-key conflict resolution is the job of `ReplicatedMap`'s
 // last-write-wins layer, not of the raw `FingerprintTreeMap`). The true symmetric
 // difference of the key sets is therefore well defined and we assert the
 // protocol discovers exactly it.

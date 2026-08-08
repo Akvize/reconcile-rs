@@ -1,7 +1,7 @@
 # Running reconcile-rs in a local kind cluster
 
 This directory spins up a small, throwaway Kubernetes cluster on your own machine and runs
-**5 `ReconcileStore` pods** in it. It's meant as a hands-on playground for learning Kubernetes,
+**5 `ReplicatedMap` pods** in it. It's meant as a hands-on playground for learning Kubernetes,
 using reconcile-rs as a realistic, stateful, peer-to-peer workload.
 
 It does **not** introduce a separate deployment: it's a thin
@@ -69,7 +69,7 @@ Each step maps to a Kubernetes concept worth understanding:
   `reconcile-headless.default.svc.cluster.local` resolve to one IP **per ready pod**. The node's
   `DnsDiscovery` re-resolves that name every few seconds to find its peers — no Kubernetes API
   access, no RBAC.
-- Pods then **gossip over UDP** (port 8080) and reconcile their `ReconcileStore<String, String>`
+- Pods then **gossip over UDP** (port 8080) and reconcile their `ReplicatedMap<String, String>`
   contents. Port 9000 serves `/metrics`, which doubles as the readiness/liveness probe.
 
 ## See reconciliation happen

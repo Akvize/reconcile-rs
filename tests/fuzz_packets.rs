@@ -20,7 +20,7 @@ use std::time::Duration;
 use rand::{Rng, SeedableRng};
 use tokio::net::UdpSocket;
 
-use reconcile::{reconcile_store::Config, ReconcileStore};
+use reconcile::{replicated_map::Config, ReplicatedMap};
 
 /// Generate a batch of adversarial payloads: pure random noise of varied
 /// lengths (including empty and larger-than-buffer), plus a few structured
@@ -67,7 +67,7 @@ async fn malformed_datagrams_do_not_panic_or_corrupt_state() {
         .with_listen_addr(victim_addr.parse().unwrap());
     // No cluster key: arbitrary bytes are *not* dropped at the auth gate and
     // reach the deserializer, which is exactly the path we want to fuzz.
-    let store = ReconcileStore::<i32, String>::new(config)
+    let store = ReplicatedMap::<i32, String>::new(config)
         .await
         .expect("bind failed");
     store.just_insert(0, "legit".to_string());

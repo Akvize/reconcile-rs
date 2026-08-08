@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`ReconcileStore`], a wrapper to a key-value map
+//! Provides the [`ReplicatedMap`], a wrapper to a key-value map
 //! to enable reconciliation between different instances over a network.
 
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ use crate::clock::Timestamp;
 use crate::discovery::{Discovery, DiscoveryKind, DnsDiscovery};
 use crate::entry::Entry;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
-use crate::reconcile_engine::{version_hash, ReconcileEngine};
+use crate::replica::{version_hash, Replica};
 use crate::timeout_wheel::TimeoutWheel;
 use crate::transport::Transport;
 use rsos::Fingerprint;
@@ -37,16 +37,16 @@ const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 /// How often the background task writes a full snapshot to the persistence backend.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Default cadence of the dynamic-discovery task (see [`ReconcileStore::with_discovery_interval`]).
+/// Default cadence of the dynamic-discovery task (see [`ReplicatedMap::with_discovery_interval`]).
 const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Default number of consecutive discovery rounds a member may be absent before it is
-/// decommissioned (see [`ReconcileStore::with_discovery_miss_threshold`]).
+/// decommissioned (see [`ReplicatedMap::with_discovery_miss_threshold`]).
 const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
 /// Default wall-time floor a member with pending unacknowledged tombstones must be continuously
 /// absent for before it is decommissioned (see
-/// [`ReconcileStore::with_discovery_decommission_floor`]). Ten minutes is far above any DNS blip or
+/// [`ReplicatedMap::with_discovery_decommission_floor`]). Ten minutes is far above any DNS blip or
 /// readiness-probe flap, so it only ever engages against a resolver that is wrong for a sustained
 /// period.
 const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
@@ -87,19 +87,19 @@ const DEFAULT_MAX_CONCURRENT_BULK_DUMPS: usize = 4;
 /// as well as its main service method: `run()`,
 /// which must be called to actually synchronize with peers.
 ///
-/// Known peers can optionally be provided using the [`with_seed`](ReconcileStore::with_seed) method. In
+/// Known peers can optionally be provided using the [`with_seed`](ReplicatedMap::with_seed) method. In
 /// any case, the store will periodically look for new peers by sampling a random address from
 /// the given peer network.
-pub struct ReconcileStore<K, V>
+pub struct ReplicatedMap<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
     /// Internal map and hooks container.
-    engine: ReconcileEngine<K, V>,
+    engine: Replica<K, V>,
     /// Tombstone timestamps for deleted entries.
     tombstones: TimeoutWheel<K>,
     /// Durable backend. Always present (the trait is mandatory); defaults to the non-durable
-    /// [`InMemoryPersistence`], swapped out via [`with_persistence`](ReconcileStore::with_persistence).
+    /// [`InMemoryPersistence`], swapped out via [`with_persistence`](ReplicatedMap::with_persistence).
     persistence: Arc<dyn Persistence<K, V>>,
     /// Optional dynamic peer-discovery source (e.g. Kubernetes DNS). When `None` (the default),
     /// discovery falls back entirely to the per-network random probing in the engine; when set, a
@@ -116,7 +116,7 @@ where
     discovery_decommission_floor: Duration,
 }
 
-/// Per-member discovery-absence tracking for [`ReconcileStore::discover_periodically`].
+/// Per-member discovery-absence tracking for [`ReplicatedMap::discover_periodically`].
 ///
 /// A member starts (implicitly, by having no entry yet) present. Missing from a discovery round
 /// moves it to [`Absent`](Self::Absent), which owns the round-miss counter and the wall-clock
@@ -179,13 +179,13 @@ impl MemberPresence {
     }
 }
 
-impl<K, V> Clone for ReconcileStore<K, V>
+impl<K, V> Clone for ReplicatedMap<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
 {
-    /// Allows cloning of the `ReconcileStore` handle for lightweight sharing in hooks or tests.
+    /// Allows cloning of the `ReplicatedMap` handle for lightweight sharing in hooks or tests.
     fn clone(&self) -> Self {
-        ReconcileStore {
+        ReplicatedMap {
             engine: self.engine.clone(),
             tombstones: self.tombstones.clone(),
             persistence: self.persistence.clone(),
@@ -197,8 +197,8 @@ where
     }
 }
 
-impl<K: Key, V: Value> ReconcileStore<K, V> {
-    /// Create a new `ReconcileStore`, binding the gossip UDP socket and setting up tombstone tracking.
+impl<K: Key, V: Value> ReplicatedMap<K, V> {
+    /// Create a new `ReplicatedMap`, binding the gossip UDP socket and setting up tombstone tracking.
     ///
     /// # Errors
     ///
@@ -206,12 +206,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
     /// the address is not available on this host.
     pub async fn new(config: Config) -> io::Result<Self> {
-        Ok(Self::from_engine(
-            ReconcileEngine::<K, V>::new(config).await?,
-        ))
+        Ok(Self::from_engine(Replica::<K, V>::new(config).await?))
     }
 
-    /// Create a `ReconcileStore` over a caller-supplied [`Transport`] adapter instead of the
+    /// Create a `ReplicatedMap` over a caller-supplied [`Transport`] adapter instead of the
     /// default UDP one.
     ///
     /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
@@ -230,10 +228,10 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
-    /// # use reconcile::{reconcile_store::Config, InMemoryNetwork, ReconcileStore};
+    /// # use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
     /// let network = InMemoryNetwork::new();
     /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
-    /// let store = ReconcileStore::<String, String>::new_with_transport(
+    /// let store = ReplicatedMap::<String, String>::new_with_transport(
     ///     Config::default(),
     ///     transport,
     /// );
@@ -242,7 +240,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         config: Config,
         transport: Arc<dyn Transport<Addr = SocketAddr>>,
     ) -> Self {
-        Self::from_engine(ReconcileEngine::<K, V>::with_transport(config, transport))
+        Self::from_engine(Replica::<K, V>::with_transport(config, transport))
     }
 
     /// Test-only constructor that accepts an explicit [`Clock`] adapter.
@@ -255,15 +253,15 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {
         Ok(Self::from_engine(
-            ReconcileEngine::<K, V>::new_with_clock(config, clock).await?,
+            Replica::<K, V>::new_with_clock(config, clock).await?,
         ))
     }
 
     /// Wrap a constructed engine in the store's own bookkeeping (tombstone wheel, persistence,
     /// discovery defaults). The single place those defaults are spelled out, so the constructors
     /// above cannot drift apart.
-    fn from_engine(engine: ReconcileEngine<K, V>) -> Self {
-        let svc = ReconcileStore {
+    fn from_engine(engine: Replica<K, V>) -> Self {
+        let svc = ReplicatedMap {
             engine,
             tombstones: TimeoutWheel::new(),
             persistence: Arc::new(InMemoryPersistence::default()),
@@ -292,7 +290,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Every store always owns a backend; by default that is the non-durable
     /// [`InMemoryPersistence`], so a process restart starts empty. Call this with a durable
     /// backend (e.g. [`FileSnapshot`](crate::FileSnapshot)) between
-    /// [`new`](ReconcileStore::new) and [`run`](ReconcileStore::run) to recover the previous
+    /// [`new`](ReplicatedMap::new) and [`run`](ReplicatedMap::run) to recover the previous
     /// state — entries, tombstones, and the causal-stability membership/acks — **before** the
     /// node rejoins the gossip protocol, so a restart does not look like a fresh, empty replica.
     ///
@@ -477,7 +475,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Register a pre-insert hook.
     ///
     /// The hook is invoked **before** inserting each key/value pair into the internal map.
-    /// Calling this does **not** consume the `ReconcileStore` instance; you can call it multiple times.
+    /// Calling this does **not** consume the `ReplicatedMap` instance; you can call it multiple times.
     ///
     /// # Deadlock Safety
     ///
@@ -512,7 +510,7 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
     /// Fingerprint of the **value-only projection** over a range — the timestamp-less counterpart of
     /// [`fingerprint`](Self::fingerprint).
     ///
-    /// A [`ReconcileMirror`](crate::mirror::ReconcileMirror) that has converged with this
+    /// A [`Mirror`](crate::mirror::Mirror) that has converged with this
     /// store computes the same value over the same range, even though it never stores timestamps.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.value_fingerprint(range)
@@ -879,8 +877,8 @@ impl<K: Key, V: Value> ReconcileStore<K, V> {
 // `get_mut` shares the same `V: Value` bound as the rest of the store: an in-place edit is
 // re-stamped and broadcast (see below), and that broadcast serializes `V` through the engine's
 // `Value`-bounded path, so the bound set matches `insert`/`remove` exactly.
-impl<K: Key, V: Value> ReconcileStore<K, V> {
-    /// Mutate the value for `k` in place, then propagate the edit like [`insert`](ReconcileStore::insert).
+impl<K: Key, V: Value> ReplicatedMap<K, V> {
+    /// Mutate the value for `k` in place, then propagate the edit like [`insert`](ReplicatedMap::insert).
     ///
     /// The callback receives `Some(&mut V)` when the key is live, or `None` when it is absent or
     /// tombstoned. When it mutated a live value, the entry is then **re-stamped with a fresh Hybrid
@@ -934,7 +932,7 @@ pub struct Config {
     /// range, sized to your topology (a whole cloud region, an availability zone, or a single
     /// subnet). This node's **local** network is whichever declared net contains
     /// [`listen_addr`](Self::listen_addr); all others are **remote**. (If none contains it, the node
-    /// logs a loud warning and treats only itself as local — see [`ReconcileStore::new`].)
+    /// logs a loud warning and treats only itself as local — see [`ReplicatedMap::new`].)
     ///
     /// A node auto-discovers peers in every network (one random probe per network per round) but
     /// gossips the full anti-entropy comparison to local-network peers every round and to
@@ -985,7 +983,7 @@ pub struct Config {
     /// between a bulk transfer's paced datagrams — only floods the single receive loop with redundant
     /// comparisons, slowing convergence rather than speeding it. Keep it ≥ a few × RTT;
     /// the 1 s default is a safe, low-overhead choice. Retunable at runtime via
-    /// [`set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    /// [`set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
     pub reconcile_interval: Duration,
     /// Rate, in bytes per second, at which a single **bulk** anti-entropy value transfer to one peer
     /// is metered. Defaults to 32 MiB/s; `None` disables pacing (the historical
@@ -1035,7 +1033,7 @@ pub struct Config {
     ///
     /// At capacity, a datagram from a completely unknown sender is dropped before any per-sender
     /// state is allocated; already-tracked senders are unaffected, and
-    /// [`forget_peer`](crate::ReconcileStore::forget_peer) frees a slot immediately. Defence in
+    /// [`forget_peer`](crate::ReplicatedMap::forget_peer) frees a slot immediately. Defence in
     /// depth for unauthenticated deployments, a hard ceiling for authenticated ones. Default 1024
     /// — see [`with_max_peers`](Config::with_max_peers).
     ///
@@ -1067,7 +1065,7 @@ impl Default for Config {
             bulk_send_rate: Some(DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(DEFAULT_SOCKET_BUFFER_SIZE),
-            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
+            freshness_window: gossip::replay::FRESHNESS_WINDOW_DEFAULT,
             max_peers: DEFAULT_MAX_PEERS,
             max_concurrent_bulk_dumps: DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         }
@@ -1131,7 +1129,7 @@ impl Config {
     /// Set the reconciliation cadence: how long the loop waits for inbound activity before
     /// initiating a round (default 1 s). See [`reconcile_interval`](Config::reconcile_interval).
     /// Retunable at runtime via
-    /// [`ReconcileStore::set_reconcile_interval`](crate::ReconcileStore::set_reconcile_interval).
+    /// [`ReplicatedMap::set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
     pub fn with_reconcile_interval(mut self, interval: Duration) -> Self {
         self.reconcile_interval = interval;
         self
@@ -1239,16 +1237,16 @@ impl Config {
 }
 
 #[cfg(test)]
-mod reconcile_store_tests {
+mod replicated_map_tests {
     use std::net::IpAddr;
     use std::sync::Arc;
     use std::time::Duration;
 
     use crate::persistence::Persistence;
-    use crate::reconcile_engine::version_hash;
+    use crate::replica::version_hash;
     use crate::{
-        reconcile_store::{Config, MemberPresence, MAX_NETS},
-        FileSnapshot, ReconcileStore,
+        replicated_map::{Config, MemberPresence, MAX_NETS},
+        FileSnapshot, ReplicatedMap,
     };
 
     /// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
@@ -1267,7 +1265,7 @@ mod reconcile_store_tests {
             bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
             recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
             send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
-            freshness_window: crate::replay::FRESHNESS_WINDOW_DEFAULT,
+            freshness_window: gossip::replay::FRESHNESS_WINDOW_DEFAULT,
             max_peers: super::DEFAULT_MAX_PEERS,
             max_concurrent_bulk_dumps: super::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         }
@@ -1277,7 +1275,7 @@ mod reconcile_store_tests {
     /// value reported is the one the clock actually stamps onto minted timestamps.
     #[tokio::test]
     async fn node_id_is_readable_and_matches_the_minted_stamp() {
-        let store = ReconcileStore::<i32, i32>::new(ephemeral_config().with_node_id(0xABCD))
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config().with_node_id(0xABCD))
             .await
             .unwrap();
         assert_eq!(store.node_id(), 0xABCD);
@@ -1306,11 +1304,11 @@ mod reconcile_store_tests {
                 .with_node_id(id)
                 .with_reconcile_interval(Duration::from_millis(5))
         };
-        let a = ReconcileStore::<i32, i32>::new_with_transport(
+        let a = ReplicatedMap::<i32, i32>::new_with_transport(
             cfg(a_ip, 1),
             Arc::new(net.bind(SocketAddr::new(a_ip, port))),
         );
-        let b = ReconcileStore::<i32, i32>::new_with_transport(
+        let b = ReplicatedMap::<i32, i32>::new_with_transport(
             cfg(b_ip, 2),
             Arc::new(net.bind(SocketAddr::new(b_ip, port))),
         );
@@ -1347,7 +1345,7 @@ mod reconcile_store_tests {
             .with_port(8090)
             .with_listen_addr("127.0.0.45".parse().unwrap())
             .with_net("127.0.0.45/32".parse().unwrap());
-        let store = ReconcileStore::<i32, i32>::new(config)
+        let store = ReplicatedMap::<i32, i32>::new(config)
             .await
             .expect("bind failed")
             .with_tombstone_timeout(Duration::from_millis(1));
@@ -1372,7 +1370,7 @@ mod reconcile_store_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.bin");
 
-        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1383,7 +1381,7 @@ mod reconcile_store_tests {
         store.snapshot(); // force a durable write
 
         // A brand-new store recovers the previous state from the same file.
-        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1406,7 +1404,7 @@ mod reconcile_store_tests {
         let path = dir.path().join("snapshot.bin");
         let peer: IpAddr = "127.0.0.99".parse().unwrap();
 
-        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1422,7 +1420,7 @@ mod reconcile_store_tests {
             .insert(peer, 123);
         store.snapshot();
 
-        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1452,7 +1450,7 @@ mod reconcile_store_tests {
         let path = dir.path().join("snapshot.bin");
         let peer: IpAddr = "127.0.0.98".parse().unwrap();
 
-        let store = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1469,7 +1467,7 @@ mod reconcile_store_tests {
 
         // Sanity check the hazard: a *fresh* store (no recovered membership) would consider the
         // same tombstone stable and collect it.
-        let fresh = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let fresh = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed");
         fresh.insert(1, 11);
@@ -1481,7 +1479,7 @@ mod reconcile_store_tests {
         );
 
         // The recovered store keeps the tombstone gated, preventing resurrection.
-        let restarted = ReconcileStore::<i32, i32>::new(ephemeral_config())
+        let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
             .await
             .expect("bind failed")
             .with_persistence(Arc::new(FileSnapshot::new(&path)));
@@ -1557,7 +1555,7 @@ mod reconcile_store_tests {
         let member: IpAddr = "127.0.0.200".parse().unwrap();
 
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
-        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
             .await
             .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
@@ -1601,7 +1599,7 @@ mod reconcile_store_tests {
 
         // Report the member present once so it enters `seen_ever`, then fail forever.
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
-        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
             .await
             .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
@@ -1677,7 +1675,7 @@ mod reconcile_store_tests {
         let member: IpAddr = "127.0.0.210".parse().unwrap();
 
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
-        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
             .await
             .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
@@ -1725,7 +1723,7 @@ mod reconcile_store_tests {
         let member: IpAddr = "127.0.0.211".parse().unwrap();
 
         let fake = FakeDiscovery::new(FakeResp::Present(vec![member]));
-        let store = ReconcileStore::<i32, i32>::new(discovery_config())
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
             .await
             .expect("bind failed")
             .with_discovery(Arc::new(fake.clone()))
@@ -1791,7 +1789,7 @@ mod reconcile_store_tests {
 
         // Create a store with the ManualClock and load the persisted state.
         let store =
-            ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
+            ReplicatedMap::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(1), clock)
                 .await
                 .expect("bind failed")
                 .with_persistence(backend);
@@ -1844,7 +1842,7 @@ mod reconcile_store_tests {
             .unwrap();
 
         let store =
-            ReconcileStore::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
+            ReplicatedMap::<i32, i32>::new_with_clock(ephemeral_config().with_node_id(2), clock)
                 .await
                 .expect("bind failed")
                 .with_persistence(backend);
@@ -1893,7 +1891,7 @@ mod reconcile_store_tests {
         let config = Config::default()
             .with_port(busy.port())
             .with_listen_addr(busy.ip());
-        let result = ReconcileStore::<i32, i32>::new(config).await;
+        let result = ReplicatedMap::<i32, i32>::new(config).await;
         let err = result
             .err()
             .expect("expected Err when the bind address is already in use");
@@ -1917,7 +1915,7 @@ mod reconcile_store_tests {
     /// `ComparisonItem` as a dated message, so `spoke_dated` becomes `true` and the receive path
     /// would add the sender to `members` — unless the cap fires first.
     fn dated_comparison_payload() -> Vec<u8> {
-        use crate::reconcile_engine::Message;
+        use crate::replica::Message;
         use crate::FingerprintTreeMap;
         use bincode::{DefaultOptions, Serializer};
         use serde::Serialize as _;
@@ -1954,7 +1952,7 @@ mod reconcile_store_tests {
             .with_net("127.0.0.180/30".parse().unwrap())
             .with_max_peers(2);
 
-        let store = ReconcileStore::<i32, i32>::new(config)
+        let store = ReplicatedMap::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
@@ -2011,7 +2009,7 @@ mod reconcile_store_tests {
             .with_net("127.0.0.184/30".parse().unwrap())
             .with_max_peers(2);
 
-        let store = ReconcileStore::<i32, i32>::new(config)
+        let store = ReplicatedMap::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
@@ -2071,7 +2069,7 @@ mod reconcile_store_tests {
             .with_listen_addr("127.0.0.1".parse().unwrap())
             .with_max_peers(2);
 
-        let store = ReconcileStore::<i32, i32>::new(config)
+        let store = ReplicatedMap::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
@@ -2136,7 +2134,7 @@ mod reconcile_store_tests {
             .with_cluster_key(cluster_key)
             .with_max_peers(2);
 
-        let store = ReconcileStore::<i32, i32>::new(config)
+        let store = ReplicatedMap::<i32, i32>::new(config)
             .await
             .expect("bind failed");
 
@@ -2147,8 +2145,8 @@ mod reconcile_store_tests {
 
         // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
         let payload = dated_comparison_payload();
-        let counter = crate::replay::SenderCounter::new();
-        let sealed = crate::auth::Authenticator::new(Some(cluster_key), false)
+        let counter = gossip::replay::SenderCounter::new();
+        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false)
             .seal(counter.next_seq(), counter.next_stamp(), &payload)
             .expect("enabled authenticator always seals");
 

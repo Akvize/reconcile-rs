@@ -10,14 +10,14 @@
 //!
 //! Without a cluster key, any host that can reach the port can forge an update and poison the
 //! cluster via last-write-wins (see the crate-level "Security model" docs). With
-//! [`Config::with_cluster_key`](crate::reconcile_store::Config::with_cluster_key), every outgoing
+//! `Config::with_cluster_key`, every outgoing
 //! datagram is framed as `tag || replay_header || payload`, `tag` a keyed MAC over
 //! `replay_header || payload`; incoming datagrams are verified before any deserialization. The
 //! 16-byte `replay_header` (`seq || stamp`, both little-endian `u64`) feeds the checks in
 //! [`crate::replay`].
 //!
 //! With the `encryption` feature and
-//! [`Config::with_encryption`](crate::reconcile_store::Config::with_encryption), the same keyed
+//! `Config::with_encryption`, the same keyed
 //! mode upgrades to authenticated encryption: `nonce || ciphertext || tag` via XChaCha20-Poly1305,
 //! the replay header encrypted along with the payload.
 //!
@@ -59,25 +59,26 @@ use std::net::IpAddr;
 use crate::replay::{ReplayFilter, Seq, Stamp, REPLAY_HEADER_LEN};
 
 /// Length in bytes of the authentication tag prepended to every datagram.
-pub(crate) const TAG_LEN: usize = 32;
+pub const TAG_LEN: usize = 32;
 
 /// Length in bytes of a cluster key.
-pub(crate) const KEY_LEN: usize = 32;
+pub const KEY_LEN: usize = 32;
 
 /// Length in bytes of the XChaCha20-Poly1305 nonce prepended to each encrypted datagram.
 ///
 /// A 192-bit nonce is large enough that drawing it at random for every datagram has negligible
 /// collision probability, so the encrypted mode needs no per-peer counter or connection state.
 #[cfg(feature = "encryption")]
-pub(crate) const AEAD_NONCE_LEN: usize = 24;
+pub const AEAD_NONCE_LEN: usize = 24;
 
 /// Length in bytes of the XChaCha20-Poly1305 (Poly1305) authentication tag.
 #[cfg(feature = "encryption")]
-pub(crate) const AEAD_TAG_LEN: usize = 16;
+pub const AEAD_TAG_LEN: usize = 16;
 
 #[cfg(not(any(feature = "mac-blake3", feature = "mac-hmac")))]
 compile_error!(
-    "reconcile: no MAC backend selected. Enable feature `mac-blake3` (default) or `mac-hmac`."
+    "gossip: no MAC backend selected. Enable feature `mac-blake3` (default) or `mac-hmac` — \
+     either on this crate directly, or via the identically-named unification feature on `reconcile`."
 );
 
 /// A shared cluster secret. Constructing one is the only way to enable authentication.
@@ -88,10 +89,10 @@ compile_error!(
 /// absence of `Copy` costs nothing at runtime.
 #[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
 #[derive(Clone)]
-pub(crate) struct ClusterKey([u8; KEY_LEN]);
+pub struct ClusterKey([u8; KEY_LEN]);
 
 impl ClusterKey {
-    pub(crate) fn new(bytes: [u8; KEY_LEN]) -> Self {
+    pub fn new(bytes: [u8; KEY_LEN]) -> Self {
         ClusterKey(bytes)
     }
 
@@ -101,7 +102,7 @@ impl ClusterKey {
 }
 
 /// A MAC tag. Can only be produced by a [`Mac`] backend.
-pub(crate) struct Tag([u8; TAG_LEN]);
+pub struct Tag([u8; TAG_LEN]);
 
 impl Tag {
     fn as_bytes(&self) -> &[u8; TAG_LEN] {
@@ -111,13 +112,13 @@ impl Tag {
 
 /// [`Payload`] state: cleared the MAC/AEAD gate, but not yet checked against the per-peer replay
 /// filter. The only state [`Authenticator::open`] can produce.
-pub(crate) struct Authenticated;
+pub struct Authenticated;
 
 /// [`Payload`] state: cleared the replay filter too (or exempt because the connection runs
 /// unauthenticated). The only state [`Payload::as_bytes`] accepts, and the only state message
 /// handling (`handle_messages`) accepts — obtainable solely through
 /// [`Payload::verify_replay`].
-pub(crate) struct Verified;
+pub struct Verified;
 
 /// A datagram payload that has cleared the authentication gate — either its tag was verified (or it
 /// was authenticated and decrypted), or the store is running in (explicitly) unauthenticated mode.
@@ -136,14 +137,14 @@ pub(crate) struct Verified;
 /// The bytes are borrowed from the receive buffer in the MAC and unauthenticated modes (zero-copy),
 /// and owned in the encrypted mode where decryption produces a fresh plaintext buffer; [`Cow`]
 /// captures both without forcing an allocation on the common path.
-pub(crate) struct Payload<'a, State = Authenticated> {
+pub struct Payload<'a, State = Authenticated> {
     bytes: Cow<'a, [u8]>,
     /// Sender sequence number extracted from the replay header, or [`Seq::NONE`] in
     /// unauthenticated mode.
-    pub(crate) seq: Seq,
+    pub seq: Seq,
     /// Sender wall-clock stamp from the replay header, or [`Stamp::NONE`] in unauthenticated
     /// mode.
-    pub(crate) stamp: Stamp,
+    pub stamp: Stamp,
     _state: PhantomData<State>,
 }
 
@@ -159,7 +160,7 @@ impl<'a> Payload<'a, Authenticated> {
     ///
     /// Returns `None` when the datagram is a replay, a duplicate, or outside the freshness window;
     /// the caller drops it silently, same as an authentication failure.
-    pub(crate) fn verify_replay(
+    pub fn verify_replay(
         self,
         filter: &ReplayFilter,
         sender: IpAddr,
@@ -177,7 +178,7 @@ impl<'a> Payload<'a, Authenticated> {
 }
 
 impl Payload<'_, Verified> {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
@@ -207,7 +208,7 @@ fn decode_replay_header(data: &[u8]) -> Option<(Seq, Stamp, &[u8])> {
 /// The active backend is selected at compile time through the `mac-*` Cargo features and aliased
 /// as [`ClusterMac`]; this trait makes the contract that every backend must satisfy explicit and
 /// compiler-checked, rather than relying on convention.
-pub(crate) trait Mac {
+pub trait Mac {
     /// Compute the authentication tag of `message` under `key`.
     fn tag(key: &ClusterKey, message: &[u8]) -> Tag;
 
@@ -218,7 +219,7 @@ pub(crate) trait Mac {
 }
 
 #[cfg(feature = "mac-blake3")]
-pub(crate) struct Blake3Mac;
+pub struct Blake3Mac;
 
 #[cfg(feature = "mac-blake3")]
 impl Mac for Blake3Mac {
@@ -238,7 +239,7 @@ impl Mac for Blake3Mac {
 // Compiled only when it is actually the selected backend (`mac-blake3` takes precedence), so an
 // `--all-features` build does not carry an unused struct.
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
-pub(crate) struct HmacSha256Mac;
+pub struct HmacSha256Mac;
 
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 impl Mac for HmacSha256Mac {
@@ -264,16 +265,16 @@ impl Mac for HmacSha256Mac {
 // `mac-blake3` takes precedence when both backends are enabled (e.g. under `--all-features`), so
 // such builds still compile instead of hitting a hard error.
 #[cfg(feature = "mac-blake3")]
-pub(crate) type ClusterMac = Blake3Mac;
+pub type ClusterMac = Blake3Mac;
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
-pub(crate) type ClusterMac = HmacSha256Mac;
+pub type ClusterMac = HmacSha256Mac;
 
 /// Authentication policy and datagram framing for one node.
 ///
 /// Holds the cluster key (or the absence thereof) and is the sole producer of [`Payload`] values.
 /// Not `Copy` because it may carry a [`ClusterKey`]; cloning it is cheap.
 #[derive(Clone)]
-pub(crate) enum Authenticator {
+pub enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
     Disabled,
     /// A cluster key is configured: datagrams are MAC-sealed and verified (plaintext payload).
@@ -287,12 +288,11 @@ pub(crate) enum Authenticator {
 impl Authenticator {
     /// Build an authenticator from an optional raw cluster key and whether to encrypt.
     ///
-    /// `encrypt` is only ever `true` when [`Config::with_encryption`] was used, which is gated on
+    /// `encrypt` is only ever `true` when `Config::with_encryption` was used, which is gated on
     /// the `encryption` feature; the `cfg(not(...))` arm keeps the match exhaustive and turns any
     /// other route into a clear panic instead of a silent downgrade.
     ///
-    /// [`Config::with_encryption`]: crate::reconcile_store::Config::with_encryption
-    pub(crate) fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
+    pub fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
         match (key, encrypt) {
             (None, _) => Authenticator::Disabled,
             (Some(bytes), false) => Authenticator::Enabled(ClusterKey::new(bytes)),
@@ -311,7 +311,7 @@ impl Authenticator {
     ///
     /// In authenticated modes this includes both the cryptographic overhead (tag / nonce+tag) and
     /// the 16-byte replay header.
-    pub(crate) fn overhead(&self) -> usize {
+    pub fn overhead(&self) -> usize {
         match self {
             Authenticator::Disabled => 0,
             Authenticator::Enabled(_) => TAG_LEN + REPLAY_HEADER_LEN,
@@ -327,7 +327,7 @@ impl Authenticator {
     ///
     /// Returns `Some(framed)` when enabled/encrypted, or `None` when disabled (the caller then
     /// sends `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
-    pub(crate) fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Option<Vec<u8>> {
+    pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Option<Vec<u8>> {
         match self {
             Authenticator::Disabled => None,
             Authenticator::Enabled(key) => {
@@ -365,7 +365,7 @@ impl Authenticator {
     ///
     /// On any failure (too short, invalid tag, decryption error, missing replay header) `None` is
     /// returned and the caller drops it silently.
-    pub(crate) fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a, Authenticated>> {
+    pub fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a, Authenticated>> {
         match self {
             Authenticator::Disabled => Some(Payload {
                 bytes: Cow::Borrowed(datagram),

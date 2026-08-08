@@ -34,7 +34,7 @@ use serde::Serialize;
 ///
 /// The encode side appends to a caller-owned buffer so a batch of messages can be framed into
 /// one datagram without per-message allocation.
-pub(crate) fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<()> {
+pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<()> {
     use ::bincode::{DefaultOptions, Serializer};
     value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
 }
@@ -49,7 +49,7 @@ pub(crate) fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::R
 /// A **clean** end-of-input (all bytes consumed on a message boundary) yields the values decoded
 /// so far; a *malformed* stream (a partial or invalid message mid-buffer) is an error, so a
 /// corrupt or hostile datagram is rejected wholesale rather than half-applied.
-pub(crate) fn decode_stream<T: DeserializeOwned>(
+pub fn decode_stream<T: DeserializeOwned>(
     bytes: &[u8],
     max_items: usize,
 ) -> ::bincode::Result<Vec<T>> {
