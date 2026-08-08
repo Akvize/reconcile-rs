@@ -26,7 +26,7 @@ use crate::fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
 /// Method names are the paper's own terms (`size`, `aggregate`, `rank`, `select`, `enumerate`,
 /// `insert`, `delete`), not renamed to Rust idiom, so the mapping from spec to code stays legible
 /// side by side with the paper. `FingerprintTreeMap` additionally keeps its pre-existing
-/// Rust-idiomatic inherent API (`len`, `get_range`, `is_empty`, ...) for ergonomic direct use —
+/// Rust-idiomatic inherent API (`len`, `range`, `is_empty`, ...) for ergonomic direct use —
 /// this trait is one more way to call it, not the only way.
 ///
 /// A few signatures adapt the paper's math to idiomatic Rust rather than a literal transliteration
@@ -52,7 +52,7 @@ pub trait Rsos<K, V> {
     fn rank(&self, z: &K) -> usize;
 
     /// `Select(r)` → `Select_X(r)`: the key at in-order position `r`. Panics if `r` is out of
-    /// bounds (matching `FingerprintTreeMap::key_at`'s existing panic-on-out-of-bounds contract,
+    /// bounds (matching `FingerprintTreeMap::select`'s existing panic-on-out-of-bounds contract,
     /// rather than adding an `Option`/`Result` the paper's own signature doesn't have).
     fn select(&self, r: usize) -> &K;
 
@@ -84,18 +84,18 @@ impl<K: Hash + Ord, V: Hash> Rsos<K, V> for FingerprintTreeMap<K, V> {
     }
 
     fn rank(&self, z: &K) -> usize {
-        self.insertion_position(z)
+        FingerprintTreeMap::rank(self, z)
     }
 
     fn select(&self, r: usize) -> &K {
-        self.key_at(r)
+        FingerprintTreeMap::select(self, r)
     }
 
     fn enumerate<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R>
     where
         K: Ord,
     {
-        self.get_range(range)
+        self.range(range)
     }
 
     fn insert(&mut self, key: K, value: V) -> Option<V> {

@@ -45,12 +45,12 @@ where
 {
     let (diff_ranges1, diff_ranges2) = diff(local, remote);
     for diff in diff_ranges1 {
-        for (k, v) in local.get_range(&diff) {
+        for (k, v) in local.range(&diff) {
             remote.insert(k.clone(), v.clone());
         }
     }
     for diff in diff_ranges2 {
-        for (k, v) in remote.get_range(&diff) {
+        for (k, v) in remote.range(&diff) {
             local.insert(k.clone(), v.clone());
         }
     }
@@ -114,7 +114,7 @@ fn test_compare() {
     reconcile(&mut tree1, &mut tree4);
     assert_eq!(tree1, tree4);
     assert_eq!(
-        tree1.get_range(&..).collect::<Vec<_>>(),
+        tree1.range(&..).collect::<Vec<_>>(),
         [
             (&25, &"World!"),
             (&40, &"Hello"),

@@ -64,8 +64,30 @@
 //!
 //! `FingerprintTreeMap` implements [`Rsos<K, V>`], delegating each trait method to the matching
 //! inherent method, and *also* keeps its own pre-existing, Rust-idiomatic inherent API (`len`,
-//! `insert`, `get_range`, `is_empty`, iterators, ...) side by side — the trait is one more way to
+//! `insert`, `range`, `is_empty`, iterators, ...) side by side — the trait is one more way to
 //! call it, not the only way.
+//!
+//! ## The two APIs, side by side
+//!
+//! | Def. 3.9 operation | [`Rsos`] trait method | [`FingerprintTreeMap`] inherent method |
+//! |---|---|---|
+//! | `size()` | [`Rsos::size`] | [`len`](FingerprintTreeMap::len) *(+ [`is_empty`](FingerprintTreeMap::is_empty))* |
+//! | `Aggregate(l, u)` | [`Rsos::aggregate`] | [`aggregate`](FingerprintTreeMap::aggregate) |
+//! | `Rank(z)` | [`Rsos::rank`] | [`rank`](FingerprintTreeMap::rank) |
+//! | `Select(r)` | [`Rsos::select`] | [`select`](FingerprintTreeMap::select) |
+//! | `Enumerate(l, u)` | [`Rsos::enumerate`] | [`range`](FingerprintTreeMap::range) |
+//! | `Insert(k, v)` | [`Rsos::insert`] | [`insert`](FingerprintTreeMap::insert) |
+//! | `Delete(k)` | [`Rsos::delete`] | [`remove`](FingerprintTreeMap::remove) |
+//!
+//! Four of the seven names now coincide; three deliberately do not. The rule is: **the trait
+//! speaks the paper's vocabulary, the inherent API speaks Rust's, and where the two collide on a
+//! name Rust already owns, Rust wins on the inherent surface.** So `Rank`/`Select` became `rank`
+//! and `select` inherently — those are the paper's terms *and* the standard order-statistic-tree
+//! terms, displacing home-grown names Rust had no claim on — while `size`/`delete`/`enumerate`
+//! stay trait-only: every Rust collection has `len()`/`is_empty()`, std maps spell removal
+//! `remove`, and `enumerate` on an inherent Rust API would read as
+//! [`Iterator::enumerate`]'s `(index, item)` pairing rather than "list a range", which
+//! [`BTreeMap::range`](std::collections::BTreeMap::range) is the established spelling for.
 //!
 //! ## Why a *map* is the right correspondence to Def. 3.4/3.9 — not a deviation
 //!

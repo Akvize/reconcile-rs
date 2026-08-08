@@ -83,7 +83,7 @@ proptest! {
         }
 
         // Full-range iteration yields the exact sorted oracle contents.
-        let got: Vec<(u8, u16)> = tree.get_range(&..).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(&..).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(got, want);
 
@@ -110,7 +110,7 @@ proptest! {
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         let range = (Bound::Included(lo), Bound::Excluded(hi));
 
-        let got: Vec<(u8, u16)> = tree.get_range(&range).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(&range).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.range(range).map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(&got, &want);
 
@@ -168,7 +168,7 @@ fn run_diff(
 fn items_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
-        .flat_map(|r| tree.get_range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
+        .flat_map(|r| tree.range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -181,7 +181,7 @@ fn keys_in(tree: &Tree, ranges: &[DiffRange<u64>]) -> Vec<u64> {
 }
 
 fn sorted_items(tree: &Tree) -> Vec<(u64, u64)> {
-    tree.get_range(&..).map(|(k, v)| (*k, *v)).collect()
+    tree.range(&..).map(|(k, v)| (*k, *v)).collect()
 }
 
 /// Build two trees from a universe and per-entry membership flags. Returns the

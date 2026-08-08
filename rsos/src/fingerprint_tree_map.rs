@@ -22,9 +22,13 @@
 //! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
 //!
 //! [`FingerprintTreeMap`] exposes the range-aggregate queries (`aggregate`,
-//! `insertion_position`, `key_at`, `len`) that a range-based-set-reconciliation anti-entropy
+//! `rank`, `select`, `len`) that a range-based-set-reconciliation anti-entropy
 //! protocol (such as this workspace's `rbsr`-to-be) needs to drive range reconciliation. It also
-//! implements the [`Rsos`](crate::Rsos) trait — see the crate root docs.
+//! implements the [`Rsos`](crate::Rsos) trait, whose seven methods are the paper's own Def. 3.9
+//! terms; four of them share a name with the inherent method they delegate to and three
+//! (`size`/`enumerate`/`delete` vs. `len`/`range`/`remove`) do not, because the inherent API keeps
+//! Rust's container spellings. The crate root docs carry the full operation-by-operation mapping
+//! table and the reasoning.
 
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -706,7 +710,11 @@ impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
     /// after insertion otherwise. This realizes Def. 3.9's `Rank` operation (see
     /// [`Rsos::rank`](crate::Rsos::rank)); `pub` so range-based-set-reconciliation protocol
     /// crates outside `rsos` can drive it.
-    pub fn insertion_position(&self, key: &K) -> usize {
+    ///
+    /// Named `rank` rather than the home-grown `insertion_position` it used to carry: `rank` is
+    /// both the paper's term and the standard order-statistic-tree term, and Rust has no competing
+    /// convention for this operation, so the trait and the inherent API can share one name.
+    pub fn rank(&self, key: &K) -> usize {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
@@ -739,7 +747,11 @@ impl<K: Hash + Ord, V: Hash> FingerprintTreeMap<K, V> {
     /// Reference to the key at the given in-order position. Panics if out of bounds. This
     /// realizes Def. 3.9's `Select` operation (see [`Rsos::select`](crate::Rsos::select));
     /// `pub` so range-based-set-reconciliation protocol crates outside `rsos` can drive it.
-    pub fn key_at(&self, index: usize) -> &K {
+    ///
+    /// Named `select` rather than the home-grown `key_at` it used to carry, for the same reason as
+    /// [`rank`](Self::rank): the paper's term is also the standard order-statistic-tree term, and
+    /// no Rust convention competes for it.
+    pub fn select(&self, index: usize) -> &K {
         fn aux<K: Ord, V>(node: &Node<K, V>, mut index: usize) -> &K {
             if let Some(children) = node.children.as_ref() {
                 for i in 0..node.keys.len() {
@@ -812,7 +824,16 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
 }
 
 impl<K: Ord, V> FingerprintTreeMap<K, V> {
-    pub fn get_range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
+    /// Iterator over the key-value pairs whose key falls in `range`, in key order. This realizes
+    /// Def. 3.9's `Enumerate` operation (see [`Rsos::enumerate`](crate::Rsos::enumerate)).
+    ///
+    /// Named `range` rather than the paper's `enumerate` — this is the one place the two
+    /// vocabularies genuinely conflict. [`BTreeMap::range`](std::collections::BTreeMap::range) is
+    /// std's spelling for exactly this operation, and `enumerate` on a Rust API would suggest
+    /// [`Iterator::enumerate`]'s `(index, item)` pairing, which is not what this yields. The
+    /// trait keeps `enumerate` because it is explicitly the paper's contract; the inherent API
+    /// keeps Rust's. (The former name here, `get_range`, matched neither.)
+    pub fn range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();
         // traverse interior nodes
@@ -977,18 +998,18 @@ mod tests {
         for _ in 0..100 {
             let index = rng.gen::<usize>() % key_values.len();
             let key = key_values[index].0;
-            assert_eq!(*tree1.key_at(index), key);
+            assert_eq!(*tree1.select(index), key);
             assert_eq!(tree1.position(&key), Some(index));
-            assert_eq!(tree1.insertion_position(&key), index);
+            assert_eq!(tree1.rank(&key), index);
         }
-        assert_eq!(tree1.insertion_position(&0), 0);
-        assert_eq!(tree1.insertion_position(&u64::MAX), tree1.len());
+        assert_eq!(tree1.rank(&0), 0);
+        assert_eq!(tree1.rank(&u64::MAX), tree1.len());
 
-        // test get_range
+        // test range
         let from_index = rng.gen_range(0..key_values.len());
         let to_index = rng.gen_range(from_index..key_values.len());
-        let from_key = tree1.key_at(from_index);
-        let to_key = tree1.key_at(to_index);
+        let from_key = tree1.select(from_index);
+        let to_key = tree1.select(to_index);
         fn test_range<
             R: RangeBounds<u64>,
             SI: std::slice::SliceIndex<[(u64, u64)], Output = [(u64, u64)]>,
@@ -999,7 +1020,7 @@ mod tests {
             slice_index: SI,
         ) {
             assert_eq!(
-                tree.get_range(&range)
+                tree.range(&range)
                     .map(|(k, v)| (*k, *v))
                     .collect::<Vec<_>>(),
                 key_values[slice_index]
@@ -1039,12 +1060,12 @@ mod tests {
     }
 
     /// The bundled [`Aggregate`]'s count half (Def. 3.5's `A(S) = (|S|, Σ(S))`) must agree with
-    /// the independently-computed `get_range(range).count()` over a handful of ranges (empty,
+    /// the independently-computed `range(range).count()` over a handful of ranges (empty,
     /// full, partial) on a tree with several dozen inserted keys. The fingerprint half is checked
-    /// the same independent way: against the per-element lifts of `get_range`'s own contents,
+    /// the same independent way: against the per-element lifts of `range`'s own contents,
     /// summed by hand.
     #[test]
-    fn aggregate_count_matches_get_range_count() {
+    fn aggregate_count_matches_range_count() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
         let mut tree: FingerprintTreeMap<u32, u32> = FingerprintTreeMap::new();
         let mut keys = Vec::new();
@@ -1062,16 +1083,16 @@ mod tests {
             let aggregate = tree.aggregate(&range);
             assert_eq!(
                 aggregate.size(),
-                tree.get_range(&range).count(),
-                "aggregate size disagrees with get_range().count() for {range:?}"
+                tree.range(&range).count(),
+                "aggregate size disagrees with range().count() for {range:?}"
             );
             assert_eq!(
                 aggregate.is_empty(),
-                tree.get_range(&range).next().is_none(),
-                "aggregate is_empty disagrees with get_range() for {range:?}"
+                tree.range(&range).next().is_none(),
+                "aggregate is_empty disagrees with range() for {range:?}"
             );
             let expected_fingerprint = tree
-                .get_range(&range)
+                .range(&range)
                 .fold(Fingerprint::ZERO, |acc, (k, v)| acc + super::lift(k, v));
             assert_eq!(
                 aggregate.fingerprint(),

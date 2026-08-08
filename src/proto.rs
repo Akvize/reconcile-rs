@@ -13,8 +13,8 @@
 //! public surface (see `ARCHITECTURE.md` §3.7). The whole module is `pub(crate)`, so although the
 //! items below are declared `pub`, they are unreachable through the public path — the gated
 //! [`crate::testing`] seam re-exports exactly the few the integration oracles need. The range-aggregate
-//! queries the algorithm relies on ([`FingerprintTreeMap::aggregate`], [`FingerprintTreeMap::insertion_position`],
-//! [`FingerprintTreeMap::key_at`], [`FingerprintTreeMap::len`]) are inherent methods on `FingerprintTreeMap`.
+//! queries the algorithm relies on ([`FingerprintTreeMap::aggregate`], [`FingerprintTreeMap::rank`],
+//! [`FingerprintTreeMap::select`], [`FingerprintTreeMap::len`]) are inherent methods on `FingerprintTreeMap`.
 
 use std::ops::{Bound, RangeBounds};
 
@@ -67,7 +67,7 @@ impl<K> From<EndBound<K>> for Bound<K> {
 /// A [`RangeAggregate`]'s range: `(StartBound<K>, EndBound<K>)`, wrapped in a local tuple struct
 /// (rather than a bare tuple) so it can implement the foreign [`RangeBounds`] trait directly —
 /// Rust's orphan rules require the outermost type to be local, and a plain tuple never qualifies.
-/// This lets a segment's range feed straight into [`FingerprintTreeMap::aggregate`] / [`FingerprintTreeMap::get_range`] like
+/// This lets a segment's range feed straight into [`FingerprintTreeMap::aggregate`] / [`FingerprintTreeMap::range`] like
 /// any other `RangeBounds<K>`, with no intermediate conversion.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct KeyRange<K>(StartBound<K>, EndBound<K>);
@@ -142,11 +142,11 @@ impl<K: std::hash::Hash + Ord> BoundedRange<K> {
     ) -> Result<Self, InvertedRange> {
         let start_index = match &start {
             StartBound::Unbounded => 0,
-            StartBound::Included(key) => tree.insertion_position(key),
+            StartBound::Included(key) => tree.rank(key),
         };
         let end_index = match &end {
             EndBound::Unbounded => tree.len(),
-            EndBound::Excluded(key) => tree.insertion_position(key),
+            EndBound::Excluded(key) => tree.rank(key),
         };
         if end_index < start_index {
             return Err(InvertedRange);
@@ -211,7 +211,7 @@ pub fn diff_round<K, V>(
         // comments). The one remaining way a wire segment can be malformed is an inverted range
         // (`start_index > end_index`, e.g. `Included(100)..Excluded(5)`) — undetectable without a
         // concrete tree, hence the fallible constructor rather than a static property of the wire
-        // type. Dropping it here avoids the underflow/out-of-bounds `key_at` that trusting the
+        // type. Dropping it here avoids the underflow/out-of-bounds `select` that trusting the
         // arithmetic would cause.
         let bounded = match BoundedRange::parse(start, end, tree) {
             Ok(bounded) => bounded,
@@ -277,7 +277,7 @@ pub fn diff_round<K, V>(
                     out_comparison.push(RangeAggregate { range, aggregate });
                     break;
                 } else {
-                    let next_key = tree.key_at(next_index);
+                    let next_key = tree.select(next_index);
                     let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
                     let aggregate = Aggregate::new(
                         next_index - cur_index,
@@ -326,7 +326,7 @@ mod tests {
     // nothing left to test at this level — see `StartBound`/`EndBound`'s doc comments.
 
     /// An inverted range (`start_index > end_index`) used to underflow `end_index -
-    /// start_index` (panic in debug, huge `usize` then out-of-bounds `key_at` in release). It
+    /// start_index` (panic in debug, huge `usize` then out-of-bounds `select` in release). It
     /// must be dropped instead. Unlike the bound-shape cases above, this one *is* still
     /// representable on the wire (both bounds are individually legal shapes) and can only be
     /// detected against a concrete tree, so it stays a runtime check (`BoundedRange::parse`).
@@ -334,7 +334,7 @@ mod tests {
     fn inverted_range_is_dropped_not_panicking() {
         let store = tree(&[10, 20, 30]);
         let segment = RangeAggregate {
-            // start_index = insertion_position(100) = 3, end_index = insertion_position(5) = 0
+            // start_index = rank(100) = 3, end_index = rank(5) = 0
             range: KeyRange::new(StartBound::Included(100), EndBound::Excluded(5)),
             aggregate: Aggregate::new(1, Fingerprint([1, 0, 0, 0])),
         };

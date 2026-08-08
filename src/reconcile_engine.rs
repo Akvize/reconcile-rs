@@ -1150,7 +1150,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                         let guard = self.map.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, v) in guard.get_range(&range) {
+                            for (k, v) in guard.range(&range) {
                                 updates.push(Message::Update((k.clone(), v.clone())));
                             }
                         }
@@ -1269,7 +1269,7 @@ impl<K: Key, V: Value> ReconcileEngine<K, V> {
                         let guard = self.projection.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, p) in guard.get_range(&range) {
+                            for (k, p) in guard.range(&range) {
                                 updates.push(Message::ValueUpdate((k.clone(), p.clone())));
                             }
                         }
