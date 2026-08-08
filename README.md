@@ -387,6 +387,21 @@ what Rust convention calls for. The fingerprint is a
 token, chosen over a 64-bit XOR for collision resistance and cross-version interoperability
 (see `rsos/src/fingerprint.rs`).
 
+Those per-element bytes come from `rsos`'s **own canonical encoding**
+(`rsos/src/canonical.rs`), not from `std::hash::Hash`: an injective, length-prefixed
+`serde::Serializer` writing straight into BLAKE3, with fixed-width little-endian integers and
+map entries sorted by encoded key. Pinning BLAKE3 pinned the hash function but not its input,
+and Rust makes no stability promise about the byte sequences its `Hash` impls emit — so
+"stable across Rust versions" only became true once `rsos` owned the encoding too. Key and
+value types therefore need `Serialize`, not `Hash`; `HashMap`/`HashSet` values, which have no
+`Hash` impl at all, are now usable.
+
+> **Wire break (pre-0.3).** Moving off `Hash` changes **every** element fingerprint. A node on
+> this code and a node on an earlier release never agree on a range fingerprint and will
+> re-exchange indefinitely without converging. This is **not a rolling upgrade**: stop the
+> cluster, upgrade every node, restart. Snapshots are unaffected in content, but a cluster with
+> mixed versions must not be run at all.
+
 Although we did come we the idea independently, it exactly matches a paper
 published on Arxiv in February 2023: [Range-Based Set
 Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer

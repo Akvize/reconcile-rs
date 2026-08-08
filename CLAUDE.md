@@ -12,7 +12,7 @@ repo — read it, don't skim it. This file adds only what's specific to Claude C
   gated on staying infrastructure-free by `./scripts/check-domain-purity.sh`, and the gate fails the
   build, not just a warning. Its `Cargo.toml` already blocks the crate-level edge; the script exists
   for what a manifest cannot see (an infrastructure type reached through a re-export). The `rsos` and
-  `rbsr` crates (`rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`,
+  `rbsr` crates (`rsos/src/fingerprint_tree_map.rs`, `rsos/src/fingerprint_tree_map_iter.rs`, `rsos/src/canonical.rs`,
   `rsos/src/fingerprint.rs`, `rsos/src/aggregate.rs`, `rbsr/src/diff.rs`, `rbsr/src/rsos_view.rs`)
   hold the same invariant via their own `Cargo.toml` dependency lists — and the *same* script now
   gates those manifests too: adding `tokio`, `bincode`, `chrono`, `ipnet`, `mio`, `reqwest`,

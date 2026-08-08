@@ -145,7 +145,7 @@ dependency order:
 
 | Crate | Holds | Kind |
 |---|---|---|
-| `rsos` | `FingerprintTreeMap`, `Fingerprint`, `Aggregate`, the `Rsos<K>` trait (`fingerprint_tree_map.rs`, `fingerprint_tree_map_iter.rs`, `fingerprint.rs`, `aggregate.rs`) | leaf, zero workspace deps |
+| `rsos` | `FingerprintTreeMap`, `Fingerprint`, `Aggregate`, the `Rsos<K>` trait (`fingerprint_tree_map.rs`, `fingerprint_tree_map_iter.rs`, `fingerprint.rs`, `canonical.rs`, `aggregate.rs`) | leaf, zero workspace deps |
 | `rbsr` | the RBSR diff walk + `RsosView<K>` (`diff.rs`, `rsos_view.rs`) | depends on `rsos` only |
 | `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Timestamp`/`Clock`/HLC ordering), `persistence.rs` (`Persistence`/`PersistedState`/`InMemoryPersistence`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; **no `lww-register` dep** — nothing there knows what an `Entry` is |

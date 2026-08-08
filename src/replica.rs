@@ -9,10 +9,9 @@
 //! Provides the [`Replica`], the inner layer of the [`ReplicatedMap`](crate::replicated_map::ReplicatedMap)
 //! that handles communication between instances at the network level.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeBounds;
@@ -64,12 +63,16 @@ type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 ///
 /// Used to acknowledge a *specific* version of a tombstone across replicas: a peer
 /// acknowledges the exact value it holds, so a stale acknowledgment for an older
-/// tombstone cannot authorize GC of a newer one. [`DefaultHasher::new`] uses fixed
-/// keys, so the same value hashes identically on every node.
-pub(crate) fn version_hash<V: Hash>(value: &V) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
+/// tombstone cannot authorize GC of a newer one.
+///
+/// Derived from `rsos`'s canonical serde encoding — the same byte source range fingerprints use —
+/// and truncated to its low 64 bits. It used to be `DefaultHasher`, whose *keys* are fixed but
+/// whose algorithm and byte consumption std explicitly does not stabilize across releases; that
+/// made "the same value hashes identically on every node" true only for nodes on the same
+/// toolchain. The canonical encoding makes it true unconditionally, and drops the `Hash` bound
+/// that would otherwise have to survive on every value type.
+pub(crate) fn version_hash<V: Serialize>(value: &V) -> u64 {
+    rsos::digest(value).0[0]
 }
 
 /// Hard cap on the number of distinct tracked peers a receive loop admits.
@@ -302,7 +305,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
-impl<K: Key, V: Value> Replica<K, V> {
+impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Create a new engine over the default transport adapter: a [`UdpTransport`] bound to the
     /// gossip socket. Wire encoding always goes through [`gossip::bincode`].
     ///
@@ -371,7 +374,7 @@ impl<K: Key, V: Value> Replica<K, V> {
     }
 }
 
-impl<K: Key, V: Value> Replica<K, V> {
+impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Assemble an engine from an already-constructed [`Transport`] and a clock. Pure wiring — no
     /// I/O — so it is infallible; the fallible socket bind lives in [`new`](Self::new).
     fn build(
