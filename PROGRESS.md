@@ -109,10 +109,14 @@ but one High resolved or mitigated.
 - ◯ Larger-than-datagram payloads — [#230](https://github.com/Akvize/reconcile-rs/issues/230) (documented gap, README "Value-size ceiling").
 - ✅ Lightweight dateless read replica (`ReadReplicaMap`) — [#128](https://github.com/Akvize/reconcile-rs/issues/128) (closed).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — [#94](https://github.com/Akvize/reconcile-rs/issues/94) (closed).
+- ✅ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
+  `contains_key`/`for_each`/`for_each_in_range`/`to_vec`/`range_to_vec`/`keys`/`values`, tombstones
+  excluded consistently across both types — [#179](https://github.com/Akvize/reconcile-rs/issues/179)
+  (closed).
 
 ### API and performance (tracked, not yet started)
-- Round out the write/read API: atomic update/upsert, predicate delete, `len`/`iter`/`get_range` —
-  [#179](https://github.com/Akvize/reconcile-rs/issues/179)/[#180](https://github.com/Akvize/reconcile-rs/issues/180).
+- Round out the write API: atomic update/upsert, predicate delete —
+  [#180](https://github.com/Akvize/reconcile-rs/issues/180).
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
 - Comparative benchmark suite — [#174](https://github.com/Akvize/reconcile-rs/issues/174).
