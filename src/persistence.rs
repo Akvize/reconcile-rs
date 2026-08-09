@@ -8,7 +8,7 @@
 
 //! Durability for a [`ReplicatedMap`](crate::ReplicatedMap): the port, and the file adapter.
 //!
-//! Persistence is split along the line between contract and adapter (ARCHITECTURE.md §3.9), but
+//! Persistence is split along the line between contract and adapter (ARCHITECTURE.md §2), but
 //! only one of the two halves left this package:
 //!
 //! - [`lww_register::persistence`] holds the [`Persistence`] port, the [`PersistedState`] snapshot

@@ -18,7 +18,7 @@
 //!
 //! It briefly lived in a standalone `snapshot` crate during the workspace split and was folded back
 //! into `reconcile` afterwards: one type with no standalone reuse value did not earn a published
-//! identity of its own (ARCHITECTURE.md §3.9). [`FileSnapshot`] is re-exported from
+//! identity of its own (ARCHITECTURE.md §2). [`FileSnapshot`] is re-exported from
 //! [`crate::persistence`] and from the crate root, which is where consumers have always seen it.
 
 use std::fs;

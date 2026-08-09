@@ -45,7 +45,7 @@
 //!
 //! Nothing here reads a clock, opens a socket, touches a filesystem, or picks a wire format: the
 //! only dependency is `serde`'s derive, for data shapes that *other* crates encode. That is the
-//! hexagonal boundary of `ARCHITECTURE.md` §2.2/§3.3, and it is enforced twice over — by this
+//! hexagonal boundary of `ARCHITECTURE.md` §2.1, and it is enforced twice over — by this
 //! crate's `Cargo.toml` (which cannot name `tokio`/`bincode`/`chrono`/`ipnet`) and by
 //! `scripts/check-domain-purity.sh`, which greps these sources for such imports in case one is
 //! reached through a re-export.

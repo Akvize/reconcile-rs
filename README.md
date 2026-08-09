@@ -76,8 +76,8 @@ performance limitations.
 
 - [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
   vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the current architecture and the target (hexagonal
-  ports & adapters) the codebase is being refactored toward.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the crate/module map, the ports & adapters (hexagonal)
+  design, domain types and their rationale, and the load-bearing invariants.
 - [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
   Durable background; carries no status — see `PROGRESS.md` for the current state of each finding.
 
@@ -384,202 +384,83 @@ the published crate.
 
 ## FingerprintTreeMap
 
-The core of the protocol is made possible by the `FingerprintTreeMap` data structure (in the
-standalone `rsos` crate), which allows `O(log(n))` access, insertion and removal, as well as
-`O(log(n))` cumulated range-aggregate queries. The latter property enables querying
-the cumulated fingerprint of all key-value pairs between two keys.
+The protocol's core is `FingerprintTreeMap` (in the standalone `rsos` crate): `O(log n)` access,
+insertion and removal, plus `O(log n)` cumulated range-aggregate queries — the cumulated fingerprint
+of all key-value pairs between two keys. The fingerprint is a 256-bit BLAKE3-per-element hash
+combined by addition modulo 2²⁵⁶ (`rsos/src/fingerprint.rs`), computed over `rsos`'s own canonical
+byte encoding (`rsos/src/encoding.rs`, not `std::hash::Hash`, whose byte sequences Rust does not
+promise to keep stable) — chosen for collision resistance and cross-version wire stability.
 
-The name decomposes as `Fingerprint` + `TreeMap`, exactly as `std`'s `BTreeMap` decomposes as
-`B` + `TreeMap`: the qualifier says what kind of tree, the suffix says what kind of container.
-It is an associative K→V container (`get`, `insert(k, v)`, `values()`), so the `Map` suffix is
-what Rust convention calls for. The fingerprint is a
-256-bit BLAKE3-per-element hash combined by addition modulo 2²⁵⁶ — a stable, portable wire
-token, chosen over a 64-bit XOR for collision resistance and cross-version interoperability
-(see `rsos/src/fingerprint.rs`).
+> **Wire break (pre-0.3).** A node on this code and a node on an earlier release never agree on a
+> range fingerprint and will re-exchange indefinitely without converging. Not a rolling upgrade:
+> stop the cluster, upgrade every node, restart. Snapshots are unaffected in content.
 
-Those per-element bytes come from `rsos`'s **own canonical encoding**
-(`rsos/src/encoding.rs`), not from `std::hash::Hash`: an injective, length-prefixed
-`serde::Serializer` writing straight into BLAKE3, with fixed-width little-endian integers and
-map entries sorted by encoded key. Pinning BLAKE3 pinned the hash function but not its input,
-and Rust makes no stability promise about the byte sequences its `Hash` impls emit — so
-"stable across Rust versions" only became true once `rsos` owned the encoding too. Key and
-value types therefore need `Serialize`, not `Hash`; `HashMap`/`HashSet` values, which have no
-`Hash` impl at all, are now usable.
+This independently matches [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567)
+(Aljoscha Meyer, 2023). The reconciliation algorithm lives in the standalone `rbsr` crate, written
+against a small read-only backend trait (`rbsr::RsosView`) rather than `FingerprintTreeMap`
+directly, so it runs over any store that can answer the four range/order-statistics queries it
+needs. Crate map, dependency graph and rationale: [`ARCHITECTURE.md`](ARCHITECTURE.md) §2. Publish
+status of the five crates: [`PROGRESS.md`](PROGRESS.md).
 
-> **Wire break (pre-0.3).** Moving off `Hash` changes **every** element fingerprint. A node on
-> this code and a node on an earlier release never agree on a range fingerprint and will
-> re-exchange indefinitely without converging. This is **not a rolling upgrade**: stop the
-> cluster, upgrade every node, restart. Snapshots are unaffected in content, but a cluster with
-> mixed versions must not be run at all.
+Our B-tree implementation stays within a factor 2 of the standard library's `BTreeMap`, at the cost
+of the extra invariants a fingerprint-carrying tree must maintain:
 
-Although we did come we the idea independently, it exactly matches a paper
-published on Arxiv in February 2023: [Range-Based Set
-Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
+| Benchmark | | Result |
+|---|---|---|
+| Insert N elements into an empty tree | ![](img/perf-fill.png) | Throughput tracks `BTreeMap` within ⅓–½ across the N range. |
+| Insert (then remove) 1 element in a tree of size N | ![](img/perf-insert.png) | 80 ns → 700 ns as N goes from 10 to 1,000,000. |
+| Remove (then restore) 1 element in a tree of size N | ![](img/perf-remove.png) | 100 ns → 800 ns over the same range. |
+| Compute 1 cumulated hash over a random range in a tree of size N | ![](img/perf-hash.png) | 30 ns → 1,200 ns over the same range. |
 
-The reconciliation algorithm itself lives in the standalone `rbsr` crate, written against a small
-read-only backend trait (`rbsr::RsosView`) rather than against `FingerprintTreeMap` directly — so it
-runs over any store that can answer the four range/order-statistics queries it needs.
-
-### Workspace layout
-
-`reconcile` is the facade over four sibling crates, layered so the compiler enforces the
-dependency direction: `rsos` (the tree and its fingerprint) → `rbsr` (the protocol driver) →
-`lww-register` (the LWW-Register CRDT domain: `Entry`/`State`, `Timestamp`, the `Clock` and
-`Persistence` ports — no async runtime, socket, codec or wall clock anywhere in it), with `gossip`
-(UDP transport, wire encoding, datagram authentication, replay protection, peer discovery) as a
-domain-independent sibling. The file-backed persistence adapter (`FileSnapshot`) lives in the facade
-itself, `src/snapshot.rs`. Everything the
-facade re-exports keeps resolving at `reconcile::*` — `reconcile::ReplicatedMap`,
-`reconcile::Entry`, `reconcile::FingerprintTreeMap`, `reconcile::UdpTransport` and so on — so the
-layout is an implementation detail unless you want to depend on one layer directly.
-
-All five are published, but they are not all offered on the same terms:
-
-- **`rsos`** and **`rbsr`** stand on their own — a range-summarizable ordered store, and the RBSR
-  algorithm over any such store. Depend on them directly if you want the data structure or the
-  algorithm without the replication.
-- **`lww-register`** and **`reconcile-gossip`** are **implementation detail with no stability
-  guarantee**. They are on crates.io only because cargo has no vendoring: `reconcile` cannot be
-  published unless its dependencies are, the same reason `serde_derive` and `tracing-attributes`
-  are there. Depend on `reconcile`, which re-exports what you need.
-
-(`gossip` publishes as `reconcile-gossip` because the plain name is taken. Dependents rename it
-back with `gossip = { package = "reconcile-gossip", … }`, so the source everywhere still says
-`use gossip::…`.)
-
-Our implementation of this data structure is based on a B-Trees that we wrote
-ourselves. Although we put a limited amount of effort in this
-and have to maintain more invariants, we stay within a factor 2 of the
-standard `BTreeMap` from the standard library:
-
-![Graph of the time needed to insert N elements in an empty tree](img/perf-fill.png)
-
-The graph above shows the amount of time **in milliseconds** (ordinate, left
-axis) needed to **insert N elements** (abscissa, bottom axis) in a tree
-(initially empty). Note that both axes use a logarithmic scale.
-
-The performance of our `FingerprintTreeMap` implementation follows closely that of
-`BTreeMap`. When looking at each value of N, we see that the average throughput
-of the `FingerprintTreeMap` is between one third and one half that of `BTreeMap`.
-
-![Graph of the time needed to insert and remove 1 element in a tree of size N](img/perf-insert.png)
-
-The graph above shows the amount of time **in nanoseconds** (abscissa, bottom
-axis) needed to **insert a single element** (and remove it) in a tree
-containing N elements (ordinate, bottom axis). Note that both axes use a
-logarithmic scale.
-
-The most important thing to notice is that the average insertion/removal time
-only grows from 80 ns to 700 s although the size of the tree changes from 10 to
-1,000,000 elements.
-
-![Graph of the time needed to remove and restore 1 element in a tree of size N](img/perf-remove.png)
-
-The graph above shows the amount of time **in nanoseconds** (abscissa, bottom
-axis) needed to **remove a single element** (and restore it) from a tree
-containing N elements (ordinate, bottom axis). Note that both axes use a
-logarithmic scale.
-
-The most important thing to notice is that the average removal/insertion time
-only grows from 100 ns to 800 s although the size of the tree changes from 10 to
-1,000,000 elements.
-
-![Graph of the time needed to compute 1 hash of a range of elements in a tree of size N](img/perf-hash.png)
-
-The graph above shows the amount of time **in microseconds** (abscissa, bottom
-axis) needed to compute **1 cumulated hash** over a random range of elements in a
-tree of size N (ordinate, bottom axis). Note that both axes use a logarithmic
-scale.
-
-The average time per cumulated hash grows from 30 ns to 1,200 ns as the size of
-the tree changes from 10 to 1,000,000 elements.
-
-Although there is likely still a lot of room for improvement regarding the
-performance of the `FingerprintTreeMap`, it is quite enough for our purposes, since we
-expect network delays to be orders of magnitude longer.
+All axes are logarithmic. Room for improvement remains, but network delays dominate in practice by
+orders of magnitude.
 
 ## ReplicatedMap
 
-The ReplicatedMap exploits the properties of `FingerprintTreeMap` to conduct a binary-search-like
-search in the collections of the two instances. Once difference are found, the
-corresponding key-value pairs are exchanged and conflicts are resolved.
+`ReplicatedMap` exploits `FingerprintTreeMap`'s range aggregates to conduct a binary-search-like
+comparison between two instances' collections; once a difference is found, the corresponding
+key-value pairs are exchanged and conflicts resolved.
 
 ## Conflict resolution
 
-Conflicts are resolved with last-write-wins (LWW), but keyed on a **Hybrid Logical Clock**
-(HLC, after Kulkarni et al. 2014) rather than a raw wall clock. Each value carries a `Timestamp`
-(the HLC stamp), and the winner is the one with the greater timestamp under the **total
-order** `(physical, logical, node_id)`.
-
-This matters for correctness. A naive physical-clock LWW is unsafe on two counts:
-
-* under clock skew, a node whose clock runs ahead always wins, **silently losing**
-  causally-newer writes from other nodes;
-* on *equal* timestamps a non-commutative tie-break lets two replicas each keep their own
-  value forever. Because the timestamp is part of the reconciliation hash, their
-  fingerprints never match and the protocol re-exchanges the pair eternally — **permanent
-  divergence and reconciliation livelock**.
-
-The HLC fixes both. On receiving a peer's value, a node advances its own clock past the
-remote timestamp, so a later local write is ordered strictly after everything it has seen
-(no lost update under bounded skew). The `node_id` makes the order total and deterministic,
-so every replica picks the *same* survivor — the merge is commutative, associative and
-idempotent, i.e. genuine Strong Eventual Consistency.
+Conflicts resolve last-write-wins (LWW), keyed on a **Hybrid Logical Clock** (HLC, Kulkarni et al.
+2014) rather than a raw wall clock — a naive physical-clock LWW is unsafe: under clock skew the
+node with the fastest clock always wins (silently losing causally-newer writes), and on *equal*
+timestamps a non-commutative tie-break causes two replicas to keep diverging forever (their
+timestamp-inclusive fingerprints never match, so the protocol re-exchanges the pair eternally). The
+HLC fixes both: receiving a peer's value advances the local clock past it (no lost update under
+bounded skew), and the total order `(physical, logical, node_id)` makes every replica pick the same
+survivor — the merge is commutative, associative, idempotent (genuine Strong Eventual Consistency).
+LWW still discards one of two *genuinely concurrent* writes by design; recovering both needs version
+vectors or a CRDT, out of scope here.
 
 Each node uses a random `NodeId` by default; set an explicit one with
-`Config::with_node_id(NodeId::new(id))` for a stable, reproducible ordering (e.g. in tests). Each
-node in a cluster must use a distinct id. A `Timestamp`'s components are each their own type
-(`PhysicalTime`, `LogicalCounter`, `NodeId`) — the HLC paper's vocabulary — rather than two `u64`s
-and a `u32`, so they cannot be transposed at a call site. They are also grouped the way the paper
-groups them: the HLC proper is the pair `(physical, logical)`, spelled `Hlc`, and a `Timestamp` is
-that reading plus the `NodeId` tie-break, so
-`Timestamp::new(Hlc::new(physical, logical), node_id)`. Neither the newtypes nor the nesting costs
-anything on the wire: serde encodes a newtype struct as its inner value alone, and a nested struct
-inlines positionally.
+`Config::with_node_id(NodeId::new(id))` for a stable, reproducible ordering (e.g. in tests) — every
+node in a cluster must use a distinct id. `Timestamp`'s type design (why `Hlc`/`PhysicalTime`/
+`LogicalCounter`/`NodeId` are each their own newtype) is rationale, not usage — see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §4.
 
-LWW still discards one of two *genuinely concurrent* writes by design; recovering both would
-require version vectors or a CRDT, which is out of scope.
+| Benchmark | | Result |
+|---|---|---|
+| Send 1 insertion, then 1 removal, between two same-size instances | ![](img/perf-send.png) | ~122 µs, flat across N — bounded by local network transmission, not lookup cost. |
+| Reconcile 1 insertion, then 1 removal, between two same-size instances | ![](img/perf-reconcile.png) | 240 µs → 640 µs as N goes from 10 to 1,000,000 — the full diff protocol must run to locate the difference. |
 
-![Graph of the time needed to send 1 insertion and 1 removal](img/perf-send.png)
-
-The graph above shows the amount of time **in microseconds** (abscissa, bottom
-axis) needed to send 1 insertion, then 1 removal** between two instances of
-`ReplicatedMap` that contain the same N elements (ordinate, left axis). Note that
-both axes use a logarithmic scale.
-
-The times are very consistent, hovering around 122 µs, showing that the
-reconciliation time is entirely bounded by the local network transmission. This
-is made possible by the immediate transmission of the element at
-insertion/removal.
-
-![Graph of the time to reconcile 1 difference between two instances](img/perf-reconcile.png)
-
-The graph above shows the amount of time **in milliseconds** (abscissa, bottom
-axis) needed to reconcile 1 insertion, then 1 removal** between two instances of
-`ReplicatedMap` that contain the same other N elements (ordinate, left axis). Note that
-both axes use a logarithmic scale.
-
-This time, the full reconciliation protocol must be run to identify the
-difference. The times grow from 240 µs to 640 µs as the size of the collection
-changes from 10 to 1,000,000 elements.
-
-**Note:** These benchmarks are performed locally on the loop-back network
-interface. On a real network, transmission delays will make the values larger.
+**Note:** benchmarked on loopback; a real network adds transmission delay on top.
 
 ## Testing and coverage
 
-The crate is covered by unit, integration, property-based and documentation
-tests. Run the whole suite with:
+The crate is covered by unit, integration, property-based and documentation tests. Run the whole
+suite with (see AGENTS.md §3 for the exact CI invocations, including the two feature-set variants):
 
 ```sh
-cargo test --all          # unit + integration + doc tests
-cargo test --doc          # documentation examples only
+cargo test --workspace          # unit + integration tests
+cargo test --doc --workspace    # documentation examples only
 ```
 
 Code coverage is measured on every CI run with
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and reported to
 [Codecov](https://codecov.io/gh/Akvize/reconcile-rs) (see the coverage badge at
-the top). To reproduce the coverage report locally:
+the top; informational only, not a merge gate — AGENTS.md §7). To reproduce locally:
 
 ```sh
 cargo install cargo-llvm-cov

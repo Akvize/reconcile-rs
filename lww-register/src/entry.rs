@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The [`Entry`] / [`State`] domain types (see `ARCHITECTURE.md` §3.6).
+//! The [`Entry`] / [`State`] domain types (see `ARCHITECTURE.md` §4).
 //!
 //! A stored cell used to be represented as an untyped `(Timestamp, Option<V>)` tuple, with three
 //! value-shape helper traits (`Reconcilable`, `MaybeTombstone`, `Projectable`) each carrying a

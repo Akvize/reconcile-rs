@@ -14,7 +14,7 @@
 //! anyway), and there is no state to hold or inject — an earlier concrete `BincodeCodec` struct was
 //! zero-sized and never swapped, so it was dissolved in favor of calling these directly.
 //! `HashRangeQueryable`/`Diffable` and `Reconcilable`/`MaybeTombstone` were dissolved for the same
-//! kind of reason (`ARCHITECTURE.md` §2.4).
+//! kind of reason (`ARCHITECTURE.md` §3.2).
 //!
 //! The reconciliation engine drives itself over [`encode`]/[`decode_stream`] instead of calling
 //! `bincode` directly elsewhere, so the encoding stays isolated to this module. Message

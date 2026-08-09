@@ -49,8 +49,8 @@ dependency is legitimately attractive.
 
 | Family | Comm. | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **XOR RBSR (= reconcile-rs)** | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow, Negentropy |
-| Secure-fingerprint RBSR (≥256-bit) | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod) |
+| Naive XOR RBSR | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
+| **Secure-fingerprint RBSR (≥256-bit) = reconcile-rs** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod), reconcile-rs |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
@@ -70,11 +70,14 @@ SOTA choice** for this use case.
 Important panel nuance: **FingerprintTreeMap does NOT belong to the Merkle Search Tree (MST) / prolly-tree
 family**, and that is a point in its favor. MST (Auvolat & Taïani, SRDS 2019) and prolly-trees
 (Dolt/Noms) *need* **insertion-order independence** because they diff by comparing the hashes of the
-tree's **internal nodes**. FingerprintTreeMap, by contrast, diffs **value-defined ranges**: the cumulative XOR
-over `[a,b)` is identical on two peers iff the *content* of the range is identical, **regardless of
-each one's B-tree shape**. FingerprintTreeMap therefore obtains the convergence guarantee that MST/prolly pay
-for with history-independence, **without paying for it** — and thereby escapes the MST
-"leading-zeros" attack. The B-tree's order-dependence is therefore **not** a defect here.
+tree's **internal nodes**. FingerprintTreeMap, by contrast, diffs **value-defined ranges**: the cumulative
+256-bit additive fingerprint (per-element BLAKE3, combined mod 2²⁵⁶) over `[a,b)` is identical on two
+peers iff the *content* of the range is identical, **regardless of each one's B-tree shape**.
+FingerprintTreeMap therefore obtains the convergence guarantee that MST/prolly pay for with
+history-independence, **without paying for it** — and, since addition-with-carry is not GF(2)-linear
+the way XOR is, also escapes the MST "leading-zeros" attack on firmer ground than a linear combiner
+would. The B-tree's order-dependence is therefore **not** a defect here, and its history-dependence
+(§2.1) is not a defect either — see the annotation there.
 
 ### 1.5 The SOTA of consistency and conflict resolution
 
@@ -107,17 +110,10 @@ a single embeddable Rust library. The pitch is "replicated state without standin
 - **Partition tolerance with automatic convergence** — nodes keep serving while partitioned and
   re-converge by anti-entropy on heal, with no manual conflict resolution (LWW).
 
-**When this is the right tool:** a read-heavy, RAM-resident working set on a fragile/commodity node
-grid where eliminating the store round-trip matters more than write throughput or strong
-consistency, and where losing a node or two must not lose data. **When it is not:** see §1.1–§1.2
-and the LWW caveats in §1.5 — counters, ledgers, strong consistency, datasets beyond one node's RAM,
-or high same-key write contention.
-
-**Path to best-of-breed.** Benchmarking against this use case surfaced concrete, tracked work: bulk
-cold-sync throughput and loss recovery (#168, #169), per-entry memory overhead (#170), point-read
-indexing (#171), snapshot cadence (#172), bulk-build throughput (#173), and a comparative benchmark
-suite (#174). Closing these is what moves reconcile-rs from the "real but narrow" niche of §1.2 to a
-credible Rust IMDG.
+Fit-for-purpose guidance (good fit / wrong tool) lives once, in README.md's "When to use this" —
+not duplicated here. **Path to best-of-breed:** the open performance/scaling roadmap that moves
+reconcile-rs from the "real but narrow" niche of §1.2 to a credible Rust IMDG is tracked in
+[`PROGRESS.md`](./PROGRESS.md) §4, not here.
 
 ---
 
@@ -127,7 +123,8 @@ credible Rust IMDG.
 > not on the full system. *(All structure/algo names below are defined in the
 > [glossary §3.2](#g92).)* Methodological anchor: the FingerprintTreeMap **is not a [Merkle tree](#g92) in the
 > [MST](#g92)/[prolly](#g92) sense**. It is a *[Range-Summarizable Order-Statistics Store](#g92)*
-> (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (the XOR of hashes)
+> (RSOS) — a B-tree augmented, per node, with a **composable subtree summary** (a 256-bit additive
+> fingerprint)
 > **+ an order statistic** (the subtree size). This abstraction was formalized in 2026
 > (arXiv:2603.19820) as the backend that range-based reconciliation (RBSR, Meyer 2023) needs. Its
 > **true peer group** = the other diffable structures; its **true algorithmic competitor** = the
@@ -181,10 +178,11 @@ Ethereum (Merkle-Patricia) and SMTs.
 The paper formalizes "**B+-tree augmented with subtree counts + composable summaries**" as the RSOS
 abstraction, proves RBSR's local-cost bounds on this backend, and ships **AELMDB**: a **persistent,
 memory-mapped** LMDB extension, evaluated with Negentropy.
-- **vs FingerprintTreeMap:** **it is the same design**, but (a) **persistent** (LMDB) and (b) with a **secure
-  summary** (Negentropy). FingerprintTreeMap *is* an RSOS — but the in-memory, 64-bit-XOR, non-persistent
-  version. **The structure's SOTA in this niche = "persistent RSOS + secure fingerprint", and the
-  FingerprintTreeMap→SOTA delta reads directly as that gap.**
+- **vs FingerprintTreeMap:** **it is the same design**, and (unlike Negentropy's incremental cryptographic
+  hash) a comparably secure one — FingerprintTreeMap already uses a 256-bit additive combiner, not the naive
+  XOR. The remaining delta is **persistence**: AELMDB is LMDB-backed (memory-mapped, durable);
+  FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent RSOS with a secure
+  fingerprint" — persistence is the gap that remains.**
 
 | Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
 |---|---|---|---|---|---|---|---|
@@ -195,22 +193,29 @@ memory-mapped** LMDB extension, evaluated with Negentropy.
 | Fixed-depth Merkle | token range | partial (rebuild) | nodes | no | yes | yes | mature (Cassandra) |
 | **RSOS/AELMDB** | augmented B+-tree | not required | ranges | no | **Yes** (LMDB) | yes | research 2026 |
 
+FingerprintTreeMap's **No** on history-independence is **not a weakness**: it is the RSOS family's whole point
+(§2.3 #1). MST/prolly *need* history-independence because they diff internal-node hashes; FingerprintTreeMap
+diffs value-defined ranges instead and never compares a node hash, so two peers with different tree
+shapes still converge.
+
 ### 2.2 Competitors at the "reconciliation algorithm" level
 
 The FingerprintTreeMap implements **RBSR**; its competitors are not tree structures.
 
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **XOR RBSR (FingerprintTreeMap)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Weak** | Earthstar/Willow/Negentropy |
+| **RBSR (FingerprintTreeMap, secure fingerprint)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** | Earthstar/Willow (naive XOR) — reconcile-rs, Negentropy (secure) |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
 | Classic IBLT | O(d·(b+log U)) | O(d) | 1 (+estim.) | **Yes** | weak | blockchains |
 
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
-- RBSR is the **worst family on latency**: O(log n) **sequential RTTs** (≈3 for 1M, ≈4 for 1B). On a
-  1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback benchmarks hide
-  (cf. F16).
+- RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a difference, the
+  exact base depending on the split fan-out (`rbsr/src/protocol.rs` currently splits by `√n` per
+  round, not a fixed branching factor — unbenchmarked and reconsidered in
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257)). On a 1 ms-RTT LAN that's several ms; on
+  WAN far more — a cost the README's loopback benchmarks hide (cf. F16).
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
@@ -224,10 +229,11 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
 1. **Value-based range diff ⇒ history-independence is not needed** *(the deepest differentiator)*.
    MST/prolly *must* be history-independent because they compare **internal node hashes** (different
-   tree shapes → false positives). FingerprintTreeMap never compares nodes: it computes the **cumulative XOR
-   over `[a,b)`**, identical on two peers **iff the range content is identical**, regardless of each
-   one's B-tree shape. → Convergence guaranteed **without paying** for history-independence, and
-   **immunity to the MST leading-zeros attack**.
+   tree shapes → false positives). FingerprintTreeMap never compares nodes: it computes the **cumulative
+   256-bit additive fingerprint over `[a,b)`**, identical on two peers **iff the range content is
+   identical**, regardless of each one's B-tree shape. → Convergence guaranteed **without paying**
+   for history-independence, and **immunity to the MST leading-zeros attack** (addition-with-carry is
+   not GF(2)-linear, unlike XOR).
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
@@ -261,11 +267,15 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to th
    (cf. F8)
 
 **P1 — Generality (what makes it a *structure*, not a special case):**
-4. **Generic summary over a monoid**: `FingerprintTreeMap<XOR>` → `RSOS<M: Monoid>` (secure fingerprint, but
-   also sum/min/max/count, sketches). Enables **embedding a sketch in the leaves** (hybrid RBSR +
-   Rateless IBLT) to break the O(log n) RTT cost (§2.2).
-5. **Fully expose the RSOS contract**: **lazy + double-ended** iterators (repo issues #90-92),
-   public `rank`/`select`/`seek_lower_bound`/`seek_upper_bound` → a reusable generic building block.
+4. **Generic summary over a monoid**: today `rsos` hardwires its range summary to the 256-bit additive
+   `Fingerprint` (`ARCHITECTURE.md` §7, tracked as `BYOLiftingMonoid`); generalizing to `RSOS<M: Monoid>`
+   also enables sum/min/max/count and sketches. Enables **embedding a sketch in the leaves** (hybrid
+   RBSR + Rateless IBLT) to break the O(log n) RTT cost (§2.2).
+5. **Fully expose the RSOS contract** — ✅ **done**: `rank`/`select`/`range` are `pub` on the standalone
+   `rsos` crate's `FingerprintTreeMap` (ARCHITECTURE.md §3.2), a reusable generic building block
+   independent of `reconcile`. (Previously in tension with an earlier ARCHITECTURE.md draft that kept
+   these `pub(crate)` inside the monolithic crate; resolved in favor of exposure once `rsos` became its
+   own published-intent crate.) Remaining: lazy + double-ended iterators (repo issues #90-92).
 
 **P2 — Durability & distributed properties carried by the structure:**
 6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
@@ -394,7 +404,7 @@ surrounding system.
 | **SipHash** | A fast keyed PRF, 64-bit output; the `DefaultHasher` algorithm. **Not** collision-resistant in the cryptographic sense. |
 | **`DefaultHasher`** | The std hasher (`std::collections::hash_map`), **not stable** across Rust versions/platforms → cross-version non-convergence (F8). |
 | **BLAKE3 / xxHash** | Fast and **stable** hashes recommended as replacements (F8). |
-| **incremental / homomorphic hash** | A set hash updated incrementally and composable. **MSet-XOR-Hash** (weak, = the current approach), **MSet-Mu-Hash** (finite field), **LtHash** (lattice/vector addition) — secure alternatives for F6. |
+| **incremental / homomorphic hash** | A set hash updated incrementally and composable. **MSet-XOR-Hash** (weak, self-inverse and GF(2)-linear), **MSet-Mu-Hash** (finite field), **LtHash** (lattice/vector addition, closest in spirit to reconcile-rs's hash-then-add-mod-2²⁵⁶ combiner) — the F6 fix moved off MSet-XOR-Hash onto this family. |
 | **transitive group** | The minimal algebraic structure required of an RBSR fingerprint (associativity, identity, inverses, transitivity) — XOR satisfies it, hence its convenience *and* its fragility. |
 | **MAC / HMAC / AEAD** | Message Authentication Code; HMAC (hash-based); Authenticated Encryption with Associated Data. The F3 fix. |
 | **TLS / DTLS / Noise / QUIC** | Secure transport layers (DTLS = TLS over datagrams; Noise = a handshake framework; QUIC = encrypted transport over UDP). Options for F3; cf. issue #96. |
@@ -439,6 +449,11 @@ surrounding system.
 - Erlay (Naumenko et al., CCS 2019) — https://arxiv.org/abs/1905.10518
 - E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores* (RSOS / AELMDB), arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820
 - *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
+- *ConflictSync*, arXiv:2505.01144 (2025, Baquero group) — the first digest-driven synchronisation
+  algorithm for state-based CRDTs, cutting transfer up to 18× — https://arxiv.org/abs/2505.01144
+- *Rateless Bloom Filters*, arXiv:2510.27614 (2025, Baquero group) — https://arxiv.org/abs/2510.27614
+  ; both validate §2.2's hybrid conclusion and show delta-CRDT sync converging toward digest-driven
+  sync, i.e. toward what this crate already does.
 
 **Merkle / anti-entropy structures**
 - A. Auvolat, F. Taïani, *Merkle Search Trees*, SRDS 2019 — https://inria.hal.science/hal-02303490 ; crate https://github.com/domodwyer/merkle-search-tree ; Bluesky/atproto usage — https://atproto.com/specs/repository

@@ -13,8 +13,8 @@
 #                   `reconcile::*` keeps resolving for existing consumers.
 # The split briefly carried a sixth member, `snapshot`. It was folded back into this package
 # (`src/snapshot.rs`) as a deliberate follow-up: one type, no standalone reuse value, no separate
-# published identity to earn — see ARCHITECTURE.md §3.9.
-# See ARCHITECTURE.md §3.9 for the target multi-crate shape.
+# published identity to earn — see ARCHITECTURE.md §2.
+# See ARCHITECTURE.md §2 for the crate/module map.
 members = ["rsos", "rbsr", "lww-register", "gossip", "."]
 resolver = "2"
 

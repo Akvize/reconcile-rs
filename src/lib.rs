@@ -71,7 +71,7 @@ pub mod replicated_map;
 // always been reachable by.
 pub(crate) mod snapshot;
 
-// Modules that moved out to sibling crates in the workspace split (ARCHITECTURE.md §3.9), re-exported
+// Modules that moved out to sibling crates in the workspace split (ARCHITECTURE.md §2), re-exported
 // under their historical paths so `reconcile::entry::Entry`, `reconcile::transport::UdpTransport`
 // and friends keep resolving unchanged for existing consumers.
 pub use gossip::{discovery, transport};
@@ -81,7 +81,7 @@ pub use lww_register::{bounds, entry};
 #[cfg(feature = "metrics-prometheus")]
 pub mod prometheus;
 
-// Internal reconciliation mechanism. `pub(crate)` (ARCHITECTURE.md §3.7): these are implementation
+// Internal reconciliation mechanism. `pub(crate)` (ARCHITECTURE.md §3.2): these are implementation
 // details, not part of the supported public surface. The few internals the integration-test oracles
 // need are re-exported through the gated [`testing`] module below.
 pub(crate) mod observability;
@@ -111,7 +111,7 @@ pub use replicated_map::ReplicatedMap;
 
 /// Internal seam for the external integration tests (today: `tests/service.rs`).
 ///
-/// The reconciliation mechanism modules are `pub(crate)` (ARCHITECTURE.md §3.7), but the
+/// The reconciliation mechanism modules are `pub(crate)` (ARCHITECTURE.md §3.2), but the
 /// integration tests need to reach a handful of their internals. This module exposes exactly those
 /// symbols so the default public surface stays clean while the tests can still reach them. It is
 /// hidden from docs and only compiled under `cfg(test)` or the `internal-testing` feature
