@@ -134,6 +134,16 @@ but one High resolved or mitigated.
   construction), `DoubleEndedIterator` + `seek_lower_bound`/`seek_upper_bound` — SOTA.md §2.4 P1
   item 5's "remaining" note — [#92](https://github.com/Akvize/reconcile-rs/issues/92) (umbrella;
   consolidates the closed #89–#91).
+- Zero-copy borrowing iterator on `ReplicatedMap`/`ReadReplicaMap` (`for x in map.iter()`, no clone,
+  no callback): blocked by the streaming-iterator problem (`Iterator::Item` can't borrow from
+  `&mut self`) combined with `#![forbid(unsafe_code)]` ruling out a self-referential
+  guard-plus-iterator struct. Interim, no-unsafe escape hatch (expose the read guard; caller holds
+  the lock for the iteration) — priority: low, only if a real workload needs it —
+  [#270](https://github.com/Akvize/reconcile-rs/issues/270). The actual fix needs a persistent
+  copy-on-write core map (`Arc`-snapshot reads, no lock held) — epic
+  [#271](https://github.com/Akvize/reconcile-rs/issues/271), which converges with the prolly-tree /
+  structural-sharing (content-addressing) direction SOTA.md §2.4 already notes as the big
+  persistence gap.
 
 Full SOTA gap analysis: [`SOTA.md`](./SOTA.md) §2.4.
 
