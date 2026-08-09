@@ -83,8 +83,13 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    # `--all-features` (not the default feature set): `just_insert`/`just_remove`/`just_*_bulk`
+    # and other `internal-testing`-gated seams are what the external integration-test oracles
+    # (`tests/read_api.rs`, `tests/diff.rs`, …) build against — see the `Lint`/`Run tests` steps'
+    # comment above. Without it this job fails to even compile the test suite it's meant to
+    # measure, rather than merely under-reporting coverage.
     - name: Generate code coverage
-      run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
