@@ -901,7 +901,6 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
         .with_listen_addr(addr_victim)
         .with_net(net)
         .with_cluster_key(key);
-    // Default freshness window is 5 minutes; the injected stamp is 1 hour in the past.
 
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
@@ -1023,7 +1022,7 @@ async fn replayed_sealed_datagram_is_rejected() {
 /// window. Without replay state surviving decommission, the filter treats the replay as
 /// first contact and re-adds X to `members`, re-poisoning causal-stability membership.
 ///
-/// This test must FAIL against the pre-fix code (commit 4391c82): `decommission_peer` called
+/// This test must FAIL against the pre-fix code: `decommission_peer` called
 /// `replay_filter.evict(peer)`, erasing per-peer state, so the replayed datagram was accepted
 /// as first contact.
 #[cfg(feature = "internal-testing")]
@@ -1227,7 +1226,6 @@ async fn tombstone_gc_converges_in_3_node_cluster_line() {
     let task2 = tokio::spawn(store2.clone().run());
     let task3 = tokio::spawn(store3.clone().run());
 
-    // Data converges through the middle node B.
     store1.insert(1, 11);
     store3.insert(3, 33);
     assert_until!(store1.get(&3).as_deref() == Some(&33));
