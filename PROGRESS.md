@@ -129,6 +129,11 @@ but one High resolved or mitigated.
   unbenchmarked and hard-coded).
 - Pluggable per-value conflict resolution beyond LWW-Register —
   [#184](https://github.com/Akvize/reconcile-rs/issues/184).
+- `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,
+  `Debug`/`Clone`, a fully-lazy traversal (stack built on first `next()` rather than at
+  construction), `DoubleEndedIterator` + `seek_lower_bound`/`seek_upper_bound` — SOTA.md §2.4 P1
+  item 5's "remaining" note — [#92](https://github.com/Akvize/reconcile-rs/issues/92) (umbrella;
+  consolidates the closed #89–#91).
 
 Full SOTA gap analysis: [`SOTA.md`](./SOTA.md) §2.4.
 

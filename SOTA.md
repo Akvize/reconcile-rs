@@ -275,7 +275,8 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to th
    `rsos` crate's `FingerprintTreeMap` (ARCHITECTURE.md §3.2), a reusable generic building block
    independent of `reconcile`. (Previously in tension with an earlier ARCHITECTURE.md draft that kept
    these `pub(crate)` inside the monolithic crate; resolved in favor of exposure once `rsos` became its
-   own published-intent crate.) Remaining: lazy + double-ended iterators (repo issues #90-92).
+   own published-intent crate.) Remaining: lazy + double-ended iterators (repo issue #92 — the
+   umbrella that consolidated #89–#91).
 
 **P2 — Durability & distributed properties carried by the structure:**
 6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
@@ -436,7 +437,7 @@ surrounding system.
 | **`cargo audit` / `cargo deny`** | Vulnerability audit / dependency policies. Absent from CI (F19). |
 | **bincode / serde / tokio / parking_lot / arrayvec / ipnet / range-cmp / chrono / rand / once_cell / tracing** | Dependencies: binary serialization; (de)serialization; async runtime; non-poisoning locks; `ArrayVec` (inline vector, B-tree nodes); network/CIDR types; key↔range comparison (`RangeOrdering`); `DateTime<Utc>` (LWW timestamps); randomness; lazy init; structured logs. |
 | **`Arc` / `RwLock` / `unwrap` / `panic=abort` / `overflow-checks`** | Atomic shared pointer; reader-writer lock; panicking unwrap; panic strategy; arithmetic-overflow checking (disabled in release → F7). |
-| **`ExactSizeIterator` / `FusedIterator` / `DoubleEndedIterator`** | Rust iterator traits targeted by issues #90-92 (full RSOS contract, §2.4). |
+| **`ExactSizeIterator` / `FusedIterator` / `DoubleEndedIterator`** | Rust iterator traits targeted by issue #92 (full RSOS contract, §2.4). |
 
 ---
 
