@@ -354,7 +354,6 @@ pub fn protocol_round<K, B: RsosView<K>>(
                 range: KeyRange::new(start_bound.clone(), end_bound.clone()),
                 aggregate: Aggregate::ZERO,
             });
-            // send the conflicting item to the remote
             enumeration_ranges.push((start_bound.into(), end_bound.into()));
         } else if local_size == 1 {
             // Not enough information to cut: a single local element cannot be split by rank, so

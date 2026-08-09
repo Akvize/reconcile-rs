@@ -16,8 +16,6 @@ use std::time::Duration;
 
 use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
 
-/// Poll `f` up to 300 times, sleeping 10 ms between tries (~3 seconds total).
-/// Returns `true` as soon as `f` becomes true, `false` if it never does.
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..300 {
         tokio::time::sleep(Duration::from_millis(10)).await;

@@ -92,6 +92,7 @@ compile_error!(
 pub struct ClusterKey([u8; KEY_LEN]);
 
 impl ClusterKey {
+    /// Wrap a raw 32-byte secret as a cluster key.
     pub fn new(bytes: [u8; KEY_LEN]) -> Self {
         ClusterKey(bytes)
     }
@@ -178,6 +179,7 @@ impl<'a> Payload<'a, Authenticated> {
 }
 
 impl Payload<'_, Verified> {
+    /// The decoded, authenticated, replay-checked message bytes, ready for [`crate::bincode`].
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -218,6 +220,7 @@ pub trait Mac {
     fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool;
 }
 
+/// [`Mac`] backend keyed on BLAKE3, the default (`mac-blake3` feature).
 #[cfg(feature = "mac-blake3")]
 pub struct Blake3Mac;
 
@@ -238,6 +241,7 @@ impl Mac for Blake3Mac {
 
 // Compiled only when it is actually the selected backend (`mac-blake3` takes precedence), so an
 // `--all-features` build does not carry an unused struct.
+/// [`Mac`] backend keyed on HMAC-SHA256 (`mac-hmac` feature).
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub struct HmacSha256Mac;
 

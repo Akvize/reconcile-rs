@@ -16,14 +16,14 @@
 //! The per-element lift and the way fingerprints are combined (256-bit addition,
 //! *not* XOR) live in [`crate::fingerprint`]; see that module for
 //! why the combiner and the underlying hash function are chosen the way they are.
-
-//! Although we did come we the idea independently, it exactly matches a paper
-//! published on Arxiv in February 2023:
-//! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
+//!
+//! This per-node-cached-subtree-fingerprint structure was arrived at independently, but it matches
+//! a structure described in A. Meyer, *Range-Based Set Reconciliation* (arXiv:2212.13567) — see the
+//! crate root docs for the full citation, including the later RSOS paper this crate also implements.
 //!
 //! [`FingerprintTreeMap`] exposes the range-aggregate queries (`aggregate`,
 //! `rank`, `select`, `len`) that a range-based-set-reconciliation anti-entropy
-//! protocol (such as this workspace's `rbsr`-to-be) needs to drive range reconciliation. It also
+//! protocol (such as this workspace's `rbsr`) needs to drive range reconciliation. It also
 //! implements the [`Rsos`](crate::Rsos) trait, whose seven methods are the paper's own Def. 3.9
 //! terms; four of them share a name with the inherent method they delegate to and three
 //! (`size`/`enumerate`/`delete` vs. `len`/`range`/`remove`) do not, because the inherent API keeps
@@ -315,6 +315,9 @@ impl<K, V> Node<K, V> {
     }
 }
 
+/// This crate's one [`Rsos`](crate::Rsos) realization: an in-memory, `ArrayVec`-node B-tree (order
+/// 6) that caches a per-subtree [`Aggregate`] at every node. See the [module docs](self) for the
+/// full background and the [crate root docs](crate) for how its API maps onto the RSOS contract.
 #[derive(Clone)]
 pub struct FingerprintTreeMap<K, V> {
     pub(crate) root: Box<Node<K, V>>,
@@ -329,10 +332,12 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
 }
 
 impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+    /// Creates an empty tree.
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Returns the value associated with `key`, if present.
     pub fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
         fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &K) -> Option<&'a V> {
             match node.keys.binary_search(key) {
@@ -349,6 +354,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_ref(), key)
     }
 
+    /// Calls `callback` with a mutable reference to the value at `key` (or `None` if absent), then
+    /// re-lifts the element and propagates the resulting fingerprint delta up to the root.
+    ///
+    /// This is the supported way to mutate a value in place: unlike the `#[cfg(test)]`-only
+    /// `IterMut`, it keeps every cached [`Aggregate`] consistent, so `check_invariants` and
+    /// `aggregate` stay correct afterward.
     pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
         fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
@@ -390,6 +401,10 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_mut(), key, callback);
     }
 
+    /// Position of `key` in the in-order sequence, or `None` if it is not present.
+    ///
+    /// Unlike [`rank`](FingerprintTreeMap::rank), which always returns a position (the insertion
+    /// point for an absent key), this distinguishes "absent" from "present at position 0".
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
