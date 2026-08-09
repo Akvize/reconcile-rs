@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! System-level, end-to-end benchmarks driving the **public** `ReconcileStore` API (point-read
+//! System-level, end-to-end benchmarks driving the **public** `ReplicatedMap` API (point-read
 //! latency vs `HashMap`/`BTreeMap`, per-entry memory footprint, bulk-load throughput, cold anti-
 //! entropy convergence between two in-process nodes, and durable-snapshot reload). Unlike the
 //! `bench` target, these reach no crate internals, so they need no feature gate.
@@ -27,8 +27,8 @@ use criterion::{
 use tokio::runtime::Runtime;
 
 use reconcile::{
-    reconcile_store::Config, Entry, FileSnapshot, PersistedState, Persistence, ReconcileStore,
-    State, Timestamp,
+    replicated_map::Config, Entry, FileSnapshot, Hlc, LogicalCounter, NodeId, PersistedState,
+    Persistence, PhysicalTime, ReplicatedMap, State, Timestamp,
 };
 
 /// Dataset sizes swept by the size-parameterised benchmarks (log scale).
@@ -51,9 +51,9 @@ fn log_group<'a>(
 }
 
 /// An in-process, peerless store loaded with `kvs` (ephemeral port, so many can coexist).
-fn loaded_store(rt: &Runtime, kvs: &[(u32, u32)]) -> ReconcileStore<u32, u32> {
+fn loaded_store(rt: &Runtime, kvs: &[(u32, u32)]) -> ReplicatedMap<u32, u32> {
     rt.block_on(async {
-        let store = ReconcileStore::<u32, u32>::new(
+        let store = ReplicatedMap::<u32, u32>::new(
             Config::default()
                 .with_port(0)
                 .with_listen_addr("127.0.0.1".parse().unwrap())
@@ -66,7 +66,7 @@ fn loaded_store(rt: &Runtime, kvs: &[(u32, u32)]) -> ReconcileStore<u32, u32> {
     })
 }
 
-/// Point-read latency: `ReconcileStore::get` against std collections at the same sizes.
+/// Point-read latency: `ReplicatedMap::get` against std collections at the same sizes.
 fn point_read(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = log_group(c, "point_read");
@@ -77,7 +77,7 @@ fn point_read(c: &mut Criterion) {
         let hashmap: HashMap<u32, u32> = kvs.iter().copied().collect();
         let btreemap: BTreeMap<u32, u32> = kvs.iter().copied().collect();
 
-        group.bench_with_input(BenchmarkId::new("ReconcileStore", size), &size, |b, _| {
+        group.bench_with_input(BenchmarkId::new("ReplicatedMap", size), &size, |b, _| {
             b.iter(|| black_box(store.get(black_box(&probe)).map(|g| *g)));
         });
         group.bench_with_input(BenchmarkId::new("HashMap", size), &size, |b, _| {
@@ -172,12 +172,12 @@ fn cold_sync(c: &mut Criterion) {
                                 .with_net("127.0.0.1/8".parse().unwrap())
                         };
                         // A is loaded with no peer declared, so `insert_bulk` broadcasts to nobody.
-                        let a = ReconcileStore::<u32, u32>::new(cfg(addr_a))
+                        let a = ReplicatedMap::<u32, u32>::new(cfg(addr_a))
                             .await
                             .expect("bind A");
                         a.insert_bulk(&kvs);
                         let target = a.fingerprint(..);
-                        let b_store = ReconcileStore::<u32, u32>::new(cfg(addr_b))
+                        let b_store = ReplicatedMap::<u32, u32>::new(cfg(addr_b))
                             .await
                             .expect("bind B")
                             .with_seed(addr_a);
@@ -209,7 +209,21 @@ fn durable_rejoin(c: &mut Criterion) {
         let snapshot = FileSnapshot::new(dir.path().join("reconcile.snapshot"));
         let state: PersistedState<u32, u32> = PersistedState {
             entries: (0..size as u32)
-                .map(|k| (k, Entry::present(Timestamp::new(k as u64, 0, 0), k)))
+                .map(|k| {
+                    (
+                        k,
+                        Entry::present(
+                            Timestamp::new(
+                                Hlc::new(
+                                    PhysicalTime::from_millis(k as u64),
+                                    LogicalCounter::new(0),
+                                ),
+                                NodeId::new(0),
+                            ),
+                            k,
+                        ),
+                    )
+                })
                 .collect(),
             members: HashSet::new(),
             tombstone_acks: HashMap::new(),
