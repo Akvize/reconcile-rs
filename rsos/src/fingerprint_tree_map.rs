@@ -401,16 +401,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 for i in 0..node.keys.len() {
                     let cmp = key.cmp(&node.keys[i]);
                     if cmp == Ordering::Less {
-                        // recurse left to key
                         return aux(&children[i], key).map(|offset| index + offset);
                     }
-                    // pass sub-tree
                     index += children[i].subtree.size();
                     if cmp == Ordering::Equal {
-                        // found key
                         return Some(index);
                     }
-                    // pass node
                     index += 1;
                 }
                 aux(children.last().unwrap().as_ref(), key).map(|offset| index + offset)
@@ -423,10 +419,8 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 
     /// Inserts `key`/`value`, returning the previous value if `key` was already present.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        // return:
-        // - a key and node to be inserted after the current node
-        // - the fingerprint difference
-        // - the value that was at key, if any
+        /// Returns a key/node pair to insert as a right sibling after the current node (if it
+        /// split), the resulting fingerprint delta, and the previous value at `key`, if any.
         fn aux<K: Serialize + Ord, V: Serialize>(
             node: &mut Node<K, V>,
             key: K,
@@ -509,9 +503,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 (k, v, fp)
             }
         }
-        // return:
-        // - the fingerprint diff
-        // - the value at the key that was removed, if there was one
+        /// Returns the resulting fingerprint delta and the value removed at `key`, if it was present.
         fn aux<K: Ord, V>(node: &mut Node<K, V>, key: &K) -> (Fingerprint, Option<V>) {
             match node.keys.binary_search(key) {
                 Ok(index) => {
@@ -565,9 +557,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// condition callers can trigger through the public API. Intended for tests, not production
     /// call sites, given the `O(n)` cost.
     pub fn check_invariants(&self) {
-        // return:
-        // - the independently recomputed aggregate of the sub-tree
-        // - the height of the sub-tree
+        /// Returns the independently recomputed aggregate and height of this subtree.
         fn aux<'a, K: Serialize + Ord, V: Serialize>(
             node: &'a Node<K, V>,
             mut min: Option<&'a K>,
@@ -575,15 +565,13 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         ) -> (Aggregate, usize) {
             let mut cum = Aggregate::ZERO;
             let mut max_height = 1;
-            // check node size
+            // `min`/`max` are `None` only for the root, which is exempt from the minimum-size bound.
             if min.is_some() || max.is_some() {
-                // this is not the root
                 assert!(
                     node.keys.len() >= MIN_CAPACITY,
                     "minimum node size invariant violated"
                 );
             }
-            // check order
             if let Some(min) = min {
                 assert!(min <= &node.keys[0], "order invariant violated");
             }
@@ -663,7 +651,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             mut lower_bound: Option<&'a K>,
             upper_bound: Option<&K>,
         ) -> Aggregate {
-            // check if the lower-bound is included in the range
             let lower_bound_included = match range.start_bound() {
                 Bound::Unbounded => true,
                 Bound::Included(key) | Bound::Excluded(key) => {
@@ -674,7 +661,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                     }
                 }
             };
-            // check if the upper-bound is included in the range
             let upper_bound_included = match range.end_bound() {
                 Bound::Unbounded => true,
                 Bound::Included(key) | Bound::Excluded(key) => {
@@ -685,13 +671,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                     }
                 }
             };
-            // if both lower and upper bounds are included in the range, the node's whole cached
-            // subtree aggregate is the answer
+            // If both bounds fall inside the range, every key in this subtree does too, so the
+            // cached subtree aggregate already is the answer — no need to walk the children.
             if lower_bound_included && upper_bound_included {
                 return node.subtree;
             }
-            // otherwise, recurse in the relevant sub-trees
-
             let mut cum = Aggregate::ZERO;
             let mut i = 0;
             while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Below {
@@ -729,16 +713,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 for i in 0..node.keys.len() {
                     let cmp = key.cmp(&node.keys[i]);
                     if cmp == Ordering::Less {
-                        // recurse left to key
                         return index + aux(&children[i], key);
                     }
-                    // pass sub-tree
                     index += children[i].subtree.size();
                     if cmp == Ordering::Equal {
-                        // found key
                         return index;
                     }
-                    // pass node
                     index += 1;
                 }
                 index + aux(children.last().unwrap(), key)
@@ -764,16 +744,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             if let Some(children) = node.children.as_ref() {
                 for i in 0..node.keys.len() {
                     if index < children[i].subtree.size() {
-                        // recurse
                         return aux(&children[i], index);
                     }
-                    // pass sub-tree
                     index -= children[i].subtree.size();
-                    // check node
                     if index == 0 {
                         return &node.keys[i];
                     }
-                    // pass node
                     index -= 1;
                 }
                 aux(children.last().unwrap(), index)

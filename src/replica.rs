@@ -1120,7 +1120,6 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 }
             }
         }
-        // handle messages
         if !in_comparison.is_empty() {
             debug!("received {} segments", in_comparison.len());
             let mut differences = Vec::new();
