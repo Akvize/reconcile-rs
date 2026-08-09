@@ -139,7 +139,7 @@ mod tests {
         let mut buf = Vec::new();
         encode(&[1u8, 2, 3, 4], &mut buf).unwrap();
         encode(&[5u8, 6, 7, 8], &mut buf).unwrap();
-        buf.pop(); // truncate the trailing 4-byte frame to 3 bytes
+        buf.pop();
         let decoded: Vec<[u8; 4]> = decode_stream(&buf, 100)
             .expect("a truncated trailing message ends the stream, not an error");
         assert_eq!(decoded, vec![[1, 2, 3, 4]]);

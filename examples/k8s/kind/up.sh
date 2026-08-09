@@ -22,7 +22,6 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
 else
   kind create cluster --config "$SCRIPT_DIR/kind-config.yaml"
 fi
-# Point kubectl at this cluster.
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 
 echo "==> Building the node image ($IMAGE) from examples/k8s/Dockerfile"

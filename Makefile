@@ -1,7 +1,6 @@
 # Makefile for both Dev Container and CLI workflows
 
 IMAGE_NAME ?= reconcile-rs-dev-container
-# By default mount the current directory into /workspace
 WORKDIR_MOUNT ?= $(shell pwd):/workspace
 
 .PHONY: build dev dc-up dc-rebuild
@@ -25,13 +24,11 @@ dev: build
 	    exec bash \
 	  "
 
-# Start Dev Container via CLI (passes Git author info into the container)
 dc-up:
 	GIT_AUTHOR_NAME="$$(git config --global user.name)" \
 	GIT_AUTHOR_EMAIL="$$(git config --global user.email)" \
 	devcontainer up
 
-# Rebuild Dev Container via CLI (passes Git author info)
 dc-rebuild:
 	GIT_AUTHOR_NAME="$$(git config --global user.name)" \
 	GIT_AUTHOR_EMAIL="$$(git config --global user.email)" \

@@ -293,7 +293,6 @@ impl PeerState {
     /// Side effect on success: updates the bitmap and `max_seq`/`stamp_at_max` as appropriate.
     fn accept(&mut self, seq: Seq, stamp: Stamp) -> bool {
         if seq > self.max_seq {
-            // Forward path: new high-water sequence.
             // Post-restart tail guard: reject pre-restart captured datagrams. A genuinely
             // later-minted datagram always has stamp >= every prior datagram (sender mints
             // monotonically). Same-millisecond bursts share a stamp, so guard uses strict <.
@@ -319,14 +318,11 @@ impl PeerState {
             // Not a restart: fall through to bitmap / window check.
             let behind = self.max_seq - seq;
             if behind >= WINDOW_SIZE {
-                // Outside the window: unconditionally reject.
                 return false;
             }
             if self.bitmap.is_marked(behind) {
-                // Already seen: duplicate.
                 return false;
             }
-            // First time in window: accept and mark.
             self.bitmap.mark(behind);
             true
         }

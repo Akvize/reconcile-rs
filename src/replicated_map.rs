@@ -556,7 +556,6 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
                 tombstones.insert(k.clone(), bounded.instant());
             }
         };
-        // Swap in the new hook
         *self.engine.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
@@ -601,8 +600,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// single encoded `(key, entry)` must fit in `65507 - authentication overhead` bytes. Above
     /// that ceiling the update is never delivered and **the key never converges on any peer** —
     /// the local map still holds it, so the failure is silent from this node's point of view and
-    /// shows up only as a `warn!` on the send path (tracked as
-    /// [issue #230](https://github.com/Akvize/reconcile-rs/issues/230)).
+    /// shows up only as a `warn!` on the send path.
     ///
     /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
     /// `io::Result` on every write. Keep values well clear of the ceiling — and well clear of the
