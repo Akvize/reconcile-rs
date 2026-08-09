@@ -15,11 +15,11 @@ use rand::Rng;
 
 /// Select a random IP address from the given network
 ///
-/// `gen_ip` is a crate-internal helper (`pub(crate)`), so this example is illustrative only and is
-/// not compiled as a doctest (it cannot name the private path from an external crate).
+/// Illustrative only, not compiled as a doctest: the exact output pins one `StdRng` seed, which is
+/// not a documented guarantee of `rand` and could shift on a `rand` upgrade.
 /// ```ignore
 /// # use rand::SeedableRng;
-/// # use reconcile::gen_ip::gen_ip;
+/// # use gossip::gen_ip::gen_ip;
 /// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "192.168.1.0/24".parse().unwrap();

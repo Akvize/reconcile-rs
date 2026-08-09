@@ -1413,10 +1413,9 @@ mod replicated_map_tests {
         // spawn `run()`, whose periodic causal-stability-gated GC would itself remove the
         // expired tombstone and race these assertions.
 
-        // insert a tombstone
+        // `remove` inserts a tombstone rather than deleting the key outright.
         store.remove(&0);
-        tokio::time::sleep(Duration::from_millis(10)).await; // await its expiration
-                                                             // The tombstone should be expired by now
+        tokio::time::sleep(Duration::from_millis(10)).await;
         assert_eq!(store.tombstones.expired(), vec![0]);
         assert_eq!(store.tombstones.remove(&0), Some(0));
         assert_eq!(store.tombstones.remove(&0), None);

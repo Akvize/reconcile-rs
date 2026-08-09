@@ -268,8 +268,10 @@ impl Mac for HmacSha256Mac {
 
 // `mac-blake3` takes precedence when both backends are enabled (e.g. under `--all-features`), so
 // such builds still compile instead of hitting a hard error.
+/// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(feature = "mac-blake3")]
 pub type ClusterMac = Blake3Mac;
+/// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub type ClusterMac = HmacSha256Mac;
 
@@ -296,6 +298,9 @@ impl Authenticator {
     /// the `encryption` feature; the `cfg(not(...))` arm keeps the match exhaustive and turns any
     /// other route into a clear panic instead of a silent downgrade.
     ///
+    /// # Panics
+    ///
+    /// Panics if `encrypt` is `true` and the crate was built without the `encryption` feature.
     pub fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
         match (key, encrypt) {
             (None, _) => Authenticator::Disabled,
