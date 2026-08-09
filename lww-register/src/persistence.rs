@@ -120,10 +120,23 @@ where
     K: Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
+    /// Returns the last state saved via [`save`](Self::save), or `Ok(None)` if `save` was never
+    /// called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned (i.e. a previous `load`/`save` panicked while
+    /// holding it).
     fn load(&self) -> io::Result<Option<PersistedState<K, V>>> {
         Ok(self.state.lock().unwrap().clone())
     }
 
+    /// Replaces the in-memory snapshot with `state`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned (i.e. a previous `load`/`save` panicked while
+    /// holding it).
     fn save(&self, state: &PersistedState<K, V>) -> io::Result<()> {
         *self.state.lock().unwrap() = Some(state.clone());
         Ok(())

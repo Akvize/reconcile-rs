@@ -92,6 +92,7 @@ compile_error!(
 pub struct ClusterKey([u8; KEY_LEN]);
 
 impl ClusterKey {
+    /// Wrap a raw 32-byte secret as a cluster key.
     pub fn new(bytes: [u8; KEY_LEN]) -> Self {
         ClusterKey(bytes)
     }
@@ -178,6 +179,7 @@ impl<'a> Payload<'a, Authenticated> {
 }
 
 impl Payload<'_, Verified> {
+    /// The decoded, authenticated, replay-checked message bytes, ready for [`crate::bincode`].
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -218,6 +220,7 @@ pub trait Mac {
     fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool;
 }
 
+/// [`Mac`] backend keyed on BLAKE3, the default (`mac-blake3` feature).
 #[cfg(feature = "mac-blake3")]
 pub struct Blake3Mac;
 
@@ -238,6 +241,7 @@ impl Mac for Blake3Mac {
 
 // Compiled only when it is actually the selected backend (`mac-blake3` takes precedence), so an
 // `--all-features` build does not carry an unused struct.
+/// [`Mac`] backend keyed on HMAC-SHA256 (`mac-hmac` feature).
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub struct HmacSha256Mac;
 
@@ -264,8 +268,10 @@ impl Mac for HmacSha256Mac {
 
 // `mac-blake3` takes precedence when both backends are enabled (e.g. under `--all-features`), so
 // such builds still compile instead of hitting a hard error.
+/// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(feature = "mac-blake3")]
 pub type ClusterMac = Blake3Mac;
+/// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub type ClusterMac = HmacSha256Mac;
 
@@ -292,6 +298,9 @@ impl Authenticator {
     /// the `encryption` feature; the `cfg(not(...))` arm keeps the match exhaustive and turns any
     /// other route into a clear panic instead of a silent downgrade.
     ///
+    /// # Panics
+    ///
+    /// Panics if `encrypt` is `true` and the crate was built without the `encryption` feature.
     pub fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
         match (key, encrypt) {
             (None, _) => Authenticator::Disabled,

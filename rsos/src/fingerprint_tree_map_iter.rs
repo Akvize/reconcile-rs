@@ -6,8 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Module `fingerprint_tree_map_iter` provides iteration utilities for `FingerprintTreeMap<K, V>`,
-//! including:
+//! Iteration utilities for [`FingerprintTreeMap`], including:
 //! - `IntoIter`: immutable in-order traversal consuming the tree and returning `(K, V)`;
 //! - `Iter`: immutable in-order traversal returning `(&K, &V)`;
 //! - `IntoValues`: immutable in-order traversal consuming the tree and yielding `V`;
@@ -288,7 +287,7 @@ impl<'a, K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 }
 
-/// An in-order mutable iterator over a `FingerprintTreeMap`.
+/// An in-order consuming iterator over a `FingerprintTreeMap`.
 ///
 /// Consumes the tree and yields its values in ascending key order.
 pub struct IntoValues<K, V> {
@@ -321,8 +320,6 @@ impl<K, V> FingerprintTreeMap<K, V> {
 }
 
 /// An iterator over shared references to values in ascending key order.
-///
-/// Yields references to values in ascending key order.
 ///
 /// Does not consume the `FingerprintTreeMap`.
 pub struct Values<'a, K, V> {

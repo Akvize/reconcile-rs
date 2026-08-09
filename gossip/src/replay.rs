@@ -83,15 +83,18 @@ impl Seq {
     /// replay header exists.
     pub const NONE: Seq = Seq(0);
 
+    /// Wrap a raw sequence number.
     #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
     pub const fn new(value: u64) -> Seq {
         Seq(value)
     }
 
+    /// Encode as the 8-byte little-endian wire representation used in the replay header.
     pub fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
+    /// Decode from the 8-byte little-endian wire representation used in the replay header.
     pub fn from_le_bytes(bytes: [u8; 8]) -> Seq {
         Seq(u64::from_le_bytes(bytes))
     }
@@ -127,15 +130,18 @@ impl Stamp {
     /// replay header exists.
     pub const NONE: Stamp = Stamp(0);
 
+    /// Wrap a raw millisecond-since-epoch value.
     #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
     pub const fn new(value: u64) -> Stamp {
         Stamp(value)
     }
 
+    /// Encode as the 8-byte little-endian wire representation used in the replay header.
     pub fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
+    /// Decode from the 8-byte little-endian wire representation used in the replay header.
     pub fn from_le_bytes(bytes: [u8; 8]) -> Stamp {
         Stamp(u64::from_le_bytes(bytes))
     }
@@ -412,6 +418,10 @@ pub struct ReplayFilter {
 }
 
 impl ReplayFilter {
+    /// Build an empty filter with the given freshness window and enabled state.
+    ///
+    /// `enabled` should mirror the owning [`crate::auth::Authenticator`]'s mode — see the struct
+    /// docs for why that decision is baked in here rather than re-checked per datagram.
     pub fn new(freshness_window: Duration, enabled: bool) -> Self {
         ReplayFilter {
             peers: Mutex::new(HashMap::new()),

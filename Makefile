@@ -6,7 +6,6 @@ WORKDIR_MOUNT ?= $(shell pwd):/workspace
 
 .PHONY: build dev dc-up dc-rebuild
 
-# Build the Docker image
 build:
 	docker build -f .devcontainer/Dockerfile.dev -t $(IMAGE_NAME) .
 

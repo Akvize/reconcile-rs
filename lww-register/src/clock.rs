@@ -143,8 +143,7 @@ impl ClockDrift {
 ///
 /// This is only the default the `HlcClock` adapter is built with; the threshold is a property of
 /// the clock itself, overridable at construction (see `HlcClock::with_max_clock_drift`) rather
-/// than a knob on the store's `Config`. The rationale below explains why this default value was
-/// chosen.
+/// than a knob on the store's `Config`.
 ///
 /// **Why 1 hour?**
 /// NTP-disciplined clocks rarely deviate by more than a few hundred milliseconds in practice;
@@ -264,8 +263,8 @@ impl LogicalCounter {
 
 /// A replica's identity — the deterministic tie-break that makes the conflict order total.
 ///
-/// See issue #233: this is the workspace's notion of "which node", and it is a type rather than a
-/// bare `u64` so it can never be passed where a wall reading is expected.
+/// A distinct type rather than a bare `u64` so it can never be passed where a physical-time
+/// reading is expected.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]

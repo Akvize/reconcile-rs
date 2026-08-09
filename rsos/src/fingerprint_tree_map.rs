@@ -16,14 +16,14 @@
 //! The per-element lift and the way fingerprints are combined (256-bit addition,
 //! *not* XOR) live in [`crate::fingerprint`]; see that module for
 //! why the combiner and the underlying hash function are chosen the way they are.
-
-//! Although we did come we the idea independently, it exactly matches a paper
-//! published on Arxiv in February 2023:
-//! [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), by Aljoscha Meyer
+//!
+//! This per-node-cached-subtree-fingerprint structure was arrived at independently, but it matches
+//! a structure described in A. Meyer, *Range-Based Set Reconciliation* (arXiv:2212.13567) — see the
+//! crate root docs for the full citation, including the later RSOS paper this crate also implements.
 //!
 //! [`FingerprintTreeMap`] exposes the range-aggregate queries (`aggregate`,
 //! `rank`, `select`, `len`) that a range-based-set-reconciliation anti-entropy
-//! protocol (such as this workspace's `rbsr`-to-be) needs to drive range reconciliation. It also
+//! protocol (such as this workspace's `rbsr`) needs to drive range reconciliation. It also
 //! implements the [`Rsos`](crate::Rsos) trait, whose seven methods are the paper's own Def. 3.9
 //! terms; four of them share a name with the inherent method they delegate to and three
 //! (`size`/`enumerate`/`delete` vs. `len`/`range`/`remove`) do not, because the inherent API keeps
@@ -137,7 +137,6 @@ impl<K, V> Node<K, V> {
         if self.keys.is_full() {
             // TODO: handle case where self.keys.len() == 2 without leaving empty node
             let mid = self.keys.len() / 2;
-            // split
             let mut right_sibling = Box::new(Node {
                 keys: ArrayVec::from_iter(self.keys.drain(mid + 1..)),
                 values: ArrayVec::from_iter(self.values.drain(mid + 1..)),
@@ -153,7 +152,6 @@ impl<K, V> Node<K, V> {
             let mid_key = self.keys.pop().unwrap();
             let mid_value = self.values.pop().unwrap();
             let mid_fp = self.fingerprints.pop().unwrap();
-            // do the insert
             let to_insert = if index <= mid {
                 self.insert(index, key, value, fingerprint, right_child, diff_fp)
             } else {
@@ -169,12 +167,10 @@ impl<K, V> Node<K, V> {
             assert!(to_insert.is_none());
             assert!(!self.keys.is_empty());
             assert!(!right_sibling.keys.is_empty());
-            // update invariants
             self.refresh_aggregate();
             right_sibling.refresh_aggregate();
             Some((mid_key, mid_value, mid_fp, right_sibling))
         } else {
-            // just insert
             self.keys.insert(index, key);
             self.values.insert(index, value);
             self.fingerprints.insert(index, fingerprint);
@@ -264,15 +260,11 @@ impl<K, V> Node<K, V> {
     fn rebalance_after_deletion(&mut self, index: usize) {
         let children = self.children.as_mut().unwrap();
         if children[index].keys.len() >= MIN_CAPACITY {
-            // nothing to do
             return;
         }
-        // need to restore minimum node size invariant
         if index > 0 && children[index - 1].keys.len() > MIN_CAPACITY {
-            // steal left, rotate right
             self.steal(index, Side::Left);
         } else if index + 1 < children.len() && children[index + 1].keys.len() > MIN_CAPACITY {
-            // steal right, rotate left
             self.steal(index, Side::Right);
         } else {
             let merge_into = if index > 0 {
@@ -280,14 +272,12 @@ impl<K, V> Node<K, V> {
             } else if index + 1 < children.len() {
                 index
             } else {
-                // root node, nothing to do
+                // Root: no sibling to steal from or merge with.
                 return;
             };
 
-            // merge right sibling in the current node
             let right_sibling = children.remove(merge_into + 1);
             let current = children[merge_into].as_mut();
-            // move separator in current node
             let k = self.keys.remove(merge_into);
             let v = self.values.remove(merge_into);
             let h = self.fingerprints.remove(merge_into);
@@ -295,7 +285,6 @@ impl<K, V> Node<K, V> {
             current.values.push(v);
             current.fingerprints.push(h);
             current.subtree += element(h);
-            // move values of right_sibling in current node
             for k in right_sibling.keys {
                 current.keys.push(k);
             }
@@ -315,6 +304,9 @@ impl<K, V> Node<K, V> {
     }
 }
 
+/// This crate's one [`Rsos`](crate::Rsos) realization: an in-memory, `ArrayVec`-node B-tree (order
+/// 6) that caches a per-subtree [`Aggregate`] at every node. See the [module docs](self) for the
+/// full background and the [crate root docs](crate) for how its API maps onto the RSOS contract.
 #[derive(Clone)]
 pub struct FingerprintTreeMap<K, V> {
     pub(crate) root: Box<Node<K, V>>,
@@ -329,10 +321,12 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
 }
 
 impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+    /// Creates an empty tree.
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Returns the value associated with `key`, if present.
     pub fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
         fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &K) -> Option<&'a V> {
             match node.keys.binary_search(key) {
@@ -349,6 +343,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_ref(), key)
     }
 
+    /// Calls `callback` with a mutable reference to the value at `key` (or `None` if absent), then
+    /// re-lifts the element and propagates the resulting fingerprint delta up to the root.
+    ///
+    /// This is the supported way to mutate a value in place: unlike the `#[cfg(test)]`-only
+    /// `IterMut`, it keeps every cached [`Aggregate`] consistent, so `check_invariants` and
+    /// `aggregate` stay correct afterward.
     pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
         fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
@@ -390,6 +390,10 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_mut(), key, callback);
     }
 
+    /// Position of `key` in the in-order sequence, or `None` if it is not present.
+    ///
+    /// Unlike [`rank`](FingerprintTreeMap::rank), which always returns a position (the insertion
+    /// point for an absent key), this distinguishes "absent" from "present at position 0".
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
@@ -397,16 +401,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 for i in 0..node.keys.len() {
                     let cmp = key.cmp(&node.keys[i]);
                     if cmp == Ordering::Less {
-                        // recurse left to key
                         return aux(&children[i], key).map(|offset| index + offset);
                     }
-                    // pass sub-tree
                     index += children[i].subtree.size();
                     if cmp == Ordering::Equal {
-                        // found key
                         return Some(index);
                     }
-                    // pass node
                     index += 1;
                 }
                 aux(children.last().unwrap().as_ref(), key).map(|offset| index + offset)
@@ -417,11 +417,10 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_ref(), key)
     }
 
+    /// Inserts `key`/`value`, returning the previous value if `key` was already present.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        // return:
-        // - a key and node to be inserted after the current node
-        // - the fingerprint difference
-        // - the value that was at key, if any
+        /// Returns a key/node pair to insert as a right sibling after the current node (if it
+        /// split), the resulting fingerprint delta, and the previous value at `key`, if any.
         fn aux<K: Serialize + Ord, V: Serialize>(
             node: &mut Node<K, V>,
             key: K,
@@ -442,7 +441,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 }
                 Err(index) => {
                     if let Some(children) = node.children.as_mut() {
-                        // internal node
                         let (mut to_insert, diff_fp, ret) = aux(&mut children[index], key, value);
                         if let Some((key, value, fingerprint, right_child)) = to_insert {
                             to_insert = node.insert(
@@ -460,7 +458,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                         }
                         (to_insert, diff_fp, ret)
                     } else {
-                        // leaf
                         let fingerprint = lift(&key, &value);
                         let to_insert =
                             node.insert(index, key, value, fingerprint, None, fingerprint);
@@ -490,6 +487,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         ret
     }
 
+    /// Removes `key`, returning its value if it was present.
     pub fn remove(&mut self, key: &K) -> Option<V> {
         fn rightmost_child<K, V>(node: &mut Node<K, V>) -> (K, V, Fingerprint) {
             if let Some(children) = node.children.as_mut() {
@@ -505,16 +503,13 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 (k, v, fp)
             }
         }
-        // return:
-        // - the fingerprint diff
-        // - the value at the key that was removed, if there was one
+        /// Returns the resulting fingerprint delta and the value removed at `key`, if it was present.
         fn aux<K: Ord, V>(node: &mut Node<K, V>, key: &K) -> (Fingerprint, Option<V>) {
             match node.keys.binary_search(key) {
                 Ok(index) => {
                     if let Some(children) = node.children.as_mut() {
-                        // internal node
-                        // we need to replace key, value and fingerprint with a new separator; we
-                        // can find it in the left or right sub-tree
+                        // The removed key's separator is replaced by its in-order predecessor,
+                        // pulled up from the rightmost leaf of the left subtree.
                         let (prev_k, prev_v, prev_fp) = rightmost_child(&mut children[index]);
                         node.keys[index] = prev_k;
                         let v = std::mem::replace(&mut node.values[index], prev_v);
@@ -523,7 +518,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                         node.rebalance_after_deletion(index);
                         (fp, Some(v))
                     } else {
-                        // leaf node
                         node.keys.remove(index);
                         let v = node.values.remove(index);
                         let fp = node.fingerprints.remove(index);
@@ -533,7 +527,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 }
                 Err(index) => {
                     if let Some(children) = node.children.as_mut() {
-                        // internal node
                         let (diff_fp, ret) = aux(&mut children[index], key);
                         // Nothing found below means `diff_fp` is `ZERO` and no element left, so
                         // this composes to a no-op — the two halves move together either way.
@@ -542,7 +535,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                         node.rebalance_after_deletion(index);
                         (diff_fp, ret)
                     } else {
-                        // leaf node
                         (Fingerprint::ZERO, None)
                     }
                 }
@@ -556,10 +548,16 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         ret
     }
 
+    /// Walks the whole tree, independently recomputing every cached [`Aggregate`], and asserts the
+    /// B-tree ordering, minimum-occupancy and height invariants alongside it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any invariant is violated — a bug in the tree's mutation logic rather than a
+    /// condition callers can trigger through the public API. Intended for tests, not production
+    /// call sites, given the `O(n)` cost.
     pub fn check_invariants(&self) {
-        // return:
-        // - the independently recomputed aggregate of the sub-tree
-        // - the height of the sub-tree
+        /// Returns the independently recomputed aggregate and height of this subtree.
         fn aux<'a, K: Serialize + Ord, V: Serialize>(
             node: &'a Node<K, V>,
             mut min: Option<&'a K>,
@@ -567,15 +565,13 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         ) -> (Aggregate, usize) {
             let mut cum = Aggregate::ZERO;
             let mut max_height = 1;
-            // check node size
+            // `min`/`max` are `None` only for the root, which is exempt from the minimum-size bound.
             if min.is_some() || max.is_some() {
-                // this is not the root
                 assert!(
                     node.keys.len() >= MIN_CAPACITY,
                     "minimum node size invariant violated"
                 );
             }
-            // check order
             if let Some(min) = min {
                 assert!(min <= &node.keys[0], "order invariant violated");
             }
@@ -655,7 +651,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             mut lower_bound: Option<&'a K>,
             upper_bound: Option<&K>,
         ) -> Aggregate {
-            // check if the lower-bound is included in the range
             let lower_bound_included = match range.start_bound() {
                 Bound::Unbounded => true,
                 Bound::Included(key) | Bound::Excluded(key) => {
@@ -666,7 +661,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                     }
                 }
             };
-            // check if the upper-bound is included in the range
             let upper_bound_included = match range.end_bound() {
                 Bound::Unbounded => true,
                 Bound::Included(key) | Bound::Excluded(key) => {
@@ -677,13 +671,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                     }
                 }
             };
-            // if both lower and upper bounds are included in the range, the node's whole cached
-            // subtree aggregate is the answer
+            // If both bounds fall inside the range, every key in this subtree does too, so the
+            // cached subtree aggregate already is the answer — no need to walk the children.
             if lower_bound_included && upper_bound_included {
                 return node.subtree;
             }
-            // otherwise, recurse in the relevant sub-trees
-
             let mut cum = Aggregate::ZERO;
             let mut i = 0;
             while i < node.keys.len() && node.keys[i].rcmp(range) == RangeOrdering::Below {
@@ -721,16 +713,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 for i in 0..node.keys.len() {
                     let cmp = key.cmp(&node.keys[i]);
                     if cmp == Ordering::Less {
-                        // recurse left to key
                         return index + aux(&children[i], key);
                     }
-                    // pass sub-tree
                     index += children[i].subtree.size();
                     if cmp == Ordering::Equal {
-                        // found key
                         return index;
                     }
-                    // pass node
                     index += 1;
                 }
                 index + aux(children.last().unwrap(), key)
@@ -756,16 +744,12 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             if let Some(children) = node.children.as_ref() {
                 for i in 0..node.keys.len() {
                     if index < children[i].subtree.size() {
-                        // recurse
                         return aux(&children[i], index);
                     }
-                    // pass sub-tree
                     index -= children[i].subtree.size();
-                    // check node
                     if index == 0 {
                         return &node.keys[i];
                     }
-                    // pass node
                     index -= 1;
                 }
                 aux(children.last().unwrap(), index)
@@ -787,6 +771,8 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 }
 
+/// Iterator over the key-value pairs of a [`FingerprintTreeMap`] whose key falls within a range, in
+/// key order. Returned by [`FingerprintTreeMap::range`].
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
     range: &'a R,
     stack: Vec<(&'a Node<K, V>, usize)>,

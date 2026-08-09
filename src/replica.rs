@@ -791,28 +791,24 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// counted, never fatal, so a vanished or unreachable peer cannot stop the loops.
     #[instrument(name = "reconcile.run", skip_all, fields(port = self.port))]
     pub async fn run(self) {
-        // extra byte that easily detect when the buffer is too small
+        // One byte larger than the largest legal datagram, so a message that fills it exactly
+        // is distinguishable from one that was truncated.
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        // start the protocol at the beginning
         self.start_reconciliation(&mut send_buf).await;
-        // infinite loop
         loop {
             // Re-read each iteration so the cadence can be retuned at runtime.
             let recv_timeout = *self.reconcile_interval.read();
             match timeout(recv_timeout, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
-                    // timeout
                     debug!("no recent activity; initiating diff protocol");
                     self.start_reconciliation(&mut send_buf).await;
                 }
                 Ok(Err(err)) => {
-                    // network error
                     warn!("network error in recv_from: {err}");
                     observability::record_datagram_dropped("recv_error");
                 }
                 Ok(Ok((size, peer))) => {
-                    // received datagram
                     observability::record_bytes_received(size);
                     if peer.port() != self.port {
                         warn!(
@@ -1124,7 +1120,6 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 }
             }
         }
-        // handle messages
         if !in_comparison.is_empty() {
             debug!("received {} segments", in_comparison.len());
             let mut differences = Vec::new();
@@ -1616,7 +1611,6 @@ mod deadlock_regressions {
         let config = Config::default()
             .with_port(8080)
             .with_listen_addr("127.0.0.44".parse().unwrap());
-        // let tree = FingerprintTreeMap::from_iter(vec![(1, 10), (2, 20)]);
         let svc = ReplicatedMap::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 
@@ -1624,19 +1618,17 @@ mod deadlock_regressions {
         let flag2 = flag.clone();
 
         let hook_svc = svc.clone();
-        // Install a pre-insert hook that itself calls insert on the same Store
+        // The hook itself calls `just_insert` on the same store, re-entering the pre-insert
+        // path; guard against re-entering more than once so the hook cannot recurse forever.
         let once = Arc::new(AtomicBool::new(false));
         let guard = once.clone();
         svc.add_pre_insert(move |&k, v| {
-            // inner insert should no longer deadlock
             if !guard.swap(true, Ordering::SeqCst) {
                 let _ = hook_svc.just_insert(k + 100, v.value().copied().unwrap_or_default() + 100);
-                // TODO Check vs Utc::now()
             }
             flag2.store(true, Ordering::SeqCst);
         });
 
-        // Trigger our hook via a normal insert
         let _ = svc.just_insert(42, 99);
         assert!(
             flag.load(Ordering::SeqCst),
