@@ -288,8 +288,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     }
 
     /// The smallest live key and its value, or `None` if the read replica holds no live entry.
-    /// Same complexity and owned-return rationale as
-    /// [`ReplicatedMap::first_key_value`](crate::ReplicatedMap::first_key_value).
+    /// Same complexity as [`ReplicatedMap::first_key_value`](crate::ReplicatedMap::first_key_value).
     pub fn first_key_value(&self) -> Option<(K, V)> {
         let guard = self.tree.read();
         guard
@@ -299,8 +298,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     }
 
     /// The largest live key and its value, or `None` if the read replica holds no live entry. Same
-    /// complexity and owned-return rationale as
-    /// [`ReplicatedMap::last_key_value`](crate::ReplicatedMap::last_key_value).
+    /// complexity as [`ReplicatedMap::last_key_value`](crate::ReplicatedMap::last_key_value).
     pub fn last_key_value(&self) -> Option<(K, V)> {
         let guard = self.tree.read();
         let mut index = guard.len();
