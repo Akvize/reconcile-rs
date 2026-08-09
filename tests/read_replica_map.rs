@@ -166,9 +166,7 @@ async fn read_replica_does_not_block_tombstone_gc() {
 /// The same convergence contract as `read_replica_converges_with_dated_store`, but with **no real
 /// sockets anywhere**: both the dated store and the read replica are wired to an
 /// [`InMemoryNetwork`](reconcile::InMemoryNetwork) through the public `_with_transport`
-/// constructors. This is the seam that `ReadReplicaMap` gained when its receive loop was moved off
-/// `tokio::net::UdpSocket` onto the `Transport` port (issue #138) — before that, a read replica
-/// could not be exercised at all without binding a UDP port.
+/// constructors, exercising `ReadReplicaMap` end to end without binding a UDP port.
 ///
 /// It asserts the full value-only protocol round-trip over the injected transport, not merely that
 /// construction succeeds: the read replica drives the diff, receives live values with their

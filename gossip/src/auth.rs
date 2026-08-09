@@ -390,7 +390,6 @@ impl Authenticator {
                 if !ClusterMac::verify(key, protected, tag) {
                     return None;
                 }
-                // Strip the replay header from the front of the authenticated region.
                 let (seq, stamp, messages) = decode_replay_header(protected)?;
                 Some(Payload {
                     bytes: Cow::Borrowed(messages),
@@ -495,12 +494,10 @@ mod tests {
         let payload = b"the quick brown fox".to_vec();
         let t = ClusterMac::tag(&k, &payload);
 
-        // Flip a payload byte.
         let mut bad_payload = payload.clone();
         bad_payload[0] ^= 0x01;
         assert!(!ClusterMac::verify(&k, &bad_payload, t.as_bytes()));
 
-        // Flip a tag byte.
         let mut bad_tag = *t.as_bytes();
         bad_tag[0] ^= 0x01;
         assert!(!ClusterMac::verify(&k, &payload, &bad_tag));

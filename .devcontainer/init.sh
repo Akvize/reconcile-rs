@@ -30,7 +30,6 @@ if [[ "$mode" == "start" ]]; then
     ln -sf "$workspace_root/pre-commit" "$hook_path"
   fi
 
-  # Add your Git config here
   if [[ -n "${GIT_AUTHOR_NAME:-}" ]]; then
     git config --global user.name "$GIT_AUTHOR_NAME"
   fi

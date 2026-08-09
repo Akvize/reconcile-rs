@@ -27,7 +27,6 @@ mod imp {
         });
     }
 
-    /// Measure the time to insert N elements in the tree
     fn fingerprint_tree_map_fill(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -75,7 +74,6 @@ mod imp {
         }
     }
 
-    /// Measure the time to insert (and remove) 1 element in a tree of size N
     fn fingerprint_tree_map_insert(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -137,7 +135,6 @@ mod imp {
         }
     }
 
-    /// Measure the time to remove (and restore) 1 element in a tree of size N
     fn fingerprint_tree_map_remove(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -199,7 +196,6 @@ mod imp {
         }
     }
 
-    /// Measure the time to compute the hash over a range in a FingerprintTreeMap of size N
     fn fingerprint_tree_map_range_fingerprint(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
@@ -306,7 +302,6 @@ mod imp {
         }
     }
 
-    /// Measure the time to send 1 insertion, and 1 removal between 2 ReplicatedMap instances containing N items
     fn service_send(c: &mut Criterion) {
         let port = 8080;
         let net = "127.0.0.1/8".parse().unwrap();
@@ -372,7 +367,6 @@ mod imp {
         }
     }
 
-    /// Measure the time to reconcile 1 insertion/removal between ReplicatedMap instances containing N items
     fn service_reconcile(c: &mut Criterion) {
         let port = 8080;
         let net = "127.0.0.1/8".parse().unwrap();
