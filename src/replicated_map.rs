@@ -17,13 +17,12 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
-use crate::clock::{NodeId, Timestamp};
+use crate::clock::{BoundedInstant, ClockDrift, NodeId, StampBound, Timestamp, MAX_CLOCK_DRIFT};
 use crate::discovery::{Discovery, DiscoveryKind, DnsDiscovery};
 use crate::entry::Entry;
 use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Persistence};
@@ -33,6 +32,18 @@ use crate::transport::Transport;
 use rsos::Fingerprint;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
+
+/// How far a **stored** tombstone stamp may lead this node's physical time before the wall-clock
+/// instant derived from it (and only that instant — never the stamp) is capped.
+///
+/// Deliberately the same budget the clock's far-future clamp uses ([`MAX_CLOCK_DRIFT`]): both
+/// answer the same question, "how far ahead of local physical time can a remote reading plausibly
+/// be?", and giving the tombstone path a second, different answer would be one more number to keep
+/// in step. The clock's own threshold is per-instance
+/// (`HlcClock::with_max_clock_drift`) but is not reachable through the [`Clock`](crate::clock::Clock)
+/// port, so this side reads the constant; if that knob is ever exposed on `Config`, this should
+/// follow it rather than stay pinned here.
+const TOMBSTONE_STAMP_DRIFT_BUDGET: ClockDrift = MAX_CLOCK_DRIFT;
 
 /// How often the background task writes a full snapshot to the persistence backend.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
@@ -491,12 +502,58 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             if v.value().is_some() {
                 tombstones.remove(k);
             } else {
-                // The timeout wheel ages tombstones by wall-clock time; use the HLC's
-                // physical component so all replicas expire a tombstone at the same logical
-                // wall time. GC is in any case gated on causal stability.
-                let when = DateTime::from_timestamp_millis(v.stamp.physical().millis() as i64)
-                    .unwrap_or_else(Utc::now);
-                tombstones.insert(k.clone(), when);
+                // The timeout wheel ages tombstones by wall-clock time. We derive that instant
+                // from the HLC's physical component — within the drift budget it is used verbatim,
+                // so honest replicas still expire a tombstone at the same logical wall time — but
+                // bounded to `local now + TOMBSTONE_STAMP_DRIFT_BUDGET` beyond it. `v.stamp` comes
+                // off the wire and the socket is unauthenticated by default, so an unbounded stamp
+                // here would let any host that can reach the port date a tombstone past every
+                // plausible expiry and retain it forever. `v.stamp` itself is never modified: it is
+                // LWW data, and only the value handed to the wheel is bounded.
+                //
+                // Trade-off, taken deliberately: the cap is `local now + budget`, so for an
+                // out-of-budget stamp the instant becomes replica-dependent and the old comment's
+                // "all replicas expire at the same logical wall time" weakens. It was already only
+                // approximate — `TimeoutWheel::expired()` reads `Utc::now()` locally, so expiry
+                // timing is a local decision either way — and nothing rests on it, since GC is
+                // additionally gated on causal stability. Within the budget (every honest stamp)
+                // the physical component is still used verbatim, so the uniformity that was real
+                // is kept. Capping at local *now* instead would be tighter but expires a
+                // legitimately-skewed peer's tombstone earlier than an equally legitimate
+                // unskewed one, for no gain: the budget is already the answer this crate gives to
+                // "how far ahead can a remote reading plausibly be".
+                let bounded = BoundedInstant::from_stored_stamp(
+                    v.stamp.physical(),
+                    TOMBSTONE_STAMP_DRIFT_BUDGET,
+                );
+                match bounded.bound() {
+                    StampBound::Verbatim => {}
+                    StampBound::Capped => {
+                        warn!(
+                            key = ?k,
+                            stamp_physical_ms = v.stamp.physical().millis(),
+                            stamp_node_id = v.stamp.node_id().get(),
+                            budget_ms = TOMBSTONE_STAMP_DRIFT_BUDGET.millis(),
+                            bounded_instant = %bounded.instant(),
+                            "tombstone stamp leads local physical time by more than the drift \
+                             budget; bounding its expiry instant to the cap (the stored stamp is \
+                             unchanged). A peer is planting far-future stamps."
+                        );
+                        crate::observability::record_tombstone_stamp_bounded("capped");
+                    }
+                    StampBound::Unrepresentable => {
+                        warn!(
+                            key = ?k,
+                            stamp_physical_ms = v.stamp.physical().millis(),
+                            stamp_node_id = v.stamp.node_id().get(),
+                            budget_ms = TOMBSTONE_STAMP_DRIFT_BUDGET.millis(),
+                            "tombstone expiry cap is not a representable wall-clock instant; \
+                             ageing the tombstone from now instead (the stored stamp is unchanged)"
+                        );
+                        crate::observability::record_tombstone_stamp_bounded("unrepresentable");
+                    }
+                }
+                tombstones.insert(k.clone(), bounded.instant());
             }
         };
         // Swap in the new hook
@@ -1363,6 +1420,133 @@ mod replicated_map_tests {
         assert_eq!(store.tombstones.expired(), vec![0]);
         assert_eq!(store.tombstones.remove(&0), Some(0));
         assert_eq!(store.tombstones.remove(&0), None);
+    }
+
+    /// A tombstone stamp is peer-controlled — it arrives over a socket that is unauthenticated by
+    /// default — so the wall-clock instant derived from it must be bounded. These tests drive the
+    /// real pre-insert hook (via `just_insert_bulk`, the same path an inbound update and a
+    /// persistence replay take) with a stamp per regime, and assert both the bound *and* that the
+    /// stored stamp came through byte-identical: it is LWW data, and rewriting it would change
+    /// conflict resolution and the wire contract.
+    mod tombstone_expiry_bound {
+        use super::*;
+        use crate::clock::{Hlc, LogicalCounter, PhysicalTime};
+        use crate::entry::Entry;
+        use crate::replicated_map::TOMBSTONE_STAMP_DRIFT_BUDGET;
+        use chrono::Utc;
+
+        /// Plant a tombstone carrying exactly `physical_ms` through the hook, and return the
+        /// instant the wheel recorded for it.
+        async fn plant(physical_ms: u64) -> (ReplicatedMap<i32, i32>, chrono::DateTime<Utc>) {
+            let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+                .await
+                .expect("bind failed");
+            let stamp = crate::clock::Timestamp::new(
+                Hlc::new(
+                    PhysicalTime::from_millis(physical_ms),
+                    LogicalCounter::new(7),
+                ),
+                NodeId::new(0xBEEF),
+            );
+            store
+                .engine
+                .just_insert_bulk(&[(1, Entry::tombstone(stamp))]);
+
+            // Invariant most at risk from a careless fix: the *stored* stamp is untouched.
+            assert_eq!(
+                store.engine.map.read().get(&1).unwrap().stamp,
+                stamp,
+                "the stored stamp must be exactly as received — only the expiry instant is bounded"
+            );
+
+            let when = store
+                .tombstones
+                .instant_of(&1)
+                .expect("tombstone was not tracked");
+            (store, when)
+        }
+
+        fn now_ms() -> i64 {
+            Utc::now().timestamp_millis()
+        }
+
+        fn cap_ms() -> i64 {
+            now_ms() + TOMBSTONE_STAMP_DRIFT_BUDGET.millis() as i64
+        }
+
+        /// Regime 1 — an ordinary stamp is used verbatim, exactly as before the bound existed.
+        /// This is what keeps honest replicas agreeing on when a tombstone ages out.
+        #[tokio::test]
+        async fn a_normal_stamp_is_used_verbatim() {
+            let physical = now_ms() as u64 - 1_000;
+            let (_store, when) = plant(physical).await;
+            assert_eq!(when.timestamp_millis(), physical as i64);
+        }
+
+        /// Regime 2 — the reachable hole. A stamp far in the future but inside chrono's range
+        /// converted *exactly* under the old `as i64` cast, dating the tombstone past every
+        /// plausible expiry so `TimeoutWheel::expired()` never yielded it: unbounded retention,
+        /// plantable by any host that can reach the port. It must now land on the cap.
+        #[tokio::test]
+        async fn a_far_future_representable_stamp_is_capped() {
+            // ~10 000 years ahead: comfortably inside chrono's year-262143 ceiling, so the old
+            // cast was lossless here and fixing only the cast would have changed nothing.
+            let physical = now_ms() as u64 + 10_000 * 365 * 24 * 3_600_000;
+            let (_store, when) = plant(physical).await;
+            assert!(
+                when.timestamp_millis() <= cap_ms(),
+                "instant {when} escaped the cap"
+            );
+            assert!(
+                when.timestamp_millis() >= now_ms() - 1_000,
+                "a capped instant must stay in the near future, not fall into the past"
+            );
+        }
+
+        /// Regime 3 — above `i64::MAX`, where the old cast wrapped negative into a pre-1970 date
+        /// and made the tombstone immediately eligible. (Less severe than it sounds: GC is
+        /// additionally gated on causal stability, so premature eligibility removed the wall-clock
+        /// safety margin rather than resurrecting data.) After the clamp the value is provably in
+        /// `i64` range, so the wrap is unrepresentable rather than handled.
+        #[tokio::test]
+        async fn a_stamp_above_i64_max_is_bounded_not_wrapped() {
+            let (_store, when) = plant(u64::MAX).await;
+            assert!(
+                when.timestamp_millis() > 0,
+                "stamp wrapped to a pre-epoch instant: {when}"
+            );
+            assert!(
+                when.timestamp_millis() <= cap_ms(),
+                "instant {when} escaped the cap"
+            );
+        }
+
+        /// The property the whole change exists for, stated directly: a hostile tombstone's
+        /// expiry *deadline* — the `instant + tombstone_timeout` the wheel fires on — is now a
+        /// finite horizon the operator controls (`now + budget + timeout`, so at most about an
+        /// hour and a minute out here), rather than a date the peer picked. The assertion is on
+        /// the deadline rather than on "it expired by now" because a capped instant is one budget
+        /// in the future by construction: bounding it makes expiry *reachable*, not immediate.
+        #[tokio::test]
+        async fn a_capped_tombstone_has_a_finite_expiry_horizon() {
+            let timeout = Duration::from_secs(60);
+            let physical = now_ms() as u64 + 10_000 * 365 * 24 * 3_600_000;
+            let (_store, when) = plant(physical).await;
+
+            let deadline = when.timestamp_millis() + timeout.as_millis() as i64;
+            assert!(
+                deadline <= cap_ms() + timeout.as_millis() as i64,
+                "expiry deadline {deadline} is beyond now + budget + timeout"
+            );
+            // For contrast, the deadline the old `as i64` cast produced from the same stamp: the
+            // cast was exact here, so the wheel would not have yielded this tombstone for ten
+            // millennia. A century of margin is plenty to make the assertion unambiguous.
+            let unbounded = physical as i64 + timeout.as_millis() as i64;
+            assert!(
+                unbounded > deadline + 100 * 365 * 24 * 3_600_000,
+                "the unbounded deadline should be astronomically later than the bounded one"
+            );
+        }
     }
 
     /// A durable backend must let a restarted store recover both live values and tombstones, with

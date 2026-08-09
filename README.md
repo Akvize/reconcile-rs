@@ -89,6 +89,16 @@ performance limitations.
 > poison propagates to the whole cluster through last-write-wins. UDP source addresses are
 > spoofable, so this is anonymous.
 
+Two consequences of a far-future stamp are bounded even without a key, because neither depends on
+trusting the sender. The stamp cannot pin this node's Hybrid Logical Clock into the future — a
+remote reading more than `MAX_CLOCK_DRIFT` (1 hour) ahead of local physical time is clamped before
+it reaches the clock state — and it cannot postpone a tombstone's expiry indefinitely, because the
+wall-clock instant the expiry wheel ages a tombstone from is derived from the stored stamp through
+that same bound. Both log a `warn!`, and the tombstone case also increments
+`reconcile_tombstone_stamp_bounded_total` (with the `metrics` feature). The stamp itself is stored
+exactly as received, so it still *wins* the last-write-wins comparison: only a cluster key stops
+that.
+
 To close this vector, provide a shared 32-byte cluster secret on **every** node:
 
 ```rust

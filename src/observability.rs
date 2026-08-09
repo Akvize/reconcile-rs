@@ -29,6 +29,7 @@
 //! | `reconcile_datagrams_dropped_total` | counter (`reason` label) | dropped datagrams |
 //! | `reconcile_rounds_total` | counter | reconciliation rounds initiated |
 //! | `reconcile_tombstone_acks_resent_total` | counter | tombstone acks resent on reconciliation rounds |
+//! | `reconcile_tombstone_stamp_bounded_total` | counter (`outcome` label) | tombstones whose expiry instant had to be bounded because the stored stamp led local time by more than the drift budget |
 //! | `reconcile_round_duration_seconds` | histogram | `start_reconciliation` wall time |
 //! | `reconcile_handle_messages_duration_seconds` | histogram | `handle_messages` wall time |
 
@@ -49,6 +50,8 @@ mod imp {
     pub(crate) const DATAGRAMS_DROPPED_TOTAL: &str = "reconcile_datagrams_dropped_total";
     pub(crate) const ROUNDS_TOTAL: &str = "reconcile_rounds_total";
     pub(crate) const TOMBSTONE_ACKS_RESENT_TOTAL: &str = "reconcile_tombstone_acks_resent_total";
+    pub(crate) const TOMBSTONE_STAMP_BOUNDED_TOTAL: &str =
+        "reconcile_tombstone_stamp_bounded_total";
     pub(crate) const ROUND_DURATION_SECONDS: &str = "reconcile_round_duration_seconds";
     pub(crate) const HANDLE_DURATION_SECONDS: &str = "reconcile_handle_messages_duration_seconds";
 
@@ -106,6 +109,14 @@ mod imp {
         counter!(TOMBSTONE_ACKS_RESENT_TOTAL).increment(n as u64);
     }
 
+    /// A tombstone's expiry instant could not be taken from its stored stamp verbatim. `outcome`
+    /// is `"capped"` or `"unrepresentable"` (see `crate::clock::StampBound`); a non-zero rate here
+    /// means some peer is planting stamps far ahead of this node's clock.
+    #[inline]
+    pub(crate) fn record_tombstone_stamp_bounded(outcome: &'static str) {
+        counter!(TOMBSTONE_STAMP_BOUNDED_TOTAL, "outcome" => outcome).increment(1);
+    }
+
     #[inline]
     pub(crate) fn record_round_duration(start: Option<Instant>) {
         if let Some(start) = start {
@@ -157,6 +168,11 @@ mod imp {
             Unit::Count,
             "Tombstone acks resent on reconciliation rounds"
         );
+        describe_counter!(
+            TOMBSTONE_STAMP_BOUNDED_TOTAL,
+            Unit::Count,
+            "Tombstones whose expiry instant had to be bounded, by outcome"
+        );
         describe_histogram!(
             ROUND_DURATION_SECONDS,
             Unit::Seconds,
@@ -205,6 +221,9 @@ mod imp {
 
     #[inline(always)]
     pub(crate) fn record_tombstone_acks_resent(_n: usize) {}
+
+    #[inline(always)]
+    pub(crate) fn record_tombstone_stamp_bounded(_outcome: &'static str) {}
 
     #[inline(always)]
     pub(crate) fn record_round_duration(_start: Option<Instant>) {}

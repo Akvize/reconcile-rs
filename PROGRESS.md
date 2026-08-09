@@ -218,6 +218,27 @@ Progress:
   (`Config::with_node_id`, `ReplicatedMap::node_id`, `reconcile::clock`'s re-export list,
   `MAX_CLOCK_DRIFT_MS` → `MAX_CLOCK_DRIFT`, `Timestamp::new` taking an `Hlc`), accepted for the
   breaking release in preparation.
+- ✅ Follow-up to the above: the one consumer `lww-register/src/clock.rs`'s module docs named as
+  having to "defend against oversized stamps themselves" — the tombstone-expiry conversion in
+  `replicated_map` — now does. It was `DateTime::from_timestamp_millis(v.stamp.physical().millis()
+  as i64).unwrap_or_else(Utc::now)` on a stamp straight off an unauthenticated-by-default socket.
+  The reachable regime was not the wrapping cast but the *exact* one: a far-future stamp inside
+  `chrono`'s range dated the tombstone past every plausible expiry, so `TimeoutWheel::expired()`
+  never yielded it — unbounded retention, plantable by any host that can reach the port. The
+  derived instant is now built by `reconcile::clock`'s `BoundedInstant`, which re-admits the stored
+  `PhysicalTime` through `AdmittedTime::clamped_to_drift` against *local* now with the same
+  `MAX_CLOCK_DRIFT` budget, then converts with a total `i64::try_from` — making the
+  wrap-to-pre-epoch regime unrepresentable rather than handled — and reports its outcome
+  (`StampBound::Verbatim`/`Capped`/`Unrepresentable`) so the residual fallback is a `warn!` plus
+  `reconcile_tombstone_stamp_bounded_total` rather than a silent `Utc::now()`. The **stored stamp
+  is untouched**: it is LWW data, and only the value handed to the wheel is bounded — asserted in
+  every regime test. Trade-off recorded deliberately: clamping against local now makes the bounded
+  instant replica-dependent for out-of-budget stamps, weakening the "all replicas expire at the
+  same logical wall time" property the old comment claimed. That property was already approximate
+  (`TimeoutWheel::expired()` reads `Utc::now()` locally, so expiry timing is local anyway) and
+  correctness does not rest on it (GC stays gated on causal stability, invariant 6); in-budget
+  stamps — every honest one — are still used verbatim, so the uniformity that existed is kept
+  exactly where it was real.
 - ✅ Step 4 — `Entry`/`State` domain type: the untyped `(Timestamp, Option<V>)` tuple is replaced by
   `Entry<Timestamp, V>` / `State<V>` (`entry.rs`); `MaybeTombstone`, `Reconcilable`, `Timestamped`,
   `Projectable` and `ValueOnly<V>` are dissolved into `Entry`'s inherent methods

@@ -393,6 +393,14 @@ evidence the drift check *has run*, not that it could), obtainable only via
 `Hlc::advance_past_remote` accepts nothing else, so the clamp is a property of the type system
 rather than of a parameter name. See §4's invariant 2 and `AGENTS.md` §4.
 
+That clamp guards the *local clock state* only: a remote stamp is stored verbatim, because it is
+LWW data. Deriving anything from a stored stamp is a separate defence, and there is one such
+derivation — the tombstone-expiry instant. `reconcile::clock`'s `BoundedInstant` owns it: it
+re-admits the stored `PhysicalTime` through the same `clamped_to_drift` seam against local now and
+converts the result with a total `i64::try_from`. It lives beside the `HlcClock` adapter rather
+than in the domain because it needs both a physical-time read and a `chrono` instant. See §4's
+invariant 6.
+
 `Entry` carries the tombstone, timestamp, and merge semantics as a concrete domain type;
 `add_pre_insert` and `PersistedState` take `Entry<…>` rather than the bare tuple. Conflict
 resolution is **domain policy**, not an infrastructure port: last-write-wins is the concrete
@@ -570,6 +578,13 @@ correctness and security guarantees tracked in [`PROGRESS.md`](./PROGRESS.md).
    earned by an authenticated dated datagram, so a discovered (unverified) address can neither block
    GC nor be the subject of a GC release. Decommissioning a member that has vanished from discovery
    uses the same `decommission_peer` escape hatch as `forget_peer`.
+   The gate is a *causal* condition; the wall-clock half of the lifecycle — the `TimeoutWheel`
+   instant a tombstone ages from — is derived from the tombstone's stored HLC stamp, which arrives
+   over an unauthenticated-by-default socket. That derivation is therefore **bounded**
+   (`reconcile::clock`'s `BoundedInstant`, §3.4): the stamp's `PhysicalTime` is re-admitted through
+   `AdmittedTime::clamped_to_drift` against *local* now, so a peer cannot date a tombstone past
+   every plausible expiry and pin it in the map forever. The stored stamp is never rewritten — it
+   is LWW data — only the derived instant is.
 7. **`version_hash` determinism** (`replica.rs`) — now the low 64 bits of `rsos::digest`, the same
    canonical serde encoding fingerprints use (§3.10), so it is deterministic across toolchains and
    not merely across nodes on the same one. It was `DefaultHasher`, whose keys are fixed but whose
