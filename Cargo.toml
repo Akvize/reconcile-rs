@@ -45,6 +45,11 @@ debug = true
 name = "bench"
 harness = false
 
+# System-level, end-to-end benchmarks over the public API (no internal seam, so no feature gate).
+[[bench]]
+name = "system"
+harness = false
+
 [features]
 default = ["mac-blake3"]
 # Per-datagram MAC authentication and payload confidentiality moved to the `gossip` crate together
@@ -123,6 +128,10 @@ tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros", "sync"]
 tracing = "0.1.40"
 
 [dev-dependencies]
+# Only `benches/system.rs`'s traffic-counting `Transport` wrapper needs this: `Transport`'s methods
+# are `#[async_trait]`-desugared, so an external impl needs the same macro (already a transitive
+# dependency via `gossip`, just not re-exported to consumers).
+async-trait = "0.1"
 clap = { version = "4.4.6", features = ["derive"] }
 criterion = "0.5.1"
 metrics-util = { version = "0.19", default-features = false, features = ["debugging"] }
