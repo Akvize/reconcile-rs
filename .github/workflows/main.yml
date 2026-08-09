@@ -83,8 +83,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    # `--all-features`: `internal-testing`-gated seams (e.g. `just_insert`) are what the
+    # integration-test oracles build against; without it this job fails to compile.
     - name: Generate code coverage
-      run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:

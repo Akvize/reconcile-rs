@@ -607,6 +607,31 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.get(k).is_some()
     }
 
+    /// The smallest live key and its value, or `None` if the store holds no live entry. `O(log n)`,
+    /// worse if the smallest raw key is tombstoned (`O(n)` if every entry is).
+    pub fn first_key_value(&self) -> Option<(K, V)> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .find(|(_, entry)| !entry.is_tombstone())
+            .map(|(k, entry)| (k.clone(), entry.value().expect("checked above").clone()))
+    }
+
+    /// The largest live key and its value, or `None` if the store holds no live entry. Same
+    /// complexity as [`first_key_value`](Self::first_key_value).
+    pub fn last_key_value(&self) -> Option<(K, V)> {
+        let guard = self.engine.map.read();
+        let mut index = guard.len();
+        while index > 0 {
+            index -= 1;
+            let key = guard.select(index).clone();
+            if let Some(value) = guard.get(&key).and_then(|entry| entry.value()) {
+                return Some((key, value.clone()));
+            }
+        }
+        None
+    }
+
     /// Call `f` for every live entry, in key order.
     ///
     /// The map read lock is held only for the duration of the call, and the borrows handed to `f`

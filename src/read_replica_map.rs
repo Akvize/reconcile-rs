@@ -287,6 +287,31 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         self.tree.read().aggregate(&range).fingerprint()
     }
 
+    /// The smallest live key and its value, or `None` if the read replica holds no live entry.
+    /// Same complexity as [`ReplicatedMap::first_key_value`](crate::ReplicatedMap::first_key_value).
+    pub fn first_key_value(&self) -> Option<(K, V)> {
+        let guard = self.tree.read();
+        guard
+            .iter()
+            .find(|(_, state)| !state.is_tombstone())
+            .map(|(k, state)| (k.clone(), state.as_value().expect("checked above").clone()))
+    }
+
+    /// The largest live key and its value, or `None` if the read replica holds no live entry. Same
+    /// complexity as [`ReplicatedMap::last_key_value`](crate::ReplicatedMap::last_key_value).
+    pub fn last_key_value(&self) -> Option<(K, V)> {
+        let guard = self.tree.read();
+        let mut index = guard.len();
+        while index > 0 {
+            index -= 1;
+            let key = guard.select(index).clone();
+            if let Some(value) = guard.get(&key).and_then(|state| state.as_value()) {
+                return Some((key, value.clone()));
+            }
+        }
+        None
+    }
+
     /// Call `f` for every live entry, in key order.
     ///
     /// The tree read lock is held only for the duration of the call, and the borrows handed to `f`
@@ -633,6 +658,35 @@ mod tests {
         let mut in_range = Vec::new();
         read_replica.for_each_in_range(2.., |k, v| in_range.push((*k, *v)));
         assert_eq!(in_range, vec![(2, 20), (4, 40)]);
+    }
+
+    /// `first_key_value`/`last_key_value` skip a tombstone sitting at the extremal raw key,
+    /// mirroring [`ReplicatedMap`](crate::ReplicatedMap)'s.
+    #[tokio::test]
+    async fn first_and_last_key_value_skip_boundary_tombstones() {
+        let read_replica = ReadReplicaMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+        assert_eq!(read_replica.first_key_value(), None);
+        assert_eq!(read_replica.last_key_value(), None);
+
+        read_replica.integrate(vec![
+            (1, State::Tombstone),
+            (2, State::Present(20)),
+            (3, State::Present(30)),
+            (4, State::Present(40)),
+            (5, State::Tombstone),
+        ]);
+        assert_eq!(read_replica.first_key_value(), Some((2, 20)));
+        assert_eq!(read_replica.last_key_value(), Some((4, 40)));
+
+        read_replica.integrate(vec![(2, State::Tombstone), (4, State::Tombstone)]);
+        assert_eq!(read_replica.first_key_value(), Some((3, 30)));
+        assert_eq!(read_replica.last_key_value(), Some((3, 30)));
+
+        read_replica.integrate(vec![(3, State::Tombstone)]);
+        assert_eq!(read_replica.first_key_value(), None);
+        assert_eq!(read_replica.last_key_value(), None);
     }
 
     /// The on-update hook fires for every integrated value, including tombstones.
