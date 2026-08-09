@@ -18,15 +18,12 @@ if [[ "$mode" == "create" ]]; then
 fi
 
 if [[ "$mode" == "start" ]]; then
-  # Lightweight operations on each container start
-  # Determine repo root
   if git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
     workspace_root="$git_root"
   else
     workspace_root="/workspace"
   fi
 
-  # Link pre-commit hook if missing
   hook_path="$workspace_root/.git/hooks/pre-commit"
   if [[ -d "$workspace_root/.git" ]] && [[ ! -L "$hook_path" ]]; then
     echo "🔗 Linking pre-commit hook"
@@ -41,7 +38,6 @@ if [[ "$mode" == "start" ]]; then
     git config --global user.email "$GIT_AUTHOR_EMAIL"
   fi
 
-  # Version check
   echo "🔧 rustc: $(rustc --version)"
   echo "✅ Init start tasks complete"
   exit 0

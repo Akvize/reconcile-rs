@@ -7,10 +7,6 @@ use rand::{
 
 use reconcile::{clock::NodeId, replicated_map::Config, Fingerprint, ReplicatedMap};
 
-/// Wait for a while until the provided predicate becomes true
-///
-/// If the predicate become true in the delay, return true, otherwise return false. This functions
-/// minimizes the wait time by checking regularly if the predicate is true.
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -61,7 +57,6 @@ async fn test() {
         .with_listen_addr(addr2)
         .with_net(net);
 
-    // create tree1 with many values
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
         let key: String = Alphanumeric.sample_string(&mut rng, 100);
@@ -69,7 +64,6 @@ async fn test() {
         (key, value)
     });
 
-    // start reconciliation stores for tree1 and tree2
     let store1 = ReplicatedMap::new(cfg1)
         .await
         .expect("bind failed")
@@ -88,19 +82,15 @@ async fn test() {
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
-    // check that tree2 is filled with the values from tree1
     assert_until!(store2.fingerprint(..) == start_fingerprint);
 
-    // check that tree1 is unchanged
     assert_eq!(store1.fingerprint(..), start_fingerprint);
 
-    // add value to tree2, and check that it is transferred to tree1
     let key = "42".to_string();
     let value = "Hello, World!".to_string();
     store2.insert(key.clone(), value.clone());
     assert_until!(store1.get(&key).as_deref() == Some(&value));
 
-    // remove value from tree1, and check that the tombstone is transferred to tree2
     store1.remove(&key);
     assert_until!(store2.get(&key).is_none());
 
@@ -151,21 +141,15 @@ async fn test() {
         }
     }
 
-    // check that a newer value can overwrite a tombstone
+    // A newer value can overwrite a tombstone.
     let key = "43".to_string();
     let value1 = "Hello, World!".to_string();
     let value2 = "Goodbye!".to_string();
-    // insert (key, value1) pair
     store1.insert(key.clone(), value1.clone());
-    // wait until store2 has received it
     assert_until!(store2.get(&key).as_deref() == Some(&value1));
-    // remove the key from store2
     store2.remove(&key);
-    // wait until store1 has received the tombstone
     assert_until!(store1.get(&key).is_none());
-    // overwrite tombstone by inserting (key, value2)
     store1.insert(key.clone(), value2.clone());
-    // check that instance2 receives value2
     assert_until!(store2.get(&key).as_deref() == Some(&value2));
 
     task2.abort();
@@ -206,11 +190,9 @@ async fn get_mut_edit_propagates_to_peers() {
     let before = "before".to_string();
     let after = "after".to_string();
 
-    // Seed a key on store1 and wait for store2 to observe the original value.
     store1.insert(key.clone(), before.clone());
     assert_until!(store2.get(&key).as_deref() == Some(&before));
 
-    // Mutate the value in place on store1.
     store1.get_mut(&key, |v| {
         if let Some(v) = v {
             *v = after.clone();
@@ -695,7 +677,6 @@ async fn cross_net_discovery_without_seed() {
     let net_b = "127.0.3.0/30".parse().unwrap();
     let addr1 = "127.0.2.1".parse().unwrap();
     let addr2 = "127.0.3.1".parse().unwrap();
-    // Each node declares the peer's exact address as a network, so its discovery probe always hits it.
     let peer2_host = "127.0.3.1/32".parse().unwrap();
     let peer1_host = "127.0.2.1/32".parse().unwrap();
     let cfg1 = Config::default()
@@ -742,10 +723,9 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     let net_b = "127.0.5.0/30".parse().unwrap();
     let addr1 = "127.0.4.1".parse().unwrap();
     let addr2 = "127.0.5.1".parse().unwrap();
-    // The peer's exact address as a /32, so the per-network discovery probe reliably hits it.
     let peer2_host = "127.0.5.1/32".parse().unwrap();
     let peer1_host = "127.0.4.1/32".parse().unwrap();
-    // Each node initially declares ONLY its own network. Fast cadence to converge quickly.
+    // Fast cadence to converge quickly.
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
@@ -759,7 +739,6 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
         .with_remote_interval(1)
         .with_remote_fanout(1);
 
-    // No seed: the nodes can only meet through per-network discovery probes.
     let store1 = ReplicatedMap::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
     let start_fingerprint = store1.fingerprint(..);
@@ -770,7 +749,6 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     let task2 = tokio::spawn(store2.clone().run());
     let task1 = tokio::spawn(store1.clone().run());
 
-    // Without the peer's network declared, discovery never reaches it, so no convergence.
     assert!(
         !wait_until(|| store2.fingerprint(..) == start_fingerprint).await,
         "nodes converged before the peer network was declared"
@@ -780,7 +758,6 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     store1.add_net(peer2_host);
     store2.add_net(peer1_host);
 
-    // The running loops pick up the new network and converge.
     assert_until!(store2.fingerprint(..) == start_fingerprint);
 
     task1.abort();

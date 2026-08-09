@@ -34,6 +34,11 @@ use serde::Serialize;
 ///
 /// The encode side appends to a caller-owned buffer so a batch of messages can be framed into
 /// one datagram without per-message allocation.
+///
+/// # Errors
+///
+/// Returns an error only if `T`'s `Serialize` implementation itself fails; encoding to an
+/// in-memory `Vec` cannot fail for I/O reasons.
 pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<()> {
     use ::bincode::{DefaultOptions, Serializer};
     value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
@@ -49,6 +54,12 @@ pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<(
 /// A **clean** end-of-input (all bytes consumed on a message boundary) yields the values decoded
 /// so far; a *malformed* stream (a partial or invalid message mid-buffer) is an error, so a
 /// corrupt or hostile datagram is rejected wholesale rather than half-applied.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` contains a message that fails to deserialize as `T` before a clean
+/// end-of-input is reached — see above for why a truncated trailing message is not treated as an
+/// error.
 pub fn decode_stream<T: DeserializeOwned>(
     bytes: &[u8],
     max_items: usize,

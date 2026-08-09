@@ -42,6 +42,7 @@ pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
 }
 
 impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
+    /// Create an empty wheel with the default 60-second expiry timeout.
     pub fn new() -> Self {
         TimeoutWheel {
             wheel: Arc::new(RwLock::new(BTreeMap::new())),
@@ -50,6 +51,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         }
     }
 
+    /// Builder-style variant of [`set_timeout`](Self::set_timeout).
     pub fn with_timeout(self, timeout: Duration) -> Self {
         *self.timeout.write().unwrap() = timeout;
         self
@@ -114,6 +116,7 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         self.map.read().unwrap().get(value).copied()
     }
 
+    /// Stop tracking `value` and return it, or `None` if it was not tracked.
     pub fn remove(&self, value: &T) -> Option<T> {
         // Acquire `wheel` before `map`, matching the order used by `insert`. A consistent
         // lock acquisition order across all methods that hold both locks is what prevents an
