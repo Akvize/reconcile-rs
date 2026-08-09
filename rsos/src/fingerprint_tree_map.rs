@@ -355,15 +355,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// `IterMut`, it keeps every cached [`Aggregate`] consistent, so `check_invariants` and
     /// `aggregate` stay correct afterward.
     ///
-    /// A `std`-style `entry()` API returning a live `&mut V` handle is deliberately not offered:
-    /// every mutation must re-lift the element and walk the fingerprint delta back to the root
-    /// before it is safe to observe, and a bare `&mut V` (or an `OccupiedEntry` wrapping one) lets
-    /// a caller mutate the value and walk away without that step ever running — silently
-    /// desynchronizing `aggregate`/`check_invariants` from the real content. `with_mut`'s
-    /// callback-scoped access is the same guarantee `entry().and_modify()` would give, without the
-    /// unsound handle; ergonomic get-or-insert (the other half of what `entry()` usually buys)
-    /// belongs one layer up, where callers already exist for it (`ReplicatedMap::upsert`/
-    /// `get_or_insert_with`).
+    /// A `std`-style `entry()` returning a live `&mut V` is deliberately not offered: a bare
+    /// handle (or an `OccupiedEntry` wrapping one) lets a caller mutate and walk away without the
+    /// re-lift/propagate step above ever running, silently desyncing `aggregate`/
+    /// `check_invariants` from the real content. Get-or-insert, the other half of what `entry()`
+    /// usually buys, already exists one layer up (`ReplicatedMap::upsert`/`get_or_insert_with`).
     pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
         fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
@@ -570,12 +566,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 
     /// Removes every entry for which `keep` returns `false`.
     ///
-    /// `O(n log n)`: unlike [`with_mut`](Self::with_mut), which re-lifts a value in place without
-    /// touching the tree's shape, dropping entries changes occupancy and can trigger rebalancing —
-    /// there is no single traversal that safely removes while walking the same nodes it reads. This
-    /// collects the keys to drop in one read-only pass, then [`remove`](Self::remove)s each; a
-    /// future single-pass implementation is possible but not warranted before this is a measured
-    /// bottleneck.
+    /// `O(n log n)`: dropping entries changes occupancy and can trigger rebalancing, so — unlike
+    /// [`with_mut`](Self::with_mut)'s in-place re-lift — there is no single traversal that safely
+    /// removes while walking the same nodes it reads. Collects the keys to drop in one read-only
+    /// pass, then [`remove`](Self::remove)s each; a single-pass version is future work if this
+    /// becomes a measured bottleneck.
     pub fn retain<F: FnMut(&K, &V) -> bool>(&mut self, mut keep: F)
     where
         K: Clone,
