@@ -343,12 +343,23 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         aux(self.root.as_ref(), key)
     }
 
+    /// Returns whether `key` is present.
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.get(key).is_some()
+    }
+
     /// Calls `callback` with a mutable reference to the value at `key` (or `None` if absent), then
     /// re-lifts the element and propagates the resulting fingerprint delta up to the root.
     ///
     /// This is the supported way to mutate a value in place: unlike the `#[cfg(test)]`-only
     /// `IterMut`, it keeps every cached [`Aggregate`] consistent, so `check_invariants` and
     /// `aggregate` stay correct afterward.
+    ///
+    /// A `std`-style `entry()` returning a live `&mut V` is deliberately not offered: a bare
+    /// handle (or an `OccupiedEntry` wrapping one) lets a caller mutate and walk away without the
+    /// re-lift/propagate step above ever running, silently desyncing `aggregate`/
+    /// `check_invariants` from the real content. Get-or-insert, the other half of what `entry()`
+    /// usually buys, already exists one layer up (`ReplicatedMap::upsert`/`get_or_insert_with`).
     pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
         fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
             node: &mut Node<K, V>,
@@ -546,6 +557,32 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             self.root.subtree.fingerprint()
         );
         ret
+    }
+
+    /// Removes every entry, resetting the tree to the same empty state [`new`](Self::new) produces.
+    pub fn clear(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Removes every entry for which `keep` returns `false`.
+    ///
+    /// `O(n log n)`: dropping entries changes occupancy and can trigger rebalancing, so — unlike
+    /// [`with_mut`](Self::with_mut)'s in-place re-lift — there is no single traversal that safely
+    /// removes while walking the same nodes it reads. Collects the keys to drop in one read-only
+    /// pass, then [`remove`](Self::remove)s each; a single-pass version is future work if this
+    /// becomes a measured bottleneck.
+    pub fn retain<F: FnMut(&K, &V) -> bool>(&mut self, mut keep: F)
+    where
+        K: Clone,
+    {
+        let to_remove: Vec<K> = self
+            .iter()
+            .filter(|(k, v)| !keep(k, v))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &to_remove {
+            self.remove(key);
+        }
     }
 
     /// Walks the whole tree, independently recomputing every cached [`Aggregate`], and asserts the
@@ -968,6 +1005,65 @@ mod tests {
         tree.remove(&75);
         tree.check_invariants();
         assert_eq!(tree.aggregate(&..), agg2);
+    }
+
+    #[test]
+    fn contains_key_tracks_presence() {
+        let mut tree = FingerprintTreeMap::new();
+        assert!(!tree.contains_key(&1));
+        tree.insert(1, "a");
+        assert!(tree.contains_key(&1));
+        assert!(!tree.contains_key(&2));
+        tree.remove(&1);
+        assert!(!tree.contains_key(&1));
+    }
+
+    #[test]
+    fn clear_empties_the_tree_and_preserves_invariants() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut tree: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        for _ in 1..=50 {
+            tree.insert(rng.gen(), rng.gen());
+        }
+        tree.check_invariants();
+
+        tree.clear();
+
+        assert_eq!(tree.len(), 0);
+        assert!(tree.is_empty());
+        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
+        tree.check_invariants();
+
+        // The tree is usable afterward, not just empty.
+        tree.insert(1, 2);
+        assert_eq!(tree.get(&1), Some(&2));
+        tree.check_invariants();
+    }
+
+    #[test]
+    fn retain_drops_non_matching_and_preserves_invariants() {
+        let mut tree: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        for k in 0..30 {
+            tree.insert(k, k * 10);
+        }
+        tree.check_invariants();
+
+        tree.retain(|k, _| k % 2 == 0);
+        tree.check_invariants();
+
+        assert_eq!(tree.len(), 15);
+        for k in 0..30 {
+            if k % 2 == 0 {
+                assert_eq!(tree.get(&k), Some(&(k * 10)));
+            } else {
+                assert_eq!(tree.get(&k), None);
+            }
+        }
+
+        // The predicate can see the value, not just the key.
+        tree.retain(|_, v| *v < 100);
+        tree.check_invariants();
+        assert!(tree.iter().all(|(_, v)| *v < 100));
     }
 
     #[test]
