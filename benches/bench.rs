@@ -15,7 +15,8 @@ mod imp {
     };
 
     use reconcile::{
-        replicated_map::Config, Entry, FingerprintTreeMap, ReplicatedMap, State, Timestamp,
+        replicated_map::Config, Entry, FingerprintTreeMap, Hlc, LogicalCounter, NodeId,
+        PhysicalTime, ReplicatedMap, State, Timestamp,
     };
 
     fn fingerprint_tree_map_new(c: &mut Criterion) {
@@ -272,7 +273,19 @@ mod imp {
                     b.iter(|| {
                         let mut tree = FingerprintTreeMap::<u32, Entry<Timestamp, u32>>::new();
                         for &k in keys[..size].iter() {
-                            tree.insert(k, Entry::present(Timestamp::new(k as u64, 0, 0), k));
+                            tree.insert(
+                                k,
+                                Entry::present(
+                                    Timestamp::new(
+                                        Hlc::new(
+                                            PhysicalTime::from_millis(k as u64),
+                                            LogicalCounter::new(0),
+                                        ),
+                                        NodeId::new(0),
+                                    ),
+                                    k,
+                                ),
+                            );
                         }
                     })
                 },

@@ -41,7 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
-use reconcile::{replicated_map::Config, ReplicatedMap};
+use reconcile::{replicated_map::Config, NodeId, ReplicatedMap};
 
 /// Read a required environment variable or exit with a clear message.
 fn required(name: &str) -> String {
@@ -68,10 +68,10 @@ fn parse_cluster_key(hex: &str) -> [u8; 32] {
 }
 
 /// Derive a stable, per-pod node id from the (stable) StatefulSet pod name.
-fn node_id_from(pod_name: &str) -> u64 {
+fn node_id_from(pod_name: &str) -> NodeId {
     let mut hasher = DefaultHasher::new();
     pod_name.hash(&mut hasher);
-    hasher.finish()
+    NodeId::new(hasher.finish())
 }
 
 #[tokio::main]

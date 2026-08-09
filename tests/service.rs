@@ -5,7 +5,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
+use reconcile::{clock::NodeId, replicated_map::Config, Fingerprint, ReplicatedMap};
 
 /// Wait for a while until the provided predicate becomes true
 ///
@@ -299,12 +299,12 @@ async fn concurrent_writes_converge() {
         .with_port(port)
         .with_listen_addr(addr1)
         .with_net(net)
-        .with_node_id(1);
+        .with_node_id(NodeId::new(1));
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net)
-        .with_node_id(2);
+        .with_node_id(NodeId::new(2));
 
     let store1 = ReplicatedMap::<String, String>::new(cfg1)
         .await

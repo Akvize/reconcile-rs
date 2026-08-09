@@ -176,7 +176,7 @@ impl<T: Ord + Copy, V: Clone> Entry<T, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::Timestamp;
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -188,30 +188,69 @@ mod tests {
 
     #[test]
     fn merge_is_commutative_on_equal_wall_and_counter() {
-        let a = Entry::present(Timestamp::new(100, 0, 1), "a");
-        let b = Entry::present(Timestamp::new(100, 0, 2), "b");
+        let a = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(100), LogicalCounter::new(0)),
+                NodeId::new(1),
+            ),
+            "a",
+        );
+        let b = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(100), LogicalCounter::new(0)),
+                NodeId::new(2),
+            ),
+            "b",
+        );
         assert_eq!(a.merge(&b), b.merge(&a));
         assert_eq!(a.merge(&b).value(), Some(&"b"));
     }
 
     #[test]
     fn merge_is_idempotent() {
-        let a = Entry::present(Timestamp::new(7, 3, 42), "x");
+        let a = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(7), LogicalCounter::new(3)),
+                NodeId::new(42),
+            ),
+            "x",
+        );
         assert_eq!(a.merge(&a), a);
     }
 
     #[test]
     fn merge_picks_the_greater_stamp() {
-        let older = Entry::present(Timestamp::new(10, 0, 5), "old");
-        let newer = Entry::present(Timestamp::new(11, 0, 1), "new");
+        let older = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(10), LogicalCounter::new(0)),
+                NodeId::new(5),
+            ),
+            "old",
+        );
+        let newer = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(11), LogicalCounter::new(0)),
+                NodeId::new(1),
+            ),
+            "new",
+        );
         assert_eq!(older.merge(&newer).value(), Some(&"new"));
         assert_eq!(newer.merge(&older).value(), Some(&"new"));
     }
 
     #[test]
     fn is_tombstone_reflects_state() {
-        let live = Entry::present(Timestamp::new(1, 0, 0), 42);
-        let dead: Entry<Timestamp, i32> = Entry::tombstone(Timestamp::new(2, 0, 0));
+        let live = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                NodeId::new(0),
+            ),
+            42,
+        );
+        let dead: Entry<Timestamp, i32> = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         assert!(!live.is_tombstone());
         assert_eq!(live.value(), Some(&42));
         assert!(dead.is_tombstone());
@@ -220,8 +259,17 @@ mod tests {
 
     #[test]
     fn project_is_isomorphic_to_option() {
-        let live = Entry::present(Timestamp::new(1, 0, 0), "v");
-        let dead: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(2, 0, 0));
+        let live = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                NodeId::new(0),
+            ),
+            "v",
+        );
+        let dead: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         assert_eq!(live.project(), State::Present("v"));
         assert_eq!(dead.project(), State::Tombstone);
     }
@@ -236,8 +284,20 @@ mod tests {
     /// `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
     #[test]
     fn projection_hash_is_timestamp_independent_but_entry_hash_is_not() {
-        let early = Entry::present(Timestamp::new(1, 0, 0), "same-value");
-        let late = Entry::present(Timestamp::new(2, 0, 0), "same-value");
+        let early = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                NodeId::new(0),
+            ),
+            "same-value",
+        );
+        let late = Entry::present(
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+                NodeId::new(0),
+            ),
+            "same-value",
+        );
 
         // The dated entries differ (different stamp) and, overwhelmingly likely, hash
         // differently.
@@ -254,8 +314,14 @@ mod tests {
         assert_eq!(hash_of(&early.project()), hash_of(&late.project()));
 
         // Same check for tombstones.
-        let early_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(1, 0, 0));
-        let late_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(2, 0, 0));
+        let early_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
+        let late_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+            NodeId::new(0),
+        ));
         assert_ne!(hash_of(&early_tomb), hash_of(&late_tomb));
         assert_eq!(
             hash_of(&early_tomb.project()),

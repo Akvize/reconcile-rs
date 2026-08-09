@@ -165,7 +165,7 @@ where
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use lww_register::clock::Timestamp;
+    use lww_register::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
     use lww_register::entry::Entry;
 
     use super::*;
@@ -184,9 +184,21 @@ mod tests {
             entries: vec![
                 (
                     1,
-                    Entry::present(Timestamp::new(1_000, 0, 7), "alive".to_string()),
+                    Entry::present(
+                        Timestamp::new(
+                            Hlc::new(PhysicalTime::from_millis(1_000), LogicalCounter::new(0)),
+                            NodeId::new(7),
+                        ),
+                        "alive".to_string(),
+                    ),
                 ),
-                (2, Entry::tombstone(Timestamp::new(2_000, 1, 7))), // tombstone
+                (
+                    2,
+                    Entry::tombstone(Timestamp::new(
+                        Hlc::new(PhysicalTime::from_millis(2_000), LogicalCounter::new(1)),
+                        NodeId::new(7),
+                    )),
+                ), // tombstone
             ],
             members,
             tombstone_acks: acks,
@@ -234,14 +246,26 @@ mod tests {
         let mut first = sample_state();
         first.entries = vec![(
             1,
-            Entry::present(Timestamp::new(1, 0, 0), "first".to_string()),
+            Entry::present(
+                Timestamp::new(
+                    Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
+                    NodeId::new(0),
+                ),
+                "first".to_string(),
+            ),
         )];
         Persistence::<i32, String>::save(&backend, &first).unwrap();
 
         let mut second = sample_state();
         second.entries = vec![(
             1,
-            Entry::present(Timestamp::new(2, 0, 0), "second".to_string()),
+            Entry::present(
+                Timestamp::new(
+                    Hlc::new(PhysicalTime::from_millis(2), LogicalCounter::new(0)),
+                    NodeId::new(0),
+                ),
+                "second".to_string(),
+            ),
         )];
         Persistence::<i32, String>::save(&backend, &second).unwrap();
 
