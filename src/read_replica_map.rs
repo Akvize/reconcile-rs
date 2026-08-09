@@ -260,20 +260,94 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
             .is_some_and(|state| !state.is_tombstone())
     }
 
-    /// Number of entries currently stored, **including replicated tombstones**.
+    /// The number of **live** entries currently held (a replicated tombstone counts as absent, not
+    /// present). Mirrors [`ReplicatedMap::len`](crate::ReplicatedMap::len): `O(n)`, it scans the
+    /// tree filtering out tombstones.
     pub fn len(&self) -> usize {
-        self.tree.read().len()
+        self.tree
+            .read()
+            .iter()
+            .filter(|(_, state)| !state.is_tombstone())
+            .count()
     }
 
-    /// Whether the read replica is empty (no entries at all, tombstones included).
+    /// Whether the read replica holds no live entry (a tree holding only tombstones is empty).
+    /// `O(n)` worst case, but returns as soon as it finds a live value.
     pub fn is_empty(&self) -> bool {
-        self.tree.read().is_empty()
+        !self
+            .tree
+            .read()
+            .iter()
+            .any(|(_, state)| !state.is_tombstone())
     }
 
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
     /// [`value_fingerprint`](crate::ReplicatedMap::value_fingerprint) over the same range.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.tree.read().aggregate(&range).fingerprint()
+    }
+
+    /// Call `f` for every live entry, in key order.
+    ///
+    /// The tree read lock is held only for the duration of the call, and the borrows handed to `f`
+    /// cannot escape it — so a long-running scan cannot leak the guard and stall the reconciliation
+    /// loop. Do not perform blocking work or call back into the read replica from `f`.
+    pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
+        let guard = self.tree.read();
+        for (k, state) in guard.iter() {
+            if let Some(value) = state.as_value() {
+                f(k, value);
+            }
+        }
+    }
+
+    /// Call `f` for every live entry whose key falls in `range`, in key order. Mirrors the
+    /// [`fingerprint`](Self::fingerprint) range signature; same locking discipline as
+    /// [`for_each`](Self::for_each).
+    pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
+        let guard = self.tree.read();
+        for (k, state) in guard.range(&range) {
+            if let Some(value) = state.as_value() {
+                f(k, value);
+            }
+        }
+    }
+
+    /// Snapshot all live entries into an owned `Vec`, in key order. Clones under the read lock;
+    /// prefer [`for_each`](Self::for_each) to avoid the copy for large scans.
+    pub fn to_vec(&self) -> Vec<(K, V)> {
+        let guard = self.tree.read();
+        guard
+            .iter()
+            .filter_map(|(k, state)| state.as_value().map(|value| (k.clone(), value.clone())))
+            .collect()
+    }
+
+    /// Snapshot the live entries whose keys fall in `range` into an owned `Vec`, in key order.
+    pub fn range_to_vec<R: RangeBounds<K>>(&self, range: R) -> Vec<(K, V)> {
+        let guard = self.tree.read();
+        guard
+            .range(&range)
+            .filter_map(|(k, state)| state.as_value().map(|value| (k.clone(), value.clone())))
+            .collect()
+    }
+
+    /// The keys of all live entries, in key order. Thin owned convenience over [`to_vec`](Self::to_vec).
+    pub fn keys(&self) -> Vec<K> {
+        let guard = self.tree.read();
+        guard
+            .iter()
+            .filter_map(|(k, state)| state.as_value().map(|_| k.clone()))
+            .collect()
+    }
+
+    /// The values of all live entries, in key order.
+    pub fn values(&self) -> Vec<V> {
+        let guard = self.tree.read();
+        guard
+            .iter()
+            .filter_map(|(_, state)| state.as_value().cloned())
+            .collect()
     }
 
     fn get_peers(&self) -> Vec<IpAddr> {
@@ -516,16 +590,49 @@ mod tests {
         read_replica.integrate(vec![(1, State::Present("v".to_string()))]);
         assert_eq!(read_replica.get(&1).as_deref(), Some(&"v".to_string()));
 
-        // A later tombstone overwrites it: the value disappears from `get`, but the key is retained
-        // as a tombstone (a read replica has no timestamp and trusts the authoritative peer).
+        // A later tombstone overwrites it: the value disappears from `get`, and it no longer counts
+        // as a live entry (a read replica has no timestamp and trusts the authoritative peer).
         read_replica.integrate(vec![(1, State::Tombstone)]);
         assert!(read_replica.get(&1).is_none());
         assert!(!read_replica.contains_key(&1));
+        assert_eq!(read_replica.len(), 0, "the tombstone is not a live entry");
+        // The tombstone itself is still retained internally (the tree keeps it until the dated peer
+        // observes it acknowledged and moves on) — `len` deliberately doesn't surface that raw size.
         assert_eq!(
-            read_replica.len(),
+            read_replica.tree.read().len(),
             1,
-            "the tombstone is retained as an entry"
+            "the tombstone is retained as a tree entry"
         );
+    }
+
+    /// The collection-shaped read API (`for_each`/`for_each_in_range`/`to_vec`/`range_to_vec`/
+    /// `keys`/`values`) mirrors [`ReplicatedMap`](crate::ReplicatedMap)'s: live entries only, in key
+    /// order, tombstones excluded.
+    #[tokio::test]
+    async fn collection_reads_exclude_tombstones() {
+        let read_replica = ReadReplicaMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+        read_replica.integrate(vec![
+            (1, State::Present(10)),
+            (2, State::Present(20)),
+            (3, State::Tombstone),
+            (4, State::Present(40)),
+        ]);
+
+        assert_eq!(read_replica.to_vec(), vec![(1, 10), (2, 20), (4, 40)]);
+        assert_eq!(read_replica.keys(), vec![1, 2, 4]);
+        assert_eq!(read_replica.values(), vec![10, 20, 40]);
+        assert_eq!(read_replica.range_to_vec(2..=3), vec![(2, 20)]);
+        assert!(read_replica.range_to_vec(3..3).is_empty());
+
+        let mut collected = Vec::new();
+        read_replica.for_each(|k, v| collected.push((*k, *v)));
+        assert_eq!(collected, read_replica.to_vec());
+
+        let mut in_range = Vec::new();
+        read_replica.for_each_in_range(2.., |k, v| in_range.push((*k, *v)));
+        assert_eq!(in_range, vec![(2, 20), (4, 40)]);
     }
 
     /// The on-update hook fires for every integrated value, including tombstones.
