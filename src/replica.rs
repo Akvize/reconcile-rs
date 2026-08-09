@@ -46,7 +46,7 @@ const BUFFER_SIZE: usize = 65507;
 /// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
 /// [`BUFFER_SIZE`] bytes and the smallest message is at least one byte, so it can never legitimately
 /// contain more than this many messages; the cap turns a crafted datagram's decode-expansion into a
-/// bounded operation (issue #151) rather than an unbounded allocation.
+/// bounded operation rather than an unbounded allocation.
 pub(crate) const MAX_MESSAGES_PER_DATAGRAM: usize = BUFFER_SIZE;
 const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 /// Byte budget for the tombstone ack resends piggybacked onto each reconciliation datagram. Kept
@@ -609,7 +609,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     pub fn just_insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
-        // 1) Call the pre-insert hook *before* taking the map lock
+        // Hooks run outside the write lock: a hook that re-inserts must not re-enter it and
+        // deadlock (matching the update-merge path in `handle_messages`).
         (self.pre_insert.read())(&key, &value);
 
         // A tombstone value is a removal; a live value is an insertion. Counting here (rather
@@ -620,7 +621,6 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             observability::record_insert();
         }
 
-        // 2) Now acquire write lock and insert (mirroring the value-only projection)
         let mut guard = self.map.write();
         self.map_insert(&mut guard, key, value)
     }
@@ -760,7 +760,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     pub fn just_insert_bulk(&self, key_values: &[(K, Entry<Timestamp, V>)]) {
-        // 1) First run all pre-insert hooks outside the map lock
+        // Hooks run outside the write lock, for the same re-entrancy reason as `just_insert`.
         for (key, value) in key_values {
             (self.pre_insert.read())(key, value);
             if value.is_tombstone() {
@@ -769,7 +769,6 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 observability::record_insert();
             }
         }
-        // 2) Then acquire the write lock once and insert them (mirroring the projection)
         let mut guard = self.map.write();
         for (key, value) in key_values {
             self.map_insert(&mut guard, key.clone(), value.clone());
@@ -2257,7 +2256,6 @@ mod tombstone_ack_bounds {
     async fn ack_for_live_key_does_not_grow_tombstone_acks() {
         let eng = engine("127.0.0.95").await;
         let key = 10;
-        // Insert a live value (not a tombstone).
         eng.just_insert(
             key,
             Entry::present(
