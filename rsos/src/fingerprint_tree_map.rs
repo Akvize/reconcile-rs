@@ -535,7 +535,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 }
                 Err(index) => {
                     if let Some(children) = node.children.as_mut() {
-                        // internal node
                         let (diff_fp, ret) = aux(&mut children[index], key);
                         // Nothing found below means `diff_fp` is `ZERO` and no element left, so
                         // this composes to a no-op — the two halves move together either way.
@@ -544,7 +543,6 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                         node.rebalance_after_deletion(index);
                         (diff_fp, ret)
                     } else {
-                        // leaf node
                         (Fingerprint::ZERO, None)
                     }
                 }

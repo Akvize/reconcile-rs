@@ -11,7 +11,6 @@ mode=${1:-start}
 echo "🚀 Running init tasks (mode=$mode)..."
 
 if [[ "$mode" == "create" ]]; then
-  # Heavy, one-time operations after container creation
   echo "📦 Running cargo update && fetch"
   cargo update && cargo fetch
   echo "✅ Cargo dependencies fetched"

@@ -34,10 +34,10 @@ pub fn gen_ip<R: Rng>(rng: &mut R, network: IpNet) -> IpAddr {
 
 /// Select a random IPv4 address from the given network
 ///
-/// Crate-internal helper; example illustrative only (not compiled as a doctest).
+/// Illustrative only, not compiled as a doctest (see [`gen_ip`]'s doc comment for why).
 /// ```ignore
 /// # use rand::SeedableRng;
-/// # use reconcile::gen_ip::gen_ipv4;
+/// # use gossip::gen_ip::gen_ipv4;
 /// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "192.168.42.0/24".parse().unwrap();
@@ -50,10 +50,10 @@ pub fn gen_ipv4<R: Rng>(rng: &mut R, network: Ipv4Net) -> Ipv4Addr {
 
 /// Select a random IPv6 address from the given network
 ///
-/// Crate-internal helper; example illustrative only (not compiled as a doctest).
+/// Illustrative only, not compiled as a doctest (see [`gen_ip`]'s doc comment for why).
 /// ```ignore
 /// # use rand::SeedableRng;
-/// # use reconcile::gen_ip::gen_ipv6;
+/// # use gossip::gen_ip::gen_ipv6;
 /// #
 /// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 /// let net = "2001:db8::/32".parse().unwrap();
