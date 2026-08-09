@@ -122,7 +122,11 @@ but one High resolved or mitigated.
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
-- Comparative benchmark suite — [#174](https://github.com/Akvize/reconcile-rs/issues/174).
+- Comparative benchmark suite — [#174](https://github.com/Akvize/reconcile-rs/issues/174), rescoped
+  to in-repo reproducibility (external comparisons optional/non-CI). `benches/system.rs` covers
+  point-read, memory footprint, bulk-load, cold anti-entropy convergence, gossip fan-out/propagation
+  scaling, and durable rejoin — see `benches/README.md`. Still open: an external (e.g. Redis)
+  comparison, non-CI and feature-gated.
 - Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT, generic monoid
   summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185); see also
   [#257](https://github.com/Akvize/reconcile-rs/issues/257) (the current split fan-out is

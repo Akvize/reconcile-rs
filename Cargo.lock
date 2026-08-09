@@ -1308,6 +1308,7 @@ dependencies = [
 name = "reconcile"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
  "bincode",
  "chrono",
  "clap",
