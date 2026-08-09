@@ -114,9 +114,12 @@ but one High resolved or mitigated.
   excluded consistently across both types — [#179](https://github.com/Akvize/reconcile-rs/issues/179)
   (closed).
 
-### API and performance (tracked, not yet started)
-- Round out the write API: atomic update/upsert, predicate delete —
-  [#180](https://github.com/Akvize/reconcile-rs/issues/180).
+### API and performance
+- ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
+  `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
+  surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed).
+
+### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
 - Comparative benchmark suite — [#174](https://github.com/Akvize/reconcile-rs/issues/174).
