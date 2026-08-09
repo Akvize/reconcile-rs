@@ -856,6 +856,26 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
         }
         ItemRange { range, stack }
     }
+
+    /// The smallest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
+    /// leftmost path.
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+        let mut node = self.root.as_ref();
+        while let Some(children) = node.children.as_ref() {
+            node = &children[0];
+        }
+        node.keys.first().zip(node.values.first())
+    }
+
+    /// The largest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
+    /// rightmost path.
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+        let mut node = self.root.as_ref();
+        while let Some(children) = node.children.as_ref() {
+            node = children.last().unwrap();
+        }
+        node.keys.last().zip(node.values.last())
+    }
 }
 
 #[cfg(test)]
@@ -877,6 +897,36 @@ mod tests {
             tree.insert(rng.gen(), rng.gen());
             tree.check_invariants();
         }
+    }
+
+    #[test]
+    fn first_and_last_key_value() {
+        let mut tree: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+        assert_eq!(tree.first_key_value(), None);
+        assert_eq!(tree.last_key_value(), None);
+
+        tree.insert(5, 50);
+        assert_eq!(tree.first_key_value(), Some((&5, &50)));
+        assert_eq!(tree.last_key_value(), Some((&5, &50)));
+
+        // A randomized tree spanning several levels: first/last must agree with the extremal
+        // `select` positions (`0` and `len() - 1`), the order-statistic ground truth.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        for _ in 1..=200 {
+            let key: i32 = rng.gen();
+            tree.insert(key, key.wrapping_mul(2));
+        }
+        tree.check_invariants();
+        let min_key = *tree.select(0);
+        let max_key = *tree.select(tree.len() - 1);
+        assert_eq!(
+            tree.first_key_value(),
+            Some((&min_key, &min_key.wrapping_mul(2)))
+        );
+        assert_eq!(
+            tree.last_key_value(),
+            Some((&max_key, &max_key.wrapping_mul(2)))
+        );
     }
 
     #[test]

@@ -8,7 +8,8 @@
 
 //! Tests for the collection-shaped read API on `ReplicatedMap`
 //! (`len`/`is_empty`/`contains_key`/`for_each`/`for_each_in_range`/`to_vec`/`range_to_vec`/
-//! `keys`/`values`), including that tombstoned entries are excluded from every accessor.
+//! `keys`/`values`/`first_key_value`/`last_key_value`), including that tombstoned entries are
+//! excluded from every accessor.
 
 use std::sync::Arc;
 
@@ -34,6 +35,8 @@ fn empty_store_reads() {
     assert!(store.range_to_vec(..).is_empty());
     assert!(store.keys().is_empty());
     assert!(store.values().is_empty());
+    assert_eq!(store.first_key_value(), None);
+    assert_eq!(store.last_key_value(), None);
 
     let mut seen = 0;
     store.for_each(|_, _| seen += 1);
@@ -59,6 +62,8 @@ fn live_reads_and_ranges() {
     );
     assert_eq!(store.keys(), vec![1, 2, 3, 4, 5]);
     assert_eq!(store.values(), vec![10, 20, 30, 40, 50]);
+    assert_eq!(store.first_key_value(), Some((1, 10)));
+    assert_eq!(store.last_key_value(), Some((5, 50)));
 
     // Callback visits every live entry, in order.
     let mut collected = Vec::new();
@@ -109,4 +114,34 @@ fn tombstoned_entries_are_excluded() {
     assert_eq!(store.len(), 0);
     assert!(store.is_empty());
     assert!(store.to_vec().is_empty());
+}
+
+/// `first_key_value`/`last_key_value` must skip past a tombstone sitting exactly at the extremal
+/// (smallest/largest) raw key — the case that distinguishes them from a plain "smallest/largest raw
+/// key" read.
+#[test]
+fn first_and_last_key_value_skip_boundary_tombstones() {
+    let store = isolated_store("127.0.0.4");
+    for k in 1..=5 {
+        store.just_insert(k, k * 10);
+    }
+    assert_eq!(store.first_key_value(), Some((1, 10)));
+    assert_eq!(store.last_key_value(), Some((5, 50)));
+
+    // Tombstone both extremes: the live min/max must move inward to 2 and 4.
+    store.just_remove(&1);
+    store.just_remove(&5);
+    assert_eq!(store.first_key_value(), Some((2, 20)));
+    assert_eq!(store.last_key_value(), Some((4, 40)));
+
+    // Tombstone everything but one middle key: it is both the min and the max.
+    store.just_remove(&2);
+    store.just_remove(&4);
+    assert_eq!(store.first_key_value(), Some((3, 30)));
+    assert_eq!(store.last_key_value(), Some((3, 30)));
+
+    // No live entries left: both read `None`, not a stale/raw tombstoned key.
+    store.just_remove(&3);
+    assert_eq!(store.first_key_value(), None);
+    assert_eq!(store.last_key_value(), None);
 }

@@ -607,6 +607,38 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.get(k).is_some()
     }
 
+    /// The smallest live key and its value, or `None` if the store holds no live entry.
+    ///
+    /// `O(log n)` when the smallest raw key is live; `O(k)` if it is preceded by `k` consecutive
+    /// tombstones (worst case `O(n)`, all tombstones — same bound as [`is_empty`](Self::is_empty)).
+    /// Returns owned clones rather than borrows: unlike [`get`](Self::get), a `(key, value)` pair
+    /// can't be expressed as a single [`MappedRwLockReadGuard`] target, and holding the map lock
+    /// across the call is exactly the hazard [`for_each`](Self::for_each) exists to avoid.
+    pub fn first_key_value(&self) -> Option<(K, V)> {
+        let guard = self.engine.map.read();
+        guard
+            .iter()
+            .find(|(_, entry)| !entry.is_tombstone())
+            .map(|(k, entry)| (k.clone(), entry.value().expect("checked above").clone()))
+    }
+
+    /// The largest live key and its value, or `None` if the store holds no live entry. Same
+    /// complexity and owned-return rationale as [`first_key_value`](Self::first_key_value), walking
+    /// from the largest raw key down via [`FingerprintTreeMap::select`](rsos::FingerprintTreeMap::select)
+    /// (the tree has no reverse iterator yet — see the crate's `fingerprint_tree_map_iter` module docs).
+    pub fn last_key_value(&self) -> Option<(K, V)> {
+        let guard = self.engine.map.read();
+        let mut index = guard.len();
+        while index > 0 {
+            index -= 1;
+            let key = guard.select(index).clone();
+            if let Some(value) = guard.get(&key).and_then(|entry| entry.value()) {
+                return Some((key, value.clone()));
+            }
+        }
+        None
+    }
+
     /// Call `f` for every live entry, in key order.
     ///
     /// The map read lock is held only for the duration of the call, and the borrows handed to `f`
