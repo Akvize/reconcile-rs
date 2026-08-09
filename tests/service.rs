@@ -1239,7 +1239,6 @@ async fn tombstone_gc_converges_in_3_node_cluster_line() {
     let fp_tombstone = store1.fingerprint(..);
     assert_until!(store2.fingerprint(..) == fp_tombstone && store3.fingerprint(..) == fp_tombstone);
 
-    // The tombstone must be GC'd on all three nodes with no decommissioning.
     assert_until_slow!(store1.fingerprint(..) != fp_tombstone);
     assert_until_slow!(store2.fingerprint(..) != fp_tombstone);
     assert_until_slow!(store3.fingerprint(..) != fp_tombstone);

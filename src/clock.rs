@@ -357,10 +357,9 @@ mod tests {
 
     #[test]
     fn observe_advances_past_a_future_timestamp() {
-        // Reproduces defect (a) for *legitimate* skew: a peer with a clock running a few
-        // seconds ahead. After observing its timestamp, our next local write must be ordered
-        // *after* it, not lost. (Far-future stamps beyond MAX_CLOCK_DRIFT are clamped;
-        // see `observe_far_future_is_clamped` for that case.)
+        // Legitimate skew: a peer with a clock running a few seconds ahead. After observing its
+        // timestamp, our next local write must be ordered *after* it, not lost. (Far-future
+        // stamps beyond MAX_CLOCK_DRIFT are clamped; see `observe_far_future_is_clamped`.)
         let clock = HlcClock::new(NodeId::new(1));
         // 5 s ahead: well within cap.
         let future = Timestamp::new(
@@ -391,8 +390,6 @@ mod tests {
         assert_eq!(local, ts(50, 5, 7));
         assert!(local > remote);
     }
-
-    // ----- New tests for the two bug fixes -----
 
     /// Observing a stamp near u64::MAX must not pin the local clock anywhere near u64::MAX.
     /// The next `now()` must be within phys_now + MAX_CLOCK_DRIFT + small margin,

@@ -337,7 +337,6 @@ mod imp {
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
-                    // start reconciliation stores
                     let store1 = ReplicatedMap::new(cfg1)
                         .await
                         .expect("bind failed")
@@ -404,7 +403,6 @@ mod imp {
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
-                    // start reconciliation services
                     let store1 = ReplicatedMap::new(cfg1)
                         .await
                         .expect("bind failed")

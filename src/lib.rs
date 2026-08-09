@@ -9,14 +9,14 @@
 //! This crate provides a key-data map structure [`FingerprintTreeMap`] (from the [`rsos`] crate)
 //! that can be used together with the reconciliation [`ReplicatedMap`]. Different instances can talk
 //! together over UDP to efficiently reconcile their differences.
-
+//!
 //! All the data is available locally in all instances, and the user can be
 //! notified of changes to the collection with an insertion hook.
-
+//!
 //! The protocol allows finding a difference over millions of elements with a limited
 //! number of round-trips. It should also work well to populate an instance from
 //! scratch from other instances.
-
+//!
 //! # When to use this
 //!
 //! `reconcile-rs` is an **embedded, in-memory, eventually-consistent replicated map** — in

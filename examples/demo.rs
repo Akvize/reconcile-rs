@@ -38,7 +38,6 @@ async fn main() {
         .with_net(net);
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
-    // build collection
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut key_values: Vec<(String, String)> = vec![];
     for _ in 0..elements {
