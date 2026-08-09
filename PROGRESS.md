@@ -118,6 +118,12 @@ but one High resolved or mitigated.
 - ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
   surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed).
+- ✅ `FingerprintTreeMap`'s own comfort write API (`rsos`, one layer below `ReplicatedMap`):
+  `contains_key`, `clear`, `retain`. A `std`-style `entry()` returning a live `&mut V` is
+  deliberately not offered — see the rationale on `with_mut`'s doc comment (a bare mutable handle
+  lets a caller skip the re-lift/fingerprint-propagation step `with_mut` guarantees); the
+  get-or-insert half of what `entry()` usually buys already exists one layer up
+  (`ReplicatedMap::upsert`/`get_or_insert_with`).
 
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot

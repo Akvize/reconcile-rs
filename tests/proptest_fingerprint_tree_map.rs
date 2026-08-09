@@ -41,15 +41,25 @@ enum Op {
     Insert(u8, u16),
     Remove(u8),
     Get(u8),
+    ContainsKey(u8),
+    /// Keep entries whose value is below this threshold — exercises `retain` with both a
+    /// no-op (`u16::MAX`, keeps everything) and an aggressive cutoff (drops most entries).
+    Retain(u16),
+    Clear,
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
-    // Small key space (u8) so that `remove`/`get` actually hit existing keys
-    // often, and node splits/merges are exercised with modest sequence lengths.
+    // Small key space (u8) so that `remove`/`get` actually hit existing keys often, and node
+    // splits/merges are exercised with modest sequence lengths. `Clear`/`Retain` are weighted
+    // low: frequent enough to interleave with splits/merges, rare enough that the sequence
+    // still builds up a non-trivial tree between them.
     prop_oneof![
-        (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::Insert(k, v)),
-        any::<u8>().prop_map(Op::Remove),
-        any::<u8>().prop_map(Op::Get),
+        6 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::Insert(k, v)),
+        6 => any::<u8>().prop_map(Op::Remove),
+        6 => any::<u8>().prop_map(Op::Get),
+        6 => any::<u8>().prop_map(Op::ContainsKey),
+        1 => any::<u16>().prop_map(Op::Retain),
+        1 => Just(Op::Clear),
     ]
 }
 
@@ -71,6 +81,17 @@ proptest! {
                 }
                 Op::Get(k) => {
                     prop_assert_eq!(tree.get(&k), oracle.get(&k));
+                }
+                Op::ContainsKey(k) => {
+                    prop_assert_eq!(tree.contains_key(&k), oracle.contains_key(&k));
+                }
+                Op::Retain(threshold) => {
+                    tree.retain(|_, v| *v < threshold);
+                    oracle.retain(|_, v| *v < threshold);
+                }
+                Op::Clear => {
+                    tree.clear();
+                    oracle.clear();
                 }
             }
             // The core safety net: structural, ordering, height, size and hash
