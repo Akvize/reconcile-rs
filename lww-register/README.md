@@ -6,13 +6,13 @@
 > [`reconcile`](https://crates.io/crates/reconcile)**, which re-exports everything here that is
 > meant for consumers (`reconcile::Entry`, `reconcile::Timestamp`, `reconcile::Persistence`, …).
 >
-> This crate is on crates.io for one reason: cargo has no vendoring, so `reconcile` cannot be
+> This crate publishes to crates.io for one reason: cargo has no vendoring, so `reconcile` cannot be
 > published unless every crate it depends on is published too — the same reason `serde_derive`,
 > `pin-project-internal` and `tracing-attributes` are on the registry. **Anything here may change
 > or disappear in any release**, including a patch release, with no deprecation period and no
 > mention in `reconcile`'s changelog. It is versioned against `reconcile`'s API, not its own, and
 > is shaped entirely by what `reconcile` needs — it is not offered as a general-purpose
-> LWW-Register.
+> LWW-Register. Current publish status: [`PROGRESS.md`](https://github.com/Akvize/reconcile-rs/blob/main/PROGRESS.md).
 
 The state-based last-write-wins register domain of
 [`reconcile-rs`](https://github.com/Akvize/reconcile-rs): `Entry`/`State` (the register cell, its

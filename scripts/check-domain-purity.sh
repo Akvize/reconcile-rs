@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforces the hexagonal-architecture invariant documented in ARCHITECTURE.md §2.2:
+# Enforces the hexagonal-architecture invariant documented in ARCHITECTURE.md §2.1:
 # the domain mechanism (data structure + protocol algorithm) imports no infrastructure
 # crate — no async runtime, no socket, no wire codec, no wall clock. This is a real
 # invariant today (not aspirational), so we gate on it rather than let it silently rot
@@ -82,7 +82,7 @@ done
 
 if [ "$status" -ne 0 ]; then
     echo >&2
-    echo "Domain modules must stay infrastructure-free (ARCHITECTURE.md §2.2/§3.3)." >&2
+    echo "Domain modules must stay infrastructure-free (ARCHITECTURE.md §2.1)." >&2
     echo "Route the dependency through a port/adapter instead, or move the code out of the domain." >&2
     echo >&2
 fi
@@ -171,7 +171,7 @@ done
 if [ "$manifest_status" -ne 0 ]; then
     echo >&2
     echo "rsos/rbsr/lww-register must stay standalone: no async runtime, socket, wire codec or" >&2
-    echo "wall clock in their manifests (ARCHITECTURE.md §2.2, AGENTS.md §9.2). Put the adapter" >&2
+    echo "wall clock in their manifests (ARCHITECTURE.md §2.1, AGENTS.md §9). Put the adapter" >&2
     echo "in gossip or reconcile instead." >&2
     status=1
 fi

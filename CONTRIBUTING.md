@@ -1,183 +1,69 @@
 # Contributing Guide
 
-Thank you for your interest in contributing to this project! We provide two workflows for setting up a reproducible Rust development environment:
+Two workflows for a reproducible Rust dev environment — pick the one that fits your tooling. Both
+build the same image (`.devcontainer/Dockerfile.dev`) and land you in a shell as user `dev`.
 
-* **IDE Workflow** (Dev Containers) for VS Code, GitHub Codespaces, JetBrains, or the Dev Containers CLI
-* **CLI Workflow** for users who prefer raw Docker commands
-
-Choose the one that fits your tooling.
-
----
+```bash
+git clone https://github.com/akvize/reconcile-rs.git && cd reconcile-rs
+```
 
 ## 🔧 IDE Workflow (Dev Containers)
 
-**Prerequisites**:
+**Prerequisites:** Docker, and one of VS Code (**Remote – Containers** extension), GitHub
+Codespaces, a JetBrains IDE with the Dev Containers plugin, or the Dev Containers CLI
+(`npm install -g @devcontainers/cli`).
 
-* Docker (Desktop or Engine)
-* One of:
+```bash
+make dc-up
+```
 
-  * VS Code with **Remote – Containers** extension
-  * GitHub Codespaces
-  * JetBrains IDE with the Dev Containers plugin
-  * Dev Containers CLI (`npm install -g @devcontainers/cli`)
+Runs `devcontainer up`: builds the image, creates/starts the container as user `dev`, runs
+`.devcontainer/init.sh create` once (postCreate) and `.devcontainer/init.sh start` on every start
+(postStart). Then open the workspace: VS Code → **Remote-Containers: Reopen in Container**;
+JetBrains → **Attach to Dev Container**; CLI users land in a shell automatically. Your IDE picks up
+the installed LSPs (`rust-analyzer`, `dockerfile-language-server-nodejs`, `taplo`, `marksman`)
+without further setup.
 
-**Setup Steps**:
-
-1. **Clone the repository**
-
-   ```bash
-   git clone https://github.com/akvize/reconcile-rs.git
-   cd reconcile-rs
-   ```
-
-2. **Start the Dev Container**
-
-   ```bash
-   make dc-up
-   ```
-
-   This runs `devcontainer up`, which will:
-
-   * Build the image via `.devcontainer/Dockerfile.dev`
-   * Create and start the container as user `dev`
-   * Run the **postCreate** step (`.devcontainer/init.sh create`) once
-   * Run the **postStart** step (`.devcontainer/init.sh start`) on each start
-
-3. **Open the workspace**
-
-   * In VS Code: **Remote-Containers: Reopen in Container**
-   * In JetBrains: **Attach to Dev Container**
-   * CLI users will be dropped into a shell inside the `dev` user automatically
-
-4. **Verify** inside the container:
-
-   ```bash
-   whoami                       # should be 'dev'
-   git config --global user.name
-   git config --global user.email
-   ls -l .git/hooks/pre-commit   # pre-commit hook linked
-   rustc --version
-   command -v rust-analyzer
-   command -v dockerfile-language-server-nodejs
-   command -v taplo
-   command -v marksman
-   ```
-
-🎉 You’re all set! Your IDE will pick up the installed LSPs automatically.
-
----
+To rebuild after a `Dockerfile.dev` change: `make dc-rebuild`.
 
 ## 🐳 CLI Workflow (Raw Docker)
 
-**Prerequisites**:
-
-* Docker Engine (with BuildKit disabled for verbose logs if desired)
-* `make` (or run commands manually)
-
-**Setup Steps**:
-
-1. **Clone the repository**
-
-   ```bash
-   git clone https://github.com/akvize/reconcile-rs.git
-   cd reconcile-rs
-   ```
-
-2. **Build the Docker image**
-
-   ```bash
-   make build
-   ```
-
-3. **Run the container interactively**
-
-   ```bash
-   make dev
-   ```
-
-   This mounts your code at `/workspace`, bootstraps the environment and drops you into `bash` as root.
-
-4. **Verify** inside the same shell:
-
-   ```bash
-   whoami                       # should be 'dev'
-   git config --global user.name
-   git config --global user.email
-   ls -l .git/hooks/pre-commit
-   rustc --version
-   command -v rust-analyzer
-   command -v dockerfile-language-server-nodejs
-   command -v taplo
-   command -v marksman
-   ```
-
-> **Tip**: You can also attach your preferred editor (Neovim, Emacs, JetBrains) to the running container for LSP support.
-
-### 🔄 Rebuilding the Image
-
-To rebuild the Docker image without running the init scripts, run:
+**Prerequisites:** Docker Engine, `make`.
 
 ```bash
-make build
+make dev
 ```
 
-This will rebuild the image using your `Dockerfile.dev`.
+Builds the image, mounts the repo at `/workspace`, runs the same init steps as the IDE workflow, and
+drops you into `bash` as user `dev`. Attach your own editor (Neovim, Emacs, …) to the running
+container for LSP support — the servers above are installed under `/usr/local/bin`.
 
-Alternatively, to force a no-cache build:
+To rebuild: `make build`, or `docker build --no-cache -f .devcontainer/Dockerfile.dev -t
+reconcile-rs-dev-container .` for a clean build.
+
+## Verify (either workflow)
 
 ```bash
-docker build --no-cache -f .devcontainer/Dockerfile.dev -t rust-dev-container .
+whoami                        # dev
+git config --global user.name
+git config --global user.email
+ls -l .git/hooks/pre-commit   # pre-commit hook linked
+rustc --version
+command -v rust-analyzer dockerfile-language-server-nodejs taplo marksman
 ```
 
-### 🧰 Attaching an Editor
+## Pre-commit hook
 
-For Neovim, Emacs, or other editors, launch your editor inside the container shell with:
+Linked automatically by `init.sh`; link manually with:
 
 ```bash
-nvim .
+ln -sf ../../pre-commit .git/hooks/pre-commit
 ```
 
-or
+Runs [`./pre-commit`](./pre-commit) before every commit — see AGENTS.md §3 for what it checks.
 
-```bash
-emacs .
-```
+## Code coverage
 
-to pick up the LSP servers installed in `/usr/local/bin`.
-
----
-
-## 📄 Pre-commit Hook
-
-We use a Git pre-commit hook to catch linting errors early. The hook is automatically linked by `init.sh`, but you can manually link it with:
-
-```bash
-ln -sf ./.devcontainer/../pre-commit .git/hooks/pre-commit
-```
-
-This will run the [`./pre-commit`](./pre-commit) before letting you create any
-commit. The goal is to detect linting errors as early as possible.
-
-## Code Coverage
-
-To get the code coverage, run:
-
-```bash
-cargo install cargo-llvm-cov
-cargo llvm-cov
-```
-
-For a detailed report of missed lines, use:
-
-```bash
-cargo llvm-cov --hide-instantiations --text
-```
-
-You can also generate an HTML version with:
-
-```bash
-cargo llvm-cov --hide-instantiations --html
-```
-
-Use the `report` sub-command to reuse the results of the previous run instead
-of running the tests again.
+See [`README.md`](./README.md) "Testing and coverage" for the `cargo-llvm-cov` commands. Two extras
+for local iteration: `--hide-instantiations --text` for a detailed missed-lines report, and the
+`report` sub-command to reuse a previous run's results instead of re-running the tests.

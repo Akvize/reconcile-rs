@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Generic-bound bundles (see ARCHITECTURE.md §3.8).
+//! Generic-bound bundles (see ARCHITECTURE.md §4.1).
 //!
 //! The reconciliation machinery repeats the same multi-bound constraints on every key and value
 //! type parameter. [`Key`] and [`Value`] bundle those *data* bounds (Clone/Debug/…/`'static`)

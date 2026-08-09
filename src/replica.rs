@@ -127,7 +127,7 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
 /// For more information, see [`ReplicatedMap`](crate::replicated_map::ReplicatedMap).
 ///
 /// `V` is the plain user value type; the engine internally stores and exchanges the dated
-/// [`Entry<Timestamp, V>`](crate::entry::Entry) domain type (see `ARCHITECTURE.md` §3.6).
+/// [`Entry<Timestamp, V>`](crate::entry::Entry) domain type (see `ARCHITECTURE.md` §4).
 ///
 /// The datagram-I/O [`Transport`] port is carried as `Arc<dyn Transport<Addr = SocketAddr>>` inside
 /// [`Inner`], since it is always reached behind a trait object. Wire encoding goes through the
