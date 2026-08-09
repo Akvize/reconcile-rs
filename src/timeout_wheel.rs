@@ -95,6 +95,17 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
             .collect()
     }
 
+    /// The instant `value` is currently tracked under, if any.
+    ///
+    /// Test-only introspection: the tombstone-expiry tests assert on the *derived* instant itself,
+    /// not merely on whether the value eventually expires, because the defect being guarded
+    /// against (an unbounded, peer-controlled instant) is invisible to an "it expired" assertion —
+    /// it is precisely a tombstone that never does.
+    #[cfg(test)]
+    pub(crate) fn instant_of(&self, value: &T) -> Option<DateTime<Utc>> {
+        self.map.read().unwrap().get(value).copied()
+    }
+
     pub fn remove(&self, value: &T) -> Option<T> {
         // Acquire `wheel` before `map`, matching the order used by `insert`. A consistent
         // lock acquisition order across all methods that hold both locks is what prevents an

@@ -103,10 +103,18 @@
 //! **What the types do not do.** They constrain the *local clock state*; they say nothing about a
 //! stamp already stored as LWW data. A clamped remote stamp keeps its original, unclamped
 //! `Timestamp` in the map — that is deliberate (the clamp must not rewrite data) — so downstream
-//! arithmetic on stored stamps still has to defend itself against oversized values. The concrete
-//! case is the tombstone-expiry conversion in `replicated_map`, where `physical().millis() as i64`
-//! can turn negative for a stamp near `u64::MAX`. No type here prevents that; it remains the
-//! caller's responsibility.
+//! arithmetic on stored stamps still has to defend itself against oversized values. No type here
+//! prevents that; it remains the consumer's responsibility.
+//!
+//! There is exactly one such consumer, and it now defends itself: the tombstone-expiry conversion
+//! in `replicated_map`, which turns a stored stamp into the wall-clock instant the expiry wheel
+//! ages by. It runs the stamp's [`PhysicalTime`] back through
+//! [`AdmittedTime::clamped_to_drift`] against *local* now, and converts the admitted value with a
+//! total `i64::try_from` — so a stamp in the far future can no longer date a tombstone past every
+//! plausible expiry (unbounded retention), and one above `i64::MAX` can no longer wrap negative
+//! into 1970. The reusable piece lives in `reconcile::clock` as `BoundedInstant`, next to the
+//! adapter, because the conversion needs both a physical-time read and a wall-clock type — neither
+//! of which belongs here. The stored stamp itself is untouched, exactly as this module requires.
 
 use serde::{Deserialize, Serialize};
 
@@ -148,9 +156,10 @@ impl ClockDrift {
 /// physical-time values; without a cap, one packet stamped near `u64::MAX` would pin every node's
 /// clock to that value permanently, destroying LWW recency. (The clamp protects the local
 /// clock state only: a stored value keeps its original stamp as LWW data, so downstream
-/// consumers of stored stamps — e.g. the tombstone expiry arithmetic in `replicated_map`,
-/// where `physical().millis() as i64` can turn negative — must defend against oversized stamps
-/// themselves.)
+/// consumers of stored stamps must defend against oversized stamps themselves. The one such
+/// consumer, the tombstone expiry arithmetic in `replicated_map`, does: it re-admits the stored
+/// [`PhysicalTime`] through [`AdmittedTime::clamped_to_drift`] against local now before deriving
+/// an expiry instant from it — see `reconcile::clock`'s `BoundedInstant`.)
 ///
 /// **Clamp semantics (strict monotonicity is preserved):**
 /// The clamp is applied only inside the [`Clock::observe`] implementation, by

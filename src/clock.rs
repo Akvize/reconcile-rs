@@ -20,6 +20,12 @@
 //! arithmetic is [`Hlc::next_tick`] and [`Hlc::advance_past_remote`], methods on the *reading*,
 //! which knows nothing of node identity — this adapter is what holds a [`NodeId`] and pairs it
 //! with a reading to mint a [`Timestamp`].
+//!
+//! The second thing that cannot live in the domain is `BoundedInstant` (crate-private): turning a
+//! *stored* HLC stamp into the `chrono` instant the tombstone-expiry wheel ages by. It sits here
+//! because it is the only other place in the crate that needs both a physical-time read and
+//! `chrono`, and because the bound it applies is the same [`MAX_CLOCK_DRIFT`] budget
+//! `HlcClock::observe` uses.
 
 use parking_lot::Mutex;
 use tracing::warn;
@@ -29,11 +35,103 @@ pub use lww_register::clock::{
     MAX_CLOCK_DRIFT,
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 /// Read physical time as an instant on the Unix-epoch millisecond scale.
-fn phys_now() -> PhysicalTime {
+pub(crate) fn phys_now() -> PhysicalTime {
     PhysicalTime::from_millis(Utc::now().timestamp_millis().max(0) as u64)
+}
+
+/// How a [`BoundedInstant`] was arrived at — the observable outcome of bounding a stored stamp.
+///
+/// Only [`Verbatim`](StampBound::Verbatim) is the ordinary case; the other two mean a stamp in the
+/// map leads this node's physical time by more than the budget, which on the default
+/// unauthenticated socket is a signal worth surfacing (see `README.md`, "Security model").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StampBound {
+    /// The stamp led local physical time by no more than the budget, so its own physical
+    /// component *is* the instant — byte-for-byte the behaviour that predates this bound.
+    Verbatim,
+    /// The stamp led local physical time by more than the budget; the cap (`local now + budget`)
+    /// is used instead. The stored stamp itself is untouched.
+    Capped,
+    /// Not even the cap is a representable `DateTime<Utc>`, so local now is used. Unreachable with
+    /// the default budget — it needs a [`ClockDrift`] large enough to push `now + budget` past
+    /// year 262143 — but it is the residual path, and it is reported rather than swallowed.
+    Unrepresentable,
+}
+
+/// A wall-clock instant derived from a **stored** HLC stamp, bounded so that a peer-controlled
+/// stamp cannot drive it arbitrarily far into the future.
+///
+/// The far-future clamp in [`Clock::observe`] protects the *local clock state* only: a remote
+/// stamp is kept exactly as received in the map, because it is LWW data and rewriting it would
+/// change conflict resolution and break the wire contract. Anything that then does *arithmetic* on
+/// a stored stamp therefore has to bound the value it derives — this type is that bound, and the
+/// tombstone-expiry hook in [`replicated_map`](crate::replicated_map) is its consumer.
+///
+/// Constructing one is the only way to get the instant, so the two hazards of the old
+/// `physical().millis() as i64` are both closed:
+///
+/// * a stamp in the far future but inside `chrono`'s range converted *exactly*, dating the
+///   tombstone past any plausible expiry, so `TimeoutWheel::expired()` never yielded it — an
+///   unbounded-retention hole reachable by any host that can send a datagram;
+/// * a stamp above `i64::MAX` wrapped negative into a pre-1970 date. After the clamp that regime
+///   is unrepresentable rather than handled: the admitted value is at most `now + budget`, and the
+///   conversion is a total [`i64::try_from`], not a lossy cast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BoundedInstant {
+    instant: DateTime<Utc>,
+    bound: StampBound,
+}
+
+impl BoundedInstant {
+    /// Bound `stamp_physical` to `local now + budget` and convert it to a wall-clock instant.
+    ///
+    /// `budget` is the same kind of plausibility allowance [`Clock::observe`] applies (default
+    /// [`MAX_CLOCK_DRIFT`]): a stamp may legitimately lead this node's clock by a bounded skew, and
+    /// within that skew the stamp's own physical component is used unchanged, so honest replicas
+    /// keep agreeing on when a tombstone ages out. Beyond it, the cap is used — see
+    /// [`StampBound`] for what each outcome means.
+    pub(crate) fn from_stored_stamp(
+        stamp_physical: PhysicalTime,
+        budget: ClockDrift,
+    ) -> BoundedInstant {
+        let admitted = AdmittedTime::clamped_to_drift(stamp_physical, phys_now(), budget);
+        // `i64::try_from` rather than `as`: after the clamp the value is provably at most
+        // `now + budget`, so the wrap-to-negative regime cannot arise — but a *total* conversion
+        // is what makes that a fact of the code rather than of the reasoning around it.
+        match i64::try_from(admitted.physical().millis())
+            .ok()
+            .and_then(DateTime::from_timestamp_millis)
+        {
+            Some(instant) => BoundedInstant {
+                instant,
+                bound: if admitted.was_clamped() {
+                    StampBound::Capped
+                } else {
+                    StampBound::Verbatim
+                },
+            },
+            // Residual path: the cap saturates at `u64::MAX` for an absurd budget, and `chrono`
+            // tops out around year 262143. Fall back to local now — the tombstone then ages from
+            // this moment, which is the conservative direction — and say so.
+            None => BoundedInstant {
+                instant: Utc::now(),
+                bound: StampBound::Unrepresentable,
+            },
+        }
+    }
+
+    /// The bounded wall-clock instant.
+    pub(crate) fn instant(self) -> DateTime<Utc> {
+        self.instant
+    }
+
+    /// How that instant was arrived at.
+    pub(crate) fn bound(self) -> StampBound {
+        self.bound
+    }
 }
 
 /// A per-node Hybrid Logical Clock — the default [`Clock`] adapter.
@@ -438,6 +536,60 @@ mod tests {
             after_clamped < far_future,
             "clamped observe produced a stamp >= the far-future value: \
              {after_clamped:?} should be < {far_future:?}"
+        );
+    }
+
+    /// The four regimes of `BoundedInstant::from_stored_stamp`, at the level of the helper itself.
+    /// The same four are exercised end-to-end through the tombstone hook in `replicated_map`.
+    #[test]
+    fn bounded_instant_covers_every_stamp_regime() {
+        let budget = MAX_CLOCK_DRIFT;
+
+        // (1) Normal stamp — a second ago. Used verbatim, so replicas still agree on the instant.
+        let normal = phys_now().millis() - 1_000;
+        let b = BoundedInstant::from_stored_stamp(PhysicalTime::from_millis(normal), budget);
+        assert_eq!(b.bound(), StampBound::Verbatim);
+        assert_eq!(b.instant().timestamp_millis(), normal as i64);
+
+        // (2) Far future but inside chrono's range: the regime where the old `as i64` cast was
+        // *exact*, so fixing the cast alone would have left the tombstone dated centuries out.
+        let far = phys_now().millis() + 10_000 * 365 * 24 * 3_600_000; // ~10 000 years ahead
+        let b = BoundedInstant::from_stored_stamp(PhysicalTime::from_millis(far), budget);
+        assert_eq!(b.bound(), StampBound::Capped);
+        let cap_upper = phys_now().saturating_add(budget).millis() as i64;
+        assert!(
+            b.instant().timestamp_millis() <= cap_upper,
+            "instant {} escaped the cap {cap_upper}",
+            b.instant()
+        );
+        assert!(
+            b.instant().timestamp_millis() >= phys_now().millis() as i64,
+            "a capped instant must still be in the future, not in the past"
+        );
+
+        // (3) Above i64::MAX: the regime the old cast wrapped negative into 1970. It must come
+        // back as the same cap as (2), never as a pre-epoch date.
+        let b = BoundedInstant::from_stored_stamp(PhysicalTime::from_millis(u64::MAX), budget);
+        assert_eq!(b.bound(), StampBound::Capped);
+        assert!(
+            b.instant().timestamp_millis() > 0,
+            "wrapped to a pre-epoch instant: {}",
+            b.instant()
+        );
+        assert!(b.instant().timestamp_millis() <= cap_upper);
+
+        // (4) Residual path: only reachable with a budget so large that `now + budget` saturates
+        // past chrono's year-262143 ceiling. Falls back to local now, and says so.
+        let b = BoundedInstant::from_stored_stamp(
+            PhysicalTime::from_millis(u64::MAX),
+            ClockDrift::from_millis(u64::MAX),
+        );
+        assert_eq!(b.bound(), StampBound::Unrepresentable);
+        let skew = (b.instant().timestamp_millis() - phys_now().millis() as i64).abs();
+        assert!(
+            skew < 60_000,
+            "fallback instant is not ~now: {}",
+            b.instant()
         );
     }
 
