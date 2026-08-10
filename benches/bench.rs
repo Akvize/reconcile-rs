@@ -223,7 +223,7 @@ mod imp {
                     let k1: u32 = rng.gen();
                     let k2: u32 = rng.gen();
                     let range = if k1 < k2 { k1..k2 } else { k2..k1 };
-                    tree.aggregate(&range);
+                    tree.aggregate(range);
                 })
             });
             size *= 10;

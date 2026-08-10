@@ -681,7 +681,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// across the crate boundary now that `FingerprintTreeMap` lives in its own crate. Callers that
     /// only need `Σ(S)` write `.aggregate(range).fingerprint()`: identical cost, the same single
     /// tree walk.
-    pub fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
+    pub fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
             range: &R,
@@ -732,7 +732,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             }
             cum
         }
-        aux(&self.root, range, None, None)
+        aux(&self.root, &range, None, None)
     }
 
     /// Position of `key` in the in-order sequence if present, or the position it would occupy
@@ -811,7 +811,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 /// Iterator over the key-value pairs of a [`FingerprintTreeMap`] whose key falls within a range, in
 /// key order. Returned by [`FingerprintTreeMap::range`].
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
-    range: &'a R,
+    /// Owned, not borrowed. Holding `&'a R` tied the range's lifetime to the borrow of the map,
+    /// which made a range built from runtime values — `map.range(lo..hi)` — a hard `E0716`: the
+    /// temporary died at the end of the statement while the iterator still borrowed it. It only
+    /// appeared to work with literal bounds because those are const-promoted to `&'static`.
+    range: R,
     stack: Vec<(&'a Node<K, V>, usize)>,
 }
 
@@ -856,13 +860,13 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// [`Iterator::enumerate`]'s `(index, item)` pairing, which is not what this yields. The
     /// trait keeps `enumerate` because it is explicitly the paper's contract; the inherent API
     /// keeps Rust's. (The former name here, `get_range`, matched neither.)
-    pub fn range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
+    pub fn range<R: RangeBounds<K>>(&self, range: R) -> ItemRange<'_, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();
         // traverse interior nodes
         'main_loop: while let Some(children) = node.children.as_ref() {
             for i in 0..node.keys.len() {
-                match node.keys[i].rcmp(range) {
+                match node.keys[i].rcmp(&range) {
                     RangeOrdering::Below => (),
                     RangeOrdering::Above => {
                         node = &children[i];
@@ -880,7 +884,7 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
         }
         // traverse leaf node
         for i in 0..node.keys.len() {
-            match node.keys[i].rcmp(range) {
+            match node.keys[i].rcmp(&range) {
                 RangeOrdering::Below => (),
                 RangeOrdering::Above | RangeOrdering::Empty => {
                     break;
@@ -970,13 +974,13 @@ mod tests {
     fn test_aggregate() {
         // empty
         let mut tree = FingerprintTreeMap::new();
-        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(tree.aggregate(..), Aggregate::ZERO);
         tree.check_invariants();
 
         // 1 value
         tree.insert(50, "Hello");
         tree.check_invariants();
-        let agg1 = tree.aggregate(&..);
+        let agg1 = tree.aggregate(..);
         assert_eq!(agg1.size(), 1);
         // The `assert_ne!`s below compare *fingerprints*, not whole aggregates: with different
         // element counts an aggregate-level `!=` would hold trivially on the size half and stop
@@ -986,7 +990,7 @@ mod tests {
         // 2 values
         tree.insert(25, "World!");
         tree.check_invariants();
-        let agg2 = tree.aggregate(&..);
+        let agg2 = tree.aggregate(..);
         assert_eq!(agg2.size(), 2);
         assert_ne!(agg2.fingerprint(), Fingerprint::ZERO);
         assert_ne!(agg2.fingerprint(), agg1.fingerprint());
@@ -994,7 +998,7 @@ mod tests {
         // 3 values
         tree.insert(75, "Everyone!");
         tree.check_invariants();
-        let agg3 = tree.aggregate(&..);
+        let agg3 = tree.aggregate(..);
         assert_eq!(agg3.size(), 3);
         assert_ne!(agg3.fingerprint(), Fingerprint::ZERO);
         assert_ne!(agg3.fingerprint(), agg1.fingerprint());
@@ -1004,7 +1008,7 @@ mod tests {
         // the whole aggregate.
         tree.remove(&75);
         tree.check_invariants();
-        assert_eq!(tree.aggregate(&..), agg2);
+        assert_eq!(tree.aggregate(..), agg2);
     }
 
     #[test]
@@ -1031,7 +1035,7 @@ mod tests {
 
         assert_eq!(tree.len(), 0);
         assert!(tree.is_empty());
-        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(tree.aggregate(..), Aggregate::ZERO);
         tree.check_invariants();
 
         // The tree is usable afterward, not just empty.
@@ -1066,6 +1070,37 @@ mod tests {
         assert!(tree.iter().all(|(_, v)| *v < 100));
     }
 
+    /// Regression guard for the signature these methods used to carry.
+    ///
+    /// `range` took `&'a R` tied to the borrow of `self`, so a range built from **runtime** values
+    /// was a hard `E0716` — the temporary died at the end of the statement while the returned
+    /// iterator still borrowed it. It only appeared to work throughout this crate's own tests and
+    /// doc examples because *literal* ranges are const-promoted to `&'static`; reading the bounds
+    /// from the data, as below, is exactly what the old signature could not express.
+    ///
+    /// Every call here is one the previous signature rejected.
+    #[test]
+    fn ranges_can_be_built_from_runtime_bounds() {
+        let tree: FingerprintTreeMap<u64, u64> = (0..100).map(|k| (k, k * 3)).collect();
+
+        // Bounds the compiler cannot promote: they are read out of the tree itself.
+        let lo = *tree.select(10);
+        let hi = *tree.select(20);
+
+        let keys: Vec<u64> = tree.range(lo..hi).map(|(k, _)| *k).collect();
+        assert_eq!(keys, (10..20).collect::<Vec<u64>>());
+        assert_eq!(tree.aggregate(lo..hi).size(), 10);
+
+        // The same, through an owned `Bound` pair rather than a range literal — the shape `rbsr`
+        // hands back as an `EnumerationRange`.
+        let bounds = (std::ops::Bound::Included(lo), std::ops::Bound::Excluded(hi));
+        assert_eq!(tree.range(bounds).count(), 10);
+        assert_eq!(tree.aggregate(bounds).size(), 10);
+
+        // A range whose bounds outlive nothing at all: built, used, and dropped inline.
+        assert_eq!(tree.range((lo + 1)..(hi - 1)).count(), 8);
+    }
+
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -1084,7 +1119,7 @@ mod tests {
             assert!(old.is_none());
             tree1.check_invariants();
             expected += Aggregate::new(1, super::lift(&key, &value));
-            assert_eq!(tree1.aggregate(&..), expected);
+            assert_eq!(tree1.aggregate(..), expected);
             key_values.push((key, value));
         }
 
@@ -1113,18 +1148,18 @@ mod tests {
         // Proper sub-ranges: compare fingerprints, since the sizes differ anyway and an
         // aggregate-level `!=` would say nothing about Σ(S).
         assert_ne!(
-            tree1.aggregate(&(mid..)).fingerprint(),
-            tree1.aggregate(&..).fingerprint()
+            tree1.aggregate((mid..)).fingerprint(),
+            tree1.aggregate(..).fingerprint()
         );
         assert_ne!(
-            tree1.aggregate(&..mid).fingerprint(),
-            tree1.aggregate(&..).fingerprint()
+            tree1.aggregate(..mid).fingerprint(),
+            tree1.aggregate(..).fingerprint()
         );
         // The Def. 3.5 monoid homomorphism, over *both* halves at once: composing the aggregates
         // of a partition of the key space with `⊗` must reproduce the aggregate of the whole.
         assert_eq!(
-            tree1.aggregate(&..mid) + tree1.aggregate(&(mid..)),
-            tree1.aggregate(&..)
+            tree1.aggregate(..mid) + tree1.aggregate((mid..)),
+            tree1.aggregate(..)
         );
 
         for _ in 0..100 {
@@ -1152,9 +1187,7 @@ mod tests {
             slice_index: SI,
         ) {
             assert_eq!(
-                tree.range(&range)
-                    .map(|(k, v)| (*k, *v))
-                    .collect::<Vec<_>>(),
+                tree.range(range).map(|(k, v)| (*k, *v)).collect::<Vec<_>>(),
                 key_values[slice_index]
             );
         }
@@ -1187,7 +1220,7 @@ mod tests {
                 expected.size() - 1,
                 expected.fingerprint() - super::lift(&key, &value),
             );
-            assert_eq!(tree1.aggregate(&..), expected);
+            assert_eq!(tree1.aggregate(..), expected);
         }
     }
 
@@ -1212,19 +1245,19 @@ mod tests {
 
         let check = |range: &dyn Fn() -> (std::ops::Bound<u32>, std::ops::Bound<u32>)| {
             let range = range();
-            let aggregate = tree.aggregate(&range);
+            let aggregate = tree.aggregate(range);
             assert_eq!(
                 aggregate.size(),
-                tree.range(&range).count(),
+                tree.range(range).count(),
                 "aggregate size disagrees with range().count() for {range:?}"
             );
             assert_eq!(
                 aggregate.is_empty(),
-                tree.range(&range).next().is_none(),
+                tree.range(range).next().is_none(),
                 "aggregate is_empty disagrees with range() for {range:?}"
             );
             let expected_fingerprint = tree
-                .range(&range)
+                .range(range)
                 .fold(Fingerprint::ZERO, |acc, (k, v)| acc + super::lift(k, v));
             assert_eq!(
                 aggregate.fingerprint(),
@@ -1252,6 +1285,6 @@ mod tests {
         check(&|| (std::ops::Bound::Included(lo), std::ops::Bound::Unbounded));
         // an empty tree
         let empty: FingerprintTreeMap<u32, u32> = FingerprintTreeMap::new();
-        assert_eq!(empty.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(empty.aggregate(..), Aggregate::ZERO);
     }
 }
