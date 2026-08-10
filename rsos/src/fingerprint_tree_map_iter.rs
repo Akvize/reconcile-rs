@@ -611,7 +611,7 @@ mod tests {
         // aggregate(..mid) ⊗ aggregate(mid..) == aggregate(..)
         let mid = BASE_ITEMS[TREE_SIZE / 2].0;
         assert_eq!(
-            tree.aggregate((..mid)) + tree.aggregate((mid..)),
+            tree.aggregate(..mid) + tree.aggregate(mid..),
             tree.aggregate(..),
             "partial-range aggregates do not compose into the global aggregate"
         );

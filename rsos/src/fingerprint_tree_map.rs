@@ -1148,7 +1148,7 @@ mod tests {
         // Proper sub-ranges: compare fingerprints, since the sizes differ anyway and an
         // aggregate-level `!=` would say nothing about Σ(S).
         assert_ne!(
-            tree1.aggregate((mid..)).fingerprint(),
+            tree1.aggregate(mid..).fingerprint(),
             tree1.aggregate(..).fingerprint()
         );
         assert_ne!(
@@ -1158,7 +1158,7 @@ mod tests {
         // The Def. 3.5 monoid homomorphism, over *both* halves at once: composing the aggregates
         // of a partition of the key space with `⊗` must reproduce the aggregate of the whole.
         assert_eq!(
-            tree1.aggregate(..mid) + tree1.aggregate((mid..)),
+            tree1.aggregate(..mid) + tree1.aggregate(mid..),
             tree1.aggregate(..)
         );
 

@@ -187,11 +187,7 @@ fn run_diff(
 fn items_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
-        .flat_map(|r| {
-            tree.range(r.clone())
-                .map(|(k, v)| (*k, *v))
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|r| tree.range(*r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
         .collect();
     out.sort_unstable();
     out.dedup();
