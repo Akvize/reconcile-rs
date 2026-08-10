@@ -311,6 +311,18 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   `Rsos::aggregate`/`RsosView::aggregate` keep the concrete `(usize, Fingerprint)` return type until
   a second summary type actually exists.
 
+  **Unlike the other two, this one is not additive, and that fixes its timing.** Generalizing
+  `Aggregate` to `Aggregate<M>` reshapes `RsosView::aggregate` into
+  `Aggregate<Self::Summary>` — and therefore turns `rbsr`'s `RangeAggregate<K>` into
+  `RangeAggregate<K, M>`. That type *is* the wire message: the codec bound moves from `K: Serialize`
+  to `K: Serialize, M: Serialize`, and the byte layout becomes `M`-dependent. Done before the first
+  published release it costs nothing; done after, it is a wire break *and* a breaking API change at
+  once. The seam is therefore worth landing with exactly one implementation (`M = Fingerprint`,
+  byte-identical to today, pinned by `tests/wire_format.rs`) rather than waiting for a second summary
+  type to justify it — which is the opposite of the `Encoding` reasoning above, and for a concrete
+  reason: an absent port can be added later, a monomorphic wire type cannot be generalized later for
+  free. Tracked in [#298](https://github.com/Akvize/reconcile-rs/issues/298).
+
 ---
 
 *For how this architecture was reached — the crate-by-crate extraction, the trait dissolutions, the

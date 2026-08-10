@@ -134,11 +134,18 @@ must enable encryption together), draws a fresh random 192-bit nonce per datagra
 of overhead (24-byte nonce + 16-byte tag).
 
 **Scope.** The MAC mode provides message integrity and authenticity; the `encryption` mode adds
-confidentiality on top. Neither provides replay protection (replaying a captured datagram is benign
-for idempotent last-write-wins reconciliation) or a peer allow-list, and the trust model stays a
-single shared secret — there is no per-peer identity or forward secrecy. Mutual peer authentication
-and forward secrecy would require a handshake (TLS/Noise), which is intentionally out of scope; if
-you need them, run the protocol over a trusted/encrypted underlay.
+confidentiality on top. Setting a cluster key also enables **per-sender replay protection**: every
+datagram carries a monotonically increasing sequence number and a sender wall-clock stamp inside the
+authenticated region, and the receiver rejects duplicates, stale out-of-window sequences, and stamps
+that deviate from local physical time by more than the freshness window
+([`Config::with_freshness_window`], default 5 minutes). Without a cluster key there is **no** replay
+protection at all — a captured datagram can be re-injected later to re-poison membership or
+re-deliver stale data.
+
+Still out of scope in every mode: a peer allow-list, per-peer identity, and forward secrecy. The
+trust model stays a single shared secret. Mutual peer authentication and forward secrecy would
+require a handshake (TLS/Noise), which is intentionally out of scope; if you need them, run the
+protocol over a trusted/encrypted underlay.
 
 [XChaCha20-Poly1305]: https://docs.rs/chacha20poly1305
 
