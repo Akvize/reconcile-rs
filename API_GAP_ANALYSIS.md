@@ -923,15 +923,21 @@ All resolved on 2026-08-10 except where noted.
   `reconcile::testing::{diff_round, start_diff}`, neither of which exists — the diff mechanism is
   `pub` on `rbsr` now. The items' underlying concerns are recorded as still-or-no-longer live rather
   than struck, since editing a batch's item list is a scope call.
-- ◯ **#2 vs #230 — left for a maintainer decision.** The June rescope narrowed #2 to a strict subset
-  of #230, so both now describe the same guard rail and neither tracks fragmentation. Either revert
-  #2 to its original chunking scope (preferred — nothing else covers it) or close it as superseded.
-  Closing the wrong one loses the fragmentation work from the tracker, so this is not a call to make
-  from an audit.
-- **Not stale, despite appearances:** [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
-  its one open child [#145](https://github.com/Akvize/reconcile-rs/issues/145) (6/7 children closed,
-  the split having landed). `PROGRESS.md` states they stay open **pending the first split-aware
-  release, not because code work remains** — so they are correctly open and were left alone.
+- ✅ **#2 closed as superseded by #230** (maintainer decision). Recorded as a deliberate loss rather
+  than a cleanup: **fragmentation / large-document support is now tracked nowhere.** #230 covers the
+  defect and enforces the ceiling; #230's own Scope deferred "the real fix: chunking" to #2, and that
+  deferral now points at a closed issue. Values larger than one datagram are unsupported by design
+  until someone re-files.
+- ✅ **#138 and #145 rescoped, not closed.** Both were correctly open — `PROGRESS.md` states they
+  await the first split-aware release rather than remaining code work — so they were slimmed to the
+  actual remainder instead. #145 is now purely the release gate (the four new crates have never been
+  published; close it when the first `v*` tag ships all five). #138 keeps **one genuine residual
+  coupling**: `src/timeout_wheel.rs:97` calls `Utc::now()` directly inside `expired()`, bypassing the
+  `Clock` port, although tombstone expiry is domain lifecycle (§5 invariant 6). It is contained — the
+  file is on the adapter side and the stamp is already bounded via `BoundedInstant` — so it is a
+  tidiness item, and it should be settled *after* #288 decides whether `Clock` is injectable at all.
+  The second coupling #138 named is **already fixed**: `src/read_replica_map.rs` now holds
+  `Arc<dyn Transport<..>>` and has no `tokio::net` call sites of its own.
 - **PRs #218–#221: never merged — investigated and resolved, 2026-08-10.** The audit initially read
   these as fixes that had landed and vanished, because their bodies are written in landed tense
   ("MSRV declared: `rust-version = "1.85"`", "`LoadError` re-exported at the crate root",
