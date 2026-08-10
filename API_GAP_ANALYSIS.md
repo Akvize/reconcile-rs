@@ -902,15 +902,36 @@ row 2 restates it), [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#
 
 ### 8.1 Housekeeping this audit surfaced
 
-- **Done but not closed:** [#233](https://github.com/Akvize/reconcile-rs/issues/233)
-  (`ReplicatedMap::node_id()` exists, `src/replicated_map.rs:295`) and
+All resolved on 2026-08-10 except where noted.
+
+- ✅ **Closed as done:** [#233](https://github.com/Akvize/reconcile-rs/issues/233)
+  (`ReplicatedMap::node_id()` at `src/replicated_map.rs:295`) and
   [#234](https://github.com/Akvize/reconcile-rs/issues/234) (`Value` no longer carries `PartialEq`,
-  `lww-register/src/bounds.rs`). [#138](https://github.com/Akvize/reconcile-rs/issues/138) is
-  effectively complete (6/7 children closed, step 6 landed but unticked).
-- **Stale type names in six open titles** — `ReconcileStore`/`HRTree` exist nowhere in the code
-  (#72, #92, #179, #180, #193, #233).
-- **#2 vs #230:** the June rescope collapsed #2 onto #230's guard rail, so both now describe the same
-  work. Revert #2 to its original fragmentation scope or close it as superseded.
+  `lww-register/src/bounds.rs:60`).
+- ✅ **Closed as delivered, with the unshipped half re-homed:**
+  [#179](https://github.com/Akvize/reconcile-rs/issues/179) — shipped in the callback shape the issue
+  itself recommends; its `iter` half never landed and is now #270/#271/#92/#291.
+  [#180](https://github.com/Akvize/reconcile-rs/issues/180) — its conditional-writes bullet is now
+  #299.
+- ✅ **Stale type names realigned** in the six open titles and eleven bodies — `ReconcileStore`,
+  `ReconcileMirror` and `HRTree` exist nowhere in the code. Mechanical renames only; scope,
+  checklists and intent untouched. (#180 needed no body change and was skipped rather than given a
+  no-op edit.)
+- ✅ **Obsolete items flagged on #205:** item 3's "no length separator" concern is structurally
+  impossible since `lift` moved off `std::hash::Hash` onto the length-prefixed canonical encoding
+  (`rsos/src/encoding.rs:35`, with a framing-ambiguity test at `:584`); item 7 names
+  `reconcile::testing::{diff_round, start_diff}`, neither of which exists — the diff mechanism is
+  `pub` on `rbsr` now. The items' underlying concerns are recorded as still-or-no-longer live rather
+  than struck, since editing a batch's item list is a scope call.
+- ◯ **#2 vs #230 — left for a maintainer decision.** The June rescope narrowed #2 to a strict subset
+  of #230, so both now describe the same guard rail and neither tracks fragmentation. Either revert
+  #2 to its original chunking scope (preferred — nothing else covers it) or close it as superseded.
+  Closing the wrong one loses the fragmentation work from the tracker, so this is not a call to make
+  from an audit.
+- **Not stale, despite appearances:** [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
+  its one open child [#145](https://github.com/Akvize/reconcile-rs/issues/145) (6/7 children closed,
+  the split having landed). `PROGRESS.md` states they stay open **pending the first split-aware
+  release, not because code work remains** — so they are correctly open and were left alone.
 - **PRs #218–#221: never merged — investigated and resolved, 2026-08-10.** The audit initially read
   these as fixes that had landed and vanished, because their bodies are written in landed tense
   ("MSRV declared: `rust-version = "1.85"`", "`LoadError` re-exported at the crate root",

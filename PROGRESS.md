@@ -109,12 +109,12 @@ but one High resolved or mitigated.
 - ◯ Larger-than-datagram payloads — [#230](https://github.com/Akvize/reconcile-rs/issues/230) (documented gap, README "Value-size ceiling").
 - ✅ Lightweight dateless read replica (`ReadReplicaMap`) — [#128](https://github.com/Akvize/reconcile-rs/issues/128) (closed).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — [#94](https://github.com/Akvize/reconcile-rs/issues/94) (closed).
-- ◐ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
+- ✅ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
   `contains_key`/`for_each`/`for_each_in_range`/`to_vec`/`range_to_vec`/`keys`/`values`, tombstones
   excluded consistently across both types — [#179](https://github.com/Akvize/reconcile-rs/issues/179)
-  (**open**, not closed as this file previously stated). Delivered in the callback shape the issue
-  itself recommends; the `iter` half of its title never landed and is deferred to
-  [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271).
+  (closed 2026-08-10; this file had claimed that prematurely while the issue was still open).
+  Delivered in the callback shape the issue itself recommends; the `iter` half of its title never
+  landed and is tracked by [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271)/[#291](https://github.com/Akvize/reconcile-rs/issues/291).
 
 ### API and performance
 - ◐ **Public-API audit (2026-08-10)** — a complete gap analysis of all five crates' public surface
@@ -155,10 +155,11 @@ but one High resolved or mitigated.
   PRs survive intact in `main`, and the repo already follows a close-and-re-land convention for
   stale branches (#217→#248, #226→#265, #244→#245). The one gap worth closing mechanically, per §10:
   nothing flags a PR whose base is not `main` and which has been open for months.
-- ◐ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
+- ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
-  surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (**open**, not closed as this
-  file previously stated). One bullet is unshipped: conditional writes
+  surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed 2026-08-10; this file
+  had claimed that prematurely while the issue was still open). One bullet was unshipped and is now
+  [#299](https://github.com/Akvize/reconcile-rs/issues/299): conditional writes
   (`compare_and_swap`/`insert_if_absent`) exist nowhere in the tree — and under LWW without
   consensus a cluster-wide compare-and-swap is not soundly implementable, so that bullet needs a
   decision rather than an implementation.
