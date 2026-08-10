@@ -46,6 +46,16 @@ enum Op {
     /// no-op (`u16::MAX`, keeps everything) and an aggressive cutoff (drops most entries).
     Retain(u16),
     Clear,
+    /// Mutate the value at a key in place through `with_mut`, the hash-safe mutation path.
+    WithMut(u8, u16),
+    /// The same, with a callback that mutates and *then* panics. The panic is caught; the tree
+    /// must survive it with every cached aggregate still describing what is actually stored.
+    ///
+    /// This is the interesting one. `with_mut` re-lifts the element and propagates the fingerprint
+    /// delta from a `Drop` guard precisely so that unwinding cannot skip it; before that, a
+    /// panicking callback left the map live and silently wrong. Interleaving these with the splits
+    /// and merges the other operations drive is what a narrow example cannot reach.
+    WithMutPanicking(u8, u16),
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -60,6 +70,8 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         6 => any::<u8>().prop_map(Op::ContainsKey),
         1 => any::<u16>().prop_map(Op::Retain),
         1 => Just(Op::Clear),
+        4 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::WithMut(k, v)),
+        2 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::WithMutPanicking(k, v)),
     ]
 }
 
@@ -92,6 +104,42 @@ proptest! {
                 Op::Clear => {
                     tree.clear();
                     oracle.clear();
+                }
+                Op::WithMut(k, v) => {
+                    let present = tree.with_mut(&k, |slot| match slot {
+                        Some(value) => {
+                            *value = v;
+                            true
+                        }
+                        None => false,
+                    });
+                    match oracle.get_mut(&k) {
+                        Some(value) => {
+                            *value = v;
+                            prop_assert!(present, "with_mut saw {k} as absent, oracle has it");
+                        }
+                        None => prop_assert!(!present, "with_mut saw {k} as present, oracle has not"),
+                    }
+                }
+                Op::WithMutPanicking(k, v) => {
+                    // The callback mutates, then unwinds. `with_mut`'s repair runs from a `Drop`
+                    // guard, so the aggregates must end up describing the *mutated* value — which
+                    // is why the oracle applies the same write.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tree.with_mut(&k, |slot| {
+                            if let Some(value) = slot {
+                                *value = v;
+                                panic!("deliberate panic inside with_mut");
+                            }
+                        })
+                    }));
+                    if let Some(value) = oracle.get_mut(&k) {
+                        *value = v;
+                        prop_assert!(outcome.is_err(), "the callback's panic must propagate");
+                    } else {
+                        // Absent key: the callback never panics, and nothing was mutated.
+                        prop_assert!(outcome.is_ok());
+                    }
                 }
             }
             // The core safety net: structural, ordering, height, size and hash
