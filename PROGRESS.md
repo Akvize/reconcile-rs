@@ -137,13 +137,24 @@ but one High resolved or mitigated.
   port with zero public implementors and no injection seam) and
   [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid summary — the one
   change here that cannot be made additively, since `RangeAggregate` is the wire type).
-- ⚠ **Fixes recorded as merged but absent from the audited tree** — verified directly on `597b94e`:
-  no `rust-version` in any manifest ([#189](https://github.com/Akvize/reconcile-rs/issues/189)/PR
-  #219); `backend.load().expect(..)` still at `src/replicated_map.rs:334` with no `LoadError`
-  ([#202](https://github.com/Akvize/reconcile-rs/issues/202)/PR #218); the k8s `readinessProbe` still
-  on `path: /metrics` ([#205](https://github.com/Akvize/reconcile-rs/issues/205)/PR #221). Either
-  those PRs never merged or the workspace split reverted them — resolve before treating any of the
-  three as done.
+- **PRs #218–#221 were never merged** (investigated 2026-08-10, resolved). Their bodies are written
+  in landed tense ("MSRV declared", "`LoadError` re-exported", "Closes #189"), which reads as a
+  record of merged work; it is not. Git pickaxe over all history finds **zero** occurrences of every
+  identifier they introduce — `rust-version`, `LoadError`, `/ready`,
+  `reconcile_internal_testing`, `with_snapshot_change_threshold` — so nothing was reverted and the
+  workspace split is not implicated. All four sat on a **7-deep stacked chain**
+  (`p1-1-antireplay → … → p1-7-hygiene`) in which every PR targeted the *previous feature branch*
+  rather than `main`, so the stack was inert from the start; they were closed unmerged in one
+  reasoned sweep on 2026-08-07 once `main` had moved past them (#243, #247). The branches are still
+  live on the remote, so the work is recoverable — re-land fresh against current `main` following the
+  #217→#248 precedent, not by rebasing the stack.
+  [#189](https://github.com/Akvize/reconcile-rs/issues/189),
+  [#202](https://github.com/Akvize/reconcile-rs/issues/202) and
+  [#205](https://github.com/Akvize/reconcile-rs/issues/205) were correctly left open throughout, and
+  this file's MSRV checkbox was never ticked. **The process is sound** — 10 of 10 spot-checked merged
+  PRs survive intact in `main`, and the repo already follows a close-and-re-land convention for
+  stale branches (#217→#248, #226→#265, #244→#245). The one gap worth closing mechanically, per §10:
+  nothing flags a PR whose base is not `main` and which has been open for months.
 - ◐ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
   surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (**open**, not closed as this

@@ -911,11 +911,21 @@ row 2 restates it), [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#
   (#72, #92, #179, #180, #193, #233).
 - **#2 vs #230:** the June rescope collapsed #2 onto #230's guard rail, so both now describe the same
   work. Revert #2 to its original fragmentation scope or close it as superseded.
-- ⚠ **Fixes recorded as merged that are absent from the audited tree** — verified directly: no
-  `rust-version` in any manifest (#189/PR #219); `backend.load().expect(..)` still at
-  `src/replicated_map.rs:334` with no `LoadError` (#202/PR #218); the k8s `readinessProbe` still on
-  `path: /metrics` (`examples/k8s/base/statefulset.yaml:54-57`, #205/PR #221). Either those PRs never
-  merged or the workspace split reverted them. **Resolve before closing anything on their strength.**
+- **PRs #218–#221: never merged — investigated and resolved, 2026-08-10.** The audit initially read
+  these as fixes that had landed and vanished, because their bodies are written in landed tense
+  ("MSRV declared: `rust-version = "1.85"`", "`LoadError` re-exported at the crate root",
+  "Closes #189"). They are proposals inside unmerged PRs. Git pickaxe over *all* history returns
+  **zero** hits for every identifier they introduce (`rust-version`, `LoadError`, `/ready`,
+  `reconcile_internal_testing`, `with_snapshot_change_threshold`), so nothing was reverted and the
+  workspace split is exonerated. Root cause: a **7-deep stacked chain** in which every PR targeted
+  the previous feature branch rather than `main`, left open ~2 months while `main` moved; closed
+  unmerged in one reasoned sweep on 2026-08-07. #189/#202/#205 stayed open throughout and remain
+  accurate. The branches are live on the remote — recoverable, and best re-landed fresh against
+  current `main` (#217→#248 is the precedent), not rebased through the stack.
+  **Not systematic:** 10 of 10 spot-checked merged PRs survive intact as ancestors of `origin/main`.
+  Two things are worth carrying forward: a PR body written in landed tense is not evidence of a
+  merge, and the GitHub API's `merged` boolean is unreliable here (it reads `false` for plainly
+  landed PRs) — `merged_at` is the discriminator.
 
 ---
 
