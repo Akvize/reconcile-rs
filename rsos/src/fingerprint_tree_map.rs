@@ -681,6 +681,8 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// across the crate boundary now that `FingerprintTreeMap` lives in its own crate. Callers that
     /// only need `Σ(S)` write `.aggregate(range).fingerprint()`: identical cost, the same single
     /// tree walk.
+    ///
+    /// Takes the range by value, for the reason spelled out on [`range`](Self::range).
     pub fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
@@ -860,6 +862,12 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// [`Iterator::enumerate`]'s `(index, item)` pairing, which is not what this yields. The
     /// trait keeps `enumerate` because it is explicitly the paper's contract; the inherent API
     /// keeps Rust's. (The former name here, `get_range`, matched neither.)
+    ///
+    /// Takes the range **by value**, as [`BTreeMap::range`](std::collections::BTreeMap::range)
+    /// does. A borrowed range has to outlive the returned iterator, and since the iterator also
+    /// borrows the map, that tied the two lifetimes together: `map.range(lo..hi)` built from
+    /// runtime bounds was a hard `E0716`, and only *literal* ranges compiled, by const-promotion.
+    /// [`ItemRange`] owns its range for the same reason.
     pub fn range<R: RangeBounds<K>>(&self, range: R) -> ItemRange<'_, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();

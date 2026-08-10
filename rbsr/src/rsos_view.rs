@@ -32,6 +32,9 @@ pub trait RsosView<K> {
     /// `Aggregate(l, u)` → `A(X ∩ [l, u))`: the bundled [`Aggregate`] over a range of keys
     /// (Def. 3.5's `A(S) = (|S|, Σ(S))`), answering "how many" and "which fingerprint" in a
     /// single query rather than two.
+    ///
+    /// Taken by value, mirroring [`rsos::Rsos::aggregate`]: a borrowed range would have to outlive
+    /// the call, which makes one built from runtime bounds inexpressible.
     fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate;
 
     /// `Rank(z)` → `Rank_X(z)`: the position `z` occupies (or would occupy) in the in-order

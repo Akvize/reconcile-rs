@@ -84,6 +84,9 @@ pub trait Rsos<K> {
     /// [`FingerprintTreeMap`]'s own `ItemRange` here would tie the abstraction to one realization's
     /// iterator. The cost is that `Rsos` is not object-safe — deliberate and free today, since
     /// every call site uses a concrete, monomorphized store.
+    ///
+    /// The range is taken by value, so one built from runtime bounds is expressible at all — see
+    /// [`FingerprintTreeMap::range`](crate::FingerprintTreeMap::range).
     fn enumerate<'a, R: RangeBounds<K> + 'a>(
         &'a self,
         range: R,
