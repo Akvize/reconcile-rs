@@ -117,44 +117,36 @@ but one High resolved or mitigated.
   landed and is tracked by [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271)/[#291](https://github.com/Akvize/reconcile-rs/issues/291).
 
 ### API and performance
-- ◐ **Public-API audit (2026-08-10)** — a complete gap analysis of all five crates' public surface
-  against what dependents need, in [`API_GAP_ANALYSIS.md`](./API_GAP_ANALYSIS.md) (evidence and
-  proposed signatures; the issues below carry the live state). The read/write map surface is
-  confirmed coherent; the defects sit underneath it. **44 findings, 9 of them P0, none previously
-  tracked** — filed as [#282](https://github.com/Akvize/reconcile-rs/issues/282)–[#299](https://github.com/Akvize/reconcile-rs/issues/299)
-  under [#206](https://github.com/Akvize/reconcile-rs/issues/206), with
+- ◐ **Public-API audit (2026-08-10)** — the public surface of all five crates reviewed against what
+  dependents need (`BTreeMap` and the RSOS contract for `rsos`, RBSR Algorithm 1/2 for `rbsr`, the
+  embedded-IMDG baseline for the facade, and implementability-from-outside for the four ports). The
+  read/write map surface is confirmed coherent; the defects sit underneath it, in trait impls,
+  generic bounds and panic-safety. **Nine P0 items, none previously tracked**, filed with their
+  evidence as [#282](https://github.com/Akvize/reconcile-rs/issues/282)–[#299](https://github.com/Akvize/reconcile-rs/issues/299)
+  under [#206](https://github.com/Akvize/reconcile-rs/issues/206);
   [#72](https://github.com/Akvize/reconcile-rs/issues/72)/[#92](https://github.com/Akvize/reconcile-rs/issues/92)/[#137](https://github.com/Akvize/reconcile-rs/issues/137)/[#185](https://github.com/Akvize/reconcile-rs/issues/185)/[#189](https://github.com/Akvize/reconcile-rs/issues/189)/[#202](https://github.com/Akvize/reconcile-rs/issues/202)/[#205](https://github.com/Akvize/reconcile-rs/issues/205)/[#257](https://github.com/Akvize/reconcile-rs/issues/257)
-  widened rather than duplicated. Full routing in that document's §8.
-  Three P0s carry correctness or security consequences beyond ergonomics:
-  `FingerprintTreeMap`'s `PartialEq` decides equality on the fingerprint alone, ignoring size
-  (reintroducing F1/#106's class in the map's own `==`, against `ARCHITECTURE.md` §5 invariant 3) —
-  [#282](https://github.com/Akvize/reconcile-rs/issues/282); every `ReplicatedMap` write panics
-  outside a Tokio runtime, and `with_discovery`'s authoritative-source precondition is a
-  `debug_assert!` that is a no-op in release —
-  [#283](https://github.com/Akvize/reconcile-rs/issues/283).
-  Two items need a maintainer **decision** before the first split-aware release freezes the
-  signatures: [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` is a re-exported
-  port with zero public implementors and no injection seam) and
-  [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid summary — the one
-  change here that cannot be made additively, since `RangeAggregate` is the wire type).
-- **PRs #218–#221 were never merged** (investigated 2026-08-10, resolved). Their bodies are written
-  in landed tense ("MSRV declared", "`LoadError` re-exported", "Closes #189"), which reads as a
-  record of merged work; it is not. Git pickaxe over all history finds **zero** occurrences of every
-  identifier they introduce — `rust-version`, `LoadError`, `/ready`,
-  `reconcile_internal_testing`, `with_snapshot_change_threshold` — so nothing was reverted and the
-  workspace split is not implicated. All four sat on a **7-deep stacked chain**
-  (`p1-1-antireplay → … → p1-7-hygiene`) in which every PR targeted the *previous feature branch*
-  rather than `main`, so the stack was inert from the start; they were closed unmerged in one
-  reasoned sweep on 2026-08-07 once `main` had moved past them (#243, #247). The branches are still
-  live on the remote, so the work is recoverable — re-land fresh against current `main` following the
-  #217→#248 precedent, not by rebasing the stack.
-  [#189](https://github.com/Akvize/reconcile-rs/issues/189),
-  [#202](https://github.com/Akvize/reconcile-rs/issues/202) and
-  [#205](https://github.com/Akvize/reconcile-rs/issues/205) were correctly left open throughout, and
-  this file's MSRV checkbox was never ticked. **The process is sound** — 10 of 10 spot-checked merged
-  PRs survive intact in `main`, and the repo already follows a close-and-re-land convention for
-  stale branches (#217→#248, #226→#265, #244→#245). The one gap worth closing mechanically, per §10:
-  nothing flags a PR whose base is not `main` and which has been open for months.
+  were widened rather than duplicated. Three P0s carry consequences beyond ergonomics:
+  `FingerprintTreeMap`'s `PartialEq` decides equality on the fingerprint alone, ignoring size —
+  F1/#106's class, in the map's own `==`, against [`ARCHITECTURE.md`](./ARCHITECTURE.md) §5
+  invariant 3 ([#282](https://github.com/Akvize/reconcile-rs/issues/282)); every `ReplicatedMap`
+  write panics outside a Tokio runtime, and `with_discovery`'s authoritative-source precondition is
+  a `debug_assert!`, a no-op in release
+  ([#283](https://github.com/Akvize/reconcile-rs/issues/283)). Two need a maintainer **decision**
+  before the first split-aware release freezes the signatures:
+  [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` is re-exported as a port with
+  zero public implementors and no injection seam) and
+  [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid — the one
+  non-additive change, since `RangeAggregate` is the wire type; see `ARCHITECTURE.md` §7).
+- **PRs #218–#221 were never merged** (established 2026-08-10). Their bodies read as landed work
+  ("MSRV declared", "`LoadError` re-exported", "Closes #189"); `git log -S` finds **zero**
+  occurrences of every identifier they introduce, so nothing was reverted and the workspace split is
+  not implicated. All four sat on a 7-deep stacked chain whose every PR targeted the *previous
+  feature branch* rather than `main`, leaving the stack inert; closed unmerged on 2026-08-07 once
+  `main` had moved past them. The branches are live on the remote — re-land fresh against `main`
+  (#217→#248 is the precedent) rather than rebasing the stack. #189/#202/#205 stayed correctly open
+  throughout. Nothing systematic: 10 of 10 spot-checked merged PRs survive intact in `main`. The one
+  gap worth closing mechanically, per AGENTS.md §10: nothing flags a PR whose base is not `main` and
+  which has been open for months.
 - ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
   surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed 2026-08-10; this file

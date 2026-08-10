@@ -36,7 +36,6 @@ exclude = [
     "ARCHITECTURE.md",
     "SOTA.md",
     "PROGRESS.md",
-    "API_GAP_ANALYSIS.md",
 ]
 
 [profile.release]
