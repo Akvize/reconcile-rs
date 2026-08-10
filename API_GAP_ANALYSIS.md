@@ -923,11 +923,17 @@ All resolved on 2026-08-10 except where noted.
   `reconcile::testing::{diff_round, start_diff}`, neither of which exists — the diff mechanism is
   `pub` on `rbsr` now. The items' underlying concerns are recorded as still-or-no-longer live rather
   than struck, since editing a batch's item list is a scope call.
-- ✅ **#2 closed as superseded by #230** (maintainer decision). Recorded as a deliberate loss rather
-  than a cleanup: **fragmentation / large-document support is now tracked nowhere.** #230 covers the
-  defect and enforces the ceiling; #230's own Scope deferred "the real fix: chunking" to #2, and that
-  deferral now points at a closed issue. Values larger than one datagram are unsupported by design
-  until someone re-files.
+- ✅ **#2 closed as superseded by #230** (maintainer decision). Its 2026-06-12 triage had already
+  rescoped it to "documentation + a guard rail", which *is* a subset of #230 — and had already parked
+  the transport work of its own accord ("the transport options stay closed unless a concrete
+  large-value consumer appears"). So closing **ratifies that decision rather than reversing it**;
+  there was no live plan to lose. Both issues land on the same position: for this project's
+  positioning (feature flags, routing tables, presence, config — small values), importing QUIC/TCP or
+  fragmentation into a deliberately connectionless gossip engine is disproportionate.
+  One consequence to clean up in #230, not #2: its Scope's last bullet still reads "**Then** the real
+  fix: chunking/fragmentation, tracked in #2" — a forward reference to a now-closed issue, which
+  should be reworded to "deliberately not planned; re-file if a concrete large-value consumer
+  appears".
 - ✅ **#138 and #145 rescoped, not closed.** Both were correctly open — `PROGRESS.md` states they
   await the first split-aware release rather than remaining code work — so they were slimmed to the
   actual remainder instead. #145 is now purely the release gate (the four new crates have never been
