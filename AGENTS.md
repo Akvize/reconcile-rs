@@ -27,10 +27,13 @@ Container / Docker setup. Link the pre-commit gate once: `ln -sf ../../pre-commi
 In CI's order (`.github/workflows/main.yml`):
 
 ```bash
+export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint
+                                                             # is a warning locally and an error
+                                                             # in CI — run the list as CI runs it
 cargo fmt --check
 ./scripts/check-domain-purity.sh                             # hexagonal boundary, §9
-cargo clippy --workspace --features internal-testing
-cargo clippy --workspace --all-features
+cargo clippy --workspace --features internal-testing --all-targets
+cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing, §3.1
 cargo build --workspace
 cargo test --workspace --features internal-testing
 cargo test --workspace --all-features
@@ -41,10 +44,33 @@ cargo doc --workspace --all-features                          # feature-gated it
 cargo package --workspace --allow-dirty                       # release packaging, §11
 ```
 
-`--workspace`, never `--all`. CI sets `RUSTFLAGS`/`RUSTDOCFLAGS=-Dwarnings`. `./pre-commit` runs a
-subset (`fmt --check`, `clippy --deny warnings`, the purity script) on the staged tree before every
-commit. `main.yml`, `./pre-commit` and this list are kept in sync by hand — change one, change all
-three.
+`--workspace`, never `--all`. `./pre-commit` runs a subset (`fmt --check`, the same `clippy`
+invocation, the purity script) on the staged tree before every commit. `main.yml`, `./pre-commit`
+and this list are kept in sync by hand — change one, change all three.
+
+### 3.1 Why `--all-targets`, and why the `export`
+
+Both flags exist because a green local run used to be able to precede a red CI run.
+
+**`--all-targets`.** Without it, clippy lints only lib and bin targets — **tests, benches and
+examples are never linted at all**. Not "linted elsewhere": a `clippy::*` lint in `tests/` is
+invisible to the entire pipeline, because the jobs that *compile* test code (`cargo test`,
+`cargo llvm-cov`) run rustc, not clippy. Measured on this workspace with one planted
+`clippy::clone_on_copy` in `tests/`:
+
+| command | outcome |
+|---|---|
+| `cargo clippy --workspace --all-features` | exit 0 — undetected |
+| `cargo clippy --workspace --all-features --all-targets` | exit 101 — caught |
+| `cargo test --workspace --all-features --no-run` | exit 0 — undetected |
+
+`--all-targets` pulls in the benches, which use the `internal-testing` seams (`just_insert` and
+friends), so it only works alongside `--features internal-testing` — that pairing is why
+`./pre-commit` carries both flags rather than just the one.
+
+**The `export`.** CI sets `RUSTFLAGS`/`RUSTDOCFLAGS=-Dwarnings` on the whole job. A contributor who
+copies the commands out of this list without it gets warnings where CI gets errors, which is a green
+local run followed by a red pipeline — rustc lints such as `unused_parens` behave exactly that way.
 
 ## 4. Type safety and domain modeling
 
