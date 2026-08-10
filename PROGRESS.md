@@ -109,24 +109,48 @@ but one High resolved or mitigated.
 - ◯ Larger-than-datagram payloads — [#230](https://github.com/Akvize/reconcile-rs/issues/230) (documented gap, README "Value-size ceiling").
 - ✅ Lightweight dateless read replica (`ReadReplicaMap`) — [#128](https://github.com/Akvize/reconcile-rs/issues/128) (closed).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — [#94](https://github.com/Akvize/reconcile-rs/issues/94) (closed).
-- ✅ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
+- ◐ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
   `contains_key`/`for_each`/`for_each_in_range`/`to_vec`/`range_to_vec`/`keys`/`values`, tombstones
   excluded consistently across both types — [#179](https://github.com/Akvize/reconcile-rs/issues/179)
-  (closed).
+  (**open**, not closed as this file previously stated). Delivered in the callback shape the issue
+  itself recommends; the `iter` half of its title never landed and is deferred to
+  [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271).
 
 ### API and performance
 - ◐ **Public-API audit (2026-08-10)** — a complete gap analysis of all five crates' public surface
-  against what dependents need, in [`API_GAP_ANALYSIS.md`](./API_GAP_ANALYSIS.md). The read/write map
-  surface below is confirmed coherent, but the audit found **nine P0 items** not covered by any open
-  issue, three of them with correctness or security consequences: `FingerprintTreeMap`'s `PartialEq`
-  decides equality on the fingerprint alone (reintroducing F1/#106's class in the map's own `==`),
-  every `ReplicatedMap` write panics outside a Tokio runtime, and `with_discovery`'s
-  authoritative-source precondition is a `debug_assert!` that is a no-op in release. See that
-  document's §7 for the prioritised backlog and §8 for what it adds beyond the issues already
-  tracked here.
-- ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
+  against what dependents need, in [`API_GAP_ANALYSIS.md`](./API_GAP_ANALYSIS.md) (evidence and
+  proposed signatures; the issues below carry the live state). The read/write map surface is
+  confirmed coherent; the defects sit underneath it. **44 findings, 9 of them P0, none previously
+  tracked** — filed as [#282](https://github.com/Akvize/reconcile-rs/issues/282)–[#299](https://github.com/Akvize/reconcile-rs/issues/299)
+  under [#206](https://github.com/Akvize/reconcile-rs/issues/206), with
+  [#72](https://github.com/Akvize/reconcile-rs/issues/72)/[#92](https://github.com/Akvize/reconcile-rs/issues/92)/[#137](https://github.com/Akvize/reconcile-rs/issues/137)/[#185](https://github.com/Akvize/reconcile-rs/issues/185)/[#189](https://github.com/Akvize/reconcile-rs/issues/189)/[#202](https://github.com/Akvize/reconcile-rs/issues/202)/[#205](https://github.com/Akvize/reconcile-rs/issues/205)/[#257](https://github.com/Akvize/reconcile-rs/issues/257)
+  widened rather than duplicated. Full routing in that document's §8.
+  Three P0s carry correctness or security consequences beyond ergonomics:
+  `FingerprintTreeMap`'s `PartialEq` decides equality on the fingerprint alone, ignoring size
+  (reintroducing F1/#106's class in the map's own `==`, against `ARCHITECTURE.md` §5 invariant 3) —
+  [#282](https://github.com/Akvize/reconcile-rs/issues/282); every `ReplicatedMap` write panics
+  outside a Tokio runtime, and `with_discovery`'s authoritative-source precondition is a
+  `debug_assert!` that is a no-op in release —
+  [#283](https://github.com/Akvize/reconcile-rs/issues/283).
+  Two items need a maintainer **decision** before the first split-aware release freezes the
+  signatures: [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` is a re-exported
+  port with zero public implementors and no injection seam) and
+  [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid summary — the one
+  change here that cannot be made additively, since `RangeAggregate` is the wire type).
+- ⚠ **Fixes recorded as merged but absent from the audited tree** — verified directly on `597b94e`:
+  no `rust-version` in any manifest ([#189](https://github.com/Akvize/reconcile-rs/issues/189)/PR
+  #219); `backend.load().expect(..)` still at `src/replicated_map.rs:334` with no `LoadError`
+  ([#202](https://github.com/Akvize/reconcile-rs/issues/202)/PR #218); the k8s `readinessProbe` still
+  on `path: /metrics` ([#205](https://github.com/Akvize/reconcile-rs/issues/205)/PR #221). Either
+  those PRs never merged or the workspace split reverted them — resolve before treating any of the
+  three as done.
+- ◐ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
-  surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed).
+  surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (**open**, not closed as this
+  file previously stated). One bullet is unshipped: conditional writes
+  (`compare_and_swap`/`insert_if_absent`) exist nowhere in the tree — and under LWW without
+  consensus a cluster-wide compare-and-swap is not soundly implementable, so that bullet needs a
+  decision rather than an implementation.
 - ✅ `FingerprintTreeMap`'s own comfort write API (`rsos`, one layer below `ReplicatedMap`):
   `contains_key`, `clear`, `retain`. A `std`-style `entry()` returning a live `&mut V` is
   deliberately not offered — see the rationale on `with_mut`'s doc comment (a bare mutable handle

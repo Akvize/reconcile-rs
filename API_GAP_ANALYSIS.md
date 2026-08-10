@@ -854,24 +854,68 @@ every builder and bool-returning mutator (the facade has **zero** today; the wor
 
 ---
 
-## 8. Relation to the tracked issues
+## 8. Dispatch — where every finding now lives
 
-Already tracked, and this audit adds API detail rather than a new item:
-[#92](https://github.com/Akvize/reconcile-rs/issues/92) (iterator refinements — but **`ItemRange` is
-outside its scope**, see F-S9), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap),
+Filed 2026-08-10. Every finding above is routed; nothing is left only in this document. This table is
+the index — the issues carry the live state, this file carries the evidence.
+
+| Findings | Destination | Kind |
+|---|---|---|
+| F-S1, F-S2, F-S3 | [#282](https://github.com/Akvize/reconcile-rs/issues/282) `rsos`: three P0 defects | new |
+| F-P2, F-R1, F-R2 | [#283](https://github.com/Akvize/reconcile-rs/issues/283) `reconcile`: three P0 defects | new |
+| F-B1, F-B6, F-S6 | [#284](https://github.com/Akvize/reconcile-rs/issues/284) contract laws | new |
+| F-P6 | [#285](https://github.com/Akvize/reconcile-rs/issues/285) `gossip`: auth extension surface | new, child of #137 |
+| F-P7 | [#286](https://github.com/Akvize/reconcile-rs/issues/286) `ClusterKey` at the boundary | new |
+| F-P1, F-P3, F-P8, X6 | [#287](https://github.com/Akvize/reconcile-rs/issues/287) `Transport`/`Discovery` contracts | new |
+| F-P4 | [#288](https://github.com/Akvize/reconcile-rs/issues/288) `Clock`: inject or unpublish | new — **a decision** |
+| F-B2, F-B3, F-B7, F-B8 | [#289](https://github.com/Akvize/reconcile-rs/issues/289) `rbsr`: public wire contract | new |
+| F-S4, F-S5, F-S7, F-S8, F-S10 | [#290](https://github.com/Akvize/reconcile-rs/issues/290) `rsos`: std parity | new |
+| F-S9 (`ItemRange` half) | [#291](https://github.com/Akvize/reconcile-rs/issues/291) | new, child of #92 |
+| F-R3, F-R7 | [#292](https://github.com/Akvize/reconcile-rs/issues/292) lifecycle & introspection | new |
+| F-R4, F-R5 | [#293](https://github.com/Akvize/reconcile-rs/issues/293) `Config` ergonomics | new |
+| F-R9 | [#294](https://github.com/Akvize/reconcile-rs/issues/294) `ReadReplicaMap` parity | new |
+| F-R10, F-R11 | [#295](https://github.com/Akvize/reconcile-rs/issues/295) silent failures & gauges | new |
+| F-R6 | [#296](https://github.com/Akvize/reconcile-rs/issues/296) hooks are setters | new, child of #79 |
+| X2 | [#297](https://github.com/Akvize/reconcile-rs/issues/297) foreign types in public signatures | new |
+| §4.1 (b) | [#298](https://github.com/Akvize/reconcile-rs/issues/298) generic monoid `Aggregate<M>` | new — **non-additive** |
+| conditional writes | [#299](https://github.com/Akvize/reconcile-rs/issues/299) decide, do not implement | new, split from #180 |
+| X1 | [#72](https://github.com/Akvize/reconcile-rs/issues/72) widened to the lint on all five roots | extended |
+| F-S9 (six iterators) | [#92](https://github.com/Akvize/reconcile-rs/issues/92) widened to the current set | extended |
+| X3, X4 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) widened to workspace release metadata | extended |
+| F-P5 | [#202](https://github.com/Akvize/reconcile-rs/issues/202) widened to the port contract | extended |
+| X5 | [#205](https://github.com/Akvize/reconcile-rs/issues/205) `#[non_exhaustive]`, `#[must_use]` | extended |
+| F-B4, F-B5, §4.1 (a) | [#257](https://github.com/Akvize/reconcile-rs/issues/257) `RoundOutcome`, `RoundLimits` | extended |
+| §4.1 (c) | [#185](https://github.com/Akvize/reconcile-rs/issues/185) #257 named as prerequisite | extended |
+| F-R8 | README "Security model" | **fixed on this branch** |
+
+Findings whose durable home is documentation, not a ticket (each is an acceptance criterion of the
+issue beside it): the four `RsosView` laws and the `Rsos` summary law → `ARCHITECTURE.md` §5 and the
+trait rustdoc (#284); the `Clock` decision → §3.2's port table (#288); the `RangeAggregate` byte
+layout → the type's own rustdoc (#289).
+
+Already tracked before this audit, and unchanged by it:
+[#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap),
 [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173)
-(performance), [#185](https://github.com/Akvize/reconcile-rs/issues/185) (hybrid RIBLT — API shape in
-§4.1), [#189](https://github.com/Akvize/reconcile-rs/issues/189) (MSRV = X3),
-[#202](https://github.com/Akvize/reconcile-rs/issues/202) (persistence robustness — F-P5 is its API
-half), [#203](https://github.com/Akvize/reconcile-rs/issues/203)/[#205](https://github.com/Akvize/reconcile-rs/issues/205)
-(CI/hygiene), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (value-size ceiling — F-R10
-row 2), [#257](https://github.com/Akvize/reconcile-rs/issues/257) (fan-out — API shape in §4.1),
-[#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271)
+(performance), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (value-size ceiling — F-R10
+row 2 restates it), [#270](https://github.com/Akvize/reconcile-rs/issues/270)/[#271](https://github.com/Akvize/reconcile-rs/issues/271)
 (zero-copy iteration).
 
-**Not covered by any open issue** — the genuinely new surface: F-S1, F-S2, F-S3, F-S4, F-S5, F-S6,
-F-S7, F-B1, F-B2, F-B6, F-P2, F-P4, F-P6, F-P7, F-R1, F-R2, F-R3, F-R4, F-R5, F-R6, F-R8, F-R9,
-X1, X2, X4, X5.
+### 8.1 Housekeeping this audit surfaced
+
+- **Done but not closed:** [#233](https://github.com/Akvize/reconcile-rs/issues/233)
+  (`ReplicatedMap::node_id()` exists, `src/replicated_map.rs:295`) and
+  [#234](https://github.com/Akvize/reconcile-rs/issues/234) (`Value` no longer carries `PartialEq`,
+  `lww-register/src/bounds.rs`). [#138](https://github.com/Akvize/reconcile-rs/issues/138) is
+  effectively complete (6/7 children closed, step 6 landed but unticked).
+- **Stale type names in six open titles** — `ReconcileStore`/`HRTree` exist nowhere in the code
+  (#72, #92, #179, #180, #193, #233).
+- **#2 vs #230:** the June rescope collapsed #2 onto #230's guard rail, so both now describe the same
+  work. Revert #2 to its original fragmentation scope or close it as superseded.
+- ⚠ **Fixes recorded as merged that are absent from the audited tree** — verified directly: no
+  `rust-version` in any manifest (#189/PR #219); `backend.load().expect(..)` still at
+  `src/replicated_map.rs:334` with no `LoadError` (#202/PR #218); the k8s `readinessProbe` still on
+  `path: /metrics` (`examples/k8s/base/statefulset.yaml:54-57`, #205/PR #221). Either those PRs never
+  merged or the workspace split reverted them. **Resolve before closing anything on their strength.**
 
 ---
 
