@@ -224,7 +224,7 @@ impl<K> BoundedRange<K> {
 pub fn initial_ranges<K, B: RsosView<K>>(local: &B) -> Vec<RangeAggregate<K>> {
     vec![RangeAggregate {
         range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-        aggregate: local.aggregate(&..),
+        aggregate: local.aggregate(..),
     }]
 }
 
@@ -293,7 +293,7 @@ pub fn protocol_round<K, B: RsosView<K>>(
         // bound combination — including a not-yet-validated inverted range — because `aggregate`
         // walks via point/range comparisons, never index arithmetic (an inverted range simply
         // aggregates to the empty set).
-        let local_aggregate = local.aggregate(&KeyRange::new(start.clone(), end.clone()));
+        let local_aggregate = local.aggregate(KeyRange::new(start.clone(), end.clone()));
         // The bound *shapes* are already guaranteed by `StartBound`/`EndBound`: a peer sending
         // anything else fails to deserialize before `protocol_round` ever runs (see their doc
         // comments). The one remaining way a wire segment can be malformed is an inverted range
@@ -382,13 +382,18 @@ pub fn protocol_round<K, B: RsosView<K>>(
                     // `end_index - cur_index` the index arithmetic would give (see the
                     // rank-difference note above), read from the same traversal as the
                     // fingerprint it ships with.
-                    let aggregate = local.aggregate(&range);
+                    //
+                    // The clone is because `aggregate` takes its range by value (so a range built
+                    // from runtime bounds is expressible at all) and the same range is then moved
+                    // into the emitted `RangeAggregate`. It costs at most two key clones per
+                    // emitted child, alongside the `next_key` clones the fan-out already performs.
+                    let aggregate = local.aggregate(range.clone());
                     child_ranges.push(RangeAggregate { range, aggregate });
                     break;
                 } else {
                     let next_key = local.select(next_index).clone();
                     let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
-                    let aggregate = local.aggregate(&range);
+                    let aggregate = local.aggregate(range.clone());
                     child_ranges.push(RangeAggregate { range, aggregate });
                     cur_bound = StartBound::Included(next_key);
                     cur_index = next_index;
@@ -516,7 +521,7 @@ mod tests {
         let store = tree(&[10, 20, 30]);
         let segment = RangeAggregate {
             range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            aggregate: store.aggregate(&..),
+            aggregate: store.aggregate(..),
         };
         let (child_ranges, enumeration_ranges) = round(&store, segment);
         assert!(child_ranges.is_empty());
@@ -532,7 +537,7 @@ mod tests {
         let segment = RangeAggregate {
             range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
             // Fingerprints collide ... but the advertised size is wrong.
-            aggregate: Aggregate::new(store.len() + 7, store.aggregate(&..).fingerprint()),
+            aggregate: Aggregate::new(store.len() + 7, store.aggregate(..).fingerprint()),
         };
         let (child_ranges, enumeration_ranges) = round(&store, segment);
         // Not concluded in sync: the range is subdivided and bounced back for refinement.

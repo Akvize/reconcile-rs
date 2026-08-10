@@ -63,7 +63,7 @@ pub trait Rsos<K> {
     /// walk. Concrete [`Aggregate`] over [`Fingerprint`](crate::Fingerprint) rather than a
     /// generic-monoid associated type — see the crate root docs' "lifting monoid" note on why
     /// that generalization is deliberately out of scope today.
-    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate;
+    fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate;
 
     /// `Rank(z)` → `Rank_X(z)`: the position `z` occupies (or would occupy) in the in-order
     /// sequence of keys.
@@ -84,9 +84,12 @@ pub trait Rsos<K> {
     /// [`FingerprintTreeMap`]'s own `ItemRange` here would tie the abstraction to one realization's
     /// iterator. The cost is that `Rsos` is not object-safe — deliberate and free today, since
     /// every call site uses a concrete, monomorphized store.
-    fn enumerate<'a, R: RangeBounds<K>>(
+    ///
+    /// The range is taken by value, so one built from runtime bounds is expressible at all — see
+    /// [`FingerprintTreeMap::range`](crate::FingerprintTreeMap::range).
+    fn enumerate<'a, R: RangeBounds<K> + 'a>(
         &'a self,
-        range: &'a R,
+        range: R,
     ) -> impl Iterator<Item = (&'a K, &'a Self::Value)> + 'a
     where
         K: Ord + 'a,
@@ -109,7 +112,7 @@ impl<K: Serialize + Ord, V: Serialize> Rsos<K> for FingerprintTreeMap<K, V> {
         self.len()
     }
 
-    fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
+    fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate {
         FingerprintTreeMap::aggregate(self, range)
     }
 
@@ -121,9 +124,9 @@ impl<K: Serialize + Ord, V: Serialize> Rsos<K> for FingerprintTreeMap<K, V> {
         FingerprintTreeMap::select(self, r)
     }
 
-    fn enumerate<'a, R: RangeBounds<K>>(
+    fn enumerate<'a, R: RangeBounds<K> + 'a>(
         &'a self,
-        range: &'a R,
+        range: R,
     ) -> impl Iterator<Item = (&'a K, &'a V)> + 'a
     where
         K: Ord + 'a,

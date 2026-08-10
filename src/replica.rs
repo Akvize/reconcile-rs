@@ -461,7 +461,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.map.read().aggregate(&range).fingerprint()
+        self.map.read().aggregate(range).fingerprint()
     }
 
     /// Fingerprint of the value-only [`projection`](Self::projection) over a range.
@@ -469,7 +469,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// This is the timestamp-less counterpart of [`fingerprint`](Self::fingerprint); a dateless
     /// read replica that has converged with this store computes the same value over the same range.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.projection.read().aggregate(&range).fingerprint()
+        self.projection.read().aggregate(range).fingerprint()
     }
 
     /// Insert into the dated `map` **and** mirror the value-only projection (and the
@@ -1156,7 +1156,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         let guard = self.map.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, v) in guard.range(&range) {
+                            for (k, v) in guard.range(range) {
                                 updates.push(Message::Update((k.clone(), v.clone())));
                             }
                         }
@@ -1275,7 +1275,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         let guard = self.projection.read();
                         let mut updates = Vec::new();
                         for range in differences {
-                            for (k, p) in guard.range(&range) {
+                            for (k, p) in guard.range(range) {
                                 updates.push(Message::ValueUpdate((k.clone(), p.clone())));
                             }
                         }
