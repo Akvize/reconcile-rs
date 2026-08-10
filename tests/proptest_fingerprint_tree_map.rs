@@ -102,7 +102,7 @@ proptest! {
         }
 
         // Full-range iteration yields the exact sorted oracle contents.
-        let got: Vec<(u8, u16)> = tree.range(&..).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(..).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(got, want);
 
@@ -111,7 +111,7 @@ proptest! {
         let expected_fingerprint = oracle
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(tree.aggregate(&..).fingerprint(), expected_fingerprint);
+        prop_assert_eq!(tree.aggregate(..).fingerprint(), expected_fingerprint);
     }
 
     #[test]
@@ -129,7 +129,7 @@ proptest! {
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         let range = (Bound::Included(lo), Bound::Excluded(hi));
 
-        let got: Vec<(u8, u16)> = tree.range(&range).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(range).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.range(range).map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(&got, &want);
 
@@ -137,7 +137,7 @@ proptest! {
         let expected = want
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(tree.aggregate(&range).fingerprint(), expected);
+        prop_assert_eq!(tree.aggregate(range).fingerprint(), expected);
     }
 
     /// `==` compares *content*, never tree shape, and both halves of the bundled aggregate take
@@ -229,7 +229,7 @@ fn run_diff(
 fn items_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
-        .flat_map(|r| tree.range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
+        .flat_map(|r| tree.range(*r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -242,7 +242,7 @@ fn keys_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<u64> {
 }
 
 fn sorted_items(tree: &Tree) -> Vec<(u64, u64)> {
-    tree.range(&..).map(|(k, v)| (*k, *v)).collect()
+    tree.range(..).map(|(k, v)| (*k, *v)).collect()
 }
 
 /// Build two trees from a universe and per-entry membership flags. Returns the

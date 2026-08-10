@@ -284,7 +284,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
     /// [`value_fingerprint`](crate::ReplicatedMap::value_fingerprint) over the same range.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.tree.read().aggregate(&range).fingerprint()
+        self.tree.read().aggregate(range).fingerprint()
     }
 
     /// The smallest live key and its value, or `None` if the read replica holds no live entry.
@@ -331,7 +331,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// [`for_each`](Self::for_each).
     pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
         let guard = self.tree.read();
-        for (k, state) in guard.range(&range) {
+        for (k, state) in guard.range(range) {
             if let Some(value) = state.as_value() {
                 f(k, value);
             }
@@ -352,7 +352,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     pub fn range_to_vec<R: RangeBounds<K>>(&self, range: R) -> Vec<(K, V)> {
         let guard = self.tree.read();
         guard
-            .range(&range)
+            .range(range)
             .filter_map(|(k, state)| state.as_value().map(|value| (k.clone(), value.clone())))
             .collect()
     }
@@ -723,7 +723,7 @@ mod tests {
 
         assert_eq!(
             read_replica.fingerprint(..),
-            reference.aggregate(&..).fingerprint()
+            reference.aggregate(..).fingerprint()
         );
     }
 

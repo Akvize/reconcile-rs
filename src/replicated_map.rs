@@ -651,7 +651,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// [`for_each`](Self::for_each).
     pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
         let guard = self.engine.map.read();
-        for (k, entry) in guard.range(&range) {
+        for (k, entry) in guard.range(range) {
             if let Some(value) = entry.value() {
                 f(k, value);
             }
@@ -672,7 +672,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     pub fn range_to_vec<R: RangeBounds<K>>(&self, range: R) -> Vec<(K, V)> {
         let guard = self.engine.map.read();
         guard
-            .range(&range)
+            .range(range)
             .filter_map(|(k, entry)| entry.value().map(|value| (k.clone(), value.clone())))
             .collect()
     }
@@ -834,7 +834,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     fn live_keys_where<P: FnMut(&K, &V) -> bool>(&self, mut select: P) -> Vec<K> {
         let guard = self.engine.map.read();
         guard
-            .range(&..)
+            .range(..)
             .filter_map(|(k, entry)| {
                 entry
                     .value()
@@ -869,7 +869,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         let keys: Vec<K> = {
             let guard = self.engine.map.read();
             guard
-                .range(&range)
+                .range(range)
                 .filter_map(|(k, entry)| entry.value().map(|_| k.clone()))
                 .collect()
         };
