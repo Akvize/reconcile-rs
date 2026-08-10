@@ -139,6 +139,48 @@ proptest! {
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
         prop_assert_eq!(tree.aggregate(range).fingerprint(), expected);
     }
+
+    /// `==` compares *content*, never tree shape, and both halves of the bundled aggregate take
+    /// part in it.
+    ///
+    /// Note on what this does and does not guard. It gives `PartialEq` the generative coverage it
+    /// had none of, but it cannot fail against the previous fingerprint-only comparison: that would
+    /// need two maps of differing size whose fingerprints coincide, which is not constructible
+    /// against real BLAKE3. The size half is asserted where it is reachable, on `Aggregate` itself,
+    /// in `rsos`'s own unit tests.
+    #[test]
+    fn fingerprint_tree_map_equality_is_content_not_shape(
+        entries in prop::collection::vec((any::<u8>(), any::<u16>()), 0..200),
+        seed in any::<u64>(),
+    ) {
+        // Later inserts overwrite, so the oracle defines the actual content.
+        let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
+        for (k, v) in &entries {
+            oracle.insert(*k, *v);
+        }
+
+        let ascending: FingerprintTreeMap<u8, u16> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut shuffled: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
+        shuffled.shuffle(&mut StdRng::seed_from_u64(seed));
+        let mut arbitrary_order = FingerprintTreeMap::new();
+        for (k, v) in shuffled {
+            arbitrary_order.insert(k, v);
+        }
+
+        // Same elements, different insertion orders and in general different node layouts.
+        prop_assert_eq!(&ascending, &arbitrary_order);
+
+        // Any single-element difference is visible, in either half.
+        if let Some((&k, &v)) = oracle.iter().next() {
+            let mut one_fewer = arbitrary_order.clone();
+            one_fewer.remove(&k);
+            prop_assert_ne!(&ascending, &one_fewer);
+
+            let mut one_changed = arbitrary_order.clone();
+            one_changed.insert(k, v.wrapping_add(1));
+            prop_assert_ne!(&ascending, &one_changed);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

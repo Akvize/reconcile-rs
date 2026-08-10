@@ -655,13 +655,38 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 }
 
+/// Equality is decided on the whole root [`Aggregate`] — **both** the element count and the
+/// combined fingerprint — never on the fingerprint alone.
+///
+/// That is the same rule the reconciliation protocol follows, and it is load-bearing rather than
+/// stylistic. A range fingerprint combines per-element lifts by addition modulo 2²⁵⁶
+/// ([`crate::fingerprint`]), so a *non-empty* set can legitimately sum to [`Fingerprint::ZERO`];
+/// comparing summaries alone would alias such a map with the empty one. Deciding emptiness and
+/// equality on `size` is `ARCHITECTURE.md` §5 invariant 3 in the workspace this crate comes from,
+/// and the reason [`Aggregate`] bundles the two halves into one value in the first place.
+///
+/// This is a `O(1)` *content* comparison, not an element-by-element walk: two maps are equal iff
+/// they hold the same number of elements with the same combined 256-bit summary, whatever their
+/// internal tree shapes. That is exactly the property range-based reconciliation relies on — and it
+/// is why the impl needs no bound on `K` or `V`. It is collision-resistant, not
+/// information-theoretically exact: two genuinely different maps of equal size compare equal only
+/// on a BLAKE3 collision.
 impl<K, V> PartialEq for FingerprintTreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
-        self.root.subtree.fingerprint() == other.root.subtree.fingerprint()
+        self.root.subtree == other.root.subtree
     }
 }
 
-impl<K, V> Eq for FingerprintTreeMap<K, V> {}
+/// Bounded on `K: Eq, V: Eq`, unlike [`PartialEq`] above.
+///
+/// The aggregate comparison is reflexive, symmetric and transitive for *any* `K`/`V`, so an
+/// unbounded impl would satisfy [`Eq`]'s stated laws. It would still be wrong to offer: `Eq` is the
+/// marker other code reads as "these values have a genuine equivalence relation", and an unbounded
+/// impl hands that promise out for element types that have none — `FingerprintTreeMap<u64, f64>`
+/// would be `Eq` while `f64` is not, a claim [`BTreeMap`](std::collections::BTreeMap) cannot make.
+/// Requiring the elements to be `Eq` keeps the promise honest without changing how `==` is
+/// computed.
+impl<K: Eq, V: Eq> Eq for FingerprintTreeMap<K, V> {}
 
 impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for FingerprintTreeMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1107,6 +1132,68 @@ mod tests {
 
         // A range whose bounds outlive nothing at all: built, used, and dropped inline.
         assert_eq!(tree.range((lo + 1)..(hi - 1)).count(), 8);
+    }
+
+    /// `==` compares content, not tree shape: the same elements inserted in different orders build
+    /// differently-shaped B-trees, and must still compare equal. This is the property range-based
+    /// reconciliation rests on.
+    #[test]
+    fn equality_is_content_not_shape() {
+        let ascending: FingerprintTreeMap<u64, u64> = (0..200).map(|k| (k, k * 7)).collect();
+        let mut descending = FingerprintTreeMap::new();
+        for k in (0..200).rev() {
+            descending.insert(k, k * 7);
+        }
+        // Different insertion orders, and in general different node layouts.
+        assert_eq!(ascending, descending);
+        assert_eq!(ascending.aggregate(..), descending.aggregate(..));
+    }
+
+    /// The two halves of the bundled aggregate are both load-bearing for `==`: a differing *value*
+    /// under identical keys moves only the fingerprint, and a missing element moves both.
+    #[test]
+    fn equality_sees_values_and_cardinality() {
+        let base: FingerprintTreeMap<u64, u64> = (0..50).map(|k| (k, k)).collect();
+
+        // Same keys, one different value.
+        let mut different_value = base.clone();
+        different_value.insert(17, 999);
+        assert_ne!(base, different_value);
+
+        // Same values, one fewer key.
+        let mut fewer = base.clone();
+        fewer.remove(&17);
+        assert_ne!(base, fewer);
+
+        // Round-tripping back to the same content restores equality.
+        fewer.insert(17, 17);
+        assert_eq!(base, fewer);
+
+        let empty_a: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        let empty_b: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        assert_eq!(empty_a, empty_b);
+        assert_ne!(base, empty_a);
+    }
+
+    /// Regression guard for the defect this impl used to carry: `==` compared
+    /// `root.subtree.fingerprint()` alone, so the element count played no part.
+    ///
+    /// A map whose elements sum to `Fingerprint::ZERO` is not constructible against real BLAKE3, so
+    /// the aliasing this prevents cannot be exercised through the map API. What *is* checkable here
+    /// is that the comparison reads the whole [`Aggregate`] — the value whose own `PartialEq`
+    /// bundles size with the summary, and whose size-vs-fingerprint distinction is exercised
+    /// directly in `aggregate.rs`.
+    #[test]
+    fn equality_reads_the_whole_aggregate_not_just_the_fingerprint() {
+        let a: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+        let b: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+        assert_eq!(a, b);
+        assert_eq!(a.aggregate(..), b.aggregate(..));
+
+        // Two aggregates sharing a fingerprint but differing in size are *not* equal — the property
+        // the old fingerprint-only comparison silently discarded.
+        let fp = a.aggregate(..).fingerprint();
+        assert_ne!(Aggregate::new(10, fp), Aggregate::new(9, fp));
     }
 
     #[test]
