@@ -6,7 +6,7 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-09.
+- **Last updated:** 2026-08-10.
 - **Structural migration:** complete — five-crate workspace, ports on the correct side of each
   boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issues
   [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
@@ -115,6 +115,15 @@ but one High resolved or mitigated.
   (closed).
 
 ### API and performance
+- ◐ **Public-API audit (2026-08-10)** — a complete gap analysis of all five crates' public surface
+  against what dependents need, in [`API_GAP_ANALYSIS.md`](./API_GAP_ANALYSIS.md). The read/write map
+  surface below is confirmed coherent, but the audit found **nine P0 items** not covered by any open
+  issue, three of them with correctness or security consequences: `FingerprintTreeMap`'s `PartialEq`
+  decides equality on the fingerprint alone (reintroducing F1/#106's class in the map's own `==`),
+  every `ReplicatedMap` write panics outside a Tokio runtime, and `with_discovery`'s
+  authoritative-source precondition is a `debug_assert!` that is a no-op in release. See that
+  document's §7 for the prioritised backlog and §8 for what it adds beyond the issues already
+  tracked here.
 - ✅ Round out the write API: atomic `update`/`upsert`/`get_or_insert_with`, `clear`/`retain`/
   `delete_range`, and a `load_bulk` no-broadcast seed path (`just_*` demoted off the published
   surface) — [#180](https://github.com/Akvize/reconcile-rs/issues/180) (closed).
