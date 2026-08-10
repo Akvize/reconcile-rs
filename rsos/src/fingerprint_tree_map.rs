@@ -79,6 +79,78 @@ fn element(fingerprint: Fingerprint) -> Aggregate {
     Aggregate::new(1, fingerprint)
 }
 
+/// The route from the root to the node holding a key: the child index taken at each interior node,
+/// then the key's own index inside the node where the key was found.
+struct KeyPath {
+    descent: Vec<usize>,
+    key_index: usize,
+}
+
+/// Restores the fingerprint invariants for one in-place value mutation — **on drop**.
+///
+/// Doing the repair in [`Drop`] rather than in a statement after the callback is the whole point.
+/// `Drop` runs on the unwinding path as well as the normal one, so a callback that panics
+/// part-way through a mutation still leaves every cached [`Aggregate`] consistent with the value
+/// actually stored. The previous shape re-lifted and propagated *after* the callback returned, so
+/// a panic skipped both: the map stayed live, unpoisoned and silently wrong — wrong in precisely
+/// the value the reconciliation protocol reads, which is how a local panic could have become
+/// cluster-wide divergence.
+///
+/// The repair is the same single root→leaf walk the old code performed, only relocated: re-lift the
+/// element, then carry the signed delta up through every ancestor's `subtree`. It is idempotent
+/// with respect to a callback that changed nothing (the delta is then `ZERO` and every write is a
+/// no-op), so it costs nothing to run unconditionally.
+struct Relift<'a, K: Serialize, V: Serialize> {
+    root: &'a mut Node<K, V>,
+    path: KeyPath,
+    key: &'a K,
+}
+
+impl<K: Serialize, V: Serialize> Relift<'_, K, V> {
+    /// The value this guard will re-lift, reached by following the recorded route.
+    fn value_mut(&mut self) -> &mut V {
+        let mut node = &mut *self.root;
+        for &index in &self.path.descent {
+            node = node.children.as_mut().expect("interior node on the route")[index].as_mut();
+        }
+        &mut node.values[self.path.key_index]
+    }
+}
+
+impl<K: Serialize, V: Serialize> Drop for Relift<'_, K, V> {
+    fn drop(&mut self) {
+        /// Returns the signed fingerprint delta this subtree contributed, having already applied it
+        /// to its own cached aggregate.
+        fn repair<K: Serialize, V: Serialize>(
+            node: &mut Node<K, V>,
+            descent: &[usize],
+            key_index: usize,
+            key: &K,
+        ) -> Fingerprint {
+            let delta = match descent.split_first() {
+                // The node holding the key: re-lift it against whatever the callback left behind.
+                None => {
+                    let old_fp = node.fingerprints[key_index];
+                    let new_fp = lift(key, &node.values[key_index]);
+                    node.fingerprints[key_index] = new_fp;
+                    new_fp - old_fp
+                }
+                Some((&index, rest)) => repair(
+                    node.children.as_mut().expect("interior node on the route")[index].as_mut(),
+                    rest,
+                    key_index,
+                    key,
+                ),
+            };
+            // The element count is unchanged — one value was overwritten in place — so only the
+            // `Σ(S)` half of the aggregate moves.
+            node.subtree = Aggregate::new(node.subtree.size(), node.subtree.fingerprint() + delta);
+            delta
+        }
+        repair(self.root, &self.path.descent, self.path.key_index, self.key);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Node<K, V> {
     pub(crate) keys: ArrayVec<K, MAX_CAPACITY>,
@@ -360,45 +432,44 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// re-lift/propagate step above ever running, silently desyncing `aggregate`/
     /// `check_invariants` from the real content. Get-or-insert, the other half of what `entry()`
     /// usually buys, already exists one layer up (`ReplicatedMap::upsert`/`get_or_insert_with`).
-    pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
-        fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
-            node: &mut Node<K, V>,
-            key: &K,
-            callback: F,
-        ) -> Fingerprint {
+    ///
+    /// The callback's return value is passed through, so `with_mut` can answer a question about the
+    /// value as well as change it.
+    ///
+    /// # Panic safety
+    ///
+    /// The re-lift and the propagation run from a [`Drop`] guard, so they happen on the unwinding
+    /// path too: a `callback` that panics part-way through a mutation leaves the tree's cached
+    /// aggregates consistent with the value it actually left behind, and
+    /// [`check_invariants`](Self::check_invariants) still passes afterwards. The panic itself
+    /// propagates unchanged.
+    pub fn with_mut<R, F: FnOnce(Option<&mut V>) -> R>(&mut self, key: &K, callback: F) -> R {
+        // Locate first, so the guard below knows what to repair before the callback can panic.
+        let mut descent = Vec::new();
+        let mut node = self.root.as_ref();
+        let key_index = loop {
             match node.keys.binary_search(key) {
-                Ok(index) => {
-                    let v = Some(&mut node.values[index]);
-                    callback(v);
-                    // callback likely modified v, so we need to restore the aggregate invariants
-                    let old_fp = node.fingerprints[index];
-                    let new_fp = lift(key, &node.values[index]);
-                    node.fingerprints[index] = new_fp;
-                    // signed delta to apply to this node and every ancestor's fingerprint. The
-                    // element count is unchanged (one value was overwritten in place), so this
-                    // touches only the Σ(S) half.
-                    let diff_fp = new_fp - old_fp;
-                    node.subtree =
-                        Aggregate::new(node.subtree.size(), node.subtree.fingerprint() + diff_fp);
-                    diff_fp
-                }
-                Err(index) => {
-                    if let Some(children) = node.children.as_mut() {
-                        let diff_fp = aux(children[index].as_mut(), key, callback);
-                        node.subtree = Aggregate::new(
-                            node.subtree.size(),
-                            node.subtree.fingerprint() + diff_fp,
-                        );
-                        diff_fp
-                    } else {
-                        callback(None);
-                        // callback cannot change the content of the tree, no invariant to restore
-                        Fingerprint::ZERO
+                Ok(index) => break index,
+                Err(index) => match node.children.as_ref() {
+                    Some(children) => {
+                        descent.push(index);
+                        node = &children[index];
                     }
-                }
+                    // Absent: the callback cannot change any element, so there is nothing to
+                    // repair and no guard to arm.
+                    None => return callback(None),
+                },
             }
-        }
-        aux(self.root.as_mut(), key, callback);
+        };
+
+        let mut guard = Relift {
+            root: self.root.as_mut(),
+            path: KeyPath { descent, key_index },
+            key,
+        };
+        let value = guard.value_mut();
+        callback(Some(value))
+        // `guard` drops here — or during unwinding, which is the point.
     }
 
     /// Position of `key` in the in-order sequence, or `None` if it is not present.
@@ -1064,6 +1135,60 @@ mod tests {
         tree.retain(|_, v| *v < 100);
         tree.check_invariants();
         assert!(tree.iter().all(|(_, v)| *v < 100));
+    }
+
+    /// Regression guard: a callback that panics part-way through a mutation must not leave the
+    /// cached aggregates describing a value that is no longer stored.
+    ///
+    /// Before the repair moved into a `Drop` guard, the re-lift and the propagation were plain
+    /// statements after the callback, so unwinding skipped both. The map stayed live and
+    /// unpoisoned, `get` returned the mutated value, and `aggregate` still described the *old* one
+    /// — which is exactly the value the reconciliation protocol compares against its peers.
+    #[test]
+    fn with_mut_keeps_aggregates_consistent_when_the_callback_panics() {
+        let mut tree: FingerprintTreeMap<u64, u64> = (0..50).map(|k| (k, k)).collect();
+        let before = tree.aggregate(&..);
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tree.with_mut(&17, |v| {
+                *v.expect("17 is present") = 999;
+                panic!("callback blew up mid-mutation");
+            })
+        }));
+        assert!(outcome.is_err(), "the panic must still propagate");
+
+        // `with_mut` is not transactional and never claimed to be: the mutation stands.
+        assert_eq!(tree.get(&17), Some(&999));
+
+        // What must hold is that the caches describe what is *actually* stored. This is the
+        // assertion that failed before the fix.
+        tree.check_invariants();
+        let after = tree.aggregate(&..);
+        assert_ne!(after, before, "the summary must have moved with the value");
+        assert_eq!(after.size(), 50, "no element was added or removed");
+
+        // And the tree is still usable, not wedged.
+        tree.insert(200, 200);
+        tree.check_invariants();
+        assert_eq!(tree.len(), 51);
+    }
+
+    /// The callback's return value is threaded through, for both the present and absent cases.
+    #[test]
+    fn with_mut_passes_the_callback_result_back() {
+        let mut tree: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+
+        let doubled = tree.with_mut(&3, |v| {
+            let v = v.expect("3 is present");
+            *v *= 2;
+            *v
+        });
+        assert_eq!(doubled, 6);
+        assert_eq!(tree.get(&3), Some(&6));
+        tree.check_invariants();
+
+        assert!(tree.with_mut(&999, |v| v.is_none()));
+        tree.check_invariants();
     }
 
     #[test]
