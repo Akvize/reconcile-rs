@@ -234,7 +234,7 @@ pub enum Decision {
 /// |---|---|---|
 /// | [`SqrtFanOut`] (the default) | three hand-picked special cases | `⌊√m⌋` elements per child, so `Θ(√m)` children |
 /// | [`FixedFanOut`] | same three special cases | a constant `b` |
-/// | [`Algorithm1`] | the paper's `\|X ∩ [l, u)\| ≤ t` | a constant `b` |
+/// | [`EnumerateBelowThreshold`] | the paper's `\|X ∩ [l, u)\| ≤ t` | a constant `b` |
 ///
 /// Which one is the default, and why it is not the cheapest one on the wire, is on [`SqrtFanOut`].
 ///
@@ -293,7 +293,8 @@ pub trait RefinementPolicy {
 /// - **both sides hold exactly one element** — they differ, so each owes the other precisely one
 ///   element and comparing further cannot save a byte: enumerate, which also asks the peer to.
 ///
-/// The paper reaches the same outcomes through a single threshold `t` instead ([`Algorithm1`]).
+/// The paper reaches the same outcomes through a single threshold `t` instead
+/// ([`EnumerateBelowThreshold`]).
 fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
     let local = comparison.span();
     let remote = comparison.remote().size();
@@ -334,7 +335,7 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
 /// A fourth case falls out of the third: a lone local element facing a larger remote range is
 /// re-advertised rather than enumerated, because one element cannot be split by rank and the peer
 /// is the side that can. [`FixedFanOut`] keeps all four and changes only the fan-out;
-/// [`Algorithm1`] replaces them with the paper's single threshold.
+/// [`EnumerateBelowThreshold`] replaces all four with the paper's single threshold.
 ///
 /// # Why it is the default, when the measurement says it should not be
 ///
@@ -373,8 +374,8 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
 /// exactly in the small-`d` regime RBSR exists for.
 ///
 /// What does **not** carry over from the paper is its local-cost bound `T_loc = O(hL + bhI + K)`,
-/// whose `bhI` term assumes a constant `b`. Under [`FixedFanOut`] or [`Algorithm1`] that bound is
-/// quotable again; under this policy it is not.
+/// whose `bhI` term assumes a constant `b`. Under [`FixedFanOut`] or [`EnumerateBelowThreshold`]
+/// that bound is quotable again; under this policy it is not.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqrtFanOut;
 
@@ -437,13 +438,13 @@ impl RefinementPolicy for FixedFanOut {
     }
 }
 
-/// Algorithm 1 of arXiv:2603.19820 as written: enumerate when the local subset is small enough
-/// (`|X ∩ [l, u)| ≤ t`), otherwise split into a constant `b`.
+/// **IDLIST when `|X ∩ [l, u)| ≤ t`, `SPLITBYRANK(b)` otherwise** — Algorithm 1 of
+/// arXiv:2603.19820 as written, with both of its parameters.
 ///
-/// The two policies above keep this crate's hand-picked enumeration cutoffs and vary only the
-/// fan-out. This one replaces the cutoffs too, so it is the paper's decision rule with both of its
-/// parameters exposed — the point of comparison for "what do our hand-picked special cases
-/// actually cost", not just "what does `√m` cost".
+/// The name states the knob that distinguishes it; the fan-out half is a constant `b`, exactly
+/// [`FixedFanOut`]'s. The two policies above keep this crate's hand-picked enumeration cutoffs and
+/// vary only that fan-out. This one replaces the cutoffs too, so it is the point of comparison for
+/// "what do our hand-picked special cases actually cost", not just "what does `√m` cost".
 ///
 /// The threshold is where the two shapes differ most: `t` trades refinement round-trips for
 /// *values*. A range of `t` local elements is shipped wholesale, and all but the differing ones are
@@ -456,14 +457,14 @@ impl RefinementPolicy for FixedFanOut {
 /// A threshold of zero is raised to one: with `t = 0`, two peers each holding a single differing
 /// element in a range would split it into itself forever, neither ever enumerating.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Algorithm1 {
+pub struct EnumerateBelowThreshold {
     threshold: usize,
     fan_out: FanOut,
 }
 
-impl Algorithm1 {
+impl EnumerateBelowThreshold {
     /// The parameters arXiv:2603.19820 §6 runs its experiments with: `t = 32`, `b = 16`.
-    pub const PAPER: Algorithm1 = Algorithm1 {
+    pub const PAPER: EnumerateBelowThreshold = EnumerateBelowThreshold {
         threshold: 32,
         fan_out: FanOut::NEGENTROPY,
     };
@@ -471,8 +472,8 @@ impl Algorithm1 {
     /// A policy enumerating ranges of at most `threshold` local elements and splitting the rest
     /// into at most `fan_out` children. `threshold` of `0` is raised to `1` — see the type-level
     /// note.
-    pub const fn new(threshold: usize, fan_out: FanOut) -> Algorithm1 {
-        Algorithm1 {
+    pub const fn new(threshold: usize, fan_out: FanOut) -> EnumerateBelowThreshold {
+        EnumerateBelowThreshold {
             threshold: if threshold == 0 { 1 } else { threshold },
             fan_out,
         }
@@ -489,13 +490,13 @@ impl Algorithm1 {
     }
 }
 
-impl Default for Algorithm1 {
-    fn default() -> Algorithm1 {
-        Algorithm1::PAPER
+impl Default for EnumerateBelowThreshold {
+    fn default() -> EnumerateBelowThreshold {
+        EnumerateBelowThreshold::PAPER
     }
 }
 
-impl RefinementPolicy for Algorithm1 {
+impl RefinementPolicy for EnumerateBelowThreshold {
     fn decide(&self, comparison: Comparison) -> Decision {
         if comparison.agrees() {
             // SKIP: `f_X = f_Y`, on the whole aggregate rather than the fingerprint alone.
@@ -550,7 +551,10 @@ mod tests {
         let agreed = Comparison::new(aggregate, aggregate, 0);
         assert_eq!(SqrtFanOut.decide(agreed), Decision::Skip);
         assert_eq!(FixedFanOut::default().decide(agreed), Decision::Skip);
-        assert_eq!(Algorithm1::PAPER.decide(agreed), Decision::Skip);
+        assert_eq!(
+            EnumerateBelowThreshold::PAPER.decide(agreed),
+            Decision::Skip
+        );
     }
 
     /// Matching fingerprints with mismatched sizes must not be read as agreement — the aliasing
@@ -598,7 +602,7 @@ mod tests {
 
     #[test]
     fn algorithm1_enumerates_at_or_below_the_threshold_and_splits_above() {
-        let policy = Algorithm1::new(32, FanOut::NEGENTROPY);
+        let policy = EnumerateBelowThreshold::new(32, FanOut::NEGENTROPY);
         for span in [0usize, 1, 31, 32] {
             assert_eq!(policy.decide(mismatch(span, 64)), Decision::Enumerate);
         }
@@ -620,7 +624,10 @@ mod tests {
         );
         assert_eq!(FanOut::new(0), FanOut::BINARY);
         assert_eq!(FanOut::new(1), FanOut::BINARY);
-        assert_eq!(Algorithm1::new(0, FanOut::BINARY).threshold(), 1);
+        assert_eq!(
+            EnumerateBelowThreshold::new(0, FanOut::BINARY).threshold(),
+            1
+        );
     }
 
     #[test]

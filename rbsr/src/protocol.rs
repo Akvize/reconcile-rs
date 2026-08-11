@@ -333,9 +333,9 @@ impl AddAssign for RoundOutcome {
 ///   [`SqrtFanOut`] cuts every `⌊√m⌋` elements, so the fan-out grows with the range.
 ///
 /// Both deviations are legitimate instantiations rather than bugs, both are costed on
-/// [`SqrtFanOut`] itself, and [`Algorithm1`](crate::Algorithm1) is the paper's rule as written for
-/// anyone who wants it. Use [`protocol_round_with_policy`] to supply either — the wire type carries
-/// no policy, so two peers running different ones still converge.
+/// [`SqrtFanOut`] itself, and [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) is
+/// Algorithm 1 as written for anyone who wants it. Use [`protocol_round_with_policy`] to supply
+/// either — the wire type carries no policy, so two peers running different ones still converge.
 ///
 /// What the driver keeps regardless of policy is Proposition 4.1's requirement: a SPLIT's children
 /// are pairwise disjoint and their union is the parent range.
@@ -508,7 +508,7 @@ mod tests {
 
     use rsos::{Fingerprint, FingerprintTreeMap};
 
-    use crate::policy::{Algorithm1, FanOut, FixedFanOut};
+    use crate::policy::{EnumerateBelowThreshold, FanOut, FixedFanOut};
 
     /// Build a real `FingerprintTreeMap` over the given (distinct, unsorted-ok) `i32` keys. A plain
     /// `i32` value stands in for whatever a caller actually stores: values are irrelevant to the
@@ -825,10 +825,13 @@ mod tests {
                 "FixedFanOut(16)",
                 Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),
             ),
-            ("Algorithm1(paper)", Box::new(Algorithm1::PAPER)),
             (
-                "Algorithm1(t=1,b=2)",
-                Box::new(Algorithm1::new(1, FanOut::BINARY)),
+                "EnumerateBelow(t=32,b=16)",
+                Box::new(EnumerateBelowThreshold::PAPER),
+            ),
+            (
+                "EnumerateBelow(t=1,b=2)",
+                Box::new(EnumerateBelowThreshold::new(1, FanOut::BINARY)),
             ),
         ]
     }

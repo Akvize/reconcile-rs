@@ -16,10 +16,11 @@
 //! branching factor `b` of Algorithm 2 in E. G. Amparore, *RBSR via Range-Summarizable
 //! Order-Statistics Stores* (arXiv:2603.19820), and this crate's default policy does not use a
 //! fixed `b`: `rbsr::SqrtFanOut` cuts every `⌊√m⌋` elements. Neither bound therefore describes what
-//! actually goes on the wire by default. Since [#257](https://github.com/Akvize/reconcile-rs/issues/257)
-//! made the policy a swappable seam, the alternatives can be priced against the default rather than
-//! estimated: `rbsr::FixedFanOut` is the paper's constant `b` with this crate's enumeration
-//! cutoffs, and `rbsr::Algorithm1` is the paper's rule with both of its parameters.
+//! actually goes on the wire by default. Since
+//! [#257](https://github.com/Akvize/reconcile-rs/issues/257) made the policy a swappable seam, the
+//! alternatives can be priced against the default rather than estimated: `rbsr::FixedFanOut` is
+//! the paper's constant `b` with this crate's enumeration cutoffs, and
+//! `rbsr::EnumerateBelowThreshold` is Algorithm 1 as written, with both parameters.
 //!
 //! **Read the two traffic columns together.** A policy that splits less advertises fewer ranges but
 //! reaches its IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire
@@ -47,8 +48,8 @@ use criterion::{
 };
 
 use rbsr::{
-    initial_ranges, protocol_round_with_policy, Algorithm1, EnumerationRange, FanOut, FixedFanOut,
-    RangeAggregate, RefinementPolicy, SqrtFanOut,
+    initial_ranges, protocol_round_with_policy, EnumerateBelowThreshold, EnumerationRange, FanOut,
+    FixedFanOut, RangeAggregate, RefinementPolicy, SqrtFanOut,
 };
 use rsos::{Aggregate, FingerprintTreeMap, Rsos};
 
@@ -111,7 +112,7 @@ fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
         ("fixed b=16", Box::new(FixedFanOut::new(FanOut::NEGENTROPY))),
         (
             "paper t=32 b=16",
-            Box::new(Algorithm1::new(32, FanOut::NEGENTROPY)),
+            Box::new(EnumerateBelowThreshold::new(32, FanOut::NEGENTROPY)),
         ),
     ]
 }

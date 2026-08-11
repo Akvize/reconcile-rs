@@ -17,8 +17,9 @@ fingerprints over shrinking key ranges and exchanging only the entries that actu
   are Algorithm 1's tuning parameters (`t` and `b`), and both are **local decisions that never reach
   the wire**: two peers running different policies still converge, so a policy can be swapped or
   A/B-compared without a protocol break. `protocol_round` uses the default `SqrtFanOut`;
-  `protocol_round_with_policy` takes any. `FixedFanOut` (the paper's constant `b`) and `Algorithm1`
-  (the paper's rule with both parameters) ship alongside it.
+  `protocol_round_with_policy` takes any. Each shipped policy is named for the rule it applies:
+  `SqrtFanOut` (the default), `FixedFanOut` (the paper's constant `b`) and
+  `EnumerateBelowThreshold` (Algorithm 1 as written, `t` *and* `b`).
 
 The crate-root docs carry a full correspondence table between the protocol vocabulary of
 [arXiv:2603.19820](https://arxiv.org/abs/2603.19820) (Amparore, 2026 — RBSR over any

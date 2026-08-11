@@ -186,7 +186,8 @@ but one High resolved or mitigated.
   `FanOut`), `protocol_round_with_policy` takes one, and `protocol_round` pins the default to
   `SqrtFanOut` — today's behaviour byte-for-byte, so `tests/wire_format.rs`'s golden vector and the
   convergence proptests pass unchanged. Two alternatives ship alongside it (`FixedFanOut`, the
-  paper's constant `b`; `Algorithm1`, the paper's rule with `t` *and* `b`). The policy is local and
+  paper's constant `b`; `EnumerateBelowThreshold`, Algorithm 1 as written, `t` *and* `b`) — each
+  named for the rule it applies, not for where it comes from. The policy is local and
   never advertised — mixed pairs converge, pinned by
   `peers_running_different_policies_still_converge` and a proptest over every pair.
   **Step B is done**: `benches/protocol.rs` now sweeps policy × `n` × `d` × difference clustering and

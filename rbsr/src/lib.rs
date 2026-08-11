@@ -47,7 +47,7 @@
 //! | **local symmetric difference** `Δ_{l,u}(X, Y)` — `Δ` restricted to `[l, u)` | what a single [`EnumerationRange`] `(l, u)` stands for on the peer that emitted it |
 //! | **balanced `b`-partition** (Def. 3.8), cut by `Rank`/`Select` (Algorithm 2) | the fan-out inside [`protocol_round`], cut by [`RsosView::select`] — with the width chosen by a [`RefinementPolicy`], `√n` by default rather than a fixed `b`; see below |
 //! | **comparison value** `f_Y = fp(A(Y ∩ [l, u)))` (Def. 3.6) | the [`rsos::Aggregate`] carried by a [`RangeAggregate`] — the *whole* aggregate, not a hash of it: equality is decided on `(fingerprint, size)`, never on the fingerprint alone |
-//! | **Algorithm 1's parameters** `t` (enumeration threshold) and `b` (branching factor) | the two knobs of a [`RefinementPolicy`]; [`Algorithm1`] is the paper's rule with both as written, [`SqrtFanOut`] is this crate's default |
+//! | **Algorithm 1's parameters** `t` (enumeration threshold) and `b` (branching factor) | the two knobs of a [`RefinementPolicy`]; [`EnumerateBelowThreshold`] is Algorithm 1 with both as written, [`SqrtFanOut`] is this crate's default |
 //!
 //! **This crate instantiates the protocol; it is not a transcription of Algorithm 1.** Two decision
 //! rules deliberately differ in the default policy — there is no enumeration threshold `t`, and the
@@ -65,10 +65,11 @@
 //! converge, and a policy can be swapped or A/B-compared without a protocol break.
 //!
 //! [`RefinementPolicy`] is that seam and [`protocol_round_with_policy`] takes one. Three are
-//! shipped — [`SqrtFanOut`] (the default, today's behaviour), [`FixedFanOut`] (the paper's constant
-//! `b`, this crate's enumeration cutoffs) and [`Algorithm1`] (the paper's rule, both parameters) —
-//! and `benches/protocol.rs` prices them against each other over store size, difference size and
-//! how the differences cluster.
+//! shipped, each named for the rule it applies rather than for where it comes from:
+//! [`SqrtFanOut`] (the default, today's behaviour), [`FixedFanOut`] (the paper's constant `b`, this
+//! crate's enumeration cutoffs) and [`EnumerateBelowThreshold`] (Algorithm 1 as written, both
+//! parameters). `benches/protocol.rs` prices them against each other over store size, difference
+//! size and how the differences cluster.
 //!
 //! # Generic over any RSOS backend
 //!
@@ -93,8 +94,8 @@ mod protocol;
 mod rsos_view;
 
 pub use policy::{
-    Algorithm1, Comparison, Decision, FanOut, FixedFanOut, RefinementPolicy, SplitStride,
-    SqrtFanOut,
+    Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,
+    SplitStride, SqrtFanOut,
 };
 pub use protocol::{
     initial_ranges, protocol_round, protocol_round_with_policy, EnumerationRange, RangeAggregate,

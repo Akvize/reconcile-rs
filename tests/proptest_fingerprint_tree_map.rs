@@ -32,8 +32,8 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 use rbsr::{
-    initial_ranges, protocol_round, protocol_round_with_policy, Algorithm1, EnumerationRange,
-    FanOut, FixedFanOut, RangeAggregate, RefinementPolicy, SqrtFanOut,
+    initial_ranges, protocol_round, protocol_round_with_policy, EnumerateBelowThreshold,
+    EnumerationRange, FanOut, FixedFanOut, RangeAggregate, RefinementPolicy, SqrtFanOut,
 };
 use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
@@ -325,7 +325,7 @@ fn policy(index: usize) -> Box<dyn RefinementPolicy> {
         0 => Box::new(SqrtFanOut),
         1 => Box::new(FixedFanOut::new(FanOut::BINARY)),
         2 => Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),
-        _ => Box::new(Algorithm1::PAPER),
+        _ => Box::new(EnumerateBelowThreshold::PAPER),
     }
 }
 
