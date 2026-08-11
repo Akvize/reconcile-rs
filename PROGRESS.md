@@ -210,9 +210,15 @@ but one High resolved or mitigated.
   10 M — still degrading into extra datagrams rather than being dropped, as `send_messages_paced`
   chunks at `BUFFER_SIZE`.
 
-  **Still open.** Changing the *default* to `FixedFanOut(16)`, which the numbers now support, is
-  deliberately not done here: #257's Step A requires the default to stay behaviour-preserving, and
-  the switch deserves its own reviewable change. Also open: exposing a policy through `reconcile`'s
+  **The branching factor is swept too** (`fan_out_sweep`, *b* = 2…256): bytes and `T_loc` follow
+  *b*/ln *b* with a minimum near *b* = 4, messages fall as log_*b* n to a floor of 6 reached at
+  *b* = 32, and the widest round grows linearly in *b* — already past one datagram at *b* = 16 for
+  n = 10⁵, d = 100. **`b = 16` is the only swept value never worse than `√m` on rounds** across every
+  measured (n, d, clustering); `b = 4` is the bytes/CPU optimum at two extra round-trips.
+
+  **Still open.** Changing the *default* to `FixedFanOut(FanOut::NEGENTROPY)`, which the numbers now
+  support, is deliberately not done here: #257's Step A requires the default to stay
+  behaviour-preserving, and the switch deserves its own reviewable change. Also open: exposing a policy through `reconcile`'s
   facade (`Config` is `Copy`, so a boxed policy needs a different carrier), and the interaction with
   the 40 B/range wire aggregate (~79 % of those bytes) — now separable, since the fan-out is a
   caller's choice rather than an edit to the protocol loop.

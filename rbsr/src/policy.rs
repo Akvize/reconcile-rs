@@ -419,8 +419,38 @@ impl RefinementPolicy for SqrtFanOut {
 /// are, at `b = 16` and `n ≤ 10⁶`, the same number of rounds the default pays: see the measured
 /// table on [`SqrtFanOut`].
 ///
+/// # Choosing `b`
+///
 /// [`Default`] is [`FanOut::NEGENTROPY`] (`b = 16`), the value Negentropy ships and
-/// arXiv:2603.19820 §6 measures against.
+/// arXiv:2603.19820 §6 measures against — and, once swept, the value the measurement also lands on.
+/// `benches/protocol.rs`'s `fan_out_sweep` runs `b` from 2 to 256; at `n = 10⁶`, `d = 1`:
+///
+/// | `b` | bytes | one-way messages | widest round | `T_loc` |
+/// |---:|---:|---:|---:|---:|
+/// | 2 | 2 061 | 22 | 96 B | 25.1 µs |
+/// | 4 | **1 960** | 12 | 202 B | **21.8 µs** |
+/// | 8 | 2 613 | 10 | 414 B | 33.0 µs |
+/// | 16 | 3 834 | 8 | 802 B | 48.5 µs |
+/// | 32 | 5 021 | **6** | 1 614 B | 73.3 µs |
+/// | 64 | 9 668 | 6 | 3 238 B | 172 µs |
+/// | 256 | 25 880 | 6 | 12 982 B | 975 µs |
+///
+/// The two columns bottom out in different places, so neither picks `b` alone. A `d = 1` descent
+/// visits `~log_b n` levels advertising `~b` ranges each, so bytes and local work follow `b / ln b`
+/// — minimized near `b = 3` — while messages fall as `log_b n` until they hit a floor of 6 that no
+/// larger `b` improves on. Past that floor (`b ≥ 32` at `n = 10⁶`, `b ≥ 16` at `n = 10⁵`) every extra
+/// unit of `b` is paid for and buys nothing.
+///
+/// `b = 16` is the value that is **never worse than [`SqrtFanOut`] on the round-trip axis** in any
+/// configuration measured — `n` from 10³ to 10⁶, `d` from 1 to 100, scattered or clustered — while
+/// cutting bytes 13.8×, local CPU ~45× and the widest single round 63× at `n = 10⁶`, `d = 1`.
+/// `b = 32` saves one further round-trip at `n = 10⁶` only, and pays ~31 % more bytes and ~51 % more
+/// CPU for it — including at `n = 10⁵`, where it saves nothing at all.
+///
+/// If bandwidth rather than latency is the binding constraint — an in-process or unix-socket peer,
+/// a metered WAN link — `b = 4` is the optimum on both bytes and CPU, at two extra round-trips.
+/// The break-even sits near an RTT of 8 µs at 1 Gb/s, so on anything that is actually a network,
+/// `b = 16` is the better end of that trade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,

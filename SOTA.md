@@ -308,6 +308,13 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   the ceiling rather than failing, so this degrades into extra datagrams and ~189 fragments rather
   than breaking. It is a bandwidth and fragmentation cost, not a bug — but it is the reason #257 is a
   communication-complexity regression rather than a tuning gap.
+- **Sweeping *b* itself lands on 16.** `benches/protocol.rs`'s `fan_out_sweep` runs *b* = 2…256.
+  Bytes and local work follow *b*/ln *b* (minimum near *b* = 3: 1 960 B at *b* = 4 against 3 834 B at
+  16, n = 10⁶, d = 1); one-way messages fall as log_*b* n to a floor of 6, reached at *b* = 32.
+  *b* = 16 is the only swept value **never worse than the `√m` default on rounds** across every
+  measured (n, d, clustering), while cutting bytes 13.8×, *T_loc* ~45× and the widest round 63×.
+  *b* = 4 wins on bytes and CPU but costs two round-trips — break-even at an RTT of ≈8 µs at 1 Gb/s,
+  i.e. only worth it when the "network" is in-process.
 - **The `t` column is not free, and the byte table above does not show its price.** The paper's
   enumeration threshold wins the refinement column by *stopping early* — and everything it stops on
   is then shipped as values, almost all of which the peer already holds. At n = 10⁵, d = 100

@@ -104,6 +104,29 @@ const DIFFERENCES: &[(usize, Clustering)] = &[
     (100, Clustering::Clustered),
 ];
 
+/// Branching factors swept by `fan_out_sweep`, doubling from the smallest that refines to well past
+/// anything a datagram can hold.
+///
+/// The interesting range is bounded on both ends by a real constraint rather than by taste. Below,
+/// `b = 2` is the minimum (a 1-partition is the identity). Above, the total ranges a `d = 1` descent
+/// advertises grow as `b / ln b` while the rounds shrink as `log_b n`, so bytes never explode with
+/// `b` — what does grow, linearly, is the *widest single round*, and that is what has to fit a
+/// datagram. The sweep runs to 256 so the ceiling is visible in the table rather than argued about.
+const FAN_OUTS: &[usize] = &[2, 4, 8, 16, 32, 64, 128, 256];
+
+/// `(store size, difference sizes)` the branching-factor sweep runs at, grouped by store size so the
+/// complete store is built once per group.
+///
+/// Small `n` only needs `d = 1`: the trade `b` governs is between rounds and ranges-per-round, and
+/// at 10³ there are too few levels for it to show. The two large sizes carry the `d` axis, because
+/// the whole point of choosing `b` is the regime this crate actually runs in.
+const SWEEP_CASES: &[(usize, &[usize])] = &[
+    (1_000, &[1]),
+    (10_000, &[1]),
+    (100_000, &[1, 10, 100]),
+    (1_000_000, &[1, 10, 100]),
+];
+
 /// The policies compared. The first is the shipped default; the other two are the paper's
 /// parameterization, one knob at a time.
 fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
@@ -394,5 +417,73 @@ fn reconciliation_cost(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, reconciliation_cost);
+/// Sweep the branching factor `b` on its own, so it can be chosen on evidence rather than inherited
+/// from Negentropy.
+///
+/// Only [`FixedFanOut`] varies here — same enumeration cutoffs as the shipped default, one knob
+/// moving — because the question this answers is "if the default becomes a fixed `b`, which one".
+///
+/// **What to read.** Bytes and rounds pull in opposite directions and neither one alone picks a `b`:
+/// a `d = 1` descent visits `~log_b n` levels advertising `~b` ranges each, so ranges grow as
+/// `b / ln b` (flat-ish, minimized near `b = 3`) while one-way messages fall as `log_b n`. Since
+/// this workspace has no RTT lane ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), the
+/// message column cannot be converted into seconds here — weigh it by your own round-trip time.
+/// The column that *is* a hard limit is the widest single round: it grows linearly in `b`, and it is
+/// what must fit a datagram (65 507 B) and survive fragmentation (~1 472 B per IP fragment, any one
+/// of which loses the whole round).
+fn fan_out_sweep(c: &mut Criterion) {
+    println!(
+        "[sweep] FixedFanOut, branching factor only, u64 keys, differences scattered.\n\
+         [sweep] bytes and rounds trade against each other; the widest round is the hard ceiling."
+    );
+    for &(n, diffs) in SWEEP_CASES {
+        let full = store(n, &[]);
+        for &d in diffs {
+            let holed = store(n, &missing_keys(n, d, Clustering::Scattered));
+            println!("[sweep] n={n} d={d} scattered");
+            for &b in FAN_OUTS {
+                let policy = FixedFanOut::new(FanOut::new(b));
+                let (counted_full, counted_holed) = (Counting::new(&full), Counting::new(&holed));
+                let mut cost = reconcile(&counted_full, &counted_holed, &policy);
+                cost.queries = counted_full.queries() + counted_holed.queries();
+                println!(
+                    "[sweep]   b={b:>4} {bytes:>9} B / {ranges:>6} ranges / {messages:>3} msgs \
+                     / {datagrams:>3} dgrams / {fragments:>5} frags | widest {largest:>5} r \
+                     = {largest_bytes:>7} B | agg {aggregate:>7} rank {rank:>7} sel {select:>7}",
+                    bytes = cost.bytes,
+                    ranges = cost.ranges,
+                    messages = cost.messages,
+                    datagrams = cost.datagrams,
+                    fragments = cost.fragments,
+                    largest = cost.largest_message,
+                    largest_bytes = cost.largest_message_bytes,
+                    aggregate = cost.queries.aggregate,
+                    rank = cost.queries.rank,
+                    select = cost.queries.select,
+                );
+            }
+        }
+    }
+
+    // The local half of the same question, timed rather than counted, at the scale the choice is
+    // actually made for.
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("fan_out_sweep_drive");
+    group.plot_config(plot_config);
+    group.sample_size(20);
+    let full = store(1_000_000, &[]);
+    let holed = store(
+        1_000_000,
+        &missing_keys(1_000_000, 1, Clustering::Scattered),
+    );
+    for &b in FAN_OUTS {
+        let policy = FixedFanOut::new(FanOut::new(b));
+        group.bench_with_input(BenchmarkId::from_parameter(b), &b, |bencher, _| {
+            bencher.iter(|| reconcile(black_box(&full), black_box(&holed), &policy));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, reconciliation_cost, fan_out_sweep);
 criterion_main!(benches);

@@ -95,6 +95,15 @@ messages, because log₁₆ 10⁶ ≈ 5 is already the iterated-square-root dept
 single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP fragments at a
 1500-byte MTU); at d = 100 it reaches 160 908 B, i.e. three datagrams. Discussion in `SOTA.md` §2.2.
 
+`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256), which is the
+question "if the default becomes a fixed `b`, which one". Bytes and local work follow `b / ln b`
+(minimized near `b = 3`); one-way messages fall as `log_b n` until they hit a floor — 6 at
+`n = 10⁶`, reached at `b = 32` — past which extra `b` is paid for and buys nothing. The widest single
+round grows linearly in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one
+datagram at `b = 16`. `b = 16` is the only swept value never worse than the current `√m` default on
+rounds across every measured `(n, d, clustering)`; `b = 4` is the bytes-and-CPU optimum, two
+round-trips behind.
+
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`split_fan_out_is_square_root_of_the_range_size`, `split_children_partition_the_parent_range`), so
 changing the *default* fails CI rather than silently changing every cluster's bandwidth profile —
