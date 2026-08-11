@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Tier 2 of the three-tier gate (AGENTS.md §3.2): the checks worth a compile, but
+# Tier 2 of the three-tier gate (AGENTS.md §3): the checks worth a compile, but
 # not worth blocking every commit on. CI (.github/workflows/main.yml) remains the
 # superset and runs on every push regardless, so this tier is not trying to
 # reproduce it — only to make the common failures cheap to find. One feature

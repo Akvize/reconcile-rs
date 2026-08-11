@@ -24,7 +24,7 @@ if [[ "$mode" == "start" ]]; then
     workspace_root="/workspace"
   fi
 
-  # Both tiers of the gate, see AGENTS.md §3.2
+  # Both tiers of the gate, see AGENTS.md §3
   for hook in pre-commit pre-push; do
     hook_path="$workspace_root/.git/hooks/$hook"
     if [[ -d "$workspace_root/.git" ]] && [[ ! -L "$hook_path" ]]; then
