@@ -50,6 +50,13 @@ harness = false
 name = "system"
 harness = false
 
+# Protocol-level cost of one RBSR reconciliation (messages / advertised ranges / wire bytes as a
+# function of store size and difference size). Drives `rsos`/`rbsr` directly rather than the facade;
+# no internal seam, so no feature gate.
+[[bench]]
+name = "protocol"
+harness = false
+
 [features]
 default = ["mac-blake3"]
 # Per-datagram MAC authentication and payload confidentiality moved to the `gossip` crate together

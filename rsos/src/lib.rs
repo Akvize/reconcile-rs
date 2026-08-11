@@ -16,12 +16,15 @@
 //!
 //! - **Def. 3.9** defines the RSOS contract itself — `size`, `Aggregate`, `Rank`, `Select`,
 //!   `Enumerate`, `Insert`, `Delete` — which this crate's [`Rsos`] trait implements literally,
-//!   method-for-method. Being an interface, RSOS admits multiple realizations: the paper itself
-//!   discusses both an in-memory augmented tree and AELMDB, a persistent, content-addressed
-//!   backend, as two realizations of the *same* abstraction, chosen for different deployment
-//!   constraints (in-memory speed vs. durability/content-addressing). This crate ships exactly
-//!   one realization, [`FingerprintTreeMap`] — an in-memory augmented tree, closer in spirit to the
-//!   paper's first example.
+//!   method-for-method. Being an interface, RSOS admits multiple realizations: the paper states
+//!   the contract abstractly (Thm. 5.2 holds for *any* aggregate-augmented B+-tree) and then
+//!   realizes it in AELMDB, a persistent, memory-mapped LMDB extension that stores the subtree
+//!   counts and composable summaries in the tree's own branch pages rather than in an auxiliary
+//!   index. AELMDB is **not** content-addressed — LMDB is a copy-on-write B+-tree addressed by
+//!   page number, and the fork does not hash a node to derive its address; content-addressing (and
+//!   the structural sharing it buys) remains unclaimed in this family. This crate ships a
+//!   different realization of the same abstraction, [`FingerprintTreeMap`] — in-memory, with no
+//!   page format at all.
 //! - **Def. 3.5** defines the *bundled aggregate* `A(S) = (|S|, Σ(S))` — and defines it as a
 //!   monoid `A := (ℕ×M, ⊗, (0, 0_M))`, not as a loose pair: one query answering both "how many
 //!   elements" and "what is their combined summary" in a single pass, rather than two independent

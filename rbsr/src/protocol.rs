@@ -275,6 +275,17 @@ pub fn initial_ranges<K, B: RsosView<K>>(local: &B) -> Vec<RangeAggregate<K>> {
 ///    bound `T_loc = O(hL + bhI + K)`: its `bhI` term assumes a constant `b`. No complexity claim
 ///    in this workspace's documentation quotes that bound, so none needed adjusting here — but a
 ///    future one must not quote it either.
+///
+///    **This deviation is not free, and the price is now measured.** Because the step is derived
+///    from the range's own size, the *first* SPLIT of a whole-store reconciliation emits ~√n child
+///    ranges no matter how small the difference is. Communication is therefore `Θ(√n)`, not the
+///    family's `O(d log n)`: `benches/protocol.rs` records 53 046 wire bytes over 1 048 advertised
+///    ranges to locate a **single** missing element in a 10⁶-entry store, against ~4 kB for a fixed
+///    `b = 16`. The compensation is real but sits in the other column — repeated square-rooting
+///    bottoms out in `Θ(log log n)` rounds rather than `O(log n)`, and the measured message count
+///    is flat (6–8) from 10³ to 10⁶ elements. Changing the rule is tracked as
+///    [#257](https://github.com/Akvize/reconcile-rs/issues/257); until it is, treat "this crate
+///    implements RBSR" as a statement about correctness, not about the published cost bounds.
 pub fn protocol_round<K, B: RsosView<K>>(
     local: &B,
     active_ranges: Vec<RangeAggregate<K>>,
@@ -526,6 +537,70 @@ mod tests {
         let (child_ranges, enumeration_ranges) = round(&store, segment);
         assert!(child_ranges.is_empty());
         assert!(enumeration_ranges.is_empty());
+    }
+
+    // ----- The fan-out rule itself -----
+    // `step = ⌊√m⌋` is a deviation from Algorithm 2's fixed `b` (see the deviation note on
+    // `protocol_round`), and it is the deviation that decides this crate's communication cost:
+    // the number of children a SPLIT emits is what goes on the wire. The two tests below pin the
+    // rule so that changing it — which is the whole point of #257 — is a deliberate act with a
+    // failing test attached, not a silent shift in every cluster's bandwidth profile.
+    // `benches/protocol.rs` reports the same quantity in bytes, over realistic store sizes.
+
+    /// A SPLIT replaces a range of `m` elements by `Θ(√m)` children, not by a constant number.
+    /// Driven through the empty-remote-is-refined path: the peer advertises a non-zero size (so
+    /// the IDLIST shortcut for an empty remote does not fire) with a fingerprint that cannot
+    /// match, which is exactly the "both sides non-empty, aggregates differ" case that splits.
+    #[test]
+    fn split_fan_out_is_square_root_of_the_range_size() {
+        for m in [100usize, 400, 2_500] {
+            let store = tree(&(0..m as i32).collect::<Vec<_>>());
+            let segment = RangeAggregate {
+                range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+                // Same element count as the local store, so neither the empty-remote nor the
+                // single-element branch applies; the fingerprint differs, so the range must split.
+                aggregate: Aggregate::new(m, Fingerprint([7, 0, 0, 0])),
+            };
+            let (child_ranges, enumeration_ranges) = round(&store, segment);
+            assert!(enumeration_ranges.is_empty());
+            let root = (m as f64).sqrt() as usize;
+            assert!(
+                child_ranges.len() >= root / 2 && child_ranges.len() <= root * 2,
+                "m={m}: SPLIT emitted {} children, expected ~√m = {root} \
+                 (a fixed branching factor would be constant in m)",
+                child_ranges.len()
+            );
+        }
+    }
+
+    /// The children of a SPLIT partition the parent exactly: consecutive, non-overlapping, and
+    /// spanning the whole parent range. This is what Proposition 4.1's correctness argument needs,
+    /// and it holds independently of *how many* children the fan-out rule chooses — so it must keep
+    /// holding through any change to that rule.
+    #[test]
+    fn split_children_partition_the_parent_range() {
+        let store = tree(&(0..400).collect::<Vec<_>>());
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: Aggregate::new(400, Fingerprint([7, 0, 0, 0])),
+        };
+        let (child_ranges, _) = round(&store, segment);
+        assert!(child_ranges.len() > 1);
+
+        let first = &child_ranges[0].range;
+        assert_eq!(first.0, StartBound::Unbounded, "partition must start at −∞");
+        let last = &child_ranges[child_ranges.len() - 1].range;
+        assert_eq!(last.1, EndBound::Unbounded, "partition must end at +∞");
+
+        for pair in child_ranges.windows(2) {
+            let (left, right) = (&pair[0].range, &pair[1].range);
+            match (&left.1, &right.0) {
+                // The previous child's excluded end is the next child's included start: adjacent,
+                // disjoint, no gap.
+                (EndBound::Excluded(end), StartBound::Included(start)) => assert_eq!(end, start),
+                other => panic!("children are not adjacent: {other:?}"),
+            }
+        }
     }
 
     /// And the adversarial middle case: matching fingerprints with mismatched sizes must not

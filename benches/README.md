@@ -1,13 +1,14 @@
 # Benchmarks
 
-Two Criterion targets, both `harness = false`, neither feature-gated:
+Three Criterion targets, all `harness = false`, none feature-gated:
 
 | Target | What it measures |
 |---|---|
 | `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
 | `system` | End-to-end, **public-API** system benchmarks (below). |
+| `protocol` | Wire cost of one full RBSR reconciliation — messages, advertised ranges and bytes as a function of store size `n` and difference size `d` (below). |
 
-Neither target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
+No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
 
 ## Running the system benchmarks
 
@@ -53,6 +54,34 @@ covered separately by `cold_sync`). No comparable open-source gossip/SWIM librar
 closest real precedent is HashiCorp's one-off [Consul 66k-node scale test](https://www.hashicorp.com/en/blog/consul-scale-test-report-to-observe-gossip-stability),
 a real-hardware exercise, not a runnable harness. These two benchmarks are closer to establishing a
 methodology than following one.
+
+## The `protocol` benchmark
+
+```sh
+cargo bench --bench protocol            # cost table + the timed drive loop
+cargo bench --bench protocol -- --quick
+```
+
+`reconciliation_cost` prints, for each `(n, d)` pair, the exact volume two peers exchange to
+converge: bytes (bincode, the same encoder the real transport uses), advertised `RangeAggregate`s,
+one-way messages, the largest single message, and IDLIST count. Deterministic, so it is printed
+rather than timed — like `system`'s `memory_footprint`. The timed `reconciliation_drive` group
+alongside it measures the local CPU cost of driving a whole run, the quantity arXiv:2603.19820
+models as `T_loc`.
+
+**Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
+rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr::protocol_round`
+instead cuts at `step = ⌊√m⌋`, so neither bound describes this implementation. The benchmark
+replaces an estimate with a measurement; the headline is that a **single** missing element in a
+10⁶-entry store costs ~53 kB over ~1 000 advertised ranges, against ~4 kB for `b = 16`, while the
+message count stays flat (6–8) across three decades of `n`. The widest single round is 50 781 B —
+inside the 65 507-byte datagram ceiling, but ~35 IP fragments at a 1500-byte MTU. Discussion in
+`SOTA.md` §2.2, decision in [#257](https://github.com/Akvize/reconcile-rs/issues/257).
+
+The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
+(`split_fan_out_is_square_root_of_the_range_size`, `split_children_partition_the_parent_range`), so
+changing it fails CI rather than silently changing every cluster's bandwidth profile — this
+benchmark quantifies the change, it does not guard it.
 
 ## Not covered yet
 

@@ -6,7 +6,9 @@
 > deliberately carries **no status or findings** — for the live correctness, security and maturity
 > state see [`PROGRESS.md`](./PROGRESS.md); for the target design see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 >
-> - **Literature survey dated:** 2026-05-30 (sources cited inline and in the [bibliography (§4)](#4-bibliography)).
+> - **Literature survey dated:** 2026-05-30, with a targeted addendum on 2026-08-10 (arXiv:2603.19820
+>   read in full against its four published repositories; §1.3/§2.1/§2.2/§2.3 revised and eight
+>   references added — sources cited inline and in the [bibliography (§4)](#4-bibliography)).
 > - **Scope:** the FingerprintTreeMap as a *data structure* and RBSR as an *algorithm*, compared to the published
 >   state of the art — not an audit of any particular commit.
 > - **Navigation:** a [glossary (§3)](#3-glossary) defines ~120 terms and an
@@ -50,7 +52,8 @@ dependency is legitimately attractive.
 | Family | Comm. | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
 | Naive XOR RBSR | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
-| **Secure-fingerprint RBSR (≥256-bit) = reconcile-rs** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod), reconcile-rs |
+| **Secure-fingerprint RBSR (≥256-bit), fixed fan-out *b*** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod, *b*=16) |
+| **↳ as instantiated in reconcile-rs (fan-out `√m`)** | **Θ(√n)** (see below) | O(d log n) | **Θ(log log n)** | No | Good | reconcile-rs |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
@@ -60,10 +63,18 @@ Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless
 Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
 (CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
-**Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, RBSR is the **worst
-family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a single
-streaming exchange, with no *d* estimation, and with adversarial robustness — it is the **current
-SOTA choice** for this use case.
+**The RBSR row splits in two because this implementation is not a fixed-*b* RBSR.** The published
+O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2; `rbsr`'s
+`protocol_round` cuts at `step = ⌊√m⌋` instead, so the first SPLIT advertises ~√n ranges *whatever
+d is*. That trades the family's communication bound away for a shallower recursion — measured, not
+estimated, by `benches/protocol.rs` ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
+See [§2.2](#22-competitors-at-the-reconciliation-algorithm-level) for the numbers.
+
+**Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, fixed-*b* RBSR is the
+**worst family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a
+single streaming exchange, with no *d* estimation, and with adversarial robustness — it is the
+**current SOTA choice** for this use case. reconcile-rs's `√m` fan-out inverts that particular
+trade-off (few RTTs, heavy rounds) rather than escaping it.
 
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
@@ -177,12 +188,40 @@ Ethereum (Merkle-Patricia) and SMTs.
 #### RSOS / AELMDB (arXiv:2603.19820, 2026) — *the most direct competitor*
 The paper formalizes "**B+-tree augmented with subtree counts + composable summaries**" as the RSOS
 abstraction, proves RBSR's local-cost bounds on this backend, and ships **AELMDB**: a **persistent,
-memory-mapped** LMDB extension, evaluated with Negentropy.
-- **vs FingerprintTreeMap:** **it is the same design**, and (unlike Negentropy's incremental cryptographic
-  hash) a comparably secure one — FingerprintTreeMap already uses a 256-bit additive combiner, not the naive
-  XOR. The remaining delta is **persistence**: AELMDB is LMDB-backed (memory-mapped, durable);
-  FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent RSOS with a secure
-  fingerprint" — persistence is the gap that remains.**
+memory-mapped** LMDB extension, evaluated with Negentropy. Read in the source
+(`github.com/amparore/aelmdb`), the fork touches only **branch pages** — a branch node becomes
+`[child pgno | aggregates | separator key]` with `aggregates := [entries?][keys?][hashsum?]` — and
+binds the summary width into the on-disk format tag. It is **not** content-addressed: LMDB is a
+copy-on-write B+-tree addressed by page number.
+- **vs FingerprintTreeMap:** **it is the same design**, and its combiner is literally ours —
+  addition modulo 2²⁵⁶ over little-endian 64-bit limbs with carry (`mdb_hashsum_add`), the C mirror
+  of `Fingerprint::combine`. Two deltas run the *other* way, in our favour, and were not visible
+  from the abstract alone:
+  - **AELMDB does not hash.** Def. 3.4's lift φ is realized by *extracting a fixed-size byte slice*
+    at a configured offset from the key or the value (`MDB_AGG_HASHSUM` + `mdb_set_hash_offset`);
+    the engine assumes the application already embedded a collision-resistant id. `rsos` owns that
+    end instead — BLAKE3 over the canonical encoding of (key, value) — so it summarizes the
+    **value**, not merely an identity the caller vouches for.
+  - **The comparison map is exact here, probabilistic there.** Negentropy's `f_p` is
+    `SHA-256(Σ ‖ varint(count))` truncated to **128 bits**; the paper (§6.1) states plainly that
+    this makes it "probabilistically sound rather than information-theoretically exact" and leaves
+    the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
+    256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
+    the injectivity of Σ with no truncation term. The price is 40 B/range against 16 B — see §2.2.
+- The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
+  durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
+  RSOS with a secure fingerprint" — persistence is the gap that remains.**
+- **What the paper's evaluation does and does not establish.** Its headline (AELMDB 4.69×–13.98×
+  faster than the `BTreeLMDB` baseline on reconciliation time) is scoped by §7.1 to single-machine,
+  fixed-protocol, reconciliation-heavy workloads. Two readings the text does not foreground, both
+  recomputed from the published `results-linux.csv`: the in-memory `Vector` backend is *faster than
+  AELMDB in all six families* (0.39×–0.59×) despite not being an RSOS at all (its `fingerprint()`
+  scans the range, O(k) not O(log n)); and the 13.98× family runs at **d ≈ 21 % of n** with 1–3
+  protocol messages — the opposite of RBSR's large-n/small-d target, a regime where the cost is
+  dominated by enumeration and point access rather than range aggregation. The result to carry
+  forward is therefore *"an aggregate-augmented persistent engine costs ~2× an in-RAM array on the
+  hot path"*, which is the number that was missing from the persistence decision (see
+  [`PROGRESS.md`](./PROGRESS.md) §4 on #271), not *"in-tree aggregates beat memory"*.
 
 | Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
 |---|---|---|---|---|---|---|---|
@@ -204,18 +243,45 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
-| **RBSR (FingerprintTreeMap, secure fingerprint)** | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** | Earthstar/Willow (naive XOR) — reconcile-rs, Negentropy (secure) |
+| **RBSR, fixed fan-out *b*** (secure fingerprint) | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** | Earthstar/Willow (naive XOR) — Negentropy (secure, *b*=16) |
+| **↳ reconcile-rs today** (fan-out `√m`) | **Θ(√n)**, d-independent | O(d log n) | **Θ(log log n) sequential** | No (self-adapting) | **Good** | reconcile-rs |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
 | Classic IBLT | O(d·(b+log U)) | O(d) | 1 (+estim.) | **Yes** | weak | blockchains |
 
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
-- RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a difference, the
-  exact base depending on the split fan-out (`rbsr/src/protocol.rs` currently splits by `√n` per
-  round, not a fixed branching factor — unbenchmarked and reconsidered in
-  [#257](https://github.com/Akvize/reconcile-rs/issues/257)). On a 1 ms-RTT LAN that's several ms; on
-  WAN far more — a cost the README's loopback benchmarks hide (cf. F16).
+- Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
+  difference. On a 1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback
+  benchmarks hide (cf. F16).
+- **This implementation does not sit on that point of the curve.** `rbsr/src/protocol.rs` cuts at
+  `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m elements each.
+  Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but the first SPLIT
+  emits ~√n range aggregates **regardless of d**, so communication is **Θ(√n)**, not O(d log n).
+  This is not a change of logarithmic base; it is a different complexity class in both columns, one
+  better and one worse. Measured by `benches/protocol.rs` (`u64` keys, d = 1, one element missing):
+
+  | n | wire bytes | ranges advertised | largest single round | one-way messages |
+  |---:|---:|---:|---:|---:|
+  | 10³ | 2 041 | 47 | 33 ranges / 1 447 B | 6 |
+  | 10⁴ | 5 395 | 121 | 101 ranges / 4 531 B | 8 |
+  | 10⁵ | 16 553 | 345 | 317 ranges / 15 327 B | 6 |
+  | 10⁶ | **53 046** | 1 048 | **1 001 ranges / 50 781 B** | 8 |
+
+  ~×3.2 per decade of *n* on the bytes (i.e. √10), flat on the message count. Concretely: **one
+  dropped UDP update in a 1 M-entry map costs ~53 kB on the next anti-entropy round**, against
+  ~4 kB for a fixed *b* = 16. The single widest round is 50 781 B — inside the 65 507-byte datagram
+  ceiling, but ~35 IP fragments at a 1500-byte MTU, any one of which loses the whole round; and
+  `send_messages_paced` chunks past the ceiling rather than failing, so beyond ~1.7 M entries this
+  degrades into multiple datagrams rather than breaking. It is a bandwidth and fragmentation cost,
+  not a bug — but it is the reason
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257) is a communication-complexity
+  regression rather than a tuning gap.
+- **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
+  `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
+  (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per
+  round it is ~79 % of the bytes measured above. The two decisions are only separable if the
+  fan-out shrinks.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
@@ -234,6 +300,17 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    identical**, regardless of each one's B-tree shape. → Convergence guaranteed **without paying**
    for history-independence, and **immunity to the MST leading-zeros attack** (addition-with-carry is
    not GF(2)-linear, unlike XOR).
+
+   **The strongest counter-argument on record**, and the reason this is a *differentiator* rather
+   than a free lunch: Meyer & Scherer (2024) show RBSR can be realized with **conventional
+   (non-homomorphic) hashes** over history-independent, clamping-invariant search trees. That is a
+   different point on the same design plane — it pays for history-independence but then owes
+   nothing to a composable-monoid summary. Two consequences worth holding: the additive combiner is
+   a *choice*, not a requirement of RBSR; and the theoretical half of
+   [#298](https://github.com/Akvize/reconcile-rs/issues/298)'s motivation (generalize to
+   `RSOS<M: Monoid>`) weakens accordingly — its wire-format half (`RangeAggregate` is the wire type,
+   so the generalization is not additive later) stands on its own and is the half that fixes the
+   timing.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
@@ -244,8 +321,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    Cassandra which builds the tree at repair time). The store *is* the reconciliation index.
 5. **Avoids Cassandra's over-streaming**: the SPLIT recursion tightens onto the ranges that
    actually differ instead of streaming a whole fixed partition. (The split fan-out here is
-   `√n` by rank, not a fixed branching factor — arXiv:2603.19820's Algorithm 2 is stated for a
-   fixed `b`, and Negentropy's default is `b = 16`; neither is what this implementation does.)
+   `√m` by rank, not a fixed branching factor — arXiv:2603.19820's Algorithm 2 is stated for a
+   fixed `b`, and Negentropy's default is `b = 16`; neither is what this implementation does. That
+   deviation is no longer only a note: §2.2 quantifies what it costs, and it is the one place where
+   this implementation is *worse* than the family it belongs to.)
 6. **Rust-native, in-process, embeddable**: a real ecosystem niche (mature equivalents = JVM).
 
 ### 2.4 The design axes of a *true* SOTA RSOS
@@ -337,9 +416,14 @@ surrounding system.
 
 | Term | Definition |
 |---|---|
-| **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): the peers maintain a family of pairwise disjoint **active ranges**, initially one **outer range**; each **protocol round**, a peer answers every active range it was asked about with **SKIP** (aggregates match → *resolved*), **IDLIST** (send the range's ordered contents outright) or **SPLIT** (replace it by a balanced family of **child ranges**). The result is the **symmetric difference** Δ(X, Y). Vocabulary and Algorithm 1 as formalized in arXiv:2603.19820 §4. What reconcile-rs implements. O(log n) RTT. |
+| **RBSR** (*Range-Based Set Reconciliation*) | Algorithm family (Meyer 2023): the peers maintain a family of pairwise disjoint **active ranges**, initially one **outer range**; each **protocol round**, a peer answers every active range it was asked about with **SKIP** (aggregates match → *resolved*), **IDLIST** (send the range's ordered contents outright) or **SPLIT** (replace it by a balanced family of **child ranges**). The result is the **symmetric difference** Δ(X, Y). Vocabulary and Algorithm 1 as formalized in arXiv:2603.19820 §4. What reconcile-rs implements — with a `√m` rather than fixed-`b` fan-out, which changes both cost columns (§1.3, §2.2). O(log n) RTT at fixed `b`. |
 | **RSOS** (*Range-Summarizable Order-Statistics Store*) | Abstraction (arXiv:2603.19820, 2026): an ordered set offering **composable** range summaries + rank/select navigation. An augmented B+-tree realizes it → **the FingerprintTreeMap is an RSOS**. |
-| **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the FingerprintTreeMap. |
+| **AELMDB** | **Persistent** RSOS implementation (LMDB extension, memory-mapped) from the 2026 paper, evaluated with Negentropy. The most direct competitor to the FingerprintTreeMap. Aggregates live in **branch pages** (`[child pgno \| aggregates \| separator key]`); the element summary is a byte slice *extracted* from the record, never hashed by the engine. Not content-addressed. |
+| **LMDB** | Lightning Memory-Mapped Database: a copy-on-write, memory-mapped B+-tree with lock-free MVCC readers and a single writer. AELMDB's host engine, and the closest existing thing to what #271 proposes to build. |
+| **Counted B-tree** | (Tatham, 2004) A B-tree carrying per-subtree element counts, giving O(log n) rank/select. The order-statistic half of RSOS, as a standalone classic. |
+| **AB-tree** | (Zhao et al., VLDB 2022) A page-oriented tree maintaining aggregate metadata **under concurrent updates**; evidence that aggregate augmentation and concurrency compose, and the reference point for root-aggregate write contention. |
+| **Embedded Merkle B-tree (EMB-tree)** | (Li et al., SIGMOD 2006) A B-tree caching digests in its nodes for **authenticated query answering** over outsourced databases. Prior art for "digests inside a B-tree", with a different goal (proofs, not range aggregation). |
+| **PBS** (*Parity Bitmap Sketch*) | (Gong et al., VLDB 2020) A sketch-based reconciliation scheme targeting low computation together with near-optimal communication — another point on the RIBLT/minisketch Pareto front. |
 | **MST** (*Merkle Search Tree*) | Auvolat & Taïani, SRDS 2019. A B-tree whose key level derives from the **hash of the key** ⇒ history-independent. Diffs **nodes**. Vulnerable to the leading-zeros attack. Usage: Bluesky/atproto. |
 | **Prolly tree** (*probabilistic B-tree*) | Noms/Dolt. Content-addressed B-tree, boundaries by **rolling hash**. History-independent + **structural sharing** → versioning (Git-like). SOTA of versioned ordered stores. |
 | **Merkle radix / Patricia trie** | A Merkle tree where position depends on the key's **prefix bits**. History-independent. The basis of Ethereum. |
@@ -448,7 +532,16 @@ surrounding system.
 - L. Yang, Y. Gilad, M. Alizadeh, *Practical Rateless Set Reconciliation*, SIGCOMM 2024, arXiv:2402.02668 — https://arxiv.org/abs/2402.02668 ; impl. https://github.com/yangl1996/riblt
 - minisketch (Bitcoin Core) — https://github.com/bitcoin-core/minisketch ; BIP 330 — https://bips.dev/330/
 - Erlay (Naumenko et al., CCS 2019) — https://arxiv.org/abs/1905.10518
-- E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores* (RSOS / AELMDB), arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820
+- E. G. Amparore, *RBSR via Range-Summarizable Order-Statistics Stores* (RSOS / AELMDB), arXiv:2603.19820 (2026) — https://arxiv.org/html/2603.19820 ; software: AELMDB https://github.com/amparore/aelmdb , Negentropy integration https://github.com/amparore/negentropy-aelmdb , benchmark harness https://github.com/amparore/bench-aelmdb
+- A. Meyer, K. Scherer, *Range-Based Set Reconciliation without Homomorphic Hashing*, preprint 2024 —
+  https://aljoscha-meyer.de/assets/landing/rbsr_nonhomomorphic.pdf — RBSR over history-independent,
+  clamping-invariant trees using conventional hashes. **The direct counter-argument to §2.3 #1**:
+  the composable-monoid summary is one design point, not a requirement of the algorithm.
+- L. Gong, Z. Liu, L. Liu, J. Xu, M. Ogihara, T. Yang, *Space- and computationally-efficient set
+  reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
+  communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).
+- Y. Minsky, A. Trachtenberg, *Scalable set reconciliation*, Allerton 2002 — the divide-and-conquer
+  ancestry of range-based refinement, predating the RBSR framing.
 - *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
 - *ConflictSync*, arXiv:2505.01144 (2025, Baquero group) — the first digest-driven synchronisation
   algorithm for state-based CRDTs, cutting transfer up to 18× — https://arxiv.org/abs/2505.01144
@@ -465,6 +558,29 @@ surrounding system.
 - Cassandra repair / over-streaming — https://www.pythian.com/blog/effective-anti-entropy-repair-cassandra
 - Willow 3d-RBSR (fingerprint security) — https://willowprotocol.org/specs/3d-range-based-set-reconciliation/index.html ; Negentropy — https://github.com/hoytech/negentropy
 - Demers et al., *Epidemic Algorithms*, PODC 1987 ; SWIM — https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf ; memberlist — https://github.com/hashicorp/memberlist
+
+**Aggregate-augmented and page-oriented trees** *(the structural ancestry of `FingerprintTreeMap`,
+surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271 all land here)*
+- S. Tatham, *Counted B-Trees* (2004) — https://www.chiark.greenend.org.uk/~sgtatham/algorithms/cbtree.html
+  — the subtree-count augmentation giving O(log n) rank/select. Direct prior art for `tree_size`:
+  the order-statistic half of RSOS is a documented classic, not a 2026 result.
+- Z. Zhao, D. Xie, F. Li, *AB-tree: Index for concurrent random sampling and updates*, VLDB 15(9),
+  2022 — maintaining aggregate metadata inside a page-oriented tree **under concurrent updates**.
+  The reference for the contention this design has by construction (every insert rewrites the root
+  aggregate, today hidden behind one global `RwLock`) and for epic
+  [#271](https://github.com/Akvize/reconcile-rs/issues/271).
+- F. Li, M. Hadjieleftheriou, G. Kollios, L. Reyzin, *Dynamic authenticated index structures for
+  outsourced databases* (Embedded Merkle B-tree), SIGMOD 2006 — twenty years of prior art on
+  caching digests inside a B-tree. Different goal (verifiable query answering, not range
+  aggregation), but it bounds any novelty claim and supplies the vocabulary if inclusion proofs
+  ever become a requirement.
+- S. Roura, *A new method for balancing binary search trees*, ICALP 2001 — balancing by subtree
+  weight; background for the untuned interaction between the tree order (6) and the protocol
+  fan-out ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
+- H. Chu et al., *LMDB* — https://github.com/LMDB — a copy-on-write, memory-mapped B+-tree with
+  lock-free MVCC readers and a single writer. Named here because that *is* the property epic
+  [#271](https://github.com/Akvize/reconcile-rs/issues/271) sets out to build in safe Rust: the
+  build-vs-adopt comparison should be made against it explicitly rather than by default.
 
 **Consistency & conflict resolution**
 - Kingsbury (Jepsen), *The trouble with timestamps* — https://aphyr.com/posts/299-the-trouble-with-timestamps ; *Jepsen: Cassandra* — https://aphyr.com/posts/294-jepsen-cassandra
@@ -487,15 +603,15 @@ surrounding system.
 > is defined: [3.1 repo → code](#g91) · [3.2 structures/algos](#g92) · [3.3 distributed](#g93) ·
 > [3.4 crypto/network](#g94) · [3.5 complexity](#g95) · [3.6 Rust](#g96).
 
-**A** — AEAD [3.4](#g94) · AELMDB [3.2](#g92) · amplification [3.4](#g94) · anti-entropy [3.3](#g93) · `Arc` [3.6](#g96) · `ArrayVec` [3.6](#g96) · associative [3.3](#g93)
+**A** — AB-tree [3.2](#g92) · AEAD [3.4](#g94) · AELMDB [3.2](#g92) · amplification [3.4](#g94) · anti-entropy [3.3](#g93) · `Arc` [3.6](#g96) · `ArrayVec` [3.6](#g96) · associative [3.3](#g93)
 
 **B** — B-tree / B+-tree [3.5](#g95) · BCH codes [3.2](#g92) · Berlekamp-Massey [3.2](#g92) · bincode [3.6](#g96) · bincode allocation bomb [3.4](#g94) · BIP 330 [3.2](#g92) · birthday bound [3.4](#g94) · BLAKE3 [3.4](#g94) · Bloom filter [3.2](#g92)
 
-**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
+**C** — CAP [3.3](#g93) · CAS [3.2](#g92) · Cassandra [3.2](#g92) · Counted B-tree [3.2](#g92) · causal consistency / causal+ [3.3](#g93) · causal stability [3.3](#g93) · CDC (content-defined chunking) [3.2](#g92) · CertainSync [3.2](#g92) · chrono [3.6](#g96) · CID [3.2](#g92) · clippy [3.6](#g96) · clock skew [3.3](#g93) · CmRDT [3.3](#g93) · collision [3.4](#g94) · commit-wait [3.3](#g93) · commutative [3.3](#g93) · content-addressing [3.2](#g92) · CPI / CPISync [3.2](#g92) · CRDT [3.3](#g93) · CvRDT [3.3](#g93)
 
 **D** — datagram [3.4](#g94) · `DateTime<Utc>` [3.6](#g96) · `DefaultHasher` [3.4](#g94) · Dolt / DoltHub [3.2](#g92) · `DoubleEndedIterator` [3.6](#g96) · DRDoS [3.4](#g94) · DTLS [3.4](#g94) · DVV (Dotted Version Vector) [3.3](#g93) · Dynamo [3.2](#g92)
 
-**E** — Earthstar [3.2](#g92) · epidemic [3.3](#g93) · Erlay [3.2](#g92) · eventual consistency [3.3](#g93) · `ExactSizeIterator` [3.6](#g96)
+**E** — Earthstar [3.2](#g92) · EMB-tree (Embedded Merkle B-tree) [3.2](#g92) · epidemic [3.3](#g93) · Erlay [3.2](#g92) · eventual consistency [3.3](#g93) · `ExactSizeIterator` [3.6](#g96)
 
 **F** — fan-out [3.5](#g95) · `FusedIterator` [3.6](#g96) · fuzzing [3.6](#g96)
 
@@ -507,7 +623,7 @@ surrounding system.
 
 **J** — join-semilattice [3.3](#g93)
 
-**L** — Lamport clock [3.3](#g93) · leading-zeros (attack) [3.2](#g92) · LtHash [3.4](#g94) · LWW (Last-Write-Wins) [3.3](#g93) · LWW-Register [3.3](#g93)
+**L** — Lamport clock [3.3](#g93) · LMDB [3.2](#g92) · leading-zeros (attack) [3.2](#g92) · LtHash [3.4](#g94) · LWW (Last-Write-Wins) [3.3](#g93) · LWW-Register [3.3](#g93)
 
 **M** — MAC [3.4](#g94) · memberlist [3.3](#g93) · Merkle-CRDT [3.2](#g92) · Merkle-DAG [3.2](#g92) · Merkle radix / Patricia [3.2](#g92) · Merkle tree / root [3.2](#g92) · minisketch [3.2](#g92) · miri [3.6](#g96) · monoid [3.5](#g95) · monotone [3.3](#g93) · MSet-Mu-Hash / MSet-XOR-Hash [3.4](#g94) · MSRV [3.6](#g96) · MST (Merkle Search Tree) [3.2](#g92) · MTU [3.4](#g94) · MV-Register [3.3](#g93)
 
@@ -515,7 +631,7 @@ surrounding system.
 
 **O** — O(log n) / O(d log n) [3.5](#g95) · once_cell [3.6](#g96) · order statistics (rank/select) [3.5](#g95) · OR-Set [3.3](#g93) · over-streaming [3.2](#g92)
 
-**P** — PACELC [3.3](#g93) · `panic=abort` [3.6](#g96) · parking_lot [3.6](#g96) · partition [3.3](#g93) · Patricia trie [3.2](#g92) · Pekko Distributed Data [§2/product](#g92) · PinSketch [3.2](#g92) · prolly tree [3.2](#g92) · proptest [3.6](#g96) · PTP [3.3](#g93) · push / pull [3.3](#g93)
+**P** — PACELC [3.3](#g93) · PBS (Parity Bitmap Sketch) [3.2](#g92) · `panic=abort` [3.6](#g96) · parking_lot [3.6](#g96) · partition [3.3](#g93) · Patricia trie [3.2](#g92) · Pekko Distributed Data [§2/product](#g92) · PinSketch [3.2](#g92) · prolly tree [3.2](#g92) · proptest [3.6](#g96) · PTP [3.3](#g93) · push / pull [3.3](#g93)
 
 **Q** — QUIC [3.4](#g94) · quickcheck [3.6](#g96) · quorum [3.3](#g93)
 

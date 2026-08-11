@@ -137,6 +137,24 @@ but one High resolved or mitigated.
   zero public implementors and no injection seam) and
   [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid — the one
   non-additive change, since `RangeAggregate` is the wire type; see `ARCHITECTURE.md` §7).
+- ◐ **RSOS/AELMDB literature pass (2026-08-10)** — arXiv:2603.19820 read in full against its four
+  published repositories (`amparore/{aelmdb, negentropy-aelmdb, lmdbxx-aelmdb, bench-aelmdb}`). The
+  design verdict is unchanged and now better evidenced: it *is* the same design, and its combiner is
+  literally ours (256-bit addition over LE 64-bit limbs with carry). Two deltas run in our favour
+  and were not visible from the abstract — AELMDB never hashes (its lift extracts a byte slice the
+  application must have made collision-resistant, where `rsos` computes BLAKE3 over the canonical
+  encoding of key *and* value), and Negentropy's comparison map is SHA-256 truncated to 128 bits,
+  which the paper itself (§6.1) calls only "probabilistically sound" with the collision analysis out
+  of scope, where `rbsr` compares the aggregate itself. Three outcomes, all landed here: `SOTA.md`
+  §1.3/§2.1/§2.2/§2.3 revised, six references added; two factual errors corrected (`SOTA.md`'s
+  `O(d log n)` claim for *this* implementation, and `rsos/src/lib.rs` calling AELMDB
+  "content-addressed" — it is a copy-on-write B+-tree addressed by page number); and #257
+  reclassified with a measurement behind it (above). One caveat worth keeping: the paper's headline
+  4.69×–13.98× is persistent-vs-persistent, its in-memory reference backend beats AELMDB in all six
+  families despite not being an RSOS at all, and its widest-margin family runs at `d ≈ 21 % of n` —
+  the opposite of the large-n/small-d profile. Nothing in it argues we should move off an in-memory
+  store; it argues that *if* we add persistence, the aggregates belong in the persistent tree rather
+  than in an auxiliary index.
 - **PRs #218–#221 were never merged** (established 2026-08-10). Their bodies read as landed work
   ("MSRV declared", "`LoadError` re-exported", "Closes #189"); `git log -S` finds **zero**
   occurrences of every identifier they introduce, so nothing was reverted and the workspace split is
@@ -171,9 +189,24 @@ but one High resolved or mitigated.
   scaling, and durable rejoin — see `benches/README.md`. Still open: an external (e.g. Redis)
   comparison, non-CI and feature-gated.
 - Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT, generic monoid
-  summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185); see also
-  [#257](https://github.com/Akvize/reconcile-rs/issues/257) (the current split fan-out is
-  unbenchmarked and hard-coded).
+  summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185).
+- **The split fan-out is a communication-complexity regression, not a tuning gap** —
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
+  "unbenchmarked and hard-coded"). `protocol_round` cuts at `step = ⌊√m⌋`, so the first SPLIT of a
+  whole-store round advertises ~√n ranges **whatever `d` is**: communication is `Θ(√n)`, not the
+  family's `O(d log n)`. Measured by the new `benches/protocol.rs` — locating one missing element in
+  a 10⁶-entry store costs **53 046 B over 1 048 advertised ranges**, against ~4 kB for a fixed
+  `b = 16`; the widest single round is 1 001 ranges / **50 781 B** — inside the 65 507-byte datagram
+  ceiling, but ~35 IP fragments at a 1500-byte MTU, any one of which loses the whole round. That
+  measurement settles #257's own open question: its estimate (~55 kB at 1 M) is confirmed, while its
+  "over the ceiling at 10 M" concern is **refuted as a failure mode** — `send_messages_to` delegates
+  to `send_messages_paced`, which chunks at `BUFFER_SIZE`, so an oversized round costs extra
+  datagrams rather than being dropped. The compensation is genuine and sits in the other
+  column: rounds are `Θ(log log n)`, measured flat at 6–8 one-way messages from 10³ to 10⁶, where
+  fixed-`b` RBSR pays `O(log n)`. So this is a deliberate-looking trade that was never deliberately
+  made, and it interacts with the 40 B/range wire aggregate (~79 % of those bytes). The split rule
+  is now pinned by unit tests in `rbsr/src/protocol.rs`, so changing it is a decision with a failing
+  test attached. Analysis: `SOTA.md` §1.3/§2.2.
 - Pluggable per-value conflict resolution beyond LWW-Register —
   [#184](https://github.com/Akvize/reconcile-rs/issues/184).
 - `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,
@@ -191,6 +224,20 @@ but one High resolved or mitigated.
   [#271](https://github.com/Akvize/reconcile-rs/issues/271), which converges with the prolly-tree /
   structural-sharing (content-addressing) direction SOTA.md §2.4 already notes as the big
   persistence gap.
+  - **Decide #271 against LMDB explicitly, before writing the copy-on-write core.** A copy-on-write
+    B+-tree with lock-free MVCC readers and a single writer is what the epic sets out to build; it
+    is also, exactly, what LMDB already is — and arXiv:2603.19820's AELMDB shows the full RSOS
+    contract (composable range aggregates + rank/select) fits inside that engine's own branch pages.
+    The number that was missing from the build-vs-adopt call now exists: on the paper's own
+    published data, the persistent aggregate-augmented engine costs **~2× an in-RAM array** on the
+    reconciliation hot path (`Vector`/AELMDB `T_rec` ratio 0.39×–0.59× across six scenario families,
+    recomputed from `bench-aelmdb`'s `results-linux.csv`), for ~1.0× the disk and *lower* RSS than
+    the auxiliary-tree baseline. Adopting is not obviously right — `#![forbid(unsafe_code)]` (AGENTS
+    §5) rules out mmap and makes an LMDB binding an FFI dependency in the domain's data path, the
+    keys would have to be encoded into byte strings, and AELMDB is a one-commit research fork. But
+    those are arguments to *write down*, not to leave implicit. The `Rsos` trait already makes the
+    question askable without disturbing anything above it: a second realization is an
+    implementation of one trait. Blocking on nobody; needs a maintainer decision recorded on #271.
 
 Full SOTA gap analysis: [`SOTA.md`](./SOTA.md) §2.4.
 
