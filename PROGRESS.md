@@ -179,6 +179,41 @@ but one High resolved or mitigated.
   lets a caller skip the re-lift/fingerprint-propagation step `with_mut` guarantees); the
   get-or-insert half of what `entry()` usually buys already exists one layer up
   (`ReplicatedMap::upsert`/`get_or_insert_with`).
+- ◐ **The split fan-out is a communication-complexity regression, not a tuning gap** —
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
+  "unbenchmarked and hard-coded"). **Step A is done** (2026-08-11): the two decisions are now a
+  `RefinementPolicy` seam in `rbsr` (`Decision` = SKIP/IDLIST/SPLIT, `Comparison`, `SplitStride`,
+  `FanOut`), `protocol_round_with_policy` takes one, and `protocol_round` pins the default to
+  `SqrtFanOut` — today's behaviour byte-for-byte, so `tests/wire_format.rs`'s golden vector and the
+  convergence proptests pass unchanged. Two alternatives ship alongside it (`FixedFanOut`, the
+  paper's constant `b`; `Algorithm1`, the paper's rule with `t` *and* `b`). The policy is local and
+  never advertised — mixed pairs converge, pinned by
+  `peers_running_different_policies_still_converge` and a proptest over every pair.
+  **Step B is done**: `benches/protocol.rs` now sweeps policy × `n` × `d` × difference clustering and
+  reports rounds, bytes, datagrams, IP fragments, IDLIST elements and local `Aggregate`/`Rank`/
+  `Select` counts.
+
+  **What the measurement changed.** Locating one missing element in a 10⁶-entry store costs
+  **53 046 B over 1 048 advertised ranges** under `√m` against **3 834 B / 78 ranges** for
+  `b = 16` — and ~13× the local RSOS queries. The claimed compensation **does not hold in the
+  reachable range**: this file previously recorded rounds as "`Θ(log log n)`, flat at 6–8 … where
+  fixed-`b` pays `O(log n)`", but measured head to head at n = 10⁶ *both* policies take 8 one-way
+  messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2× near
+  n ≈ 10¹². So `√m` pays ~14× the bytes and buys nothing observable back. Corrected in `SOTA.md`
+  §1.3/§2.2. Two qualifications: every bench runs at RTT ≈ 0
+  ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), and the gap closes to ~7 % at
+  d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for. The earlier
+  ceiling finding also sharpens: at n = 10⁶ with d = 100 the widest round reaches **160 908 B over
+  3 300 ranges = 3 datagrams / ~189 fragments**, so the ceiling is reachable at 10⁶, not only at
+  10 M — still degrading into extra datagrams rather than being dropped, as `send_messages_paced`
+  chunks at `BUFFER_SIZE`.
+
+  **Still open.** Changing the *default* to `FixedFanOut(16)`, which the numbers now support, is
+  deliberately not done here: #257's Step A requires the default to stay behaviour-preserving, and
+  the switch deserves its own reviewable change. Also open: exposing a policy through `reconcile`'s
+  facade (`Config` is `Copy`, so a boxed policy needs a different carrier), and the interaction with
+  the 40 B/range wire aggregate (~79 % of those bytes) — now separable, since the fan-out is a
+  caller's choice rather than an edit to the protocol loop.
 
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
@@ -190,23 +225,6 @@ but one High resolved or mitigated.
   comparison, non-CI and feature-gated.
 - Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT, generic monoid
   summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185).
-- **The split fan-out is a communication-complexity regression, not a tuning gap** —
-  [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
-  "unbenchmarked and hard-coded"). `protocol_round` cuts at `step = ⌊√m⌋`, so the first SPLIT of a
-  whole-store round advertises ~√n ranges **whatever `d` is**: communication is `Θ(√n)`, not the
-  family's `O(d log n)`. Measured by the new `benches/protocol.rs` — locating one missing element in
-  a 10⁶-entry store costs **53 046 B over 1 048 advertised ranges**, against ~4 kB for a fixed
-  `b = 16`; the widest single round is 1 001 ranges / **50 781 B** — inside the 65 507-byte datagram
-  ceiling, but ~35 IP fragments at a 1500-byte MTU, any one of which loses the whole round. That
-  measurement settles #257's own open question: its estimate (~55 kB at 1 M) is confirmed, while its
-  "over the ceiling at 10 M" concern is **refuted as a failure mode** — `send_messages_to` delegates
-  to `send_messages_paced`, which chunks at `BUFFER_SIZE`, so an oversized round costs extra
-  datagrams rather than being dropped. The compensation is genuine and sits in the other
-  column: rounds are `Θ(log log n)`, measured flat at 6–8 one-way messages from 10³ to 10⁶, where
-  fixed-`b` RBSR pays `O(log n)`. So this is a deliberate-looking trade that was never deliberately
-  made, and it interacts with the 40 B/range wire aggregate (~79 % of those bytes). The split rule
-  is now pinned by unit tests in `rbsr/src/protocol.rs`, so changing it is a decision with a failing
-  test attached. Analysis: `SOTA.md` §1.3/§2.2.
 - Pluggable per-value conflict resolution beyond LWW-Register —
   [#184](https://github.com/Akvize/reconcile-rs/issues/184).
 - `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,

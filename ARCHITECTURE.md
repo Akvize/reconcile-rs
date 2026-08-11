@@ -23,7 +23,9 @@ converge. Five mechanisms:
   **range fingerprint**, so the hash of any key interval is available in `O(log n)`.
 - **Anti-entropy protocol** — two peers compare aggregates over shrinking key ranges (`rbsr`'s
   `protocol_round`) and exchange only the entries that actually differ. Equality and emptiness are
-  decided by interval **size**, not by hash, to stay collision-safe.
+  decided by interval **size**, not by hash, to stay collision-safe. *How* a range is refined —
+  when to stop splitting and how wide to cut — is a `RefinementPolicy`, a purely local choice that
+  never reaches the wire (§3.1).
 - **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock timestamp
   (`Timestamp`); conflicts resolve by **last-write-wins** over the HLC total order
   `(physical, logical, node_id)`.
@@ -39,7 +41,7 @@ converge. Five mechanisms:
 ```mermaid
 flowchart LR
     rsos["rsos\nFingerprintTreeMap, Fingerprint,\nAggregate, Rsos trait"]
-    rbsr["rbsr\nprotocol_round, initial_ranges,\nRsosView"]
+    rbsr["rbsr\nprotocol_round, initial_ranges,\nRsosView, RefinementPolicy"]
     lww["lww-register\nEntry/State, Timestamp,\nClock + Persistence ports"]
     gossip["gossip\nTransport port, wire encoding,\nauth, replay, Discovery port"]
     reconcile["reconcile (facade)\nReplica, ReplicatedMap,\nReadReplicaMap, HlcClock, FileSnapshot"]
@@ -60,7 +62,7 @@ address. `reconcile` is the one place the two meet.
 | Crate | Holds | Kind |
 |---|---|---|
 | `rsos` | `fingerprint_tree_map{,_iter}.rs`, `fingerprint.rs`, `encoding.rs`, `aggregate.rs`, `rsos_trait.rs` | leaf, zero workspace deps |
-| `rbsr` | `protocol.rs` (the driver), `rsos_view.rs` | depends on `rsos` only |
+| `rbsr` | `protocol.rs` (the driver), `policy.rs` (the refinement-policy seam), `rsos_view.rs` | depends on `rsos` only |
 | `lww-register` | `entry.rs`, `bounds.rs`, `clock.rs` (`Hlc`/`Timestamp`/`Clock`), `persistence.rs` (`Persistence`/`PersistedState`) | **domain**, infrastructure-free |
 | `gossip` | `transport.rs`, `bincode.rs`, `auth.rs`, `replay.rs`, `discovery.rs`, `gen_ip.rs` | infrastructure; no `lww-register` dep |
 | `reconcile` | `replica.rs`, `replicated_map.rs`, `read_replica_map.rs`, `clock.rs` (`HlcClock` adapter), `snapshot.rs` (`FileSnapshot`), `observability.rs`, `prometheus.rs`, `timeout_wheel.rs` | facade; depends on all four, re-exports their public types under `reconcile::*` |
@@ -142,13 +144,30 @@ cap so one datagram cannot be expanded into an unbounded number of messages. Aut
 (`Authenticator`/MAC) wraps the codec externally, verified on raw bytes before any decoding runs
 (§5 invariant 5) — never folded in.
 
+**`RefinementPolicy` is a strategy, not a port.** `rbsr::RefinementPolicy` is a trait, and every
+port here is a trait, but it removes no infrastructure dependency: it sits *inside* the hexagon and
+varies a domain decision — for one active range, SKIP, IDLIST or SPLIT, and how wide a SPLIT cuts.
+It earns a seam for a different reason than a port does: the choice is **purely local and never
+negotiated**. A peer answers whatever segmentation it is asked about, `RangeAggregate` carries no
+policy, and Proposition 4.1's soundness argument uses only that a SPLIT's children are pairwise
+disjoint with union the parent — which `protocol_round` guarantees regardless of policy. So two
+peers running *different* policies converge (`tests/proptest_fingerprint_tree_map.rs`'s
+`convergence_holds_under_any_policy_and_any_mixed_pair`, and `rbsr`'s own
+`peers_running_different_policies_still_converge`), which is what makes swapping one cheap.
+Advertising or negotiating a policy would turn that free experiment into a protocol break, and is
+the one thing this seam must never grow ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
+
 **Visibility.** `Clock`/`Transport`/`Persistence`/`Discovery` are public ports on their owning crate.
 The mechanism they wrap is not part of `reconcile`'s own re-export surface (`reconcile::*` does not
 re-export `rbsr::protocol_round`/`initial_ranges`/`RangeAggregate` or `gossip::bincode::{encode,
 decode_stream}`) — but since `rsos` and `rbsr` are themselves published-intent, reusable crates
 (AGENTS.md §11), their tree/protocol primitives (`rank`/`select`/`range`, `protocol_round`,
-`initial_ranges`, `RangeAggregate`, `EnumerationRange`) are genuinely `pub` at the crate level, for a
-consumer who depends on `rsos`/`rbsr` directly instead of through `reconcile`. `gossip::bincode`'s
+`protocol_round_with_policy`, `initial_ranges`, `RangeAggregate`, `EnumerationRange`, `RoundOutcome`
+and the `RefinementPolicy` seam) are genuinely `pub` at the crate level, for a consumer who depends
+on `rsos`/`rbsr` directly instead of through `reconcile`. Injecting a policy is therefore an
+`rbsr`-level operation today: `reconcile`'s own `Config` is `Copy` (a fixed-size `nets` array exists
+to keep it so), which a boxed or borrowed policy would break, and choosing what the facade should
+expose is a separate decision that wants the measured comparison first — see `SOTA.md` §2.2. `gossip::bincode`'s
 functions are `pub` for the same reason (`reconcile` must reach them across the crate boundary), just
 not re-exported. `Codec` was considered and dissolved as a trait: one implementation, no
 object-safety need (methods are generic, always carried as a type parameter), and no plausible
@@ -251,7 +270,8 @@ guarantees `PROGRESS.md` tracks the resolution history of.
    derived orders, `Hlc` over `(physical, logical)` then `Timestamp` over `(hlc, node_id)`; the
    newtype declaration order *is* the conflict order, and `tests/timestamp_wire_format.rs` pins that
    neither the newtype wrapping nor the `Hlc` nesting costs anything on the wire.
-3. **Size-not-hash emptiness/equality** in `protocol_round` (`rbsr/src/protocol.rs`).
+3. **Size-not-hash emptiness/equality** in `protocol_round` (`rbsr/src/protocol.rs`) — owned by
+   `Comparison::agrees`, so a swapped `RefinementPolicy` cannot re-derive it wrongly.
 4. **Malformed-bound / inverted-range hardening** in `protocol_round`.
 5. **Authenticate before deserialise** — the MAC is verified on raw bytes before the codec runs;
    `decode_stream` never absorbs authentication.
@@ -270,6 +290,12 @@ guarantees `PROGRESS.md` tracks the resolution history of.
    (feeding `version_hash`); its `State<V>` projection has no timestamp field at all, so a dated
    store and a dateless `ReadReplicaMap` compute identical per-element fingerprints. Guarded by
    `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
+9. **A SPLIT's children partition their parent** — consecutive, pairwise disjoint, union the parent
+   range — whatever `RefinementPolicy` chose the width, and whatever policy the *peer* is running.
+   This is what Proposition 4.1's soundness argument rests on, and therefore the reason the policy
+   can stay a local, un-negotiated choice (§3.1). Guarded by
+   `rbsr/src/protocol.rs::split_children_partition_the_parent_range` and, across mixed policy pairs,
+   `peers_running_different_policies_still_converge`.
 
 ---
 
