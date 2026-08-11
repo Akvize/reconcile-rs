@@ -79,6 +79,78 @@ fn element(fingerprint: Fingerprint) -> Aggregate {
     Aggregate::new(1, fingerprint)
 }
 
+/// The route from the root to the node holding a key: the child index taken at each interior node,
+/// then the key's own index inside the node where the key was found.
+struct KeyPath {
+    descent: Vec<usize>,
+    key_index: usize,
+}
+
+/// Restores the fingerprint invariants for one in-place value mutation — **on drop**.
+///
+/// Doing the repair in [`Drop`] rather than in a statement after the callback is the whole point.
+/// `Drop` runs on the unwinding path as well as the normal one, so a callback that panics
+/// part-way through a mutation still leaves every cached [`Aggregate`] consistent with the value
+/// actually stored. The previous shape re-lifted and propagated *after* the callback returned, so
+/// a panic skipped both: the map stayed live, unpoisoned and silently wrong — wrong in precisely
+/// the value the reconciliation protocol reads, which is how a local panic could have become
+/// cluster-wide divergence.
+///
+/// The repair is the same single root→leaf walk the old code performed, only relocated: re-lift the
+/// element, then carry the signed delta up through every ancestor's `subtree`. It is idempotent
+/// with respect to a callback that changed nothing (the delta is then `ZERO` and every write is a
+/// no-op), so it costs nothing to run unconditionally.
+struct Relift<'a, K: Serialize, V: Serialize> {
+    root: &'a mut Node<K, V>,
+    path: KeyPath,
+    key: &'a K,
+}
+
+impl<K: Serialize, V: Serialize> Relift<'_, K, V> {
+    /// The value this guard will re-lift, reached by following the recorded route.
+    fn value_mut(&mut self) -> &mut V {
+        let mut node = &mut *self.root;
+        for &index in &self.path.descent {
+            node = node.children.as_mut().expect("interior node on the route")[index].as_mut();
+        }
+        &mut node.values[self.path.key_index]
+    }
+}
+
+impl<K: Serialize, V: Serialize> Drop for Relift<'_, K, V> {
+    fn drop(&mut self) {
+        /// Returns the signed fingerprint delta this subtree contributed, having already applied it
+        /// to its own cached aggregate.
+        fn repair<K: Serialize, V: Serialize>(
+            node: &mut Node<K, V>,
+            descent: &[usize],
+            key_index: usize,
+            key: &K,
+        ) -> Fingerprint {
+            let delta = match descent.split_first() {
+                // The node holding the key: re-lift it against whatever the callback left behind.
+                None => {
+                    let old_fp = node.fingerprints[key_index];
+                    let new_fp = lift(key, &node.values[key_index]);
+                    node.fingerprints[key_index] = new_fp;
+                    new_fp - old_fp
+                }
+                Some((&index, rest)) => repair(
+                    node.children.as_mut().expect("interior node on the route")[index].as_mut(),
+                    rest,
+                    key_index,
+                    key,
+                ),
+            };
+            // The element count is unchanged — one value was overwritten in place — so only the
+            // `Σ(S)` half of the aggregate moves.
+            node.subtree = Aggregate::new(node.subtree.size(), node.subtree.fingerprint() + delta);
+            delta
+        }
+        repair(self.root, &self.path.descent, self.path.key_index, self.key);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Node<K, V> {
     pub(crate) keys: ArrayVec<K, MAX_CAPACITY>,
@@ -360,45 +432,44 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// re-lift/propagate step above ever running, silently desyncing `aggregate`/
     /// `check_invariants` from the real content. Get-or-insert, the other half of what `entry()`
     /// usually buys, already exists one layer up (`ReplicatedMap::upsert`/`get_or_insert_with`).
-    pub fn with_mut<F: FnOnce(Option<&mut V>)>(&mut self, key: &K, callback: F) {
-        fn aux<K: Serialize + Ord, V: Serialize, F: FnOnce(Option<&mut V>)>(
-            node: &mut Node<K, V>,
-            key: &K,
-            callback: F,
-        ) -> Fingerprint {
+    ///
+    /// The callback's return value is passed through, so `with_mut` can answer a question about the
+    /// value as well as change it.
+    ///
+    /// # Panic safety
+    ///
+    /// The re-lift and the propagation run from a [`Drop`] guard, so they happen on the unwinding
+    /// path too: a `callback` that panics part-way through a mutation leaves the tree's cached
+    /// aggregates consistent with the value it actually left behind, and
+    /// [`check_invariants`](Self::check_invariants) still passes afterwards. The panic itself
+    /// propagates unchanged.
+    pub fn with_mut<R, F: FnOnce(Option<&mut V>) -> R>(&mut self, key: &K, callback: F) -> R {
+        // Locate first, so the guard below knows what to repair before the callback can panic.
+        let mut descent = Vec::new();
+        let mut node = self.root.as_ref();
+        let key_index = loop {
             match node.keys.binary_search(key) {
-                Ok(index) => {
-                    let v = Some(&mut node.values[index]);
-                    callback(v);
-                    // callback likely modified v, so we need to restore the aggregate invariants
-                    let old_fp = node.fingerprints[index];
-                    let new_fp = lift(key, &node.values[index]);
-                    node.fingerprints[index] = new_fp;
-                    // signed delta to apply to this node and every ancestor's fingerprint. The
-                    // element count is unchanged (one value was overwritten in place), so this
-                    // touches only the Σ(S) half.
-                    let diff_fp = new_fp - old_fp;
-                    node.subtree =
-                        Aggregate::new(node.subtree.size(), node.subtree.fingerprint() + diff_fp);
-                    diff_fp
-                }
-                Err(index) => {
-                    if let Some(children) = node.children.as_mut() {
-                        let diff_fp = aux(children[index].as_mut(), key, callback);
-                        node.subtree = Aggregate::new(
-                            node.subtree.size(),
-                            node.subtree.fingerprint() + diff_fp,
-                        );
-                        diff_fp
-                    } else {
-                        callback(None);
-                        // callback cannot change the content of the tree, no invariant to restore
-                        Fingerprint::ZERO
+                Ok(index) => break index,
+                Err(index) => match node.children.as_ref() {
+                    Some(children) => {
+                        descent.push(index);
+                        node = &children[index];
                     }
-                }
+                    // Absent: the callback cannot change any element, so there is nothing to
+                    // repair and no guard to arm.
+                    None => return callback(None),
+                },
             }
-        }
-        aux(self.root.as_mut(), key, callback);
+        };
+
+        let mut guard = Relift {
+            root: self.root.as_mut(),
+            path: KeyPath { descent, key_index },
+            key,
+        };
+        let value = guard.value_mut();
+        callback(Some(value))
+        // `guard` drops here — or during unwinding, which is the point.
     }
 
     /// Position of `key` in the in-order sequence, or `None` if it is not present.
@@ -655,13 +726,38 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 }
 
+/// Equality is decided on the whole root [`Aggregate`] — **both** the element count and the
+/// combined fingerprint — never on the fingerprint alone.
+///
+/// That is the same rule the reconciliation protocol follows, and it is load-bearing rather than
+/// stylistic. A range fingerprint combines per-element lifts by addition modulo 2²⁵⁶
+/// ([`crate::fingerprint`]), so a *non-empty* set can legitimately sum to [`Fingerprint::ZERO`];
+/// comparing summaries alone would alias such a map with the empty one. Deciding emptiness and
+/// equality on `size` is `ARCHITECTURE.md` §5 invariant 3 in the workspace this crate comes from,
+/// and the reason [`Aggregate`] bundles the two halves into one value in the first place.
+///
+/// This is a `O(1)` *content* comparison, not an element-by-element walk: two maps are equal iff
+/// they hold the same number of elements with the same combined 256-bit summary, whatever their
+/// internal tree shapes. That is exactly the property range-based reconciliation relies on — and it
+/// is why the impl needs no bound on `K` or `V`. It is collision-resistant, not
+/// information-theoretically exact: two genuinely different maps of equal size compare equal only
+/// on a BLAKE3 collision.
 impl<K, V> PartialEq for FingerprintTreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
-        self.root.subtree.fingerprint() == other.root.subtree.fingerprint()
+        self.root.subtree == other.root.subtree
     }
 }
 
-impl<K, V> Eq for FingerprintTreeMap<K, V> {}
+/// Bounded on `K: Eq, V: Eq`, unlike [`PartialEq`] above.
+///
+/// The aggregate comparison is reflexive, symmetric and transitive for *any* `K`/`V`, so an
+/// unbounded impl would satisfy [`Eq`]'s stated laws. It would still be wrong to offer: `Eq` is the
+/// marker other code reads as "these values have a genuine equivalence relation", and an unbounded
+/// impl hands that promise out for element types that have none — `FingerprintTreeMap<u64, f64>`
+/// would be `Eq` while `f64` is not, a claim [`BTreeMap`](std::collections::BTreeMap) cannot make.
+/// Requiring the elements to be `Eq` keeps the promise honest without changing how `==` is
+/// computed.
+impl<K: Eq, V: Eq> Eq for FingerprintTreeMap<K, V> {}
 
 impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for FingerprintTreeMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -681,7 +777,9 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// across the crate boundary now that `FingerprintTreeMap` lives in its own crate. Callers that
     /// only need `Σ(S)` write `.aggregate(range).fingerprint()`: identical cost, the same single
     /// tree walk.
-    pub fn aggregate<R: RangeBounds<K>>(&self, range: &R) -> Aggregate {
+    ///
+    /// Takes the range by value, for the reason spelled out on [`range`](Self::range).
+    pub fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate {
         fn aux<'a, K: Ord, V, R: RangeBounds<K>>(
             node: &'a Node<K, V>,
             range: &R,
@@ -732,7 +830,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             }
             cum
         }
-        aux(&self.root, range, None, None)
+        aux(&self.root, &range, None, None)
     }
 
     /// Position of `key` in the in-order sequence if present, or the position it would occupy
@@ -811,7 +909,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 /// Iterator over the key-value pairs of a [`FingerprintTreeMap`] whose key falls within a range, in
 /// key order. Returned by [`FingerprintTreeMap::range`].
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
-    range: &'a R,
+    /// Owned, not borrowed. Holding `&'a R` tied the range's lifetime to the borrow of the map,
+    /// which made a range built from runtime values — `map.range(lo..hi)` — a hard `E0716`: the
+    /// temporary died at the end of the statement while the iterator still borrowed it. It only
+    /// appeared to work with literal bounds because those are const-promoted to `&'static`.
+    range: R,
     stack: Vec<(&'a Node<K, V>, usize)>,
 }
 
@@ -856,13 +958,19 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// [`Iterator::enumerate`]'s `(index, item)` pairing, which is not what this yields. The
     /// trait keeps `enumerate` because it is explicitly the paper's contract; the inherent API
     /// keeps Rust's. (The former name here, `get_range`, matched neither.)
-    pub fn range<'a, R: RangeBounds<K>>(&'a self, range: &'a R) -> ItemRange<'a, K, V, R> {
+    ///
+    /// Takes the range **by value**, as [`BTreeMap::range`](std::collections::BTreeMap::range)
+    /// does. A borrowed range has to outlive the returned iterator, and since the iterator also
+    /// borrows the map, that tied the two lifetimes together: `map.range(lo..hi)` built from
+    /// runtime bounds was a hard `E0716`, and only *literal* ranges compiled, by const-promotion.
+    /// [`ItemRange`] owns its range for the same reason.
+    pub fn range<R: RangeBounds<K>>(&self, range: R) -> ItemRange<'_, K, V, R> {
         let mut stack = Vec::new();
         let mut node = self.root.as_ref();
         // traverse interior nodes
         'main_loop: while let Some(children) = node.children.as_ref() {
             for i in 0..node.keys.len() {
-                match node.keys[i].rcmp(range) {
+                match node.keys[i].rcmp(&range) {
                     RangeOrdering::Below => (),
                     RangeOrdering::Above => {
                         node = &children[i];
@@ -880,7 +988,7 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
         }
         // traverse leaf node
         for i in 0..node.keys.len() {
-            match node.keys[i].rcmp(range) {
+            match node.keys[i].rcmp(&range) {
                 RangeOrdering::Below => (),
                 RangeOrdering::Above | RangeOrdering::Empty => {
                     break;
@@ -970,13 +1078,13 @@ mod tests {
     fn test_aggregate() {
         // empty
         let mut tree = FingerprintTreeMap::new();
-        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(tree.aggregate(..), Aggregate::ZERO);
         tree.check_invariants();
 
         // 1 value
         tree.insert(50, "Hello");
         tree.check_invariants();
-        let agg1 = tree.aggregate(&..);
+        let agg1 = tree.aggregate(..);
         assert_eq!(agg1.size(), 1);
         // The `assert_ne!`s below compare *fingerprints*, not whole aggregates: with different
         // element counts an aggregate-level `!=` would hold trivially on the size half and stop
@@ -986,7 +1094,7 @@ mod tests {
         // 2 values
         tree.insert(25, "World!");
         tree.check_invariants();
-        let agg2 = tree.aggregate(&..);
+        let agg2 = tree.aggregate(..);
         assert_eq!(agg2.size(), 2);
         assert_ne!(agg2.fingerprint(), Fingerprint::ZERO);
         assert_ne!(agg2.fingerprint(), agg1.fingerprint());
@@ -994,7 +1102,7 @@ mod tests {
         // 3 values
         tree.insert(75, "Everyone!");
         tree.check_invariants();
-        let agg3 = tree.aggregate(&..);
+        let agg3 = tree.aggregate(..);
         assert_eq!(agg3.size(), 3);
         assert_ne!(agg3.fingerprint(), Fingerprint::ZERO);
         assert_ne!(agg3.fingerprint(), agg1.fingerprint());
@@ -1004,7 +1112,7 @@ mod tests {
         // the whole aggregate.
         tree.remove(&75);
         tree.check_invariants();
-        assert_eq!(tree.aggregate(&..), agg2);
+        assert_eq!(tree.aggregate(..), agg2);
     }
 
     #[test]
@@ -1031,7 +1139,7 @@ mod tests {
 
         assert_eq!(tree.len(), 0);
         assert!(tree.is_empty());
-        assert_eq!(tree.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(tree.aggregate(..), Aggregate::ZERO);
         tree.check_invariants();
 
         // The tree is usable afterward, not just empty.
@@ -1066,6 +1174,153 @@ mod tests {
         assert!(tree.iter().all(|(_, v)| *v < 100));
     }
 
+    /// Regression guard: a callback that panics part-way through a mutation must not leave the
+    /// cached aggregates describing a value that is no longer stored.
+    ///
+    /// Before the repair moved into a `Drop` guard, the re-lift and the propagation were plain
+    /// statements after the callback, so unwinding skipped both. The map stayed live and
+    /// unpoisoned, `get` returned the mutated value, and `aggregate` still described the *old* one
+    /// — which is exactly the value the reconciliation protocol compares against its peers.
+    #[test]
+    fn with_mut_keeps_aggregates_consistent_when_the_callback_panics() {
+        let mut tree: FingerprintTreeMap<u64, u64> = (0..50).map(|k| (k, k)).collect();
+        let before = tree.aggregate(..);
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tree.with_mut(&17, |v| {
+                *v.expect("17 is present") = 999;
+                panic!("callback blew up mid-mutation");
+            })
+        }));
+        assert!(outcome.is_err(), "the panic must still propagate");
+
+        // `with_mut` is not transactional and never claimed to be: the mutation stands.
+        assert_eq!(tree.get(&17), Some(&999));
+
+        // What must hold is that the caches describe what is *actually* stored. This is the
+        // assertion that failed before the fix.
+        tree.check_invariants();
+        let after = tree.aggregate(..);
+        assert_ne!(after, before, "the summary must have moved with the value");
+        assert_eq!(after.size(), 50, "no element was added or removed");
+
+        // And the tree is still usable, not wedged.
+        tree.insert(200, 200);
+        tree.check_invariants();
+        assert_eq!(tree.len(), 51);
+    }
+
+    /// The callback's return value is threaded through, for both the present and absent cases.
+    #[test]
+    fn with_mut_passes_the_callback_result_back() {
+        let mut tree: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+
+        let doubled = tree.with_mut(&3, |v| {
+            let v = v.expect("3 is present");
+            *v *= 2;
+            *v
+        });
+        assert_eq!(doubled, 6);
+        assert_eq!(tree.get(&3), Some(&6));
+        tree.check_invariants();
+
+        assert!(tree.with_mut(&999, |v| v.is_none()));
+        tree.check_invariants();
+    }
+
+    /// Regression guard for the signature these methods used to carry.
+    ///
+    /// `range` took `&'a R` tied to the borrow of `self`, so a range built from **runtime** values
+    /// was a hard `E0716` — the temporary died at the end of the statement while the returned
+    /// iterator still borrowed it. It only appeared to work throughout this crate's own tests and
+    /// doc examples because *literal* ranges are const-promoted to `&'static`; reading the bounds
+    /// from the data, as below, is exactly what the old signature could not express.
+    ///
+    /// Every call here is one the previous signature rejected.
+    #[test]
+    fn ranges_can_be_built_from_runtime_bounds() {
+        let tree: FingerprintTreeMap<u64, u64> = (0..100).map(|k| (k, k * 3)).collect();
+
+        // Bounds the compiler cannot promote: they are read out of the tree itself.
+        let lo = *tree.select(10);
+        let hi = *tree.select(20);
+
+        let keys: Vec<u64> = tree.range(lo..hi).map(|(k, _)| *k).collect();
+        assert_eq!(keys, (10..20).collect::<Vec<u64>>());
+        assert_eq!(tree.aggregate(lo..hi).size(), 10);
+
+        // The same, through an owned `Bound` pair rather than a range literal — the shape `rbsr`
+        // hands back as an `EnumerationRange`.
+        let bounds = (std::ops::Bound::Included(lo), std::ops::Bound::Excluded(hi));
+        assert_eq!(tree.range(bounds).count(), 10);
+        assert_eq!(tree.aggregate(bounds).size(), 10);
+
+        // A range whose bounds outlive nothing at all: built, used, and dropped inline.
+        assert_eq!(tree.range((lo + 1)..(hi - 1)).count(), 8);
+    }
+
+    /// `==` compares content, not tree shape: the same elements inserted in different orders build
+    /// differently-shaped B-trees, and must still compare equal. This is the property range-based
+    /// reconciliation rests on.
+    #[test]
+    fn equality_is_content_not_shape() {
+        let ascending: FingerprintTreeMap<u64, u64> = (0..200).map(|k| (k, k * 7)).collect();
+        let mut descending = FingerprintTreeMap::new();
+        for k in (0..200).rev() {
+            descending.insert(k, k * 7);
+        }
+        // Different insertion orders, and in general different node layouts.
+        assert_eq!(ascending, descending);
+        assert_eq!(ascending.aggregate(..), descending.aggregate(..));
+    }
+
+    /// The two halves of the bundled aggregate are both load-bearing for `==`: a differing *value*
+    /// under identical keys moves only the fingerprint, and a missing element moves both.
+    #[test]
+    fn equality_sees_values_and_cardinality() {
+        let base: FingerprintTreeMap<u64, u64> = (0..50).map(|k| (k, k)).collect();
+
+        // Same keys, one different value.
+        let mut different_value = base.clone();
+        different_value.insert(17, 999);
+        assert_ne!(base, different_value);
+
+        // Same values, one fewer key.
+        let mut fewer = base.clone();
+        fewer.remove(&17);
+        assert_ne!(base, fewer);
+
+        // Round-tripping back to the same content restores equality.
+        fewer.insert(17, 17);
+        assert_eq!(base, fewer);
+
+        let empty_a: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        let empty_b: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+        assert_eq!(empty_a, empty_b);
+        assert_ne!(base, empty_a);
+    }
+
+    /// Regression guard for the defect this impl used to carry: `==` compared
+    /// `root.subtree.fingerprint()` alone, so the element count played no part.
+    ///
+    /// A map whose elements sum to `Fingerprint::ZERO` is not constructible against real BLAKE3, so
+    /// the aliasing this prevents cannot be exercised through the map API. What *is* checkable here
+    /// is that the comparison reads the whole [`Aggregate`] — the value whose own `PartialEq`
+    /// bundles size with the summary, and whose size-vs-fingerprint distinction is exercised
+    /// directly in `aggregate.rs`.
+    #[test]
+    fn equality_reads_the_whole_aggregate_not_just_the_fingerprint() {
+        let a: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+        let b: FingerprintTreeMap<u64, u64> = (0..10).map(|k| (k, k)).collect();
+        assert_eq!(a, b);
+        assert_eq!(a.aggregate(..), b.aggregate(..));
+
+        // Two aggregates sharing a fingerprint but differing in size are *not* equal — the property
+        // the old fingerprint-only comparison silently discarded.
+        let fp = a.aggregate(..).fingerprint();
+        assert_ne!(Aggregate::new(10, fp), Aggregate::new(9, fp));
+    }
+
     #[test]
     fn big_test() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -1084,7 +1339,7 @@ mod tests {
             assert!(old.is_none());
             tree1.check_invariants();
             expected += Aggregate::new(1, super::lift(&key, &value));
-            assert_eq!(tree1.aggregate(&..), expected);
+            assert_eq!(tree1.aggregate(..), expected);
             key_values.push((key, value));
         }
 
@@ -1113,18 +1368,18 @@ mod tests {
         // Proper sub-ranges: compare fingerprints, since the sizes differ anyway and an
         // aggregate-level `!=` would say nothing about Σ(S).
         assert_ne!(
-            tree1.aggregate(&(mid..)).fingerprint(),
-            tree1.aggregate(&..).fingerprint()
+            tree1.aggregate(mid..).fingerprint(),
+            tree1.aggregate(..).fingerprint()
         );
         assert_ne!(
-            tree1.aggregate(&..mid).fingerprint(),
-            tree1.aggregate(&..).fingerprint()
+            tree1.aggregate(..mid).fingerprint(),
+            tree1.aggregate(..).fingerprint()
         );
         // The Def. 3.5 monoid homomorphism, over *both* halves at once: composing the aggregates
         // of a partition of the key space with `⊗` must reproduce the aggregate of the whole.
         assert_eq!(
-            tree1.aggregate(&..mid) + tree1.aggregate(&(mid..)),
-            tree1.aggregate(&..)
+            tree1.aggregate(..mid) + tree1.aggregate(mid..),
+            tree1.aggregate(..)
         );
 
         for _ in 0..100 {
@@ -1152,9 +1407,7 @@ mod tests {
             slice_index: SI,
         ) {
             assert_eq!(
-                tree.range(&range)
-                    .map(|(k, v)| (*k, *v))
-                    .collect::<Vec<_>>(),
+                tree.range(range).map(|(k, v)| (*k, *v)).collect::<Vec<_>>(),
                 key_values[slice_index]
             );
         }
@@ -1187,7 +1440,7 @@ mod tests {
                 expected.size() - 1,
                 expected.fingerprint() - super::lift(&key, &value),
             );
-            assert_eq!(tree1.aggregate(&..), expected);
+            assert_eq!(tree1.aggregate(..), expected);
         }
     }
 
@@ -1212,19 +1465,19 @@ mod tests {
 
         let check = |range: &dyn Fn() -> (std::ops::Bound<u32>, std::ops::Bound<u32>)| {
             let range = range();
-            let aggregate = tree.aggregate(&range);
+            let aggregate = tree.aggregate(range);
             assert_eq!(
                 aggregate.size(),
-                tree.range(&range).count(),
+                tree.range(range).count(),
                 "aggregate size disagrees with range().count() for {range:?}"
             );
             assert_eq!(
                 aggregate.is_empty(),
-                tree.range(&range).next().is_none(),
+                tree.range(range).next().is_none(),
                 "aggregate is_empty disagrees with range() for {range:?}"
             );
             let expected_fingerprint = tree
-                .range(&range)
+                .range(range)
                 .fold(Fingerprint::ZERO, |acc, (k, v)| acc + super::lift(k, v));
             assert_eq!(
                 aggregate.fingerprint(),
@@ -1252,6 +1505,6 @@ mod tests {
         check(&|| (std::ops::Bound::Included(lo), std::ops::Bound::Unbounded));
         // an empty tree
         let empty: FingerprintTreeMap<u32, u32> = FingerprintTreeMap::new();
-        assert_eq!(empty.aggregate(&..), Aggregate::ZERO);
+        assert_eq!(empty.aggregate(..), Aggregate::ZERO);
     }
 }

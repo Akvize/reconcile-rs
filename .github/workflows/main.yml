@@ -37,9 +37,9 @@ jobs:
     # `--all-features` steps already cover it; the default steps make it explicit so the oracle
     # always runs.
     - name: Lint
-      run: cargo clippy --workspace --features internal-testing
+      run: cargo clippy --workspace --features internal-testing --all-targets
     - name: Lint (all features)
-      run: cargo clippy --workspace --all-features
+      run: cargo clippy --workspace --all-features --all-targets
     - name: Build
       run: cargo build --workspace --verbose
     - name: Run tests

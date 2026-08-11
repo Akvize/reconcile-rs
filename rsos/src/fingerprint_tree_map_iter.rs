@@ -580,7 +580,7 @@ mod tests {
         let mut tree = make_tree();
         tree.check_invariants();
 
-        let aggregate_before = tree.aggregate(&..);
+        let aggregate_before = tree.aggregate(..);
 
         // Mutate several keys at random positions; each must leave the tree consistent.
         for _ in 0..20 {
@@ -595,7 +595,7 @@ mod tests {
         // (astronomically unlikely to collide for random u64 values). `with_mut` overwrites
         // values in place and so must *not* change the element count — hence the fingerprint-only
         // comparison here, plus an explicit check that the size half held still.
-        let aggregate_after = tree.aggregate(&..);
+        let aggregate_after = tree.aggregate(..);
         assert_ne!(
             aggregate_before.fingerprint(),
             aggregate_after.fingerprint(),
@@ -611,11 +611,11 @@ mod tests {
         // aggregate(..mid) ⊗ aggregate(mid..) == aggregate(..)
         let mid = BASE_ITEMS[TREE_SIZE / 2].0;
         assert_eq!(
-            tree.aggregate(&(..mid)) + tree.aggregate(&(mid..)),
-            tree.aggregate(&..),
+            tree.aggregate(..mid) + tree.aggregate(mid..),
+            tree.aggregate(..),
             "partial-range aggregates do not compose into the global aggregate"
         );
-        assert_eq!(tree.aggregate(&..), aggregate_after);
+        assert_eq!(tree.aggregate(..), aggregate_after);
     }
 
     #[test]

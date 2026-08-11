@@ -46,6 +46,16 @@ enum Op {
     /// no-op (`u16::MAX`, keeps everything) and an aggressive cutoff (drops most entries).
     Retain(u16),
     Clear,
+    /// Mutate the value at a key in place through `with_mut`, the hash-safe mutation path.
+    WithMut(u8, u16),
+    /// The same, with a callback that mutates and *then* panics. The panic is caught; the tree
+    /// must survive it with every cached aggregate still describing what is actually stored.
+    ///
+    /// This is the interesting one. `with_mut` re-lifts the element and propagates the fingerprint
+    /// delta from a `Drop` guard precisely so that unwinding cannot skip it; before that, a
+    /// panicking callback left the map live and silently wrong. Interleaving these with the splits
+    /// and merges the other operations drive is what a narrow example cannot reach.
+    WithMutPanicking(u8, u16),
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -60,6 +70,8 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         6 => any::<u8>().prop_map(Op::ContainsKey),
         1 => any::<u16>().prop_map(Op::Retain),
         1 => Just(Op::Clear),
+        4 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::WithMut(k, v)),
+        2 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::WithMutPanicking(k, v)),
     ]
 }
 
@@ -93,6 +105,42 @@ proptest! {
                     tree.clear();
                     oracle.clear();
                 }
+                Op::WithMut(k, v) => {
+                    let present = tree.with_mut(&k, |slot| match slot {
+                        Some(value) => {
+                            *value = v;
+                            true
+                        }
+                        None => false,
+                    });
+                    match oracle.get_mut(&k) {
+                        Some(value) => {
+                            *value = v;
+                            prop_assert!(present, "with_mut saw {k} as absent, oracle has it");
+                        }
+                        None => prop_assert!(!present, "with_mut saw {k} as present, oracle has not"),
+                    }
+                }
+                Op::WithMutPanicking(k, v) => {
+                    // The callback mutates, then unwinds. `with_mut`'s repair runs from a `Drop`
+                    // guard, so the aggregates must end up describing the *mutated* value — which
+                    // is why the oracle applies the same write.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tree.with_mut(&k, |slot| {
+                            if let Some(value) = slot {
+                                *value = v;
+                                panic!("deliberate panic inside with_mut");
+                            }
+                        })
+                    }));
+                    if let Some(value) = oracle.get_mut(&k) {
+                        *value = v;
+                        prop_assert!(outcome.is_err(), "the callback's panic must propagate");
+                    } else {
+                        // Absent key: the callback never panics, and nothing was mutated.
+                        prop_assert!(outcome.is_ok());
+                    }
+                }
             }
             // The core safety net: structural, ordering, height, size and hash
             // caches must all hold after *every* mutation. Panics here would be
@@ -102,7 +150,7 @@ proptest! {
         }
 
         // Full-range iteration yields the exact sorted oracle contents.
-        let got: Vec<(u8, u16)> = tree.range(&..).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(..).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(got, want);
 
@@ -111,7 +159,7 @@ proptest! {
         let expected_fingerprint = oracle
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(tree.aggregate(&..).fingerprint(), expected_fingerprint);
+        prop_assert_eq!(tree.aggregate(..).fingerprint(), expected_fingerprint);
     }
 
     #[test]
@@ -129,7 +177,7 @@ proptest! {
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         let range = (Bound::Included(lo), Bound::Excluded(hi));
 
-        let got: Vec<(u8, u16)> = tree.range(&range).map(|(k, v)| (*k, *v)).collect();
+        let got: Vec<(u8, u16)> = tree.range(range).map(|(k, v)| (*k, *v)).collect();
         let want: Vec<(u8, u16)> = oracle.range(range).map(|(k, v)| (*k, *v)).collect();
         prop_assert_eq!(&got, &want);
 
@@ -137,7 +185,49 @@ proptest! {
         let expected = want
             .iter()
             .fold(Fingerprint::ZERO, |acc, (k, v)| acc + lift(k, v));
-        prop_assert_eq!(tree.aggregate(&range).fingerprint(), expected);
+        prop_assert_eq!(tree.aggregate(range).fingerprint(), expected);
+    }
+
+    /// `==` compares *content*, never tree shape, and both halves of the bundled aggregate take
+    /// part in it.
+    ///
+    /// Note on what this does and does not guard. It gives `PartialEq` the generative coverage it
+    /// had none of, but it cannot fail against the previous fingerprint-only comparison: that would
+    /// need two maps of differing size whose fingerprints coincide, which is not constructible
+    /// against real BLAKE3. The size half is asserted where it is reachable, on `Aggregate` itself,
+    /// in `rsos`'s own unit tests.
+    #[test]
+    fn fingerprint_tree_map_equality_is_content_not_shape(
+        entries in prop::collection::vec((any::<u8>(), any::<u16>()), 0..200),
+        seed in any::<u64>(),
+    ) {
+        // Later inserts overwrite, so the oracle defines the actual content.
+        let mut oracle: BTreeMap<u8, u16> = BTreeMap::new();
+        for (k, v) in &entries {
+            oracle.insert(*k, *v);
+        }
+
+        let ascending: FingerprintTreeMap<u8, u16> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut shuffled: Vec<(u8, u16)> = oracle.iter().map(|(k, v)| (*k, *v)).collect();
+        shuffled.shuffle(&mut StdRng::seed_from_u64(seed));
+        let mut arbitrary_order = FingerprintTreeMap::new();
+        for (k, v) in shuffled {
+            arbitrary_order.insert(k, v);
+        }
+
+        // Same elements, different insertion orders and in general different node layouts.
+        prop_assert_eq!(&ascending, &arbitrary_order);
+
+        // Any single-element difference is visible, in either half.
+        if let Some((&k, &v)) = oracle.iter().next() {
+            let mut one_fewer = arbitrary_order.clone();
+            one_fewer.remove(&k);
+            prop_assert_ne!(&ascending, &one_fewer);
+
+            let mut one_changed = arbitrary_order.clone();
+            one_changed.insert(k, v.wrapping_add(1));
+            prop_assert_ne!(&ascending, &one_changed);
+        }
     }
 }
 
@@ -187,7 +277,7 @@ fn run_diff(
 fn items_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
         .iter()
-        .flat_map(|r| tree.range(r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
+        .flat_map(|r| tree.range(*r).map(|(k, v)| (*k, *v)).collect::<Vec<_>>())
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -200,7 +290,7 @@ fn keys_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<u64> {
 }
 
 fn sorted_items(tree: &Tree) -> Vec<(u64, u64)> {
-    tree.range(&..).map(|(k, v)| (*k, *v)).collect()
+    tree.range(..).map(|(k, v)| (*k, *v)).collect()
 }
 
 /// Build two trees from a universe and per-entry membership flags. Returns the
