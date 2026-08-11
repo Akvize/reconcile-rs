@@ -161,6 +161,12 @@ next are a live decision — see [`PROGRESS.md`](./PROGRESS.md), not this file.
 
 `gossip` publishes as `reconcile-gossip` (name taken); every dependent renames it back
 (`gossip = { package = "reconcile-gossip", ... }`) so source everywhere still says `use gossip::…`.
-`lww-register`/`reconcile-gossip` are implementation detail with no stability guarantee — on
-crates.io only because cargo has no vendoring. Every intra-workspace dependency carries a `version`
-alongside its `path` (required for `cargo package`/`publish` to resolve it).
+Every intra-workspace dependency carries a `version` alongside its `path` (required for
+`cargo package`/`publish` to resolve it). The four siblings are on crates.io only because cargo has
+no vendoring — depend on `reconcile`, not on them.
+
+**Version lines (decided 2026-08-11, #308).** `rsos`/`lww-register`/`reconcile-gossip` have types in
+`reconcile`'s public API, so their majors are coupled to its and they go `1.0.0` with it; the items
+it re-exports are covered by its semver, nothing else in them is. `rbsr` does not — nothing of it is
+re-exported, its use is confined to `pub(crate)` modules — so it stays `0.x` until its own surface
+settles (#289): promoting later is additive, demoting is not.

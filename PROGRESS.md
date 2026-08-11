@@ -314,10 +314,10 @@ more valuable to users than most of this list (#271, #185, #190). Valuable ≠ b
 
 | Issue | State |
 |---|---|
-| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | The four siblings are `0.1.0` and their types are in `reconcile`'s public API — a 1.0 facade on `0.x` crates cannot keep its promise. **Decision: lockstep 1.0.0, or stop re-exporting** |
+| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **Decided 2026-08-11**, recorded in AGENTS.md §11. `rsos`/`lww-register`/`reconcile-gossip` have types in `reconcile`'s public API, so their majors are coupled to its and they go **`1.0.0` with it**; `rbsr` has none — no `pub use rbsr::`, and `initial_ranges`/`protocol_round`/`RangeAggregate` are reached only from the `pub(crate)` `src/replica.rs` — so it **stays `0.x`**, gated on [#289](https://github.com/Akvize/reconcile-rs/issues/289). Chosen for reversibility: `0.x → 1.0` later is additive, `1.0 → 2.0` is not. Remaining: the version bumps, the crates.io card wording, a mechanical re-check via #311 |
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
-| [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids |
+| [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
 | [#312](https://github.com/Akvize/reconcile-rs/issues/312) | `cargo audit`/`cargo deny` and `overflow-checks`, previously mis-cited in this file as tracked by #203/#205 |
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
 | [#204](https://github.com/Akvize/reconcile-rs/issues/204) | **Mostly resolved in the tree**: `tags.yml` verifies tag against manifest and publishes in dependency order; the docs no longer say `0.0.0-git`. What remains is its Problem 3 — the version decision |
@@ -331,7 +331,8 @@ number it carries. Straight to `1.0.0` is defensible only if Gate A is complete;
 Open and wanted, none blocking: performance/evidence (#170–#174, #187, #280, #281, #257), the
 persistent-core-map epic (#270–#277), scaling (#185, #186, #190, #147, #178), the grid layer (#193,
 #191, #192, #184), the crypto roadmap (#96, #135, #136, #137), docs/ergonomics (#72, #92, #231,
-#232). #299 is a decision to write down and should ride along regardless.
+#232), and the additive remainder of #289/#290/#291 — #289 now also carrying `rbsr`'s eventual
+promotion to 1.0, per #308. #299 is a decision to write down and should ride along regardless.
 
 ---
 
