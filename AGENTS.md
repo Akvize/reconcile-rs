@@ -4,7 +4,9 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 ...). Tool-specific files (`CLAUDE.md`) import this file and add nothing that contradicts it.
 
 This file states rules, not rationale. For rationale and worked examples, follow the links —
-duplicating them here is exactly the rot this file is meant to avoid (§10).
+duplicating them here is exactly the rot this file is meant to avoid (§10). That is a budget, not a
+preference: `./scripts/check-doc-budget.sh` fails if this file and `CLAUDE.md` exceed 200 lines
+together, since `CLAUDE.md` imports this one verbatim and a reader gets the sum.
 
 ## 1. Map
 
@@ -20,7 +22,7 @@ Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/depl
 ## 2. Environment
 
 Plain `cargo` + a Rust toolchain is enough. [`CONTRIBUTING.md`](./CONTRIBUTING.md) documents a Dev
-Container / Docker setup. Link both git hooks once (§3.2):
+Container / Docker setup. Link both git hooks once (§3):
 
 ```bash
 ln -sf ../../pre-commit .git/hooks/pre-commit
@@ -36,9 +38,10 @@ export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; wit
                                                              # is a warning locally and an error
                                                              # in CI — run the list as CI runs it
 cargo fmt --check
+./scripts/check-doc-budget.sh                                # AGENTS.md + CLAUDE.md ≤ 200 lines
 ./scripts/check-domain-purity.sh                             # hexagonal boundary, §9
 cargo clippy --workspace --features internal-testing --all-targets
-cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing, §3.1
+cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
 cargo test --workspace --features internal-testing
 cargo test --workspace --all-features
@@ -49,73 +52,25 @@ cargo doc --workspace --all-features                          # feature-gated it
 cargo package --workspace --allow-dirty                       # release packaging, §11
 ```
 
-`--workspace`, never `--all`. This list is what CI runs and what "done" means; the two git hooks run
-tiered *subsets* of it and deliberately do not reproduce it (§3.2). `main.yml` and this list are kept
-in sync by hand — change one, change both.
-
-### 3.1 Why `--all-targets`, and why the `export`
-
-Both flags exist because a green local run used to be able to precede a red CI run.
-
-**`--all-targets`.** Without it, clippy lints only lib and bin targets — **tests, benches and
-examples are never linted at all**. Not "linted elsewhere": a `clippy::*` lint in `tests/` is
-invisible to the entire pipeline, because the jobs that *compile* test code (`cargo test`,
-`cargo llvm-cov`) run rustc, not clippy. Measured on this workspace with one planted
-`clippy::clone_on_copy` in `tests/`:
-
-| command | outcome |
-|---|---|
-| `cargo clippy --workspace --all-features` | exit 0 — undetected |
-| `cargo clippy --workspace --all-features --all-targets` | exit 101 — caught |
-| `cargo test --workspace --all-features --no-run` | exit 0 — undetected |
-
-`--all-targets` pulls in the benches, which use the `internal-testing` seams (`just_insert` and
-friends), so it only works alongside `--features internal-testing` — that pairing is why
-`./pre-push` carries both flags rather than just the one.
-
-**The `export`.** CI sets `RUSTFLAGS`/`RUSTDOCFLAGS=-Dwarnings` on the whole job. A contributor who
-copies the commands out of this list without it gets warnings where CI gets errors, which is a green
-local run followed by a red pipeline — rustc lints such as `unused_parens` behave exactly that way.
-
-### 3.2 Three tiers: commit, push, CI
-
-CI runs the §3 list on every push, so the hooks do not have to reproduce it — they have to catch the
-cheap failures early without making the inner loop unpleasant. Each tier gets a time budget, and a
-check belongs in the earliest tier it fits:
+`--workspace`, never `--all`. This list is what CI runs and what "done" means. The two git hooks run
+tiered *subsets* of it and deliberately do not reproduce it; a check belongs in the earliest tier
+whose budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
-| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, `./scripts/check-domain-purity.sh` | 0.3 s |
-| [`./pre-push`](./pre-push) | `cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings`, `cargo test --workspace --features internal-testing` | ~20 s |
-| [`main.yml`](./.github/workflows/main.yml) | the whole §3 list | minutes |
+| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, `./scripts/check-doc-budget.sh`, `./scripts/check-domain-purity.sh` | 0.4 s |
+| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s |
+| [`main.yml`](./.github/workflows/main.yml) | everything above | minutes |
 
-Measured on this workspace, four cores, warm `target/`. The push tier is dominated by the test
-binaries — building them when they are stale, and running them either way (`tests/service.rs` alone
-spends ~5 s on real sockets and timers) — not by clippy, which is ~4 s of it.
+So a commit may be lint-dirty and a push should not be: `git commit` is a save point, `git push` a
+publication, and `git push --no-verify` skips tier 2 on purpose. Both hooks check a materialized
+tree — the index, then the commit being pushed — because what is recorded or published is what has
+to be green, whatever is half-finished on disk. Neither exports `RUSTFLAGS`: that export is for a
+human running the list by hand. `main.yml` and this list are kept in sync by hand — change one,
+change both.
 
-What follows from the split, in the order it tends to surprise people:
-
-- **A commit may be lint-dirty; a push should not be.** That is the intended trade — `git commit` is
-  a save point, `git push` is a publication. Neither tier-1 check invokes rustc, so committing never
-  waits on a build.
-- **Tier 2 runs one feature variant, not both.** The second variant, `cargo bench --no-run`,
-  `cargo doc` ×2 and `cargo package` stay in CI: they roughly double the wall clock to re-check what
-  tier 2 has already covered for the common case. Doc tests are *not* in that list — plain
-  `cargo test` already runs them, which is why the §3 list's separate `cargo test --doc` line is
-  belt-and-braces rather than extra coverage.
-- **Neither hook exports `RUSTFLAGS`.** §3.1's export is for a human running the list by hand. In a
-  hook it would give every hook run a different fingerprint from every `cargo` command run by hand,
-  so each would evict the other's artifacts and both would rebuild a 128-crate tree (47 without dev-
-  dependencies) every time. `clippy … -- --deny warnings` already denies rustc lints on the
-  workspace crates, which is the part §3.1 was about.
-- **Both hooks check a materialized tree, not the working directory** — `pre-commit` the index,
-  `pre-push` the commit being pushed. What is recorded or published is what has to be green,
-  whatever is half-finished on disk.
-- **`git push --no-verify` skips tier 2 on purpose.** Pushing a work-in-progress branch for someone
-  to look at is legitimate, and CI remains the authority either way.
-
-Adding a check to a hook means checking it against that tier's budget first. If it does not fit, it
-belongs in CI only — that is not a lesser outcome, it is the design.
+Why `--all-targets` is load-bearing, why the export exists, and why each tier stops where it does:
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) "Why the gate looks like this" — measured, not asserted.
 
 ## 4. Type safety and domain modeling
 
@@ -190,7 +145,7 @@ No enforced commit-message/PR-title format — match recent history (`git log --
 the tracking issue (`#NNN`) where relevant.
 
 The one enforced convention: a rule a human must remember and enforce by eye belongs in
-`.github/workflows/main.yml` instead, plus whichever hook tier it fits in (§3.2; §9 is the model).
+`.github/workflows/main.yml` instead, plus whichever hook tier it fits in (§3; §9 is the model).
 Prose-only guidelines decay; failing commands don't.
 
 ## 11. Publishing

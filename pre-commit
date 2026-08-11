@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Tier 1 of the three-tier gate (AGENTS.md §3.2): the checks that never invoke
+# Tier 1 of the three-tier gate (AGENTS.md §3): the checks that never invoke
 # rustc, so committing stays interactive. Everything that needs a compile runs at
 # push time (./pre-push) or in CI (.github/workflows/main.yml).
 
@@ -13,6 +13,9 @@ git checkout-index --prefix="$TEMPDIR/" -af
 
 echo "Running cargo fmt"
 (cd $TEMPDIR; cargo fmt --check)
+
+echo "Running doc-budget check"
+(cd $TEMPDIR; ./scripts/check-doc-budget.sh)
 
 echo "Running domain-purity check"
 (cd $TEMPDIR; ./scripts/check-domain-purity.sh)
