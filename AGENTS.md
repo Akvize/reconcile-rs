@@ -20,7 +20,12 @@ Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/depl
 ## 2. Environment
 
 Plain `cargo` + a Rust toolchain is enough. [`CONTRIBUTING.md`](./CONTRIBUTING.md) documents a Dev
-Container / Docker setup. Link the pre-commit gate once: `ln -sf ../../pre-commit .git/hooks/pre-commit`.
+Container / Docker setup. Link both git hooks once (§3.2):
+
+```bash
+ln -sf ../../pre-commit .git/hooks/pre-commit
+ln -sf ../../pre-push .git/hooks/pre-push
+```
 
 ## 3. Build, lint, test — run all before declaring work done
 
@@ -44,9 +49,9 @@ cargo doc --workspace --all-features                          # feature-gated it
 cargo package --workspace --allow-dirty                       # release packaging, §11
 ```
 
-`--workspace`, never `--all`. `./pre-commit` runs a subset (`fmt --check`, the same `clippy`
-invocation, the purity script) on the staged tree before every commit. `main.yml`, `./pre-commit`
-and this list are kept in sync by hand — change one, change all three.
+`--workspace`, never `--all`. This list is what CI runs and what "done" means; the two git hooks run
+tiered *subsets* of it and deliberately do not reproduce it (§3.2). `main.yml` and this list are kept
+in sync by hand — change one, change both.
 
 ### 3.1 Why `--all-targets`, and why the `export`
 
@@ -66,11 +71,51 @@ invisible to the entire pipeline, because the jobs that *compile* test code (`ca
 
 `--all-targets` pulls in the benches, which use the `internal-testing` seams (`just_insert` and
 friends), so it only works alongside `--features internal-testing` — that pairing is why
-`./pre-commit` carries both flags rather than just the one.
+`./pre-push` carries both flags rather than just the one.
 
 **The `export`.** CI sets `RUSTFLAGS`/`RUSTDOCFLAGS=-Dwarnings` on the whole job. A contributor who
 copies the commands out of this list without it gets warnings where CI gets errors, which is a green
 local run followed by a red pipeline — rustc lints such as `unused_parens` behave exactly that way.
+
+### 3.2 Three tiers: commit, push, CI
+
+CI runs the §3 list on every push, so the hooks do not have to reproduce it — they have to catch the
+cheap failures early without making the inner loop unpleasant. Each tier gets a time budget, and a
+check belongs in the earliest tier it fits:
+
+| tier | what runs | cost |
+|---|---|---|
+| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, `./scripts/check-domain-purity.sh` | 0.3 s |
+| [`./pre-push`](./pre-push) | `cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings`, `cargo test --workspace --features internal-testing` | ~20 s |
+| [`main.yml`](./.github/workflows/main.yml) | the whole §3 list | minutes |
+
+Measured on this workspace, four cores, warm `target/`. The push tier is dominated by the test
+binaries — building them when they are stale, and running them either way (`tests/service.rs` alone
+spends ~5 s on real sockets and timers) — not by clippy, which is ~4 s of it.
+
+What follows from the split, in the order it tends to surprise people:
+
+- **A commit may be lint-dirty; a push should not be.** That is the intended trade — `git commit` is
+  a save point, `git push` is a publication. Neither tier-1 check invokes rustc, so committing never
+  waits on a build.
+- **Tier 2 runs one feature variant, not both.** The second variant, `cargo bench --no-run`,
+  `cargo doc` ×2 and `cargo package` stay in CI: they roughly double the wall clock to re-check what
+  tier 2 has already covered for the common case. Doc tests are *not* in that list — plain
+  `cargo test` already runs them, which is why the §3 list's separate `cargo test --doc` line is
+  belt-and-braces rather than extra coverage.
+- **Neither hook exports `RUSTFLAGS`.** §3.1's export is for a human running the list by hand. In a
+  hook it would give every hook run a different fingerprint from every `cargo` command run by hand,
+  so each would evict the other's artifacts and both would rebuild a 128-crate tree (47 without dev-
+  dependencies) every time. `clippy … -- --deny warnings` already denies rustc lints on the
+  workspace crates, which is the part §3.1 was about.
+- **Both hooks check a materialized tree, not the working directory** — `pre-commit` the index,
+  `pre-push` the commit being pushed. What is recorded or published is what has to be green,
+  whatever is half-finished on disk.
+- **`git push --no-verify` skips tier 2 on purpose.** Pushing a work-in-progress branch for someone
+  to look at is legitimate, and CI remains the authority either way.
+
+Adding a check to a hook means checking it against that tier's budget first. If it does not fit, it
+belongs in CI only — that is not a lesser outcome, it is the design.
 
 ## 4. Type safety and domain modeling
 
@@ -145,8 +190,8 @@ No enforced commit-message/PR-title format — match recent history (`git log --
 the tracking issue (`#NNN`) where relevant.
 
 The one enforced convention: a rule a human must remember and enforce by eye belongs in
-`./pre-commit` and `.github/workflows/main.yml` instead (§9 is the model). Prose-only guidelines
-decay; failing commands don't.
+`.github/workflows/main.yml` instead, plus whichever hook tier it fits in (§3.2; §9 is the model).
+Prose-only guidelines decay; failing commands don't.
 
 ## 11. Publishing
 

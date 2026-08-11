@@ -24,11 +24,14 @@ if [[ "$mode" == "start" ]]; then
     workspace_root="/workspace"
   fi
 
-  hook_path="$workspace_root/.git/hooks/pre-commit"
-  if [[ -d "$workspace_root/.git" ]] && [[ ! -L "$hook_path" ]]; then
-    echo "🔗 Linking pre-commit hook"
-    ln -sf "$workspace_root/pre-commit" "$hook_path"
-  fi
+  # Both tiers of the gate, see AGENTS.md §3.2
+  for hook in pre-commit pre-push; do
+    hook_path="$workspace_root/.git/hooks/$hook"
+    if [[ -d "$workspace_root/.git" ]] && [[ ! -L "$hook_path" ]]; then
+      echo "🔗 Linking $hook hook"
+      ln -sf "$workspace_root/$hook" "$hook_path"
+    fi
+  done
 
   if [[ -n "${GIT_AUTHOR_NAME:-}" ]]; then
     git config --global user.name "$GIT_AUTHOR_NAME"

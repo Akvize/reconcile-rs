@@ -14,4 +14,4 @@ repo — read it, don't skim it. This file adds only what's specific to Claude C
 - Adding or touching a wire/domain value type? Re-read AGENTS.md §4 — strong-typed newtypes with
   type-owned validation, not bare primitives.
 - Don't add prose-only guidelines here. A rule worth stating either belongs in `AGENTS.md` (source
-  of truth) or, per AGENTS.md §10, in a script wired into `./pre-commit` and CI.
+  of truth) or, per AGENTS.md §10, in a script wired into CI and whichever hook tier it fits (§3.2).

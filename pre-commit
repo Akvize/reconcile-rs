@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Tier 1 of the three-tier gate (AGENTS.md §3.2): the checks that never invoke
+# rustc, so committing stays interactive. Everything that needs a compile runs at
+# push time (./pre-push) or in CI (.github/workflows/main.yml).
+
 # To handle partially committed files, we must copy the staged changes to a
 # separate location. See also https://stackoverflow.com/a/36793330
 TEMPDIR=$(mktemp -d)
 trap 'rm -rf "$TEMPDIR"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
 git checkout-index --prefix="$TEMPDIR/" -af
 
-# keep using the same target/ directory, not a new one in the temporary directory
-# this avoids re-parsing everything from scratching every time we run the script
-GIT_ROOT=$(git rev-parse --show-toplevel)
-export CARGO_TARGET_DIR="${GIT_ROOT}/target"
-
 echo "Running cargo fmt"
 (cd $TEMPDIR; cargo fmt --check)
-echo "Running cargo clippy"
-(cd $TEMPDIR; cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings)
 
 echo "Running domain-purity check"
 (cd $TEMPDIR; ./scripts/check-domain-purity.sh)

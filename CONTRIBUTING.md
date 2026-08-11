@@ -47,20 +47,23 @@ reconcile-rs-dev-container .` for a clean build.
 whoami                        # dev
 git config --global user.name
 git config --global user.email
-ls -l .git/hooks/pre-commit   # pre-commit hook linked
+ls -l .git/hooks/pre-commit .git/hooks/pre-push   # both hooks linked
 rustc --version
 command -v rust-analyzer dockerfile-language-server-nodejs taplo marksman
 ```
 
-## Pre-commit hook
+## Git hooks
 
 Linked automatically by `init.sh`; link manually with:
 
 ```bash
 ln -sf ../../pre-commit .git/hooks/pre-commit
+ln -sf ../../pre-push .git/hooks/pre-push
 ```
 
-Runs [`./pre-commit`](./pre-commit) before every commit — see AGENTS.md §3 for what it checks.
+[`./pre-commit`](./pre-commit) runs before every commit, [`./pre-push`](./pre-push) before every
+push. They run tiered subsets of the checks in AGENTS.md §3 rather than all of them, so that
+committing costs no compile at all — see AGENTS.md §3.2 for the tiers and each one's budget.
 
 ## Code coverage
 
