@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Tier 2 of the three-tier gate (AGENTS.md §3.2): the checks worth a compile, but
+# not worth blocking every commit on. CI (.github/workflows/main.yml) remains the
+# superset and runs on every push regardless, so this tier is not trying to
+# reproduce it — only to make the common failures cheap to find. One feature
+# variant, no `cargo doc`/`package`/`bench`: those stay in CI.
+#
+# Skip it with `git push --no-verify` — pushing a work-in-progress branch for
+# someone to look at is legitimate, and CI is still the authority.
+
+# git feeds pre-push one line per ref on stdin:
+#     <local-ref> <local-sha> <remote-ref> <remote-sha>
+# Collect every line before running anything, so a check can never swallow the
+# refs still queued on stdin. A local-sha of all zeros means "delete this remote
+# ref": there is no commit to check. That sentinel is derived rather than
+# hardcoded as 40 characters, so this keeps working in a sha256 repository.
+NULL_SHA=$(git hash-object --stdin </dev/null | sed 's/./0/g')
+commits=()
+while read -r _ local_sha _ _; do
+  if [[ "$local_sha" != "$NULL_SHA" ]] && [[ " ${commits[*]-} " != *" $local_sha "* ]]; then
+    commits+=("$local_sha")
+  fi
+done
+
+# keep using the same target/ directory, not a new one in the temporary directory
+# this avoids re-parsing everything from scratch every time we run the script
+GIT_ROOT=$(git rev-parse --show-toplevel)
+export CARGO_TARGET_DIR="${GIT_ROOT}/target"
+
+WORKDIR=$(mktemp -d)
+trap 'rm -rf "$WORKDIR"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
+
+for commit in ${commits[@]+"${commits[@]}"}; do
+  # Check the commit being pushed rather than the working tree, for the same
+  # reason pre-commit checks the index: what gets published is what has to be
+  # green, whatever is half-finished on disk.
+  tree="$WORKDIR/$commit"
+  mkdir -p "$tree"
+  git archive "$commit" | tar -x -C "$tree"
+
+  echo "Running cargo clippy on $commit"
+  (cd "$tree"; cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings)
+
+  echo "Running cargo test on $commit"
+  (cd "$tree"; cargo test --workspace --features internal-testing)
+done
