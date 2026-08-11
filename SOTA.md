@@ -282,6 +282,12 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   and ~13× the local `Aggregate`/`Rank`/`Select` queries with it (2 094/2 092/1 040 against
   155/152/70).
 
+  The paper's local cost *T_loc* is the widest gap, and it is pure CPU, so no RTT caveat touches it:
+  the timed two-peer drive at d = 1 runs **2.10 ms under `√m` against 45.0 µs at *b* = 16 (≈47×)** at
+  n = 10⁶, 460 µs against 25.2 µs at 10⁵, and only 1.6× apart at 10³. Steeper than the query-count
+  ratio because a `√n` fan-out's queries are individually dearer — ~1 000 `Select`s at spread-out
+  ranks and ~1 000 wide `Aggregate`s per round touch far more of the tree than a narrow descent.
+
   **The compensation is not observable in the reachable range.** Θ(log log n) beats Θ(log_16 n)
   asymptotically, but at n = 10⁶ the iterated square root bottoms out in ~4 levels and log₁₆ 10⁶ ≈ 5;
   the measured message counts are *identical* (8 and 8). The separation only reaches a factor of two

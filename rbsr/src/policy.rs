@@ -365,6 +365,21 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
 /// in-memory store holds. So the `√m` rule pays ~14× the bytes, ~13× the local RSOS queries and
 /// ~5× the IP fragments at `n = 10⁶` and buys nothing back that is observable at that size.
 ///
+/// The paper's local cost `T_loc` is the widest gap of all, and it is pure local CPU — no network,
+/// so no RTT caveat applies to it. `reconciliation_drive` times the whole two-peer drive at `d = 1`:
+///
+/// | n | this policy | [`FixedFanOut`] `b = 16` | ratio |
+/// |---:|---:|---:|---:|
+/// | 10³ | 12.9 µs | 8.2 µs | 1.6× |
+/// | 10⁴ | 43.8 µs | 18.2 µs | 2.4× |
+/// | 10⁵ | 460 µs | 25.2 µs | 18× |
+/// | 10⁶ | **2.10 ms** | **45.0 µs** | **47×** |
+///
+/// Steeper than the 13× query-count ratio because the queries themselves get dearer: a `√n` fan-out
+/// `select`s at ~1 000 spread-out ranks and aggregates over ~1 000 wide ranges per round, touching
+/// far more of the tree than a narrow descent, and grows the output `Vec` to ~42 kB of
+/// `RangeAggregate` against ~3 kB.
+///
 /// Two caveats keep this from being a one-line verdict. Every benchmark here runs at RTT ≈ 0
 /// ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), so the message column is a *count*
 /// rather than a latency — equal counts do mean equal round-trips, but a policy that lost on that

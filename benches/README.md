@@ -89,7 +89,9 @@ Since [#257](https://github.com/Akvize/reconcile-rs/issues/257) made the rule a 
 against an estimate. Headline, for a **single** missing element in a 10⁶-entry store: ~53 kB over
 ~1 048 ranges under `√m` against **3.8 kB over 78 ranges** for `b = 16` — at the *same* 8 one-way
 messages, because log₁₆ 10⁶ ≈ 5 is already the iterated-square-root depth at that size. The
-`Θ(log log n)` round advantage `√m` is supposed to buy does not appear below n ≈ 10¹². The widest
+`Θ(log log n)` round advantage `√m` is supposed to buy does not appear below n ≈ 10¹². The timed
+`reconciliation_drive` group widens it further, in a column no RTT caveat touches: 2.10 ms against
+45.0 µs, ≈47×. The widest
 single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP fragments at a
 1500-byte MTU); at d = 100 it reaches 160 908 B, i.e. three datagrams. Discussion in `SOTA.md` §2.2.
 

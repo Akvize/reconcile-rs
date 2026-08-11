@@ -196,7 +196,8 @@ but one High resolved or mitigated.
 
   **What the measurement changed.** Locating one missing element in a 10⁶-entry store costs
   **53 046 B over 1 048 advertised ranges** under `√m` against **3 834 B / 78 ranges** for
-  `b = 16` — and ~13× the local RSOS queries. The claimed compensation **does not hold in the
+  `b = 16` — ~13× the local RSOS queries, and **47× the local CPU** (2.10 ms against 45.0 µs on the
+  timed `reconciliation_drive`, a pure-CPU figure no RTT caveat touches). The claimed compensation **does not hold in the
   reachable range**: this file previously recorded rounds as "`Θ(log log n)`, flat at 6–8 … where
   fixed-`b` pays `O(log n)`", but measured head to head at n = 10⁶ *both* policies take 8 one-way
   messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2× near
