@@ -26,8 +26,17 @@ use tracing::debug;
 
 use rsos::Aggregate;
 
-use crate::policy::{Comparison, Decision, RefinementPolicy, SqrtFanOut};
+use crate::policy::{Comparison, Decision, FanOut, FixedFanOut, RefinementPolicy};
 use crate::rsos_view::RsosView;
+
+/// The refinement policy [`protocol_round`] applies: the paper's constant branching factor at
+/// Negentropy's `b = 16`, with this crate's enumeration cutoffs.
+///
+/// Named rather than spelled inline so "what does this crate do by default" is one `grep`, and so
+/// the switch away from [`SqrtFanOut`](crate::SqrtFanOut) — measured in `benches/protocol.rs`,
+/// decided in [#257](https://github.com/Akvize/reconcile-rs/issues/257) — is a one-line diff if it
+/// ever needs revisiting.
+const DEFAULT_POLICY: FixedFanOut = FixedFanOut::new(FanOut::NEGENTROPY);
 
 /// The start bound of a [`RangeAggregate`] range, as this protocol actually emits it: `Included` or
 /// `Unbounded`, never `Excluded`.
@@ -294,9 +303,9 @@ impl AddAssign for RoundOutcome {
     }
 }
 
-/// One **protocol round** under this crate's default refinement policy, [`SqrtFanOut`]: apply the
-/// responder step to every active range this peer was asked to answer, classifying each as SKIP,
-/// IDLIST or SPLIT.
+/// One **protocol round** under this crate's default refinement policy, [`FixedFanOut`] at
+/// `b = 16`: apply the responder step to every active range this peer was asked to answer,
+/// classifying each as SKIP, IDLIST or SPLIT.
 ///
 /// "A complete protocol round consists of each peer applying Algorithm 1 to the active ranges it is
 /// asked to answer" (§4 of arXiv:2603.19820). `active_ranges` is that batch — what the peer sent,
@@ -323,19 +332,27 @@ impl AddAssign for RoundOutcome {
 ///
 /// *Which* of the three outcomes a range takes is not fixed by this function. It is a
 /// [`RefinementPolicy`] — a purely local decision, never negotiated on the wire — and this entry
-/// point pins it to [`SqrtFanOut`], the behaviour this crate has always had:
+/// point pins it to [`FixedFanOut`] at [`FanOut::NEGENTROPY`], which leaves exactly one deviation
+/// from Algorithm 1:
 ///
 /// - **no enumeration threshold `t`.** The paper takes IDLIST whenever `|X ∩ [l, u)| ≤ t` for a
-///   fixed parameter `t` (its experiments use `t = 32`); [`SqrtFanOut`] uses three hand-picked
-///   special cases instead.
-/// - **no fixed branching factor `b`.** The paper's `SPLITBYRANK(O_X, l, u, b)` produces a
-///   `b`-balanced partition for a constant `b` (its experiments use Negentropy's `b = 16`);
-///   [`SqrtFanOut`] cuts every `⌊√m⌋` elements, so the fan-out grows with the range.
+///   fixed parameter `t` (its experiments use `t = 32`); this crate uses four hand-picked special
+///   cases instead, listed on [`SqrtFanOut`](crate::SqrtFanOut). They are not a byte-saving:
+///   enumerating a range of up
+///   to `t` elements ships values the peer mostly already holds, which is why
+///   [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) — Algorithm 1 as written, for
+///   anyone who wants it — is not the default either.
+/// - **the branching factor is the paper's.** `SPLITBYRANK(O_X, l, u, b)` produces a `b`-balanced
+///   partition for a constant `b`, and `b = 16` is Negentropy's, arXiv:2603.19820 §6's comparison
+///   point, and the value `benches/protocol.rs`'s sweep settles on. Because `b` is constant, the
+///   paper's local-cost bound `T_loc = O(hL + bhI + K)` describes this crate again.
 ///
-/// Both deviations are legitimate instantiations rather than bugs, both are costed on
-/// [`SqrtFanOut`] itself, and [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) is
-/// Algorithm 1 as written for anyone who wants it. Use [`protocol_round_with_policy`] to supply
-/// either — the wire type carries no policy, so two peers running different ones still converge.
+/// Until 2026-08 the default was [`SqrtFanOut`](crate::SqrtFanOut), whose fan-out grew as `⌊√m⌋`;
+/// it is still shipped,
+/// and the measurement that retired it is on its own documentation. Use
+/// [`protocol_round_with_policy`] to run it, or any other rule — the wire type carries no policy,
+/// so two peers running different ones still converge, and a cluster can therefore be migrated one
+/// node at a time.
 ///
 /// What the driver keeps regardless of policy is Proposition 4.1's requirement: a SPLIT's children
 /// are pairwise disjoint and their union is the parent range.
@@ -350,7 +367,7 @@ where
 {
     protocol_round_with_policy(
         local,
-        &SqrtFanOut,
+        &DEFAULT_POLICY,
         active_ranges,
         child_ranges,
         enumeration_ranges,
@@ -508,7 +525,7 @@ mod tests {
 
     use rsos::{Fingerprint, FingerprintTreeMap};
 
-    use crate::policy::{EnumerateBelowThreshold, FanOut, FixedFanOut};
+    use crate::policy::{EnumerateBelowThreshold, SqrtFanOut};
 
     /// Build a real `FingerprintTreeMap` over the given (distinct, unsorted-ok) `i32` keys. A plain
     /// `i32` value stands in for whatever a caller actually stores: values are irrelevant to the
@@ -630,34 +647,62 @@ mod tests {
     }
 
     // ----- The fan-out rule itself -----
-    // `step = ⌊√m⌋` is a deviation from Algorithm 2's fixed `b` (see the deviation note on
-    // `protocol_round`), and it is the deviation that decides this crate's communication cost:
-    // the number of children a SPLIT emits is what goes on the wire. The two tests below pin the
-    // rule so that changing it — which is the whole point of #257 — is a deliberate act with a
-    // failing test attached, not a silent shift in every cluster's bandwidth profile.
+    // The number of children a SPLIT emits is what goes on the wire, so the fan-out rule *is* this
+    // crate's communication cost. The tests below pin it so that changing it is a deliberate act
+    // with a failing test attached, not a silent shift in every cluster's bandwidth profile.
     // `benches/protocol.rs` reports the same quantity in bytes, over realistic store sizes.
+    //
+    // One crafted segment covers all of them: the peer advertises the same element count as the
+    // local store (so neither the empty-remote nor the single-element cutoff fires) with a
+    // fingerprint that cannot match, which is exactly the "both sides non-empty, aggregates differ"
+    // case that splits.
+    fn splitting_segment(m: usize) -> RangeAggregate<i32> {
+        RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: Aggregate::new(m, Fingerprint([7, 0, 0, 0])),
+        }
+    }
 
-    /// A SPLIT replaces a range of `m` elements by `Θ(√m)` children, not by a constant number.
-    /// Driven through the empty-remote-is-refined path: the peer advertises a non-zero size (so
-    /// the IDLIST shortcut for an empty remote does not fire) with a fingerprint that cannot
-    /// match, which is exactly the "both sides non-empty, aggregates differ" case that splits.
+    /// The **default** fan-out is a constant: a SPLIT emits at most `b = 16` children whatever the
+    /// range's size. Changing `DEFAULT_POLICY` fails here.
     #[test]
-    fn split_fan_out_is_square_root_of_the_range_size() {
+    fn default_split_fan_out_is_constant_at_sixteen() {
+        for m in [100usize, 400, 2_500, 250_000] {
+            let store = tree(&(0..m as i32).collect::<Vec<_>>());
+            let (child_ranges, enumeration_ranges) = round(&store, splitting_segment(m));
+            assert!(enumeration_ranges.is_empty());
+            assert!(
+                child_ranges.len() <= FanOut::NEGENTROPY.get(),
+                "m={m}: SPLIT emitted {} children, expected at most b={} \
+                 (a size-dependent fan-out would grow with m)",
+                child_ranges.len(),
+                FanOut::NEGENTROPY.get()
+            );
+            assert!(child_ranges.len() > 1, "m={m}: the split must refine");
+        }
+    }
+
+    /// And the rule the default replaced in 2026-08 (#257) is still available and still `Θ(√m)`:
+    /// `SqrtFanOut` is shipped for anyone who wants the historical bandwidth/round profile back,
+    /// so its behaviour is pinned too rather than left to rot.
+    #[test]
+    fn sqrt_fan_out_is_still_the_square_root_of_the_range_size() {
         for m in [100usize, 400, 2_500] {
             let store = tree(&(0..m as i32).collect::<Vec<_>>());
-            let segment = RangeAggregate {
-                range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-                // Same element count as the local store, so neither the empty-remote nor the
-                // single-element branch applies; the fingerprint differs, so the range must split.
-                aggregate: Aggregate::new(m, Fingerprint([7, 0, 0, 0])),
-            };
-            let (child_ranges, enumeration_ranges) = round(&store, segment);
+            let mut child_ranges = Vec::new();
+            let mut enumeration_ranges = Vec::new();
+            protocol_round_with_policy(
+                &store,
+                &SqrtFanOut,
+                vec![splitting_segment(m)],
+                &mut child_ranges,
+                &mut enumeration_ranges,
+            );
             assert!(enumeration_ranges.is_empty());
             let root = (m as f64).sqrt() as usize;
             assert!(
                 child_ranges.len() >= root / 2 && child_ranges.len() <= root * 2,
-                "m={m}: SPLIT emitted {} children, expected ~√m = {root} \
-                 (a fixed branching factor would be constant in m)",
+                "m={m}: SPLIT emitted {} children, expected ~√m = {root}",
                 child_ranges.len()
             );
         }
@@ -665,16 +710,12 @@ mod tests {
 
     /// The children of a SPLIT partition the parent exactly: consecutive, non-overlapping, and
     /// spanning the whole parent range. This is what Proposition 4.1's correctness argument needs,
-    /// and it holds independently of *how many* children the fan-out rule chooses — so it must keep
-    /// holding through any change to that rule.
+    /// and it holds independently of *how many* children the fan-out rule chooses — so it kept
+    /// holding across the 2026-08 default change, and must keep holding through any future one.
     #[test]
     fn split_children_partition_the_parent_range() {
         let store = tree(&(0..400).collect::<Vec<_>>());
-        let segment = RangeAggregate {
-            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            aggregate: Aggregate::new(400, Fingerprint([7, 0, 0, 0])),
-        };
-        let (child_ranges, _) = round(&store, segment);
+        let (child_ranges, _) = round(&store, splitting_segment(400));
         assert!(child_ranges.len() > 1);
 
         let first = &child_ranges[0].range;

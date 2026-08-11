@@ -53,7 +53,7 @@ dependency is legitimately attractive.
 |---|---|---|---|---|---|---|
 | Naive XOR RBSR | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
 | **Secure-fingerprint RBSR (≥256-bit), fixed fan-out *b*** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod, *b*=16) |
-| **↳ as instantiated in reconcile-rs (default fan-out `√m`)** | **Θ(√n)** (see below) | O(d log n) | **Θ(log log n)** — *asymptotic only, §2.2* | No | Good | reconcile-rs |
+| **↳ as instantiated in reconcile-rs** (`b`=16 since 2026-08; `√m` before) | O(d log n) — *was Θ(√n)* | O(d log n) | O(log n) sequential — *8 one-way msgs at n=10⁶* | No | Good | reconcile-rs |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
@@ -63,23 +63,27 @@ Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless
 Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
 (CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
-**The RBSR row splits in two because this implementation's *default policy* is not a fixed-*b*
-RBSR.** The published O(d log n) / O(log n) figures assume the constant branching factor of
-Algorithm 2; `rbsr`'s default `SqrtFanOut` cuts at `step = ⌊√m⌋` instead, so the first SPLIT
-advertises ~√n ranges *whatever d is*. That was taken to trade the family's communication bound away
-for a shallower recursion. Since [#257](https://github.com/Akvize/reconcile-rs/issues/257) made the
-rule a swappable `RefinementPolicy`, both halves of the trade are measured against a fixed *b* in
-the same harness (`benches/protocol.rs`) rather than reasoned about — and **the shallower recursion
-does not show up in the reachable range**: at n = 10⁶ both policies converge in the same 8 one-way
-messages, while `√m` spends ~14× the bytes. See
+**The RBSR row carries a "since 2026-08" because this implementation's default policy changed.**
+The published O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2, and
+until 2026-08 `rbsr` did not use one: `SqrtFanOut` cut at `step = ⌊√m⌋`, so the first SPLIT
+advertised ~√n ranges *whatever d is*, and communication was Θ(√n). That was taken to buy a
+shallower recursion in exchange. Once [#257](https://github.com/Akvize/reconcile-rs/issues/257) made
+the rule a swappable `RefinementPolicy`, both halves of the trade were measured against a fixed *b*
+in the same harness (`benches/protocol.rs`) rather than reasoned about — and **the shallower
+recursion did not show up in the reachable range**: at n = 10⁶ both converge in the same 8 one-way
+messages, while `√m` spent ~14× the bytes and ~47× the local CPU. The default is now
+`FixedFanOut(16)`, so the published bounds describe this crate again; `SqrtFanOut` is still shipped
+for the one regime where it wins. See
 [§2.2](#22-competitors-at-the-reconciliation-algorithm-level) for the numbers.
 
 **Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, fixed-*b* RBSR is the
 **worst family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a
 single streaming exchange, with no *d* estimation, and with adversarial robustness — it is the
-**current SOTA choice** for this use case. reconcile-rs's `√m` fan-out was expected to invert that
-particular trade-off (few RTTs, heavy rounds) rather than escape it; measured, it does not invert it
-in the reachable range — it pays the heavy rounds without buying the RTT saving (§2.2).
+**current SOTA choice** for this use case. reconcile-rs's former `√m` fan-out was expected to invert
+that particular trade-off (few RTTs, heavy rounds) rather than escape it; measured, it did not
+invert it in the reachable range — it paid the heavy rounds without buying the RTT saving, which is
+why the default is a fixed *b* now (§2.2). Escaping the trade-off, rather than moving along it,
+remains [#185](https://github.com/Akvize/reconcile-rs/issues/185)'s job.
 
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
@@ -249,7 +253,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
 | **RBSR, fixed fan-out *b*** (secure fingerprint) | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** | Earthstar/Willow (naive XOR) — Negentropy (secure, *b*=16) |
-| **↳ reconcile-rs default policy** (fan-out `√m`) | **Θ(√n)**, d-independent | O(d log n) | Θ(log log n) sequential — *equal to `b`=16 below n≈10¹²* | No (self-adapting) | **Good** | reconcile-rs |
+| **↳ reconcile-rs, default since 2026-08** (`b`=16) | O(d log n) | O(d log n) | O(log_16 n) sequential | No | **Good** | reconcile-rs |
+| **↳ reconcile-rs, default before** (fan-out `√m`, still shipped) | **Θ(√n)**, d-independent | O(d log n) | Θ(log log n) sequential — *equal to `b`=16 below n≈10¹²* | No (self-adapting) | **Good** | reconcile-rs |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
@@ -259,9 +264,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 - Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
   difference. On a 1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback
   benchmarks hide (cf. F16).
-- **This implementation's default policy does not sit on that point of the curve.** `rbsr`'s
+- **This implementation sat off that point of the curve until 2026-08, and no longer does.** `rbsr`'s
   `SqrtFanOut` cuts at `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m
-  elements each. Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but
+  elements each. It was the default; it is now one policy among three, and the measurement below is
+  why. Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but
   the first SPLIT emits ~√n range aggregates **regardless of d**, so communication is **Θ(√n)**, not
   O(d log n). This is not a change of logarithmic base; it is a different complexity class in both
   columns, one better and one worse.
@@ -311,10 +317,12 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 - **Sweeping *b* itself lands on 16.** `benches/protocol.rs`'s `fan_out_sweep` runs *b* = 2…256.
   Bytes and local work follow *b*/ln *b* (minimum near *b* = 3: 1 960 B at *b* = 4 against 3 834 B at
   16, n = 10⁶, d = 1); one-way messages fall as log_*b* n to a floor of 6, reached at *b* = 32.
-  *b* = 16 is the only swept value **never worse than the `√m` default on rounds** across every
+  *b* = 16 is the only swept value **never worse than the outgoing `√m` rule on rounds** across every
   measured (n, d, clustering), while cutting bytes 13.8×, *T_loc* ~45× and the widest round 63×.
   *b* = 4 wins on bytes and CPU but costs two round-trips — break-even at an RTT of ≈8 µs at 1 Gb/s,
-  i.e. only worth it when the "network" is in-process.
+  i.e. only worth it when the "network" is in-process. **`FixedFanOut(16)` is the default since
+  2026-08.** The switch is a behaviour change, not a wire change — the policy never crosses the wire
+  and mixed pairs converge — so a cluster migrates one node at a time.
 - **The `t` column is not free, and the byte table above does not show its price.** The paper's
   enumeration threshold wins the refinement column by *stopping early* — and everything it stops on
   is then shipped as values, almost all of which the peer already holds. At n = 10⁵, d = 100

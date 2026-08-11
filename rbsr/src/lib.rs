@@ -45,20 +45,20 @@
 //! | **unresolved** — "the active ranges always form a partition of the still unresolved portion" | whatever is still in flight: what the caller has yet to feed back into [`protocol_round`] |
 //! | **symmetric difference** `Δ(X, Y) := (X \ Y) ∪ (Y \ X)` (Def. 3.3) | what a full run computes: the union of everything reported through `enumeration_ranges` on both sides |
 //! | **local symmetric difference** `Δ_{l,u}(X, Y)` — `Δ` restricted to `[l, u)` | what a single [`EnumerationRange`] `(l, u)` stands for on the peer that emitted it |
-//! | **balanced `b`-partition** (Def. 3.8), cut by `Rank`/`Select` (Algorithm 2) | the fan-out inside [`protocol_round`], cut by [`RsosView::select`] — with the width chosen by a [`RefinementPolicy`], `√n` by default rather than a fixed `b`; see below |
+//! | **balanced `b`-partition** (Def. 3.8), cut by `Rank`/`Select` (Algorithm 2) | the fan-out inside [`protocol_round`], cut by [`RsosView::select`] — with the width chosen by a [`RefinementPolicy`], the paper's constant `b = 16` by default; see below |
 //! | **comparison value** `f_Y = fp(A(Y ∩ [l, u)))` (Def. 3.6) | the [`rsos::Aggregate`] carried by a [`RangeAggregate`] — the *whole* aggregate, not a hash of it: equality is decided on `(fingerprint, size)`, never on the fingerprint alone |
-//! | **Algorithm 1's parameters** `t` (enumeration threshold) and `b` (branching factor) | the two knobs of a [`RefinementPolicy`]; [`EnumerateBelowThreshold`] is Algorithm 1 with both as written, [`SqrtFanOut`] is this crate's default |
+//! | **Algorithm 1's parameters** `t` (enumeration threshold) and `b` (branching factor) | the two knobs of a [`RefinementPolicy`]; the default [`FixedFanOut`] takes `b` as written and replaces `t` with four special cases, [`EnumerateBelowThreshold`] takes both as written |
 //!
-//! **This crate instantiates the protocol; it is not a transcription of Algorithm 1.** Two decision
-//! rules deliberately differ in the default policy — there is no enumeration threshold `t`, and the
-//! SPLIT fan-out grows as `√n` instead of a fixed branching factor `b`. Both are spelled out, with
-//! what they do and do not preserve of the paper's guarantees and what they measurably cost, on
-//! [`SqrtFanOut`]. Anyone comparing this code against the paper line by line should read that note
-//! first.
+//! **This crate instantiates the protocol; it is not a transcription of Algorithm 1.** One decision
+//! rule deliberately differs in the default policy: there is no enumeration threshold `t` — four
+//! hand-picked special cases stand in for it, listed on [`SqrtFanOut`]. The SPLIT fan-out *is* the
+//! paper's constant `b`, at Negentropy's 16. Until 2026-08 it was not: the default cut every `⌊√m⌋`
+//! elements, which made communication `Θ(√n)` rather than the family's `O(d log n)`. That rule is
+//! still shipped as [`SqrtFanOut`], and the measurement that retired it is on its documentation.
 //!
 //! # The refinement policy is swappable
 //!
-//! Those two rules are *choices*, and they are not wire contract: a peer answers whatever
+//! Both knobs are *choices*, and neither is wire contract: a peer answers whatever
 //! segmentation it is asked about, and Proposition 4.1's soundness argument uses only that a
 //! SPLIT's children are pairwise disjoint with union the parent — which [`protocol_round`]
 //! guarantees whatever the policy decides. So two peers running **different** policies still
@@ -66,10 +66,15 @@
 //!
 //! [`RefinementPolicy`] is that seam and [`protocol_round_with_policy`] takes one. Three are
 //! shipped, each named for the rule it applies rather than for where it comes from:
-//! [`SqrtFanOut`] (the default, today's behaviour), [`FixedFanOut`] (the paper's constant `b`, this
-//! crate's enumeration cutoffs) and [`EnumerateBelowThreshold`] (Algorithm 1 as written, both
+//! [`FixedFanOut`] (**the default**, the paper's constant `b` at 16), [`SqrtFanOut`] (the default
+//! until 2026-08, fan-out `⌊√m⌋`) and [`EnumerateBelowThreshold`] (Algorithm 1 as written, both
 //! parameters). `benches/protocol.rs` prices them against each other over store size, difference
-//! size and how the differences cluster.
+//! size and how the differences cluster, and sweeps `b` on its own — which is how the default came
+//! to be chosen rather than inherited.
+//!
+//! Because the choice is local, changing it is a **behaviour** change and never a wire break: a
+//! node on one policy reconciles correctly with a node on another, so a cluster migrates one node
+//! at a time.
 //!
 //! # Generic over any RSOS backend
 //!

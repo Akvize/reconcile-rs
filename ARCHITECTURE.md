@@ -25,7 +25,7 @@ converge. Five mechanisms:
   `protocol_round`) and exchange only the entries that actually differ. Equality and emptiness are
   decided by interval **size**, not by hash, to stay collision-safe. *How* a range is refined —
   when to stop splitting and how wide to cut — is a `RefinementPolicy`, a purely local choice that
-  never reaches the wire (§3.1).
+  never reaches the wire (§3.1); the default splits into the paper's constant `b` = 16.
 - **Causality & conflict resolution** — each value is stamped with a Hybrid Logical Clock timestamp
   (`Timestamp`); conflicts resolve by **last-write-wins** over the HLC total order
   `(physical, logical, node_id)`.

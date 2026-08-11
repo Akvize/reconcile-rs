@@ -6,7 +6,7 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-10.
+- **Last updated:** 2026-08-11.
 - **Structural migration:** complete — five-crate workspace, ports on the correct side of each
   boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issues
   [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
@@ -179,13 +179,13 @@ but one High resolved or mitigated.
   lets a caller skip the re-lift/fingerprint-propagation step `with_mut` guarantees); the
   get-or-insert half of what `entry()` usually buys already exists one layer up
   (`ReplicatedMap::upsert`/`get_or_insert_with`).
-- ◐ **The split fan-out is a communication-complexity regression, not a tuning gap** —
+- ✅ **The split fan-out was a communication-complexity regression, not a tuning gap** —
   [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
   "unbenchmarked and hard-coded"). **Step A is done** (2026-08-11): the two decisions are now a
   `RefinementPolicy` seam in `rbsr` (`Decision` = SKIP/IDLIST/SPLIT, `Comparison`, `SplitStride`,
   `FanOut`), `protocol_round_with_policy` takes one, and `protocol_round` pins the default to
-  `SqrtFanOut` — today's behaviour byte-for-byte, so `tests/wire_format.rs`'s golden vector and the
-  convergence proptests pass unchanged. Two alternatives ship alongside it (`FixedFanOut`, the
+  `SqrtFanOut` — the then-current behaviour byte-for-byte, so `tests/wire_format.rs`'s golden vector
+  and the convergence proptests passed unchanged (the default moved only afterwards, below). Two alternatives ship alongside it (`FixedFanOut`, the
   paper's constant `b`; `EnumerateBelowThreshold`, Algorithm 1 as written, `t` *and* `b`) — each
   named for the rule it applies, not for where it comes from. The policy is local and
   never advertised — mixed pairs converge, pinned by
@@ -216,12 +216,17 @@ but one High resolved or mitigated.
   n = 10⁵, d = 100. **`b = 16` is the only swept value never worse than `√m` on rounds** across every
   measured (n, d, clustering); `b = 4` is the bytes/CPU optimum at two extra round-trips.
 
-  **Still open.** Changing the *default* to `FixedFanOut(FanOut::NEGENTROPY)`, which the numbers now
-  support, is deliberately not done here: #257's Step A requires the default to stay
-  behaviour-preserving, and the switch deserves its own reviewable change. Also open: exposing a policy through `reconcile`'s
-  facade (`Config` is `Copy`, so a boxed policy needs a different carrier), and the interaction with
-  the 40 B/range wire aggregate (~79 % of those bytes) — now separable, since the fan-out is a
-  caller's choice rather than an edit to the protocol loop.
+  **The default is now `FixedFanOut(FanOut::NEGENTROPY)`** (2026-08-11), on that evidence.
+  `protocol_round` pins it via a named `DEFAULT_POLICY` const; `SqrtFanOut` stays shipped and
+  pinned by its own test. The switch is a **behaviour** change, not a wire change — the policy never
+  crosses the wire and mixed pairs converge — so a cluster migrates one node at a time with no flag
+  day. What comes back with a constant `b`: communication is `O(d log n)` again rather than `Θ(√n)`,
+  and the paper's `T_loc = O(hL + bhI + K)` is quotable for this crate.
+
+  **Still open.** Exposing a policy through `reconcile`'s facade (`Config` is `Copy`, so a boxed
+  policy needs a different carrier), and the interaction with the 40 B/range wire aggregate (~79 % of
+  the bytes measured under `√m`) — now separable, since the fan-out is a caller's choice rather than
+  an edit to the protocol loop.
 
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot

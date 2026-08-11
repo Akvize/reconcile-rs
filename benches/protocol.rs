@@ -14,13 +14,13 @@
 //! This target exists because the two published cost bounds for range-based set reconciliation —
 //! `O(d log n)` communication and `O(log n)` sequential rounds — are stated for the **fixed**
 //! branching factor `b` of Algorithm 2 in E. G. Amparore, *RBSR via Range-Summarizable
-//! Order-Statistics Stores* (arXiv:2603.19820), and this crate's default policy does not use a
-//! fixed `b`: `rbsr::SqrtFanOut` cuts every `⌊√m⌋` elements. Neither bound therefore describes what
-//! actually goes on the wire by default. Since
+//! Order-Statistics Stores* (arXiv:2603.19820), and until 2026-08 this crate's default did not use
+//! a fixed `b`: `rbsr::SqrtFanOut` cuts every `⌊√m⌋` elements, so neither bound described what
+//! actually went on the wire. This target is what changed that. Since
 //! [#257](https://github.com/Akvize/reconcile-rs/issues/257) made the policy a swappable seam, the
-//! alternatives can be priced against the default rather than estimated: `rbsr::FixedFanOut` is
-//! the paper's constant `b` with this crate's enumeration cutoffs, and
-//! `rbsr::EnumerateBelowThreshold` is Algorithm 1 as written, with both parameters.
+//! alternatives could be priced against each other rather than estimated, and the default is now
+//! `rbsr::FixedFanOut` at `b = 16` — chosen here, in the sweep below, not inherited from
+//! Negentropy. `rbsr::EnumerateBelowThreshold` is Algorithm 1 as written, with both parameters.
 //!
 //! **Read the two traffic columns together.** A policy that splits less advertises fewer ranges but
 //! reaches its IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire
@@ -127,12 +127,16 @@ const SWEEP_CASES: &[(usize, &[usize])] = &[
     (1_000_000, &[1, 10, 100]),
 ];
 
-/// The policies compared. The first is the shipped default; the other two are the paper's
-/// parameterization, one knob at a time.
+/// The policies compared: the shipped default, the rule it replaced, and Algorithm 1 as written.
+/// Keeping the retired rule in the comparison is deliberate — it is what the numbers below are a
+/// verdict on, and it is still shipped.
 fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
     vec![
-        ("sqrt (default)", Box::new(SqrtFanOut)),
-        ("fixed b=16", Box::new(FixedFanOut::new(FanOut::NEGENTROPY))),
+        ("sqrt (pre-2026-08)", Box::new(SqrtFanOut)),
+        (
+            "fixed b=16 (default)",
+            Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),
+        ),
         (
             "paper t=32 b=16",
             Box::new(EnumerateBelowThreshold::new(32, FanOut::NEGENTROPY)),
