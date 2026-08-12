@@ -6,7 +6,7 @@ Three Criterion targets, all `harness = false`, none feature-gated:
 |---|---|
 | `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
 | `system` | End-to-end, **public-API** system benchmarks (below). |
-| `protocol` | Wire cost of one full RBSR reconciliation — messages, advertised ranges and bytes as a function of store size `n` and difference size `d` (below). |
+| `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — messages, advertised ranges, bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 
 No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
 
@@ -60,28 +60,54 @@ methodology than following one.
 ```sh
 cargo bench --bench protocol            # cost table + the timed drive loop
 cargo bench --bench protocol -- --quick
+
+# The printed table only (no timed group): give Criterion a filter that matches no benchmark id.
+cargo bench --bench protocol -- 'no_such_benchmark'
 ```
 
-`reconciliation_cost` prints, for each `(n, d)` pair, the exact volume two peers exchange to
-converge: bytes (bincode, the same encoder the real transport uses), advertised `RangeAggregate`s,
-one-way messages, the largest single message, and IDLIST count. Deterministic, so it is printed
-rather than timed — like `system`'s `memory_footprint`. The timed `reconciliation_drive` group
-alongside it measures the local CPU cost of driving a whole run, the quantity arXiv:2603.19820
-models as `T_loc`.
+`reconciliation_cost` prints, for each `(policy, n, d, clustering)`, the exact volume two peers
+exchange to converge: bytes (bincode, the same encoder the real transport uses), advertised
+`RangeAggregate`s, one-way messages, datagrams, IP fragments, the largest single message, the IDLIST
+ranges **and the elements they actually ship**, and the local `Aggregate`/`Rank`/`Select` counts
+summed over both peers. Deterministic, so it is printed rather than timed — like `system`'s
+`memory_footprint`. The timed `reconciliation_drive` group alongside it measures the local CPU cost
+of driving a whole run per policy, the quantity arXiv:2603.19820 models as `T_loc`.
+
+**Read the columns together.** A policy that splits less advertises fewer ranges but reaches its
+IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire — nearly all of
+them elements the peer already holds. At n = 10⁵, d = 100 scattered, the paper's `t`=32 policy saves
+40 % of the refinement bytes and ships **5 036 elements instead of 100**. Reporting ranges without
+elements would pick the wrong default. The message column is the round-trip count, and every
+benchmark here runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)): weigh it
+by your own RTT before concluding.
 
 **Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
-rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr::protocol_round`
-instead cuts at `step = ⌊√m⌋`, so neither bound describes this implementation. The benchmark
-replaces an estimate with a measurement; the headline is that a **single** missing element in a
-10⁶-entry store costs ~53 kB over ~1 000 advertised ranges, against ~4 kB for `b = 16`, while the
-message count stays flat (6–8) across three decades of `n`. The widest single round is 50 781 B —
-inside the 65 507-byte datagram ceiling, but ~35 IP fragments at a 1500-byte MTU. Discussion in
-`SOTA.md` §2.2, decision in [#257](https://github.com/Akvize/reconcile-rs/issues/257).
+rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out
+a swappable `RefinementPolicy`, so what a given configuration costs is a measurement rather than a
+quotation: this target supplies it. For a **single** missing element in a 10⁶-entry store, `b = 16`
+spends 3.8 kB over 78 ranges against `SqrtFanOut`'s ~53 kB over ~1 048 ranges, at the *same* 8
+one-way messages — log₁₆ 10⁶ ≈ 5 is already the iterated-square-root depth at that size, so the
+`Θ(log log n)` round advantage `√m` offers asymptotically does not appear below n ≈ 10¹². The timed
+`reconciliation_drive` group widens the gap further, in a column no RTT caveat touches: 2.10 ms
+against 45.0 µs, ≈47×. Interpretation lives in `SOTA.md` §2.2; the decisions these numbers drove are
+in `PROGRESS.md`. The widest
+single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP fragments at a
+1500-byte MTU); at d = 100 it reaches 160 908 B, i.e. three datagrams. Discussion in `SOTA.md` §2.2.
+
+`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256). Bytes and local work follow `b / ln b`
+(minimized near `b = 3`); one-way messages fall as `log_b n` until they hit a floor — 6 at
+`n = 10⁶`, reached at `b = 32` — past which extra `b` is paid for and buys nothing. The widest single
+round grows linearly in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one
+datagram at `b = 16`. Across every measured `(n, d, clustering)`, `b = 16` is the only swept value
+never worse than `√m` on rounds; `b = 4` is the bytes-and-CPU optimum, two round-trips behind, and
+is the value to reach for when bandwidth rather than latency binds.
 
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
-(`split_fan_out_is_square_root_of_the_range_size`, `split_children_partition_the_parent_range`), so
-changing it fails CI rather than silently changing every cluster's bandwidth profile — this
-benchmark quantifies the change, it does not guard it.
+(`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,
+`split_children_partition_the_parent_range`), so changing the *default* fails CI rather than
+silently changing every cluster's bandwidth profile — this benchmark quantifies such a change, it
+does not guard it. `split_children_partition_the_parent_range` is policy-independent and must hold
+under any fan-out rule.
 
 ## Not covered yet
 

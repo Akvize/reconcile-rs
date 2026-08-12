@@ -18,7 +18,10 @@
 //! 2. Any two stores converge to identical state after running the full diff
 //!    loop, the returned diff ranges equal the true symmetric difference of the
 //!    key sets, and convergence survives reordered, duplicated and dropped
-//!    messages — modelling the lossy UDP transport.
+//!    messages — modelling the lossy UDP transport. Convergence is also checked
+//!    under every shipped `RefinementPolicy` and under *mixed* pairs of them,
+//!    which is the property that makes the policy swappable without a protocol
+//!    break (#257).
 
 use std::collections::BTreeMap;
 use std::ops::Bound;
@@ -28,7 +31,10 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use rbsr::{initial_ranges, protocol_round, EnumerationRange, RangeAggregate};
+use rbsr::{
+    initial_ranges, protocol_round, protocol_round_with_policy, EnumerateBelowThreshold,
+    EnumerationRange, FanOut, FixedFanOut, RangeAggregate, RefinementPolicy, SqrtFanOut,
+};
 use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
 // ---------------------------------------------------------------------------
@@ -273,6 +279,56 @@ fn run_diff(
     (a_diffs, b_diffs)
 }
 
+/// The same exchange with each peer running its **own** [`RefinementPolicy`].
+///
+/// Separate policies per side on purpose: the refinement rule is a local decision that never
+/// crosses the wire, so a mixed pair must converge just as a matched one does. The responder of
+/// each half-round is the peer whose policy applies.
+fn run_diff_with_policies(
+    a: &Tree,
+    b: &Tree,
+    a_policy: &dyn RefinementPolicy,
+    b_policy: &dyn RefinementPolicy,
+) -> (Vec<EnumerationRange<u64>>, Vec<EnumerationRange<u64>>) {
+    let mut a_diffs = Vec::new();
+    let mut b_diffs = Vec::new();
+    let mut a_seg = initial_ranges(a);
+    let mut b_seg = Vec::new();
+
+    let mut guard = 0;
+    while !a_seg.is_empty() {
+        protocol_round_with_policy(
+            b,
+            b_policy,
+            std::mem::take(&mut a_seg),
+            &mut b_seg,
+            &mut b_diffs,
+        );
+        protocol_round_with_policy(
+            a,
+            a_policy,
+            std::mem::take(&mut b_seg),
+            &mut a_seg,
+            &mut a_diffs,
+        );
+
+        guard += 1;
+        assert!(guard < 100_000, "diff loop failed to terminate");
+    }
+    (a_diffs, b_diffs)
+}
+
+/// The shipped policies, indexed so a proptest strategy can pick a pair. Boxed rather than a
+/// concrete type because the point is to mix them.
+fn policy(index: usize) -> Box<dyn RefinementPolicy> {
+    match index {
+        0 => Box::new(SqrtFanOut),
+        1 => Box::new(FixedFanOut::new(FanOut::BINARY)),
+        2 => Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),
+        _ => Box::new(EnumerateBelowThreshold::PAPER),
+    }
+}
+
 /// Collect the (key, value) pairs that `tree` holds inside any of `ranges`.
 fn items_in(tree: &Tree, ranges: &[EnumerationRange<u64>]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = ranges
@@ -446,6 +502,45 @@ proptest! {
 
         // A final, complete exchange (guaranteed retransmission) converges.
         let (a_diffs, b_diffs) = run_diff(&a, &b, &mut noop);
+        apply_full(&mut a, &mut b, &a_diffs, &b_diffs);
+        a.check_invariants();
+        b.check_invariants();
+
+        let want: Vec<(u64, u64)> = union.into_iter().collect();
+        prop_assert_eq!(sorted_items(&a), want.clone());
+        prop_assert_eq!(sorted_items(&b), want);
+        prop_assert!(a == b);
+    }
+
+    /// Any refinement policy converges, and so does any *mixed pair* of them.
+    ///
+    /// The three properties above pin the default policy. This one pins what must hold for every
+    /// rule the seam admits, which is the claim that makes the seam free: a policy is a local
+    /// decision, the wire type carries none, so two peers need not agree on one.
+    ///
+    /// The assertion is deliberately weaker than `two_trees_converge_and_diff_is_symmetric_difference`
+    /// above. A policy with an enumeration threshold ships whole ranges once they are small enough,
+    /// so its diff ranges *cover* the symmetric difference rather than equalling it — that overshoot
+    /// is the threshold's cost, not a bug. What may never weaken is the outcome: both trees hold the
+    /// union and agree.
+    #[test]
+    fn convergence_holds_under_any_policy_and_any_mixed_pair(
+        universe in universe_strategy(),
+        a_index in 0usize..4,
+        b_index in 0usize..4,
+    ) {
+        let (mut a, mut b, only_a, only_b, union) = build_pair(&universe);
+        let (a_policy, b_policy) = (policy(a_index), policy(b_index));
+
+        let (a_diffs, b_diffs) =
+            run_diff_with_policies(&a, &b, a_policy.as_ref(), b_policy.as_ref());
+
+        // Cover, not equal: everything only one side holds must be inside some enumerated range.
+        let a_found = keys_in(&a, &a_diffs);
+        let b_found = keys_in(&b, &b_diffs);
+        prop_assert!(only_a.iter().all(|k| a_found.contains(k)));
+        prop_assert!(only_b.iter().all(|k| b_found.contains(k)));
+
         apply_full(&mut a, &mut b, &a_diffs, &b_diffs);
         a.check_invariants();
         b.check_invariants();

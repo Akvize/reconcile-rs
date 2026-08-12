@@ -12,21 +12,30 @@
 //! Both functions are free functions generic over [`RsosView`], the four read-only RSOS operations
 //! the driver needs (`size`/`aggregate`/`rank`/`select`) — never over a concrete data structure.
 //! See the crate root documentation for the algorithm, the paper-vocabulary correspondence table,
-//! and the citations; and [`protocol_round`]'s own documentation for the three protocol outcomes
-//! and this crate's two deviations from Algorithm 1.
+//! and the citations; [`protocol_round`]'s own documentation for the three protocol outcomes; and
+//! [`RefinementPolicy`] for the decision rules that choose between them.
 //!
 //! This module is private — everything public here is re-exported from the crate root, so any
 //! documentation a *user* needs belongs on an item, not in this header, which rustdoc never
 //! renders.
 
-use std::ops::{Bound, RangeBounds};
+use std::ops::{AddAssign, Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use rsos::Aggregate;
 
+use crate::policy::{Comparison, Decision, FanOut, FixedFanOut, RefinementPolicy};
 use crate::rsos_view::RsosView;
+
+/// The refinement policy [`protocol_round`] applies: the paper's constant branching factor at
+/// Negentropy's `b = 16`, with this crate's enumeration cutoffs.
+///
+/// Named rather than spelled inline so "what does this crate do by default" is one `grep`, and so
+/// changing it is a one-line diff. `benches/protocol.rs` measures what each shipped policy costs;
+/// `PROGRESS.md` records why this one is the default.
+const DEFAULT_POLICY: FixedFanOut = FixedFanOut::new(FanOut::NEGENTROPY);
 
 /// The start bound of a [`RangeAggregate`] range, as this protocol actually emits it: `Included` or
 /// `Unbounded`, never `Excluded`.
@@ -228,8 +237,74 @@ pub fn initial_ranges<K, B: RsosView<K>>(local: &B) -> Vec<RangeAggregate<K>> {
     }]
 }
 
-/// One **protocol round**: apply the responder step to every active range this peer was asked to
-/// answer, classifying each as SKIP, IDLIST or SPLIT.
+/// What one [`protocol_round`] did, tallied where the decisions are taken rather than inferred
+/// from the output vectors.
+///
+/// Three of the five numbers a caller could *almost* reconstruct by diffing the output `Vec`
+/// lengths — almost, because one range can appear in both outputs. The fourth cannot be
+/// reconstructed at all: a malformed segment is dropped with a bare `debug!`, which is a `tracing`
+/// event, so a consumer on `log` or with no subscriber installed sees literally nothing. Returning
+/// the tally is what makes "how many segments did that peer send me that did not parse" an
+/// answerable question, and what lets `benches/protocol.rs` report per-round classification counts
+/// for a policy rather than guessing them.
+///
+/// Adding across rounds is [`AddAssign`], so a driver can accumulate a whole reconciliation into
+/// one value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RoundOutcome {
+    skipped: usize,
+    enumerated: usize,
+    split: usize,
+    children: usize,
+    dropped_malformed: usize,
+}
+
+impl RoundOutcome {
+    /// Ranges resolved outright (SKIP): written to neither output.
+    pub const fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Ranges handed back for explicit enumeration (IDLIST).
+    pub const fn enumerated(&self) -> usize {
+        self.enumerated
+    }
+
+    /// Ranges refined (SPLIT). This counts *parents*, not children — see
+    /// [`children`](Self::children).
+    pub const fn split(&self) -> usize {
+        self.split
+    }
+
+    /// Child ranges written to `child_ranges`, across every outcome: the SPLIT fan-outs plus the
+    /// one-per-range bounce an IDLIST adds when the peer's range is non-empty.
+    ///
+    /// This is the quantity that travels in the next batch, so it is the one a datagram budget is
+    /// spent in — the same count a policy sees through [`Comparison::children_emitted`].
+    pub const fn children(&self) -> usize {
+        self.children
+    }
+
+    /// Segments dropped without being answered because their bounds inverted once resolved against
+    /// the local set. Non-zero means a peer is sending malformed input.
+    pub const fn dropped_malformed(&self) -> usize {
+        self.dropped_malformed
+    }
+}
+
+impl AddAssign for RoundOutcome {
+    fn add_assign(&mut self, other: RoundOutcome) {
+        self.skipped += other.skipped;
+        self.enumerated += other.enumerated;
+        self.split += other.split;
+        self.children += other.children;
+        self.dropped_malformed += other.dropped_malformed;
+    }
+}
+
+/// One **protocol round** under this crate's default refinement policy, [`FixedFanOut`] at
+/// `b = 16`: apply the responder step to every active range this peer was asked to answer,
+/// classifying each as SKIP, IDLIST or SPLIT.
 ///
 /// "A complete protocol round consists of each peer applying Algorithm 1 to the active ranges it is
 /// asked to answer" (§4 of arXiv:2603.19820). `active_ranges` is that batch — what the peer sent,
@@ -246,54 +321,78 @@ pub fn initial_ranges<K, B: RsosView<K>>(local: &B) -> Vec<RangeAggregate<K>> {
 ///   pairwise disjoint and their union is the parent range.
 ///
 /// Reading a range's fate off the outputs is exhaustive: it is in `child_ranges` (SPLIT), in
-/// `enumeration_ranges` (IDLIST), in **both** (the one-element-each case, where the two peers owe
-/// each other exactly one element), or in neither (SKIP). Malformed input joins the last of those:
-/// a range whose bounds invert once resolved against the local set is dropped rather than
-/// answered.
+/// `enumeration_ranges` (IDLIST), in **both** (an IDLIST against a peer that holds something here,
+/// which also bounces the range back so the peer enumerates its side), or in neither (SKIP).
+/// Malformed input joins the last of those: a range whose bounds invert once resolved against the
+/// local set is dropped rather than answered, and counted in the returned
+/// [`RoundOutcome`](RoundOutcome::dropped_malformed).
 ///
-/// # Deviations from Algorithm 1
+/// # Which rule decides, and how to change it
 ///
-/// This crate *instantiates* the protocol; it is not a transcription of Algorithm 1. Two decision
-/// rules differ, and neither is a bug — but a reader holding the paper open should know which
-/// lines will not match:
+/// *Which* of the three outcomes a range takes is not fixed by this function. It is a
+/// [`RefinementPolicy`] — a purely local decision, never negotiated on the wire — and this entry
+/// point pins it to [`FixedFanOut`] at [`FanOut::NEGENTROPY`], which leaves exactly one deviation
+/// from Algorithm 1:
 ///
-/// 1. **No enumeration threshold `t`.** The paper takes IDLIST whenever `|X ∩ [l, u)| ≤ t` for a
-///    fixed parameter `t` (its experiments use `t = 32`). There is no `t` here. Enumeration is
-///    triggered instead by hand-picked special cases: the peer's range is empty, or both sides
-///    hold exactly one element (which enumerates *and* bounces the range back, so the exchange is
-///    symmetric). A lone local element facing a larger remote range is bounced back with the local
-///    aggregate rather than enumerated. The termination argument is the paper's — every
-///    mismatching range is either resolved or strictly refined — reached through different
-///    cutoffs.
-/// 2. **The SPLIT fan-out is not a fixed `b`.** The paper's `SPLITBYRANK(O_X, l, u, b)` produces a
-///    `b`-balanced partition for a fixed branching factor `b` (its experiments use Negentropy's
-///    `b = 16`). Here the cut step is `⌊√(count)⌋`, so the fan-out grows as `√n` with the range
-///    size instead of staying constant. The partition is still balanced by *rank* — cuts are
-///    materialized with [`RsosView::select`] exactly as in Algorithm 2 — and the child ranges are
-///    still pairwise disjoint with union the parent range, which is all Proposition 4.1's
-///    correctness argument uses. What does **not** carry over verbatim is the paper's local-cost
-///    bound `T_loc = O(hL + bhI + K)`: its `bhI` term assumes a constant `b`. No complexity claim
-///    in this workspace's documentation quotes that bound, so none needed adjusting here — but a
-///    future one must not quote it either.
+/// - **no enumeration threshold `t`.** The paper takes IDLIST whenever `|X ∩ [l, u)| ≤ t` for a
+///   fixed parameter `t` (its experiments use `t = 32`); this crate uses four hand-picked special
+///   cases instead, listed on [`SqrtFanOut`](crate::SqrtFanOut).
+///   [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) is Algorithm 1 with `t` as written,
+///   for anyone who wants it.
+/// - **the branching factor is the paper's.** `SPLITBYRANK(O_X, l, u, b)` produces a `b`-balanced
+///   partition for a constant `b`; `b = 16` is Negentropy's and arXiv:2603.19820 §6's comparison
+///   point. Because `b` is constant, the paper's local-cost bound `T_loc = O(hL + bhI + K)`
+///   describes this crate.
 ///
-///    **This deviation is not free, and the price is now measured.** Because the step is derived
-///    from the range's own size, the *first* SPLIT of a whole-store reconciliation emits ~√n child
-///    ranges no matter how small the difference is. Communication is therefore `Θ(√n)`, not the
-///    family's `O(d log n)`: `benches/protocol.rs` records 53 046 wire bytes over 1 048 advertised
-///    ranges to locate a **single** missing element in a 10⁶-entry store, against ~4 kB for a fixed
-///    `b = 16`. The compensation is real but sits in the other column — repeated square-rooting
-///    bottoms out in `Θ(log log n)` rounds rather than `O(log n)`, and the measured message count
-///    is flat (6–8) from 10³ to 10⁶ elements. Changing the rule is tracked as
-///    [#257](https://github.com/Akvize/reconcile-rs/issues/257); until it is, treat "this crate
-///    implements RBSR" as a statement about correctness, not about the published cost bounds.
+/// [`SqrtFanOut`](crate::SqrtFanOut), whose fan-out grows as `⌊√m⌋`, is shipped alongside. Use
+/// [`protocol_round_with_policy`] to run it, or any other rule — the wire type carries no policy,
+/// so two peers running different ones still converge, and a cluster can therefore run mixed
+/// policies or be migrated one node at a time.
+///
+/// What the driver keeps regardless of policy is Proposition 4.1's requirement: a SPLIT's children
+/// are pairwise disjoint and their union is the parent range.
 pub fn protocol_round<K, B: RsosView<K>>(
     local: &B,
     active_ranges: Vec<RangeAggregate<K>>,
     child_ranges: &mut Vec<RangeAggregate<K>>,
     enumeration_ranges: &mut Vec<EnumerationRange<K>>,
-) where
+) -> RoundOutcome
+where
     K: Clone,
 {
+    protocol_round_with_policy(
+        local,
+        &DEFAULT_POLICY,
+        active_ranges,
+        child_ranges,
+        enumeration_ranges,
+    )
+}
+
+/// One **protocol round** under a caller-supplied [`RefinementPolicy`] — [`protocol_round`] with
+/// its default rule replaced.
+///
+/// The policy chooses between SKIP, IDLIST and SPLIT, and how wide a SPLIT cuts. It chooses nothing
+/// else: the bounds validation, the rank arithmetic, the `select` cuts and the partition invariant
+/// stay here, so no policy can produce children that overlap or leave a gap. See
+/// [`RefinementPolicy`] for what a policy may and may not assume, and why swapping one is not a
+/// protocol break.
+///
+/// `policy` is `?Sized`, so `&dyn RefinementPolicy` works as well as a concrete type — useful for a
+/// benchmark or a runtime-configured driver that holds several.
+pub fn protocol_round_with_policy<K, B, P>(
+    local: &B,
+    policy: &P,
+    active_ranges: Vec<RangeAggregate<K>>,
+    child_ranges: &mut Vec<RangeAggregate<K>>,
+    enumeration_ranges: &mut Vec<EnumerationRange<K>>,
+) -> RoundOutcome
+where
+    K: Clone,
+    B: RsosView<K>,
+    P: RefinementPolicy + ?Sized,
+{
+    let mut outcome = RoundOutcome::default();
     for segment in active_ranges {
         let RangeAggregate {
             range: KeyRange(start, end),
@@ -316,15 +415,10 @@ pub fn protocol_round<K, B: RsosView<K>>(
             Ok(bounded) => bounded,
             Err(InvertedRange) => {
                 debug!("dropping segment with inverted range");
+                outcome.dropped_malformed += 1;
                 continue;
             }
         };
-        // `local_size` is the same quantity as `end_index - start_index`: `rank` counts the keys
-        // strictly below a bound, so the difference of the two ranks *is* the number of keys in
-        // `[start, end)` — which is what `aggregate` counted. It comes from the bundled aggregate
-        // rather than from that subtraction so the count and the fingerprint it is compared
-        // alongside are read from one and the same traversal.
-        let local_size = local_aggregate.size();
         let start_index = bounded.start_index;
         let end_index = bounded.end_index;
         let BoundedRange {
@@ -332,86 +426,92 @@ pub fn protocol_round<K, B: RsosView<K>>(
             end: end_bound,
             ..
         } = bounded;
-        // NOTE: decisions about emptiness and equality are made on the exact element counts,
-        // never on the fingerprints alone. A range fingerprint combines per-element lifts by
-        // addition modulo 2²⁵⁶ (see `rsos::fingerprint`), so a *non-empty* range can legitimately
-        // fingerprint to `ZERO`; using `Σ(S) == ZERO` as an "empty" sentinel (or matching
-        // fingerprints alone as "equal") would alias such ranges and cause silent, permanent
-        // divergence.
-        let remote_size = remote.size();
-        if remote.fingerprint() == local_aggregate.fingerprint() && remote_size == local_size {
-            // SKIP: the aggregates agree, so the range is resolved. It leaves the active family by
-            // appearing in neither output.
-            continue;
-        } else if remote_size == 0 {
-            // IDLIST: the peer holds nothing here, so everything we hold is the local symmetric
-            // difference. Hand the range to the caller to enumerate and ship.
-            enumeration_ranges.push((start_bound.into(), end_bound.into()));
-            continue;
-        } else if local_size == 0 {
-            // present on remote; bounce back to the remote — a degenerate SPLIT whose single child
-            // *is* the parent range, advertised as empty so the peer takes the IDLIST branch above
-            // on its side and enumerates it to us.
-            child_ranges.push(RangeAggregate {
-                range: KeyRange::new(start_bound, end_bound),
-                aggregate: Aggregate::ZERO,
-            });
-            continue;
-        } else if remote_size == 1 && local_size == 1 {
-            // Both outcomes at once, because both sides owe each other exactly one element:
-            // IDLIST our element to the peer, and bounce the range back advertised as empty so the
-            // peer IDLISTs its own element to us.
-            child_ranges.push(RangeAggregate {
-                range: KeyRange::new(start_bound.clone(), end_bound.clone()),
-                aggregate: Aggregate::ZERO,
-            });
-            enumeration_ranges.push((start_bound.into(), end_bound.into()));
-        } else if local_size == 1 {
-            // Not enough information to cut: a single local element cannot be split by rank, so
-            // re-advertise the range unchanged with our real aggregate and let the peer — which
-            // holds more here — do the splitting. Another degenerate SPLIT: one child, equal to
-            // the parent.
-            child_ranges.push(RangeAggregate {
-                range: KeyRange::new(start_bound, end_bound),
-                aggregate: local_aggregate,
-            });
-        } else {
-            // SPLIT: replace the parent by a balanced family of child ranges, cut by *rank* via
-            // `select` (Algorithm 2's `SPLITBYRANK`). The step is `√(count)` rather than the
-            // paper's fixed branching factor `b` — see the module docs' deviation note; the
-            // children are still pairwise disjoint with union the parent range, which is what the
-            // correctness argument needs.
-            // NOTE: end_index - start_index ≥ 2
-            let step = ((end_index - start_index) as f32).sqrt() as usize;
-            let mut cur_bound = start_bound;
-            let mut cur_index = start_index;
-            loop {
-                let next_index = cur_index + step;
-                if next_index >= end_index {
-                    let range = KeyRange::new(cur_bound, end_bound);
-                    // One bundled aggregate per emitted sub-range: its count is the same
-                    // `end_index - cur_index` the index arithmetic would give (see the
-                    // rank-difference note above), read from the same traversal as the
-                    // fingerprint it ships with.
-                    //
-                    // The clone is because `aggregate` takes its range by value (so a range built
-                    // from runtime bounds is expressible at all) and the same range is then moved
-                    // into the emitted `RangeAggregate`. It costs at most two key clones per
-                    // emitted child, alongside the `next_key` clones the fan-out already performs.
-                    let aggregate = local.aggregate(range.clone());
-                    child_ranges.push(RangeAggregate { range, aggregate });
-                    break;
-                } else {
-                    let next_key = local.select(next_index).clone();
-                    let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
-                    let aggregate = local.aggregate(range.clone());
-                    child_ranges.push(RangeAggregate { range, aggregate });
-                    cur_bound = StartBound::Included(next_key);
-                    cur_index = next_index;
+        // The policy sees the two aggregates and the round's running child count, and nothing else
+        // — notably not the bounds, so it cannot make a key-dependent decision the peer would
+        // disagree with. `Comparison::span()` is `local_aggregate.size()`, which is the same
+        // quantity as `end_index - start_index`: `rank` counts the keys strictly below a bound, so
+        // the difference of the two ranks *is* the number of keys in `[start, end)`. It is read
+        // from the bundled aggregate rather than from that subtraction so the count and the
+        // fingerprint it is compared alongside come from one and the same traversal.
+        //
+        // NOTE: emptiness and equality are decided on the exact element counts, never on the
+        // fingerprints alone — see `Comparison::agrees`, which owns that comparison so no policy
+        // has to re-derive it.
+        let comparison = Comparison::new(local_aggregate, remote, outcome.children);
+        match policy.decide(comparison) {
+            Decision::Skip => {
+                // SKIP: the range is resolved. It leaves the active family by appearing in neither
+                // output.
+                outcome.skipped += 1;
+            }
+            Decision::Enumerate => {
+                // IDLIST: hand the range to the caller to enumerate and ship. If the peer holds
+                // anything here, it owes us its side too — and this crate's IDLIST is
+                // one-directional, so the only way to ask for it without a wire change is to bounce
+                // the parent back advertised as *empty*, which makes the peer take this very branch
+                // on its side. Deriving that from the peer's advertised size rather than from the
+                // policy's return is what keeps the unsound variant ("enumerate and resolve, while
+                // the peer still holds elements we never asked for") unrepresentable.
+                outcome.enumerated += 1;
+                if remote.size() != 0 {
+                    child_ranges.push(RangeAggregate {
+                        range: KeyRange::new(start_bound.clone(), end_bound.clone()),
+                        aggregate: Aggregate::ZERO,
+                    });
+                    outcome.children += 1;
+                }
+                enumeration_ranges.push((start_bound.into(), end_bound.into()));
+            }
+            Decision::Split(stride) => {
+                // SPLIT: replace the parent by a balanced family of child ranges, cut by *rank* via
+                // `select` (Algorithm 2's `SPLITBYRANK`). Whatever stride the policy chose, the
+                // children are consecutive, pairwise disjoint and cover the parent exactly, which
+                // is what Proposition 4.1's correctness argument needs.
+                outcome.split += 1;
+                let stride = stride.get();
+                let mut cur_bound = start_bound;
+                let mut cur_index = start_index;
+                loop {
+                    let next_index = cur_index + stride;
+                    if next_index >= end_index {
+                        let range = KeyRange::new(cur_bound, end_bound);
+                        // One bundled aggregate per emitted sub-range: its count is the same
+                        // `end_index - cur_index` the index arithmetic would give (see the
+                        // rank-difference note above), read from the same traversal as the
+                        // fingerprint it ships with.
+                        //
+                        // Nothing was cut before this child exactly when `cur_index` never moved,
+                        // and then the child *is* the parent — whose aggregate is already in hand,
+                        // so the degenerate split a policy uses to bounce a range back costs no
+                        // second traversal.
+                        //
+                        // Otherwise the clone is because `aggregate` takes its range by value (so a
+                        // range built from runtime bounds is expressible at all) and the same range
+                        // is then moved into the emitted `RangeAggregate`. It costs at most two key
+                        // clones per emitted child, alongside the `next_key` clones the fan-out
+                        // already performs.
+                        let aggregate = if cur_index == start_index {
+                            local_aggregate
+                        } else {
+                            local.aggregate(range.clone())
+                        };
+                        child_ranges.push(RangeAggregate { range, aggregate });
+                        outcome.children += 1;
+                        break;
+                    } else {
+                        let next_key = local.select(next_index).clone();
+                        let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
+                        let aggregate = local.aggregate(range.clone());
+                        child_ranges.push(RangeAggregate { range, aggregate });
+                        outcome.children += 1;
+                        cur_bound = StartBound::Included(next_key);
+                        cur_index = next_index;
+                    }
                 }
             }
         }
     }
+    outcome
 }
 
 #[cfg(test)]
@@ -419,6 +519,8 @@ mod tests {
     use super::*;
 
     use rsos::{Fingerprint, FingerprintTreeMap};
+
+    use crate::policy::{EnumerateBelowThreshold, SqrtFanOut};
 
     /// Build a real `FingerprintTreeMap` over the given (distinct, unsorted-ok) `i32` keys. A plain
     /// `i32` value stands in for whatever a caller actually stores: values are irrelevant to the
@@ -540,34 +642,62 @@ mod tests {
     }
 
     // ----- The fan-out rule itself -----
-    // `step = ⌊√m⌋` is a deviation from Algorithm 2's fixed `b` (see the deviation note on
-    // `protocol_round`), and it is the deviation that decides this crate's communication cost:
-    // the number of children a SPLIT emits is what goes on the wire. The two tests below pin the
-    // rule so that changing it — which is the whole point of #257 — is a deliberate act with a
-    // failing test attached, not a silent shift in every cluster's bandwidth profile.
+    // The number of children a SPLIT emits is what goes on the wire, so the fan-out rule *is* this
+    // crate's communication cost. The tests below pin it so that changing it is a deliberate act
+    // with a failing test attached, not a silent shift in every cluster's bandwidth profile.
     // `benches/protocol.rs` reports the same quantity in bytes, over realistic store sizes.
+    //
+    // One crafted segment covers all of them: the peer advertises the same element count as the
+    // local store (so neither the empty-remote nor the single-element cutoff fires) with a
+    // fingerprint that cannot match, which is exactly the "both sides non-empty, aggregates differ"
+    // case that splits.
+    fn splitting_segment(m: usize) -> RangeAggregate<i32> {
+        RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: Aggregate::new(m, Fingerprint([7, 0, 0, 0])),
+        }
+    }
 
-    /// A SPLIT replaces a range of `m` elements by `Θ(√m)` children, not by a constant number.
-    /// Driven through the empty-remote-is-refined path: the peer advertises a non-zero size (so
-    /// the IDLIST shortcut for an empty remote does not fire) with a fingerprint that cannot
-    /// match, which is exactly the "both sides non-empty, aggregates differ" case that splits.
+    /// The **default** fan-out is a constant: a SPLIT emits at most `b = 16` children whatever the
+    /// range's size. Changing `DEFAULT_POLICY` fails here, which is the point — the fan-out is
+    /// every cluster's bandwidth profile.
     #[test]
-    fn split_fan_out_is_square_root_of_the_range_size() {
+    fn default_split_fan_out_is_constant_at_sixteen() {
+        for m in [100usize, 400, 2_500, 250_000] {
+            let store = tree(&(0..m as i32).collect::<Vec<_>>());
+            let (child_ranges, enumeration_ranges) = round(&store, splitting_segment(m));
+            assert!(enumeration_ranges.is_empty());
+            assert!(
+                child_ranges.len() <= FanOut::NEGENTROPY.get(),
+                "m={m}: SPLIT emitted {} children, expected at most b={} \
+                 (a size-dependent fan-out would grow with m)",
+                child_ranges.len(),
+                FanOut::NEGENTROPY.get()
+            );
+            assert!(child_ranges.len() > 1, "m={m}: the split must refine");
+        }
+    }
+
+    /// The other shipped fan-out rule is `Θ(√m)`, and pinned for the same reason: `SqrtFanOut` is
+    /// public API, so its cut positions are a contract, not an implementation detail.
+    #[test]
+    fn sqrt_fan_out_is_still_the_square_root_of_the_range_size() {
         for m in [100usize, 400, 2_500] {
             let store = tree(&(0..m as i32).collect::<Vec<_>>());
-            let segment = RangeAggregate {
-                range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-                // Same element count as the local store, so neither the empty-remote nor the
-                // single-element branch applies; the fingerprint differs, so the range must split.
-                aggregate: Aggregate::new(m, Fingerprint([7, 0, 0, 0])),
-            };
-            let (child_ranges, enumeration_ranges) = round(&store, segment);
+            let mut child_ranges = Vec::new();
+            let mut enumeration_ranges = Vec::new();
+            protocol_round_with_policy(
+                &store,
+                &SqrtFanOut,
+                vec![splitting_segment(m)],
+                &mut child_ranges,
+                &mut enumeration_ranges,
+            );
             assert!(enumeration_ranges.is_empty());
             let root = (m as f64).sqrt() as usize;
             assert!(
                 child_ranges.len() >= root / 2 && child_ranges.len() <= root * 2,
-                "m={m}: SPLIT emitted {} children, expected ~√m = {root} \
-                 (a fixed branching factor would be constant in m)",
+                "m={m}: SPLIT emitted {} children, expected ~√m = {root}",
                 child_ranges.len()
             );
         }
@@ -576,15 +706,11 @@ mod tests {
     /// The children of a SPLIT partition the parent exactly: consecutive, non-overlapping, and
     /// spanning the whole parent range. This is what Proposition 4.1's correctness argument needs,
     /// and it holds independently of *how many* children the fan-out rule chooses — so it must keep
-    /// holding through any change to that rule.
+    /// holding through any change to that rule, and under any caller-supplied policy.
     #[test]
     fn split_children_partition_the_parent_range() {
         let store = tree(&(0..400).collect::<Vec<_>>());
-        let segment = RangeAggregate {
-            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
-            aggregate: Aggregate::new(400, Fingerprint([7, 0, 0, 0])),
-        };
-        let (child_ranges, _) = round(&store, segment);
+        let (child_ranges, _) = round(&store, splitting_segment(400));
         assert!(child_ranges.len() > 1);
 
         let first = &child_ranges[0].range;
@@ -601,6 +727,219 @@ mod tests {
                 other => panic!("children are not adjacent: {other:?}"),
             }
         }
+    }
+
+    // ----- Convergence, under every policy and under mixed pairs -----
+    // The tests above pin the *default* rule. These pin what must hold for **any** rule: that a
+    // full reconciliation driven through `protocol_round_with_policy` terminates and leaves the two
+    // stores holding the same elements. `benches/protocol.rs` measures what each policy costs to get
+    // there; here we only care that it gets there at all.
+
+    /// Drive a full reconciliation between two stores until no active range is left, applying every
+    /// IDLIST the way `reconcile`'s engine does — enumerate the responder's contents over the range
+    /// and insert them into the peer.
+    ///
+    /// The two policies are supplied separately so a **mixed** pair can be driven: the refinement
+    /// policy is a local decision and never crosses the wire, so two peers running different rules
+    /// must still converge. Returns the one-way message count, purely as evidence of progress.
+    fn drive(
+        a: &mut FingerprintTreeMap<i32, i32>,
+        b: &mut FingerprintTreeMap<i32, i32>,
+        a_policy: &dyn RefinementPolicy,
+        b_policy: &dyn RefinementPolicy,
+    ) -> usize {
+        let mut active = initial_ranges(&*a);
+        // `initial_ranges` came from `a`, so `b` answers first and the responder alternates.
+        let mut responder_is_b = true;
+        let mut messages = 0;
+        while !active.is_empty() {
+            messages += 1;
+            let mut children = Vec::new();
+            let mut enumerations = Vec::new();
+            // The responder answers under its own policy, then the ranges it asked to enumerate are
+            // materialized before the borrow ends, so the peer can be mutated below.
+            let items: Vec<(i32, i32)> = {
+                let (responder, policy) = if responder_is_b {
+                    (&*b, b_policy)
+                } else {
+                    (&*a, a_policy)
+                };
+                protocol_round_with_policy(
+                    responder,
+                    policy,
+                    active,
+                    &mut children,
+                    &mut enumerations,
+                );
+                enumerations
+                    .into_iter()
+                    .flat_map(|range| {
+                        responder
+                            .range(range)
+                            .map(|(k, v)| (*k, *v))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            };
+            let receiver = if responder_is_b { &mut *a } else { &mut *b };
+            for (key, value) in items {
+                receiver.insert(key, value);
+            }
+            active = children;
+            responder_is_b = !responder_is_b;
+            assert!(
+                messages < 10_000,
+                "reconciliation failed to converge — the refinement is not shrinking"
+            );
+        }
+        messages
+    }
+
+    /// Build the two stores, reconcile them under the given pair of policies, and assert they end
+    /// up holding exactly the union — same keys, same values, same whole-store aggregate.
+    fn assert_converges(
+        keys_a: &[i32],
+        keys_b: &[i32],
+        a_policy: &dyn RefinementPolicy,
+        b_policy: &dyn RefinementPolicy,
+    ) {
+        let (mut a, mut b) = (tree(keys_a), tree(keys_b));
+        drive(&mut a, &mut b, a_policy, b_policy);
+
+        let mut union: Vec<i32> = keys_a.iter().chain(keys_b).copied().collect();
+        union.sort_unstable();
+        union.dedup();
+        let contents =
+            |t: &FingerprintTreeMap<i32, i32>| t.range(..).map(|(k, _)| *k).collect::<Vec<_>>();
+        assert_eq!(contents(&a), union, "a did not converge on the union");
+        assert_eq!(contents(&b), union, "b did not converge on the union");
+        // The aggregate is what the protocol itself compares, so agreeing on it is the property a
+        // *next* round would observe: two stores that agree here exchange nothing at all.
+        assert_eq!(a.aggregate(..), b.aggregate(..));
+    }
+
+    /// The corpora exercise the three shapes that pull the policies apart: a difference scattered
+    /// across the whole key space, a difference clustered into one contiguous block, and the
+    /// degenerate ends (one side empty, both sides empty, one differing element).
+    fn corpora() -> Vec<(&'static str, Vec<i32>, Vec<i32>)> {
+        let full: Vec<i32> = (0..500).collect();
+        vec![
+            ("both empty", vec![], vec![]),
+            ("one side empty", full.clone(), vec![]),
+            ("identical", full.clone(), full.clone()),
+            (
+                "one differing element",
+                full.clone(),
+                full.iter().copied().filter(|k| *k != 250).collect(),
+            ),
+            (
+                "scattered differences",
+                full.clone(),
+                full.iter().copied().filter(|k| k % 37 != 0).collect(),
+            ),
+            (
+                "clustered differences",
+                full.clone(),
+                full.iter()
+                    .copied()
+                    .filter(|k| !(200..250).contains(k))
+                    .collect(),
+            ),
+            (
+                "disjoint halves",
+                full.iter().copied().filter(|k| k % 2 == 0).collect(),
+                full.iter().copied().filter(|k| k % 2 == 1).collect(),
+            ),
+        ]
+    }
+
+    fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
+        vec![
+            ("SqrtFanOut", Box::new(SqrtFanOut)),
+            ("FixedFanOut(2)", Box::new(FixedFanOut::new(FanOut::BINARY))),
+            (
+                "FixedFanOut(16)",
+                Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),
+            ),
+            (
+                "EnumerateBelow(t=32,b=16)",
+                Box::new(EnumerateBelowThreshold::PAPER),
+            ),
+            (
+                "EnumerateBelow(t=1,b=2)",
+                Box::new(EnumerateBelowThreshold::new(1, FanOut::BINARY)),
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_policy_reconciles_every_corpus() {
+        for (policy_name, policy) in policies() {
+            for (corpus, keys_a, keys_b) in corpora() {
+                println!("{policy_name} / {corpus}");
+                assert_converges(&keys_a, &keys_b, policy.as_ref(), policy.as_ref());
+            }
+        }
+    }
+
+    /// The seam's headline property: the policy is a **local** decision, so two peers running
+    /// different ones still converge. If this ever fails, the policy has leaked into the wire
+    /// contract and swapping one is no longer free.
+    #[test]
+    fn peers_running_different_policies_still_converge() {
+        for (a_name, a_policy) in policies() {
+            for (b_name, b_policy) in policies() {
+                for (corpus, keys_a, keys_b) in corpora() {
+                    println!("{a_name} vs {b_name} / {corpus}");
+                    assert_converges(&keys_a, &keys_b, a_policy.as_ref(), b_policy.as_ref());
+                }
+            }
+        }
+    }
+
+    /// The classification tally must add up to the ranges that were answered, and must attribute
+    /// the malformed one rather than silently swallowing it — the count is the only signal a
+    /// consumer without a `tracing` subscriber ever gets.
+    #[test]
+    fn round_outcome_accounts_for_every_segment() {
+        let store = tree(&[10, 20, 30, 40, 50]);
+        let mut child_ranges = Vec::new();
+        let mut enumeration_ranges = Vec::new();
+        let outcome = protocol_round(
+            &store,
+            vec![
+                // SKIP: our own aggregate, advertised back at us.
+                RangeAggregate {
+                    range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+                    aggregate: store.aggregate(..),
+                },
+                // IDLIST: the peer holds nothing over the whole range.
+                RangeAggregate {
+                    range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+                    aggregate: Aggregate::ZERO,
+                },
+                // SPLIT: same size, different fingerprint.
+                RangeAggregate {
+                    range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+                    aggregate: Aggregate::new(5, Fingerprint([7, 0, 0, 0])),
+                },
+                // Dropped: inverted once resolved against the local set.
+                RangeAggregate {
+                    range: KeyRange::new(StartBound::Included(100), EndBound::Excluded(5)),
+                    aggregate: Aggregate::new(1, Fingerprint([1, 0, 0, 0])),
+                },
+            ],
+            &mut child_ranges,
+            &mut enumeration_ranges,
+        );
+        assert_eq!(outcome.skipped(), 1);
+        assert_eq!(outcome.enumerated(), 1);
+        assert_eq!(outcome.split(), 1);
+        assert_eq!(outcome.dropped_malformed(), 1);
+        // The IDLIST was against an empty peer range, so it bounced nothing back: every child came
+        // from the SPLIT.
+        assert_eq!(outcome.children(), child_ranges.len());
+        assert_eq!(enumeration_ranges.len(), outcome.enumerated());
     }
 
     /// And the adversarial middle case: matching fingerprints with mismatched sizes must not
