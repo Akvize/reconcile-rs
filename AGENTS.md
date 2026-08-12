@@ -141,7 +141,9 @@ reference, not updated for routine changes.
 
 **Prose is the last resort**, in docs and in code comments alike: prefer a mermaid diagram
 (`ARCHITECTURE.md` §2/§3 is the model), a table, a code block, or a link. State the rule, the shape
-or the evidence — never narrate it. Applies to anything committed here, this file included.
+or the evidence — never narrate it. Scope is every doc **about** this repo, in it or not — issues,
+PRs, review comments — not only committed files; `.github/ISSUE_TEMPLATE/`/`pull_request_template.md`
+carry the shape so it isn't re-derived per post.
 
 ## 10. Commit, PR, and gating conventions
 
