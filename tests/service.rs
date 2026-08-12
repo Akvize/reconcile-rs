@@ -94,14 +94,8 @@ async fn test() {
     store1.remove(&key);
     assert_until!(store2.get(&key).is_none());
 
-    // Check that a *causally later* write always wins. The conflict order is established by
-    // making the second writer observe the first write before acting (we wait for the first
-    // value to propagate). Under the Hybrid Logical Clock this means the second writer's clock
-    // has advanced past the first timestamp, so its write is ordered strictly after — the
-    // deterministic, causality-respecting LWW contract. (We deliberately do *not* rely on
-    // wall-clock real-time order across the two independent node clocks: two writes in the same
-    // millisecond on different nodes are genuinely concurrent and resolved by node id, which is
-    // exactly the ambiguity this is about.)
+    // A causally later write must win. Causality is established by waiting for the first value
+    // to propagate — not by wall-clock order, which for concurrent writes means nothing.
     let key = "42".to_string();
     for i in 0..20 {
         // Unique values per iteration so each `assert_until` observes *this* write, not a value
@@ -156,10 +150,8 @@ async fn test() {
     task1.abort();
 }
 
-/// Regression test for the `get_mut` propagation bug: an in-place mutation must be re-stamped and
-/// broadcast so that peers converge to the edited value, exactly like a regular `insert`. Before
-/// the fix, `get_mut` neither bumped the timestamp nor broadcast, so the edit stayed local and the
-/// peer never saw it.
+/// An in-place `get_mut` mutation must be re-stamped and broadcast, so peers converge to the
+/// edited value exactly as for an `insert`.
 #[tokio::test(flavor = "multi_thread")]
 async fn get_mut_edit_propagates_to_peers() {
     let port = 8089;
@@ -261,15 +253,11 @@ async fn authenticated_nodes_converge() {
     task1.abort();
 }
 
-/// Regression test: two replicas that concurrently write *different* values to
-/// the same key must converge to a single agreed value, with matching fingerprints.
+/// Two replicas writing different values to one key concurrently must converge on one value with
+/// matching fingerprints.
 ///
-/// Before the Hybrid Logical Clock fix, conflict resolution keyed on the physical wall clock
-/// with a non-commutative tie-break: on equal timestamps each replica kept its own value, and
-/// because the timestamp is part of the reconciliation hash the fingerprints never matched, so
-/// the protocol re-exchanged the pair forever (permanent divergence + livelock). With the
-/// total-order HLC the survivor is deterministic, so both replicas agree and the fingerprints
-/// equalize. If the regression returned, the convergence assertions below would time out.
+/// A non-commutative tie-break would leave each keeping its own, and since the timestamp is part
+/// of the fingerprint, re-exchanging the pair forever. The assertions below time out if so.
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_writes_converge() {
     let port = 8083;
@@ -462,12 +450,8 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
     task2.abort();
 }
 
-/// Regression test for the remote DoS where a single malformed UDP datagram panicked the
-/// receive loop, silently killing reconciliation.
-///
-/// We send a malformed datagram to each node, then check that reconciliation still works.
-/// Before the fix, the receive loop task would panic and die, and the propagation assertion
-/// below would time out.
+/// A malformed datagram must not kill the receive loop: reconciliation must still work after one
+/// is delivered to each node.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_malformed_datagram_does_not_crash() {
     let port = 8082;
@@ -613,10 +597,8 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
     task1.abort();
 }
 
-/// Two nodes in distinct geographical networks converge over cross-network anti-entropy.
-///
-/// Networks are simulated by two disjoint /30 subnets inside the loopback range, each node living in
-/// one of them and declaring both. A dedicated port isolates the test.
+/// Two nodes in distinct networks — disjoint loopback /30s, each declaring both — converge over
+/// cross-network anti-entropy.
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_net_reconciliation() {
     let port = 8085;
@@ -664,12 +646,10 @@ async fn cross_net_reconciliation() {
     task2.abort();
 }
 
-/// A node auto-discovers a peer in another network purely from the network's CIDR, with
-/// no seed. Discovery probes one random address per network each round. To keep the test
-/// deterministic (rather than relying on a random probe landing on the peer within a subnet), each
-/// node declares the *other node's exact address* as a network (a /32), so the per-network discovery
-/// probe reliably targets the peer. The local network stays a /30 so local-network probing is
-/// unaffected.
+/// A node auto-discovers a peer in another network from the CIDR alone, with no seed.
+///
+/// Each node declares the other's address as a /32 net, so the per-network probe is deterministic;
+/// the local net stays a /30.
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_net_discovery_without_seed() {
     let port = 8086;
@@ -711,11 +691,8 @@ async fn cross_net_discovery_without_seed() {
     task2.abort();
 }
 
-/// Runtime topology injection: a network declared **while the loop is running** must take effect
-/// without recreating the node. Two nodes start declaring only their own network and with no seed,
-/// so discovery never probes the peer and they cannot converge. Injecting the peer's network with
-/// [`add_net`](ReplicatedMap::add_net) makes per-network discovery reach the peer and they converge,
-/// proving the running reconciliation loop observes the mutation.
+/// A network declared **while the loop is running** must take effect: two nodes that cannot
+/// converge without the peer's net do so once [`add_net`](ReplicatedMap::add_net) injects it.
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_add_net_enables_discovery_and_convergence() {
     let port = 8087;
@@ -764,11 +741,8 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     task2.abort();
 }
 
-/// Repair is decoupled from net membership: a peer learned by contact (here, seeded) is reconciled
-/// even when its address is in **none** of the declared networks (the `unclassified` bucket). Both
-/// nodes declare a single network that contains *neither* node's address, so each node's local net
-/// falls back to its own host route and the peer is unclassified — yet they still converge. This is
-/// the guarantee that makes runtime topology changes unable to cause silent divergence.
+/// Repair is decoupled from net membership: a seeded peer in **none** of the declared networks
+/// still converges — the guarantee that keeps a topology change from causing silent divergence.
 #[tokio::test(flavor = "multi_thread")]
 async fn unclassified_peer_is_still_reconciled() {
     let port = 8088;
@@ -876,16 +850,8 @@ async fn runtime_config_setters() {
     store.set_tombstone_timeout(Duration::from_millis(500));
 }
 
-/// A datagram whose wall-clock stamp is far outside the freshness window must be silently dropped.
-///
-/// This test injects a legitimately-sealed datagram (correct key, correct MAC) whose stamp is set
-/// one hour in the past, well outside the default 5-minute freshness window.  The engine must
-/// reject it silently and keep running.
-///
-/// This test would FAIL against the pre-change code: old code had no replay filter and therefore no
-/// freshness check.  Any correctly-MAC-tagged datagram was accepted regardless of its timestamp,
-/// so an attacker who captured a datagram hours earlier could replay it indefinitely.  The
-/// `seal_datagram` helper also did not exist in the testing seam before this change.
+/// A legitimately-sealed datagram stamped an hour in the past — well outside the default
+/// freshness window — must be dropped silently, leaving the engine running.
 #[cfg(feature = "internal-testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_datagram_outside_freshness_window_is_rejected() {
@@ -945,17 +911,8 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
     task.abort();
 }
 
-/// Replaying the same sealed datagram (identical bytes, same seq) must be silently rejected after
-/// the first delivery.
-///
-/// This test crafts a valid authenticated datagram via the `internal-testing` seam, delivers it to
-/// an authenticated store, and then delivers the exact same bytes a second time.  Because the
-/// sequence number (seq=1) is already recorded in the per-peer replay filter, the second delivery
-/// is dropped silently and the engine continues running normally.
-///
-/// This test would FAIL against the pre-change code: old code had no replay header, no
-/// `SenderCounter`, and no `ReplayFilter`.  The `Authenticator::seal` function did not accept
-/// `seq` or `stamp` parameters, and `seal_datagram` did not exist in the testing seam.
+/// Redelivering identical sealed bytes must be dropped silently: the sequence number is already
+/// recorded in the per-peer replay filter.
 #[cfg(feature = "internal-testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn replayed_sealed_datagram_is_rejected() {
@@ -1014,17 +971,10 @@ async fn replayed_sealed_datagram_is_rejected() {
     task.abort();
 }
 
-/// A decommissioned peer's captured datagram, replayed while still fresh, must be rejected
-/// and must not re-add the peer to membership.
+/// A decommissioned peer's captured datagram, replayed while still fresh, must be rejected and
+/// must not re-add the peer to membership (AGENTS.md §8).
 ///
-/// Attack scenario: an adversary captures a valid datagram from peer X while X is active,
-/// waits for X to be decommissioned, and then replays the datagram within the freshness
-/// window. Without replay state surviving decommission, the filter treats the replay as
-/// first contact and re-adds X to `members`, re-poisoning causal-stability membership.
-///
-/// This test must FAIL against the pre-fix code: `decommission_peer` called
-/// `replay_filter.evict(peer)`, erasing per-peer state, so the replayed datagram was accepted
-/// as first contact.
+/// Evicting the peer's replay state would make the replay read as first contact.
 #[cfg(feature = "internal-testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn decommissioned_peer_replay_is_rejected() {
@@ -1097,13 +1047,8 @@ async fn decommissioned_peer_replay_is_rejected() {
     task.abort();
 }
 
-/// Regression test: in a cluster of three or more nodes, a deleted key's tombstone must
-/// eventually be garbage-collected on **every** node once they have all held it long enough — with
-/// **no** manual `forget_peer`/decommission. Before the periodic ack-resend fix the causal-stability
-/// ack matrix never completed at N≥3 (two non-originating replicas never learned that the other held
-/// the deletion), so this assertion hung forever.
-///
-/// Full-mesh topology: every node seeds the other two.
+/// At N≥3, a tombstone must be collected on **every** node with no manual decommission — which
+/// needs the periodic ack resend, acks otherwise being pairwise. Full-mesh topology.
 #[tokio::test(flavor = "multi_thread")]
 async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
     // Dedicated port for test isolation.
@@ -1178,16 +1123,9 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
     task3.abort();
 }
 
-/// Companion to the mesh test, in a line topology (A↔B↔C: the middle node relays; A and C never
-/// communicate directly, so each is a member only of B). End-to-end coverage that GC still
-/// converges when propagation is relayed rather than broadcast from a single origin.
-///
-/// Note: the strict regression guard is the *mesh* test above — that is the configuration in
-/// which the pre-fix ack matrix provably never completes (B and C learn the deletion
-/// simultaneously from A and never exchange acks). A relayed line incidentally completes the
-/// matrix through the existing stale-value ack path during each adjacent node's value→tombstone
-/// transition, so it converges even without the periodic-ack-resend fix; this test simply
-/// confirms the fix does not regress that path.
+/// The same in a line topology (A↔B↔C), where propagation is relayed rather than broadcast from
+/// one origin. The mesh test above is the strict guard; a line completes the ack matrix through
+/// the stale-value ack path anyway.
 #[tokio::test(flavor = "multi_thread")]
 async fn tombstone_gc_converges_in_3_node_cluster_line() {
     let port = 8121;

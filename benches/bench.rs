@@ -230,14 +230,10 @@ mod imp {
         }
     }
 
-    /// Compare the in-memory cost of a **naive dated replica**
-    /// (`FingerprintTreeMap<K, Entry<Timestamp, V>>`, which drags along a timestamp it never uses)
-    /// against the **lightweight value-only replica** (`FingerprintTreeMap<K, State<V>>`) that the
-    /// `ReadReplicaMap` design introduces.
+    /// In-memory cost of a dated replica (`FingerprintTreeMap<K, Entry<Timestamp, V>>`) against
+    /// the value-only one (`FingerprintTreeMap<K, State<V>>`).
     ///
-    /// Criterion times the *fill* of each tree at growing sizes; the value-only tree both builds faster
-    /// (less to move/hash per entry) and, as the one-off report below shows, stores fewer bytes per
-    /// entry — the whole point of the optimization for fleets with many passive read replicas.
+    /// Criterion times the fill at growing sizes; the report below adds bytes per entry.
     fn read_replica_memory(c: &mut Criterion) {
         let dated = std::mem::size_of::<Entry<Timestamp, u32>>();
         let light = std::mem::size_of::<State<u32>>();

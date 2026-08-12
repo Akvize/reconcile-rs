@@ -29,16 +29,11 @@ fn local_config() -> Config {
         .with_net("127.0.0.1/8".parse().unwrap())
 }
 
-/// Keep every `tracing` callsite "hot" for the whole test binary.
+/// Keep every `tracing` callsite hot for the whole binary.
 ///
-/// `tracing` caches per-callsite interest **globally**, but these tests install
-/// **thread-local** subscribers (`set_default`). If a store is ever constructed while the
-/// current default is the no-op `NoSubscriber` — e.g. the metrics test below, or a parallel
-/// test caught between guard transitions — the `info!("Listening on")` callsite is registered
-/// as `Interest::never` and then silently vanishes for every other test, regardless of their
-/// thread-local subscriber. Installing a permanently-interested **global** default once keeps
-/// all callsites enabled; the per-test thread-local capturing subscribers still receive the
-/// events (a thread-local default overrides the global one for dispatch).
+/// Callsite interest is cached **globally** while these tests install thread-local subscribers, so
+/// a store built under `NoSubscriber` would register `Interest::never` and silence that callsite
+/// for every other test.
 fn keep_callsites_hot() {
     use std::sync::Once;
     use tracing_subscriber::filter::LevelFilter;
@@ -138,10 +133,7 @@ async fn local_mutations_increment_metric_counters() {
     use metrics::with_local_recorder;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 
-    // `new` binds a socket but emits no metrics, so build the store outside the recorder scope.
-    // This store is built without a tracing subscriber; `keep_callsites_hot` prevents its
-    // `info!("Listening on")` emission from poisoning the shared callsite cache for the other
-    // tests (see that helper).
+    // `new` emits no metrics, so build outside the recorder scope.
     keep_callsites_hot();
     let store = ReplicatedMap::<i32, i32>::new(local_config())
         .await
@@ -150,10 +142,7 @@ async fn local_mutations_increment_metric_counters() {
     let recorder = DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
 
-    // The insert/remove counters are recorded synchronously on this thread (the subsequent
-    // broadcast is a detached task that, with no peers, sends nothing), so every counted metric
-    // is emitted inside the local-recorder scope. This node has no peers, so `insert`/`remove`
-    // behave like the local-only variants for counting purposes.
+    // The counters are recorded synchronously, so all of them land inside the recorder scope.
     with_local_recorder(&recorder, || {
         store.insert(1, 10);
         store.insert(2, 20);

@@ -152,26 +152,16 @@ async fn read_replica_does_not_block_tombstone_gc() {
     assert_until!(dated.fingerprint(..) != with_tombstone);
     // The live value for key 2 is untouched by GC.
     assert_eq!(dated.get(&2).as_deref(), Some(&22));
-    // NOTE: we deliberately do *not* assert the deletion reaches the read replica here. With this
-    // pathologically short tombstone timeout the dated store collects the tombstone before the read
-    // replica's periodic value-only diff observes it, so the read replica may retain the
-    // pre-deletion value — the documented consequence of GC outrunning read-replica propagation.
-    // Reliable deletion propagation (with a normal timeout) is covered by
-    // `read_replica_converges_with_dated_store`.
+    // No deletion assertion: this timeout lets GC outrun replica propagation, the documented
+    // consequence. `read_replica_converges_with_dated_store` covers the normal case.
 
     dated_task.abort();
     read_replica_task.abort();
 }
 
-/// The same convergence contract as `read_replica_converges_with_dated_store`, but with **no real
-/// sockets anywhere**: both the dated store and the read replica are wired to an
-/// [`InMemoryNetwork`](reconcile::InMemoryNetwork) through the public `_with_transport`
-/// constructors, exercising `ReadReplicaMap` end to end without binding a UDP port.
-///
-/// It asserts the full value-only protocol round-trip over the injected transport, not merely that
-/// construction succeeds: the read replica drives the diff, receives live values with their
-/// timestamps dropped, keeps hashing identically to the dated store's value-only projection, picks
-/// up a write made after convergence, and reflects a deletion as a tombstone.
+/// The same convergence contract as `read_replica_converges_with_dated_store`, over an
+/// [`InMemoryNetwork`](reconcile::InMemoryNetwork) with no sockets — the full value-only
+/// round-trip, not merely construction.
 #[tokio::test(flavor = "multi_thread")]
 async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
     let network = InMemoryNetwork::new();

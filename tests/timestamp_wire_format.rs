@@ -36,10 +36,8 @@ use reconcile::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
 use reconcile::entry::Entry;
 use rsos::{lift, Fingerprint};
 
-/// Build the timestamp both vectors below are taken from.
-///
-/// Distinct, non-trivial values in all three components, so a transposition of two of them would
-/// change the bytes (a `(0, 0, 0)` stamp would not).
+/// The timestamp both vectors below are taken from: distinct, non-trivial components, so a
+/// transposition changes the bytes.
 fn sample_stamp() -> Timestamp {
     Timestamp::new(
         Hlc::new(
@@ -58,12 +56,8 @@ fn encode<T: Serialize>(value: &T) -> Vec<u8> {
     buf
 }
 
-/// `Timestamp`'s bincode encoding, under the same `DefaultOptions` the wire codec uses.
-///
-/// bincode writes struct fields sequentially with no framing and no field names, and a newtype
-/// struct as its inner value alone — so these bytes are `physical`, `logical` and `node_id` as
-/// varints, back to back, whether the fields are bare primitives or newtypes over them, and
-/// whether the first two sit directly on `Timestamp` or one level down inside an `Hlc`.
+/// `Timestamp`'s bincode encoding under the wire codec's `DefaultOptions`: `physical`, `logical`
+/// and `node_id` as back-to-back varints, unchanged by the newtypes or the `Hlc` nesting.
 #[test]
 fn timestamp_bincode_encoding_is_unchanged() {
     const GOLDEN: &[u8] = &[

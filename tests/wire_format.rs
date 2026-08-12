@@ -27,20 +27,14 @@ use serde::{Deserialize, Serialize};
 use rbsr::RangeAggregate;
 use rsos::{Aggregate, Fingerprint};
 
-/// `RangeAggregate`'s encoding must be **byte-for-byte** what the pre-`Aggregate` layout
-/// `{range, hash: Fingerprint, size: usize}` produced, so a node running this code and a node
-/// running the previous release reconcile without either noticing.
+/// `RangeAggregate`'s golden encoding, under the wire codec's `DefaultOptions`.
 ///
-/// The bytes below were captured from that earlier layout, under the same `DefaultOptions`
-/// configuration the wire codec uses, before the two fields were collapsed into one nested
-/// `Aggregate`. bincode writes struct fields sequentially with no framing and no field names, so
-/// the nested struct is inlined and the encoding is unchanged — *provided* `Aggregate` declares
-/// `fingerprint` before `size`. Reordering those two declarations breaks this test, which is
-/// exactly the point (see `rsos::Aggregate`'s own note).
+/// bincode inlines the nested `Aggregate` in declaration order, so these bytes hold only while
+/// `Aggregate` declares `fingerprint` before `size` — reordering breaks this test, which is the
+/// point.
 ///
-/// Reading the vector: `1` = the `StartBound::Included` discriminant, `7` = the start key; `1` =
-/// the `EndBound::Excluded` discriminant, `42` = the end key; then the four `u64` fingerprint
-/// limbs as bincode varints; then `251, 44, 1` = the varint for `size == 300`.
+/// Reading the vector: `1` = `StartBound::Included`, `7` = start key; `1` = `EndBound::Excluded`,
+/// `42` = end key; four `u64` fingerprint limbs as varints; `251, 44, 1` = `size == 300`.
 #[test]
 fn wire_format_is_unchanged_by_the_aggregate_collapse() {
     const GOLDEN: &[u8] = &[

@@ -32,20 +32,12 @@ macro_rules! assert_until {
     };
 }
 
-/// Build a single-node store that is isolated from all other tests and whose `run()` loop
-/// does not get stuck in a self-send tight loop.
+/// A single-node store isolated from the other tests, whose `run()` loop leaves
+/// `clear_expired_tombstones` a scheduling window.
 ///
-/// Design choices:
-///  * `probe_net` is configured as the declared network.  It is deliberately DIFFERENT from
-///    `listen_addr` so that `derive_local_net` cannot find `listen_addr` inside `probe_net`
-///    and falls back to the `listen_addr/32` host route.  The only probe target is the
-///    single address of `probe_net`; since nothing listens there, UDP fire-and-forget
-///    succeeds but `recv_from` blocks for the full `reconcile_interval` (≈1 s) before
-///    timing out — giving `clear_expired_tombstones` its scheduling window each cycle.
-///  * A non-zero `port` is required; port 0 produces EINVAL when the engine sends to
-///    `(probe_target, self.port)`.
-///  * No peers are seeded, so `members` stays empty and `is_tombstone_stable` returns
-///    `true` immediately — any expired tombstone is GC'd in the first sweep.
+/// `probe_net` differs from `listen_addr`, so the local net falls back to the host route and the
+/// one probe target answers nothing, blocking `recv_from` for a full interval. `port` must be
+/// non-zero (port 0 gives EINVAL on send). No peers, so any expired tombstone is stable at once.
 async fn isolated_store(
     listen_addr: IpAddr,
     probe_net: &str,
@@ -63,12 +55,8 @@ async fn isolated_store(
     .with_tombstone_timeout(tombstone_timeout)
 }
 
-/// Core regression: `remove_bulk` of N keys in the same millisecond must produce N
-/// individually tracked tombstones, all of which expire and are GC'd.
-///
-/// Before the fix, the `TimeoutWheel` keyed on `DateTime<Utc>` alone, so keys sharing the
-/// same millisecond timestamp would overwrite each other; only one tombstone would be yielded
-/// by `expired()` and eventually GC'd, leaving the rest retained forever (fingerprint ≠ ZERO).
+/// `remove_bulk` of N keys in one millisecond must produce N individually tracked tombstones,
+/// all of which expire and are collected — a wheel keyed on the instant alone would keep one.
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_bulk_same_millisecond_all_gc() {
     // Very short timeout so GC fires quickly.
@@ -86,11 +74,8 @@ async fn remove_bulk_same_millisecond_all_gc() {
     let live_fp = store.fingerprint(..);
     assert_ne!(live_fp, Fingerprint::ZERO);
 
-    // Delete all keys in one bulk call.  The HLC's physical component is derived from
-    // `Utc::now()` in milliseconds; any two calls within the same millisecond share the
-    // same `physical`.  We cannot *force* a collision from outside the crate, but calling
-    // `remove_bulk` atomically is the most likely scenario and exercises the pre-insert hook
-    // code path that converts each tombstone's `physical` to a `DateTime<Utc>` wheel instant.
+    // A same-millisecond collision cannot be forced from outside the crate; one `remove_bulk` is
+    // the likeliest way to get one.
     store.remove_bulk(&keys);
 
     for &k in &keys {
