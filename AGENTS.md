@@ -139,6 +139,10 @@ Docs that change with code, same PR: `README.md`, `ARCHITECTURE.md` §1–§3, t
 [`PROGRESS.md`](./PROGRESS.md): living status, update as findings/phases change. `SOTA.md`: durable
 reference, not updated for routine changes.
 
+**Prose is the last resort**, in docs and in code comments alike: prefer a mermaid diagram
+(`ARCHITECTURE.md` §2/§3 is the model), a table, a code block, or a link. State the rule, the shape
+or the evidence — never narrate it. Applies to anything committed here, this file included.
+
 ## 10. Commit, PR, and gating conventions
 
 No enforced commit-message/PR-title format — match recent history (`git log --oneline`). Reference
@@ -165,8 +169,6 @@ Every intra-workspace dependency carries a `version` alongside its `path` (requi
 `cargo package`/`publish` to resolve it). The four siblings are on crates.io only because cargo has
 no vendoring — depend on `reconcile`, not on them.
 
-**Version lines (decided 2026-08-11, #308).** `rsos`/`lww-register`/`reconcile-gossip` have types in
-`reconcile`'s public API, so their majors are coupled to its and they go `1.0.0` with it; the items
-it re-exports are covered by its semver, nothing else in them is. `rbsr` does not — nothing of it is
-re-exported, its use is confined to `pub(crate)` modules — so it stays `0.x` until its own surface
-settles (#289): promoting later is additive, demoting is not.
+**Version lines (#308, 2026-08-11).** `rsos`/`lww-register`/`reconcile-gossip` are in `reconcile`'s
+public API → majors coupled → `1.0.0` with it, its semver covering the re-exported items only.
+`rbsr` is not → stays `0.x` until #289 settles it; promoting later is additive, demoting is not.

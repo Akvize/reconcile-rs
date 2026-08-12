@@ -8,9 +8,9 @@
 #   gossip        — the network adapter layer (`Transport`, wire encoding, `Authenticator`,
 #                   replay protection, `Discovery`); deliberately independent of `lww-register`
 #   .             — the `reconcile` facade: `ReplicatedMap` and `ReadReplicaMap` over the
-#                   `pub(crate)` `Replica` engine (private on purpose: it carries the
-#                   causal-stability bookkeeping, and its privacy is what keeps `rbsr` off the
-#                   public surface — see #308 and ARCHITECTURE.md §3.2 "Visibility"), the
+#                   `pub(crate)` `Replica` engine (private: carries the causal-stability
+#                   bookkeeping, and keeps `rbsr` off the public surface — #308,
+#                   ARCHITECTURE.md §3.2), the
 #                   file-backed `Persistence` adapter (`src/snapshot.rs`), observability and the
 #                   `HlcClock` adapter; depends on all four and re-exports their public types, so
 #                   `reconcile::*` keeps resolving for existing consumers.

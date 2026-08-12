@@ -322,20 +322,29 @@ The load-bearing correctness/security properties are documented once, in
 ## 6. Release 1.0.0 — the gate list
 
 Status mirror of [#206](https://github.com/Akvize/reconcile-rs/issues/206), which owns the plan and
-the reasoning. Update a row here when its issue moves; don't restate the argument.
+the reasoning. Update a row when its issue moves; don't restate the argument.
 
-**What 1.0.0 commits to** — three freezes: the public API of `reconcile` (semver from then on), the
-wire (any 1.x node reconciles with any other 1.x node), and the on-disk format. The third is
-**already true**: `src/snapshot.rs:42-46` writes `RCNL` + a `u32` version and rejects a foreign one
-with a descriptive error. And three things it does **not** claim, which the README must say in the
-same breath: not feature-complete (full replication only), not a consensus system (AP + LWW, so no
-cluster-wide conditional writes — [#299](https://github.com/Akvize/reconcile-rs/issues/299)), not
-authenticated by default (AGENTS.md §8).
+| 1.0.0 freezes | Holds today |
+|---|---|
+| `reconcile`'s public API — semver from then on | no — Gate A |
+| Wire — any 1.x node reconciles with any 1.x node | no — [#309](https://github.com/Akvize/reconcile-rs/issues/309) |
+| On-disk — `RCNL` + `u32`, foreign version rejected (`src/snapshot.rs:42-46`) | **yes** |
 
-**A gate is** (A) a non-additive change, so deferring it costs a 2.0.0; (B) a defect that makes one
-of those three claims false the day it is made; or (C) something without which the release cannot
-happen, be found, or be verified. Everything else is post-1.0 **by construction** — including work
-more valuable to users than most of this list (#271, #185, #190). Valuable ≠ blocking.
+| 1.0.0 does **not** claim | Where it is stated |
+|---|---|
+| feature-complete — full replication only | README |
+| consensus — AP + LWW, so no cluster-wide conditional writes | [#299](https://github.com/Akvize/reconcile-rs/issues/299) |
+| authenticated by default | AGENTS.md §8 |
+
+```mermaid
+flowchart TD
+    Q{"Deferred past the tag —\nwhat does it cost?"}
+    Q -->|"a non-additive change to a\nsignature, a trait, or the wire"| A["Gate A — a 2.0.0"]
+    Q -->|"one of the three freezes\nis false on day one"| B["Gate B — a broken claim"]
+    Q -->|"cannot ship, be found,\nor be verified"| C["Gate C — no release"]
+    Q -->|"none of the three"| N["post-1.0 by construction\nvaluable is not blocking"]
+    style N fill:#00000000
+```
 
 ### Gate A — non-additive (deferring costs a 2.0.0)
 
@@ -367,9 +376,25 @@ more valuable to users than most of this list (#271, #185, #190). Valuable ≠ b
 
 ### Gate C — release mechanics and semver coherence
 
+Version lines, decided 2026-08-11 ([#308](https://github.com/Akvize/reconcile-rs/issues/308), rule in
+AGENTS.md §11):
+
+```mermaid
+flowchart LR
+    subgraph coupled["types in reconcile's public API — major coupled — 1.0.0"]
+        rsos["rsos"]
+        lww["lww-register"]
+        gos["reconcile-gossip"]
+    end
+    rbsr["rbsr — stays 0.x\nno pub use; reached only from\nthe pub(crate) src/replica.rs"]
+    coupled --> rec["reconcile 1.0.0"]
+    rbsr -. "private dependency" .-> rec
+    style rbsr fill:#00000000
+```
+
 | Issue | State |
 |---|---|
-| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **Decided 2026-08-11**, recorded in AGENTS.md §11. `rsos`/`lww-register`/`reconcile-gossip` have types in `reconcile`'s public API, so their majors are coupled to its and they go **`1.0.0` with it**; `rbsr` has none — no `pub use rbsr::`, and `initial_ranges`/`protocol_round`/`RangeAggregate` are reached only from the `pub(crate)` `src/replica.rs` — so it **stays `0.x`**, gated on [#289](https://github.com/Akvize/reconcile-rs/issues/289). Chosen for reversibility: `0.x → 1.0` later is additive, `1.0 → 2.0` is not — **and #307 vindicated that within the day**: `feat(rbsr)!` landed on `main` 2026-08-11, changing `protocol_round`'s return type to `RoundOutcome` and retiring `SqrtFanOut` as the default, a breaking `rbsr` API change that a 1.0 line would have had to carry as a 2.0. Remaining: the version bumps, the crates.io card wording, a mechanical re-check via #311 |
+| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ decided — diagram above. Reversible by construction: `0.x → 1.0` is additive, `1.0 → 2.0` is not, and #307's `feat(rbsr)!` on `main` the same day (`protocol_round` → `RoundOutcome`, `SqrtFanOut` retired as default) would have forced that 2.0. Remaining: version bumps, card wording, mechanical re-check via #311 |
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
 | [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
@@ -377,18 +402,24 @@ more valuable to users than most of this list (#271, #185, #190). Valuable ≠ b
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
 | [#204](https://github.com/Akvize/reconcile-rs/issues/204) | **Mostly resolved in the tree**: `tags.yml` verifies tag against manifest and publishes in dependency order; the docs no longer say `0.0.0-git`. What remains is its Problem 3 — the version decision |
 
-**The version decision.** `0.2.1` is live and predates the split, so the next tag is breaking whatever
-number it carries. Straight to `1.0.0` is defensible only if Gate A is complete; otherwise cut a
-`0.3.0` carrying the breaks and tag 1.0.0 from it. Which one, and why, is a required output of #206.
+**Version to cut** (open; required output of #206). `0.2.1` predates the split, so the next tag
+breaks whatever number it carries: `1.0.0` directly only if Gate A is complete, else `0.3.0` carrying
+the breaks and 1.0.0 tagged from it.
 
 ### Not gates
 
-Open and wanted, none blocking: performance/evidence (#170–#174, #187, #280, #281 — #257 landed
-2026-08-11 via #307 and is no longer among them), the
-persistent-core-map epic (#270–#277), scaling (#185, #186, #190, #147, #178), the grid layer (#193,
-#191, #192, #184), the crypto roadmap (#96, #135, #136, #137), docs/ergonomics (#72, #92, #231,
-#232), and the additive remainder of #289/#290/#291 — #289 now also carrying `rbsr`'s eventual
-promotion to 1.0, per #308. #299 is a decision to write down and should ride along regardless.
+Open and wanted, none blocking.
+
+| Area | Issues |
+|---|---|
+| Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307 |
+| Persistent core map | #270–#277 |
+| Scaling & topology | #185, #186, #190, #147, #178 |
+| Grid layer | #193, #191, #192, #184 |
+| Crypto roadmap | #96, #135, #136, #137 |
+| Docs & ergonomics | #72, #92, #231, #232; additive remainder of #289–#291, #289 also gating `rbsr`'s promotion (#308) |
+
+#299 is a decision to write down, not code to build — rides along regardless.
 
 ---
 
