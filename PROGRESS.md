@@ -193,7 +193,79 @@ but one High resolved or mitigated.
   lets a caller skip the re-lift/fingerprint-propagation step `with_mut` guarantees); the
   get-or-insert half of what `entry()` usually buys already exists one layer up
   (`ReplicatedMap::upsert`/`get_or_insert_with`).
+- ✅ **The split fan-out was a communication-complexity regression, not a tuning gap** —
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
+  "unbenchmarked and hard-coded"), closed 2026-08-11.
 
+  **Step A — the seam.** The loop's two tuning decisions are now a `RefinementPolicy` in `rbsr`
+  (`Decision` = SKIP/IDLIST/SPLIT, `Comparison`, `SplitStride`, `FanOut`); `protocol_round_with_policy`
+  takes one, `protocol_round` pins a named `DEFAULT_POLICY`. It landed behaviour-preserving — the
+  default was `SqrtFanOut`, byte-for-byte the previous rule, so `tests/wire_format.rs`'s golden
+  vector and the convergence proptests passed unchanged. Three policies ship, each named for the
+  rule it applies rather than for where it comes from: `FixedFanOut`, `SqrtFanOut`,
+  `EnumerateBelowThreshold`. The policy is local and never advertised; mixed pairs converge, pinned
+  by `peers_running_different_policies_still_converge` and a proptest over every pair.
+  `protocol_round` also returns a `RoundOutcome` tally, which is the only signal a consumer without
+  a `tracing` subscriber gets for the malformed-segment drop path.
+
+  **Step B — the measurement.** `benches/protocol.rs` sweeps policy × `n` × `d` × difference
+  clustering, reporting rounds, bytes, datagrams, IP fragments, IDLIST *elements* and local
+  `Aggregate`/`Rank`/`Select` counts, plus a timed drive (the paper's `T_loc`). Locating one missing
+  element, differences scattered:
+
+  | n | `√m` bytes / msgs / `T_loc` | `b`=16 bytes / msgs / `T_loc` |
+  |---:|---:|---:|
+  | 10³ | 2 041 / 6 / 12.9 µs | 1 701 / 6 / 8.2 µs |
+  | 10⁴ | 5 395 / 8 / 43.8 µs | 2 195 / 6 / 18.2 µs |
+  | 10⁵ | 16 553 / 6 / 460 µs | 2 789 / 6 / 25.2 µs |
+  | 10⁶ | **53 046** / 8 / **2.10 ms** | **3 834** / 8 / **45.0 µs** |
+
+  **This corrected a claim this file used to make.** Rounds were recorded here as "`Θ(log log n)`,
+  flat at 6–8 … where fixed-`b` pays `O(log n)`". Measured head to head at n = 10⁶, *both* take 8
+  one-way messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2×
+  near n ≈ 10¹². So `√m` paid ~14× the bytes, ~13× the local RSOS queries and 47× the local CPU and
+  bought nothing observable back. Corrected in `SOTA.md` §1.3/§2.2. Two qualifications: every bench
+  runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), and the gap closes to
+  ~7 % at d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for, and
+  competitive once `d` approaches `√n`. The earlier ceiling finding also sharpens: at n = 10⁶ with
+  d = 100 the widest round reaches **160 908 B over 3 300 ranges = 3 datagrams / ~189 fragments**, so
+  the ceiling is reachable at 10⁶, not only at 10 M — still degrading into extra datagrams rather
+  than being dropped, as `send_messages_paced` chunks at `BUFFER_SIZE`.
+
+  `EnumerateBelowThreshold` wins the refinement column and loses on values: at n = 10⁵, d = 100 it
+  saves 40 % of refinement bytes while enumerating **5 036 elements against 100**. Break-even is
+  13–37 B per entry, and a `Timestamp` alone encodes to 23 B, so the paper's `t` is a net loss on
+  this wire format. That is why `benches/protocol.rs` reports IDLIST elements alongside ranges.
+
+  **The branching factor was swept** (`fan_out_sweep`, *b* = 2…256) rather than inherited from
+  Negentropy. At n = 10⁶, d = 1:
+
+  | `b` | 2 | 4 | 8 | 16 | 32 | 64 | 256 |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | bytes | 2 061 | **1 960** | 2 613 | 3 834 | 5 021 | 9 668 | 25 880 |
+  | one-way msgs | 22 | 12 | 10 | 8 | **6** | 6 | 6 |
+  | widest round | 96 B | 202 B | 414 B | 802 B | 1 614 B | 3 238 B | 12 982 B |
+  | `T_loc` | 25.1 µs | **21.8 µs** | 33.0 µs | 48.5 µs | 73.3 µs | 172 µs | 975 µs |
+
+  Bytes and `T_loc` follow *b*/ln *b* (minimum near *b* = 3–4); messages fall as log_*b* n to a floor
+  no larger *b* improves on; the widest round grows linearly in *b* and is the hard ceiling — already
+  past one datagram at *b* = 16 for n = 10⁵, d = 100.
+
+  **Decision: the default is `FixedFanOut(FanOut::NEGENTROPY)`** (2026-08-11). *b* = 16 is the only
+  swept value **never worse than `√m` on rounds** in any measured (n, d, clustering), so no
+  deployment traded latency for the bandwidth win — which is what made the switch decidable without
+  an RTT lane. *b* = 32 saves one more round-trip at 10⁶ alone, for +31 % bytes, +51 % CPU and double
+  the widest round; *b* = 4 is the bytes/CPU optimum at two extra round-trips, break-even near an RTT
+  of 8 µs at 1 Gb/s, i.e. worth it only in-process. The switch is a **behaviour** change, not a wire
+  change — mixed pairs converge — so a cluster migrates one node at a time with no flag day. With a
+  constant *b*, communication is `O(d log n)` again rather than `Θ(√n)` and the paper's
+  `T_loc = O(hL + bhI + K)` is quotable for this crate. `SqrtFanOut` stays shipped, supported and
+  pinned by its own test.
+
+  **Still open.** Exposing a policy through `reconcile`'s facade (`Config` is `Copy`, so a boxed
+  policy needs a different carrier), and the interaction with the 40 B/range wire aggregate (~79 % of
+  the bytes measured under `√m`) — now separable, since the fan-out is a caller's choice rather than
+  an edit to the protocol loop.
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
@@ -204,23 +276,6 @@ but one High resolved or mitigated.
   comparison, non-CI and feature-gated.
 - Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT, generic monoid
   summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185).
-- **The split fan-out is a communication-complexity regression, not a tuning gap** —
-  [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
-  "unbenchmarked and hard-coded"). `protocol_round` cuts at `step = ⌊√m⌋`, so the first SPLIT of a
-  whole-store round advertises ~√n ranges **whatever `d` is**: communication is `Θ(√n)`, not the
-  family's `O(d log n)`. Measured by the new `benches/protocol.rs` — locating one missing element in
-  a 10⁶-entry store costs **53 046 B over 1 048 advertised ranges**, against ~4 kB for a fixed
-  `b = 16`; the widest single round is 1 001 ranges / **50 781 B** — inside the 65 507-byte datagram
-  ceiling, but ~35 IP fragments at a 1500-byte MTU, any one of which loses the whole round. That
-  measurement settles #257's own open question: its estimate (~55 kB at 1 M) is confirmed, while its
-  "over the ceiling at 10 M" concern is **refuted as a failure mode** — `send_messages_to` delegates
-  to `send_messages_paced`, which chunks at `BUFFER_SIZE`, so an oversized round costs extra
-  datagrams rather than being dropped. The compensation is genuine and sits in the other
-  column: rounds are `Θ(log log n)`, measured flat at 6–8 one-way messages from 10³ to 10⁶, where
-  fixed-`b` RBSR pays `O(log n)`. So this is a deliberate-looking trade that was never deliberately
-  made, and it interacts with the 40 B/range wire aggregate (~79 % of those bytes). The split rule
-  is now pinned by unit tests in `rbsr/src/protocol.rs`, so changing it is a decision with a failing
-  test attached. Analysis: `SOTA.md` §1.3/§2.2.
 - Pluggable per-value conflict resolution beyond LWW-Register —
   [#184](https://github.com/Akvize/reconcile-rs/issues/184).
 - `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,
@@ -314,7 +369,7 @@ more valuable to users than most of this list (#271, #185, #190). Valuable ≠ b
 
 | Issue | State |
 |---|---|
-| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **Decided 2026-08-11**, recorded in AGENTS.md §11. `rsos`/`lww-register`/`reconcile-gossip` have types in `reconcile`'s public API, so their majors are coupled to its and they go **`1.0.0` with it**; `rbsr` has none — no `pub use rbsr::`, and `initial_ranges`/`protocol_round`/`RangeAggregate` are reached only from the `pub(crate)` `src/replica.rs` — so it **stays `0.x`**, gated on [#289](https://github.com/Akvize/reconcile-rs/issues/289). Chosen for reversibility: `0.x → 1.0` later is additive, `1.0 → 2.0` is not. Remaining: the version bumps, the crates.io card wording, a mechanical re-check via #311 |
+| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **Decided 2026-08-11**, recorded in AGENTS.md §11. `rsos`/`lww-register`/`reconcile-gossip` have types in `reconcile`'s public API, so their majors are coupled to its and they go **`1.0.0` with it**; `rbsr` has none — no `pub use rbsr::`, and `initial_ranges`/`protocol_round`/`RangeAggregate` are reached only from the `pub(crate)` `src/replica.rs` — so it **stays `0.x`**, gated on [#289](https://github.com/Akvize/reconcile-rs/issues/289). Chosen for reversibility: `0.x → 1.0` later is additive, `1.0 → 2.0` is not — **and #307 vindicated that within the day**: `feat(rbsr)!` landed on `main` 2026-08-11, changing `protocol_round`'s return type to `RoundOutcome` and retiring `SqrtFanOut` as the default, a breaking `rbsr` API change that a 1.0 line would have had to carry as a 2.0. Remaining: the version bumps, the crates.io card wording, a mechanical re-check via #311 |
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
 | [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
@@ -328,7 +383,8 @@ number it carries. Straight to `1.0.0` is defensible only if Gate A is complete;
 
 ### Not gates
 
-Open and wanted, none blocking: performance/evidence (#170–#174, #187, #280, #281, #257), the
+Open and wanted, none blocking: performance/evidence (#170–#174, #187, #280, #281 — #257 landed
+2026-08-11 via #307 and is no longer among them), the
 persistent-core-map epic (#270–#277), scaling (#185, #186, #190, #147, #178), the grid layer (#193,
 #191, #192, #184), the crypto roadmap (#96, #135, #136, #137), docs/ergonomics (#72, #92, #231,
 #232), and the additive remainder of #289/#290/#291 — #289 now also carrying `rbsr`'s eventual

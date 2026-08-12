@@ -53,7 +53,7 @@ dependency is legitimately attractive.
 |---|---|---|---|---|---|---|
 | Naive XOR RBSR | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
 | **Secure-fingerprint RBSR (≥256-bit), fixed fan-out *b*** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod, *b*=16) |
-| **↳ as instantiated in reconcile-rs (fan-out `√m`)** | **Θ(√n)** (see below) | O(d log n) | **Θ(log log n)** | No | Good | reconcile-rs |
+| **↳ as instantiated in reconcile-rs** (`b`=16, swappable policy) | O(d log n) | O(d log n) | O(log_16 n) sequential — *8 one-way msgs at n=10⁶* | No | Good | reconcile-rs |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
@@ -63,18 +63,24 @@ Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless
 Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
 (CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
-**The RBSR row splits in two because this implementation is not a fixed-*b* RBSR.** The published
-O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2; `rbsr`'s
-`protocol_round` cuts at `step = ⌊√m⌋` instead, so the first SPLIT advertises ~√n ranges *whatever
-d is*. That trades the family's communication bound away for a shallower recursion — measured, not
-estimated, by `benches/protocol.rs` ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
-See [§2.2](#22-competitors-at-the-reconciliation-algorithm-level) for the numbers.
+**The published O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2,
+and this implementation uses one** — `rbsr`'s default `RefinementPolicy` is `FixedFanOut(16)`, so
+the family's bounds describe it. The fan-out is a *local, swappable* choice rather than a wire
+contract, and `rbsr` also ships `SqrtFanOut`, which cuts at `step = ⌊√m⌋`: the first SPLIT then
+advertises ~√n ranges *whatever d is*, trading Θ(√n) communication for a Θ(log log n) recursion
+depth. That is a different point of the same curve, not a different family; the two coincide on
+round count below n ≈ 10¹², so the trade is one-sided in the reachable range. Both are measured in
+`benches/protocol.rs`; see [§2.2](#22-competitors-at-the-reconciliation-algorithm-level) for the
+numbers.
 
 **Key takeaway:** for the **large-n / small-d / latency-sensitive** profile, fixed-*b* RBSR is the
 **worst family on latency** (O(log n) sequential RTTs) whereas **Rateless IBLT** finds the diff in a
 single streaming exchange, with no *d* estimation, and with adversarial robustness — it is the
-**current SOTA choice** for this use case. reconcile-rs's `√m` fan-out inverts that particular
-trade-off (few RTTs, heavy rounds) rather than escaping it.
+**current SOTA choice** for this use case. reconcile-rs sits squarely in the fixed-*b* row and
+therefore inherits that weakness; its alternative `√m` policy moves along the same curve (fewer
+RTTs, heavier rounds) without escaping it, and measurably does not even buy the RTT saving below
+n ≈ 10¹² (§2.2). Escaping the trade-off rather than moving along it is
+[#185](https://github.com/Akvize/reconcile-rs/issues/185)'s job.
 
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
@@ -244,7 +250,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 | Family | Communication | Compute | RTT | Knows *d*? | Adversarial robustness | Maturity |
 |---|---|---|---|---|---|---|
 | **RBSR, fixed fan-out *b*** (secure fingerprint) | O(d log n) | O(d log n) | **O(log n) sequential** | No (self-adapting) | **Good** | Earthstar/Willow (naive XOR) — Negentropy (secure, *b*=16) |
-| **↳ reconcile-rs today** (fan-out `√m`) | **Θ(√n)**, d-independent | O(d log n) | **Θ(log log n) sequential** | No (self-adapting) | **Good** | reconcile-rs |
+| **↳ reconcile-rs, default policy** (`b`=16) | O(d log n) | O(d log n) | O(log_16 n) sequential | No | **Good** | reconcile-rs |
+| **↳ reconcile-rs, `SqrtFanOut` policy** (fan-out `√m`) | **Θ(√n)**, d-independent | O(d log n) | Θ(log log n) sequential — *equal to `b`=16 below n≈10¹²* | No (self-adapting) | **Good** | reconcile-rs |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
@@ -254,34 +261,77 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 - Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
   difference. On a 1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback
   benchmarks hide (cf. F16).
-- **This implementation does not sit on that point of the curve.** `rbsr/src/protocol.rs` cuts at
-  `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m elements each.
-  Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but the first SPLIT
-  emits ~√n range aggregates **regardless of d**, so communication is **Θ(√n)**, not O(d log n).
-  This is not a change of logarithmic base; it is a different complexity class in both columns, one
-  better and one worse. Measured by `benches/protocol.rs` (`u64` keys, d = 1, one element missing):
+- **A size-derived fan-out sits off that point of the curve, and `rbsr` ships one.** `SqrtFanOut`
+  cuts at `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m elements
+  each. Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but the first
+  SPLIT emits ~√n range aggregates **regardless of d**, so communication is **Θ(√n)**, not
+  O(d log n). This is not a change of logarithmic base; it is a different complexity class in both
+  columns, one better and one worse. It is not the default; the numbers below are why.
 
-  | n | wire bytes | ranges advertised | largest single round | one-way messages |
-  |---:|---:|---:|---:|---:|
-  | 10³ | 2 041 | 47 | 33 ranges / 1 447 B | 6 |
-  | 10⁴ | 5 395 | 121 | 101 ranges / 4 531 B | 8 |
-  | 10⁵ | 16 553 | 345 | 317 ranges / 15 327 B | 6 |
-  | 10⁶ | **53 046** | 1 048 | **1 001 ranges / 50 781 B** | 8 |
+  `benches/protocol.rs` measures **both columns against a fixed *b* in the same harness** (`u64`
+  keys, d = 1, one element missing):
 
-  ~×3.2 per decade of *n* on the bytes (i.e. √10), flat on the message count. Concretely: **one
-  dropped UDP update in a 1 M-entry map costs ~53 kB on the next anti-entropy round**, against
-  ~4 kB for a fixed *b* = 16. The single widest round is 50 781 B — inside the 65 507-byte datagram
-  ceiling, but ~35 IP fragments at a 1500-byte MTU, any one of which loses the whole round; and
-  `send_messages_paced` chunks past the ceiling rather than failing, so beyond ~1.7 M entries this
-  degrades into multiple datagrams rather than breaking. It is a bandwidth and fragmentation cost,
-  not a bug — but it is the reason
-  [#257](https://github.com/Akvize/reconcile-rs/issues/257) is a communication-complexity
-  regression rather than a tuning gap.
+  | n | `√m` bytes | `√m` msgs | `b`=16 bytes | `b`=16 msgs | `t`=32/`b`=16 bytes | msgs |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 10³ | 2 041 | 6 | 1 701 | 6 | 1 476 | 4 |
+  | 10⁴ | 5 395 | 8 | 2 195 | 6 | 1 520 | 4 |
+  | 10⁵ | 16 553 | 6 | 2 789 | 6 | 2 294 | 5 |
+  | 10⁶ | **53 046** | 8 | **3 834** | 8 | **3 246** | 6 |
+
+  ~×3.2 per decade of *n* on the `√m` bytes (i.e. √10). Concretely: **one dropped UDP update in a
+  1 M-entry map costs ~53 kB on the next anti-entropy round**, against 3.8 kB for a fixed *b* = 16 —
+  and ~13× the local `Aggregate`/`Rank`/`Select` queries with it (2 094/2 092/1 040 against
+  155/152/70).
+
+  The paper's local cost *T_loc* is the widest gap, and it is pure CPU, so no RTT caveat touches it:
+  the timed two-peer drive at d = 1 runs **2.10 ms under `√m` against 45.0 µs at *b* = 16 (≈47×)** at
+  n = 10⁶, 460 µs against 25.2 µs at 10⁵, and only 1.6× apart at 10³. Steeper than the query-count
+  ratio because a `√n` fan-out's queries are individually dearer — ~1 000 `Select`s at spread-out
+  ranks and ~1 000 wide `Aggregate`s per round touch far more of the tree than a narrow descent.
+
+  **The compensation is not observable in the reachable range.** Θ(log log n) beats Θ(log_16 n)
+  asymptotically, but at n = 10⁶ the iterated square root bottoms out in ~4 levels and log₁₆ 10⁶ ≈ 5;
+  the measured message counts are *identical* (8 and 8). The separation only reaches a factor of two
+  around n ≈ 10¹², far past what a fully-replicated in-memory store holds. So the `√m` rule pays the
+  Θ(√n) bytes and buys nothing back at any size this crate targets.
+
+  Two qualifications keep it from being a one-line verdict. First, every benchmark here runs at
+  RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), so the message column is a
+  *count*: equal counts do mean equal round-trips, but a policy losing on that column could not be
+  priced in seconds. Second, the gap closes as *d* grows and scatters — at d = 100 over 10⁶ elements
+  the two are within 7 % (270 940 B against 253 153 B), because ~√n ranges stop being overhead once
+  the difference genuinely needs that many. `√m` is worst exactly in the small-*d* regime RBSR
+  exists for.
+
+  The widest single round at d = 1 is 50 781 B — inside the 65 507-byte datagram ceiling, but ~35 IP
+  fragments at a 1500-byte MTU, any one of which loses the whole round. At d = 100 over 10⁶ elements
+  it reaches **160 908 B over 3 300 ranges**, i.e. three datagrams: `send_messages_paced` chunks past
+  the ceiling rather than failing, so this degrades into extra datagrams and ~189 fragments rather
+  than breaking. It is a bandwidth and fragmentation cost, not a bug — but it is the reason #257 is a
+  communication-complexity regression rather than a tuning gap.
+- **Sweeping *b* itself lands on 16.** `benches/protocol.rs`'s `fan_out_sweep` runs *b* = 2…256.
+  Bytes and local work follow *b*/ln *b* (minimum near *b* = 3: 1 960 B at *b* = 4 against 3 834 B at
+  16, n = 10⁶, d = 1); one-way messages fall as log_*b* n to a floor of 6, reached at *b* = 32.
+  *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
+  measured (n, d, clustering), while spending 13.8× fewer bytes, ~45× less *T_loc* and a 63×
+  narrower widest round.
+  *b* = 4 wins on bytes and CPU but costs two round-trips — break-even at an RTT of ≈8 µs at 1 Gb/s,
+  i.e. only worth it when the "network" is in-process. Because the policy never crosses the wire and
+  mixed pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format
+  decision.
+- **The `t` column is not free, and the byte table above does not show its price.** The paper's
+  enumeration threshold wins the refinement column by *stopping early* — and everything it stops on
+  is then shipped as values, almost all of which the peer already holds. At n = 10⁵, d = 100
+  scattered, `t`=32/`b`=16 advertises 88 817 B of refinement against `√m`'s 147 726 B, but enumerates
+  **5 036 elements against 100**: a 50× value amplification hidden behind a 40 % refinement saving.
+  This is why `benches/protocol.rs` reports IDLIST elements alongside advertised ranges, and why a
+  policy comparison that reports only wire ranges would pick the wrong default.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
   (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per
   round it is ~79 % of the bytes measured above. The two decisions are only separable if the
-  fan-out shrinks.
+  fan-out shrinks — which, now that the fan-out is a swappable policy, is a one-line change to a
+  caller rather than an edit to the protocol loop.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
