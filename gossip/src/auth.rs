@@ -6,20 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Per-datagram message authentication for the reconciliation protocol.
-//!
-//! Without a cluster key, any host that can reach the port can forge an update and poison the
-//! cluster via last-write-wins (see the crate-level "Security model" docs). With
-//! `Config::with_cluster_key`, every outgoing
-//! datagram is framed as `tag || replay_header || payload`, `tag` a keyed MAC over
-//! `replay_header || payload`; incoming datagrams are verified before any deserialization. The
-//! 16-byte `replay_header` (`seq || stamp`, both little-endian `u64`) feeds the checks in
-//! [`crate::replay`].
-//!
-//! With the `encryption` feature and
-//! `Config::with_encryption`, the same keyed
-//! mode upgrades to authenticated encryption: `nonce || ciphertext || tag` via XChaCha20-Poly1305,
-//! the replay header encrypted along with the payload.
+//! Per-datagram message authentication. Unauthenticated by default: README "Security model".
 //!
 //! # Wire layout (authenticated modes)
 //!
@@ -27,30 +14,12 @@
 //!
 //! Encryption mode: `nonce (24 B) || encrypt(seq (8 B LE) || stamp (8 B LE) || protocol_messages) || tag (16 B)`
 //!
-//! The replay header is inside the authenticated / encrypted region in both cases, so it cannot be
-//! tampered with by an observer.
+//! The replay header sits inside the authenticated/encrypted region in both cases.
 //!
-//! # Design
-//!
-//! The module is layered so the type system carries the security invariants ("parse, don't
-//! validate"):
-//!
-//! - [`Mac`] is the cryptographic primitive — a compile-time-selected trait with one concrete
-//!   backend per Cargo feature ([`Blake3Mac`] for `mac-blake3`, the default, or `HmacSha256Mac`
-//!   for `mac-hmac`). [`ClusterMac`] aliases the active backend.
-//! - [`ClusterKey`] and [`Tag`] are newtypes around raw byte arrays so keys, tags and arbitrary
-//!   buffers cannot be confused.
-//! - [`Authenticator`] holds the policy (authentication enabled or not) plus framing. It is the
-//!   only producer of a [`Payload`].
-//! - [`Payload`] is an opaque wrapper that can only be obtained from [`Authenticator::open`].
-//!   Because message handling consumes a `Payload` rather than `&[u8]`, it is structurally
-//!   impossible to deserialize bytes that have not cleared the authentication gate.
-//! - [`Payload`] additionally carries its replay-check state as a type parameter
-//!   ([`Authenticated`] vs [`Verified`]): [`Authenticator::open`] can only produce
-//!   `Payload<Authenticated>`, and [`Payload::verify_replay`] is the sole way to obtain a
-//!   `Payload<Verified>`. Message handling takes `Payload<Verified>`, so a datagram that has
-//!   cleared the MAC/AEAD gate but not the anti-replay filter cannot reach it — the ordering is
-//!   enforced by the compiler, not by call-site discipline.
+//! The layering carries the security invariants in the types: [`Authenticator`] is the sole
+//! producer of a [`Payload`], and message handling consumes `Payload<`[`Verified`]`>`, obtainable
+//! only from [`Payload::verify_replay`] — so authenticate-before-decode
+//! (`ARCHITECTURE.md` §5 invariant 5) and check-replay-before-handle are both compile-time.
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -66,8 +35,7 @@ pub const KEY_LEN: usize = 32;
 
 /// Length in bytes of the XChaCha20-Poly1305 nonce prepended to each encrypted datagram.
 ///
-/// A 192-bit nonce is large enough that drawing it at random for every datagram has negligible
-/// collision probability, so the encrypted mode needs no per-peer counter or connection state.
+/// 192 bits: safe to draw at random per datagram, so no per-peer counter is needed.
 #[cfg(feature = "encryption")]
 pub const AEAD_NONCE_LEN: usize = 24;
 
@@ -83,10 +51,7 @@ compile_error!(
 
 /// A shared cluster secret. Constructing one is the only way to enable authentication.
 ///
-/// The type is deliberately `Clone` but **not** `Copy`: with the `zeroize` feature enabled it
-/// implements a `Drop` that wipes the key bytes from memory, which `Copy` would forbid (and which
-/// would be meaningless for a freely-duplicated value). Cloning a 32-byte array is trivial, so the
-/// absence of `Copy` costs nothing at runtime.
+/// `Clone` but not `Copy`: the `zeroize` feature gives it a wiping `Drop`, which `Copy` forbids.
 #[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
 #[derive(Clone)]
 pub struct ClusterKey([u8; KEY_LEN]);
@@ -121,23 +86,12 @@ pub struct Authenticated;
 /// [`Payload::verify_replay`].
 pub struct Verified;
 
-/// A datagram payload that has cleared the authentication gate — either its tag was verified (or it
-/// was authenticated and decrypted), or the store is running in (explicitly) unauthenticated mode.
-/// The rest of the engine can only obtain one through [`Authenticator::open`], so message handling
-/// cannot, by construction, run on bytes that were not cleared first ("parse, don't validate").
+/// A datagram payload that has cleared the authentication gate, obtainable only from
+/// [`Authenticator::open`].
 ///
-/// In authenticated modes the payload also carries the `seq` and `stamp` extracted from the
-/// replay header; in unauthenticated mode both are [`Seq::NONE`]/[`Stamp::NONE`] (replay
-/// protection is disabled).
-///
-/// `State` tracks how far the payload has progressed through validation — [`Authenticated`] (just
-/// [`Authenticator::open`]) or [`Verified`] (also cleared [`Payload::verify_replay`]) — so the
-/// *order* of the two checks is a compile-time property, not a call-site convention. See the
-/// module docs.
-///
-/// The bytes are borrowed from the receive buffer in the MAC and unauthenticated modes (zero-copy),
-/// and owned in the encrypted mode where decryption produces a fresh plaintext buffer; [`Cow`]
-/// captures both without forcing an allocation on the common path.
+/// `State` is [`Authenticated`] or [`Verified`], so the order of the two checks is a compile-time
+/// property. `seq`/`stamp` are [`Seq::NONE`]/[`Stamp::NONE`] in unauthenticated mode. [`Cow`]
+/// because the MAC path borrows the receive buffer and the encrypted path owns a plaintext.
 pub struct Payload<'a, State = Authenticated> {
     bytes: Cow<'a, [u8]>,
     /// Sender sequence number extracted from the replay header, or [`Seq::NONE`] in
@@ -150,17 +104,10 @@ pub struct Payload<'a, State = Authenticated> {
 }
 
 impl<'a> Payload<'a, Authenticated> {
-    /// The sole path from [`Authenticated`] to [`Verified`]: run the replay check and, on
-    /// success, return a payload message handling can consume.
+    /// The sole path from [`Authenticated`] to [`Verified`].
     ///
-    /// No longer takes `&Authenticator`: whether replay-checking even applies is
-    /// [`ReplayFilter`]'s own concern, fixed once at construction from the authenticator's mode
-    /// (see its doc comment) rather than re-derived on every datagram. A disabled filter accepts
-    /// unconditionally, so this always behaves correctly regardless of mode — there is no `bool`
-    /// left for a caller to get backwards.
-    ///
-    /// Returns `None` when the datagram is a replay, a duplicate, or outside the freshness window;
-    /// the caller drops it silently, same as an authentication failure.
+    /// `None` when the datagram is a replay, a duplicate, or outside the freshness window — the
+    /// caller drops it silently. A disabled [`ReplayFilter`] accepts unconditionally.
     pub fn verify_replay(
         self,
         filter: &ReplayFilter,
@@ -205,18 +152,14 @@ fn decode_replay_header(data: &[u8]) -> Option<(Seq, Stamp, &[u8])> {
     Some((seq, stamp, &data[REPLAY_HEADER_LEN..]))
 }
 
-/// The keyed MAC primitive used to authenticate datagrams.
-///
-/// The active backend is selected at compile time through the `mac-*` Cargo features and aliased
-/// as [`ClusterMac`]; this trait makes the contract that every backend must satisfy explicit and
-/// compiler-checked, rather than relying on convention.
+/// The keyed MAC primitive: one backend per `mac-*` feature, aliased as [`ClusterMac`].
 pub trait Mac {
     /// Compute the authentication tag of `message` under `key`.
     fn tag(key: &ClusterKey, message: &[u8]) -> Tag;
 
     /// Constant-time check that `tag` authenticates `message` under `key`.
     ///
-    /// `tag` is the untrusted on-the-wire slice; an incorrect length yields `false`.
+    /// `tag` is untrusted wire input; a wrong length yields `false`.
     fn verify(key: &ClusterKey, message: &[u8], tag: &[u8]) -> bool;
 }
 
@@ -239,8 +182,6 @@ impl Mac for Blake3Mac {
     }
 }
 
-// Compiled only when it is actually the selected backend (`mac-blake3` takes precedence), so an
-// `--all-features` build does not carry an unused struct.
 /// [`Mac`] backend keyed on HMAC-SHA256 (`mac-hmac` feature).
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub struct HmacSha256Mac;
@@ -266,8 +207,7 @@ impl Mac for HmacSha256Mac {
     }
 }
 
-// `mac-blake3` takes precedence when both backends are enabled (e.g. under `--all-features`), so
-// such builds still compile instead of hitting a hard error.
+// `mac-blake3` wins when both are enabled, so `--all-features` still compiles.
 /// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(feature = "mac-blake3")]
 pub type ClusterMac = Blake3Mac;
@@ -275,10 +215,7 @@ pub type ClusterMac = Blake3Mac;
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 pub type ClusterMac = HmacSha256Mac;
 
-/// Authentication policy and datagram framing for one node.
-///
-/// Holds the cluster key (or the absence thereof) and is the sole producer of [`Payload`] values.
-/// Not `Copy` because it may carry a [`ClusterKey`]; cloning it is cheap.
+/// Authentication policy and datagram framing for one node: the sole producer of [`Payload`].
 #[derive(Clone)]
 pub enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
@@ -294,13 +231,10 @@ pub enum Authenticator {
 impl Authenticator {
     /// Build an authenticator from an optional raw cluster key and whether to encrypt.
     ///
-    /// `encrypt` is only ever `true` when `Config::with_encryption` was used, which is gated on
-    /// the `encryption` feature; the `cfg(not(...))` arm keeps the match exhaustive and turns any
-    /// other route into a clear panic instead of a silent downgrade.
-    ///
     /// # Panics
     ///
-    /// Panics if `encrypt` is `true` and the crate was built without the `encryption` feature.
+    /// If `encrypt` is `true` and the crate was built without the `encryption` feature — a loud
+    /// failure rather than a silent downgrade.
     pub fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
         match (key, encrypt) {
             (None, _) => Authenticator::Disabled,
@@ -315,11 +249,8 @@ impl Authenticator {
         }
     }
 
-    /// Number of extra bytes a sealed datagram adds over the raw protocol messages, for
-    /// MTU/buffer accounting.
-    ///
-    /// In authenticated modes this includes both the cryptographic overhead (tag / nonce+tag) and
-    /// the 16-byte replay header.
+    /// Extra bytes a sealed datagram adds over the raw messages, for MTU accounting: crypto
+    /// overhead plus the replay header.
     pub fn overhead(&self) -> usize {
         match self {
             Authenticator::Disabled => 0,
@@ -331,22 +262,16 @@ impl Authenticator {
 
     /// Frame an outgoing datagram, injecting the replay header.
     ///
-    /// - `Enabled`: `tag(replay_header || payload) || replay_header || payload`.
-    /// - `Encrypted`: `nonce || ciphertext(replay_header || payload) || tag`.
-    ///
-    /// Returns `Some(framed)` when enabled/encrypted, or `None` when disabled (the caller then
-    /// sends `payload` unchanged, byte-for-byte identical to the unauthenticated protocol).
+    /// `None` when disabled: the caller sends `payload` unchanged.
     pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Option<Vec<u8>> {
         match self {
             Authenticator::Disabled => None,
             Authenticator::Enabled(key) => {
                 let header = encode_replay_header(seq, stamp);
-                // Authenticated region: replay_header || payload
                 let mut protected = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
                 protected.extend_from_slice(&header);
                 protected.extend_from_slice(payload);
                 let tag = ClusterMac::tag(key, &protected);
-                // Wire: tag || replay_header || payload
                 let mut framed = Vec::with_capacity(TAG_LEN + protected.len());
                 framed.extend_from_slice(tag.as_bytes());
                 framed.extend_from_slice(&protected);
@@ -355,7 +280,6 @@ impl Authenticator {
             #[cfg(feature = "encryption")]
             Authenticator::Encrypted(key) => {
                 let header = encode_replay_header(seq, stamp);
-                // Plaintext = replay_header || payload; both are encrypted and authenticated.
                 let mut plaintext = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
                 plaintext.extend_from_slice(&header);
                 plaintext.extend_from_slice(payload);
@@ -364,16 +288,10 @@ impl Authenticator {
         }
     }
 
-    /// Authenticate (and, in encrypted mode, decrypt) an incoming datagram, returning the
-    /// [`Payload`] cleared for processing.
+    /// Authenticate (and in encrypted mode decrypt) an incoming datagram.
     ///
-    /// In authenticated modes the returned [`Payload`] also carries the `seq` and `stamp` values
-    /// extracted from the replay header. The result is [`Authenticated`], not [`Verified`]: the
-    /// caller must call [`Payload::verify_replay`] before message handling will accept it. In
-    /// unauthenticated mode both fields are [`Seq::NONE`]/[`Stamp::NONE`].
-    ///
-    /// On any failure (too short, invalid tag, decryption error, missing replay header) `None` is
-    /// returned and the caller drops it silently.
+    /// Produces [`Authenticated`], never [`Verified`]: the caller must still
+    /// [`Payload::verify_replay`]. `None` on any failure, and the caller drops it silently.
     pub fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a, Authenticated>> {
         match self {
             Authenticator::Disabled => Some(Payload {
@@ -401,7 +319,6 @@ impl Authenticator {
             #[cfg(feature = "encryption")]
             Authenticator::Encrypted(key) => {
                 let plaintext = encryption::open(key, datagram)?;
-                // The plaintext starts with the replay header.
                 let (seq, stamp, messages) = decode_replay_header(&plaintext)?;
                 Some(Payload {
                     bytes: Cow::Owned(messages.to_vec()),
@@ -415,9 +332,6 @@ impl Authenticator {
 }
 
 /// XChaCha20-Poly1305 authenticated encryption over the cluster key.
-///
-/// A child module so it can reuse [`ClusterKey`]'s private accessor while keeping all the
-/// `chacha20poly1305` plumbing — and the feature gate — in one place.
 #[cfg(feature = "encryption")]
 mod encryption {
     use chacha20poly1305::aead::{Aead, OsRng};
@@ -432,8 +346,7 @@ mod encryption {
     /// Encrypt `payload`, returning `nonce || ciphertext || tag`.
     pub(super) fn seal(key: &ClusterKey, payload: &[u8]) -> Vec<u8> {
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        // No associated data. Encryption only fails for a multi-gigabyte plaintext, which a single
-        // UDP datagram can never reach, so the buffer-size invariant makes this infallible.
+        // Encryption only fails past multi-gigabyte plaintexts, unreachable in a datagram.
         let ciphertext = cipher(key)
             .encrypt(&nonce, payload)
             .expect("XChaCha20-Poly1305 encryption of a datagram-sized payload cannot fail");
@@ -468,11 +381,8 @@ mod tests {
         ClusterKey::new([byte; KEY_LEN])
     }
 
-    /// Run a freshly-opened `Payload` through the replay check, using a throwaway filter with a
-    /// wide-open freshness window — these tests care about the auth/seal roundtrip, not replay
-    /// semantics (covered separately in `replay::tests`), so any fresh datagram must pass. The
-    /// window must be huge, not just generous: these tests seal fixed, near-epoch stamps (e.g.
-    /// `12345`), not real "now" values, so it must cover the gap to actual wall-clock time.
+    /// Replay-check with a throwaway wide-open filter: these tests seal fixed near-epoch stamps,
+    /// so the window must span the gap to real wall-clock time.
     fn verify(payload: Payload<'_, Authenticated>) -> Payload<'_, Verified> {
         let filter = ReplayFilter::new(Duration::from_secs(200 * 365 * 24 * 3600), true);
         let sender: IpAddr = "127.0.0.1".parse().unwrap();
@@ -516,7 +426,6 @@ mod tests {
         let sealed = auth
             .seal(Seq::new(1), Stamp::new(12345), payload)
             .expect("enabled");
-        // MAC overhead + replay header + payload
         assert_eq!(sealed.len(), TAG_LEN + REPLAY_HEADER_LEN + payload.len());
         let p = verify(auth.open(&sealed).expect("should open"));
         assert_eq!(p.as_bytes(), payload);
@@ -527,7 +436,6 @@ mod tests {
     #[test]
     fn open_too_short() {
         let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
-        // Fewer than TAG_LEN + REPLAY_HEADER_LEN bytes can never carry a valid datagram.
         assert!(auth.open(&[0u8; TAG_LEN + REPLAY_HEADER_LEN - 1]).is_none());
         assert!(auth.open(&[0u8; 10]).is_none());
         assert!(auth.open(&[]).is_none());
@@ -549,7 +457,6 @@ mod tests {
         assert!(matches!(auth, Authenticator::Disabled));
         assert_eq!(auth.overhead(), 0);
         assert!(auth.seal(Seq::new(0), Stamp::new(0), b"payload").is_none());
-        // Any datagram clears the gate unchanged in unauthenticated mode; seq/stamp are 0.
         let p = verify(
             auth.open(b"raw bytes")
                 .expect("unauthenticated always clears"),
@@ -559,8 +466,7 @@ mod tests {
         assert_eq!(p.stamp, Stamp::new(0));
     }
 
-    /// Replay: the same sealed datagram must be accepted by `open` (the auth gate does not do
-    /// replay checks), but the payload carries the seq/stamp so the caller can do them.
+    /// The auth gate does not replay-check: a resealed datagram opens, carrying seq/stamp.
     #[test]
     fn replay_header_round_trips_seq_and_stamp() {
         let auth = Authenticator::new(Some([0xAB; KEY_LEN]), false);
@@ -595,7 +501,6 @@ mod tests {
             let sealed = auth
                 .seal(Seq::new(1), Stamp::new(555), payload)
                 .expect("encrypted");
-            // nonce + replay_header + payload + AEAD tag
             assert_eq!(
                 sealed.len(),
                 super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + payload.len() + super::AEAD_TAG_LEN
@@ -612,7 +517,6 @@ mod tests {
             let sealed = encryptor(0x11)
                 .seal(Seq::new(1), Stamp::new(0), payload)
                 .expect("encrypted");
-            // The plaintext must not appear anywhere in the framed datagram.
             assert!(!sealed
                 .windows(payload.len())
                 .any(|window| window == payload));
@@ -620,8 +524,7 @@ mod tests {
 
         #[test]
         fn fresh_nonce_per_datagram() {
-            // The same payload sealed twice must differ (random nonce), so an observer cannot even
-            // tell two identical messages apart.
+            // Random nonce: two identical messages must not be distinguishable as such.
             let auth = encryptor(0x11);
             let payload = b"identical payload";
             assert_ne!(
@@ -638,7 +541,6 @@ mod tests {
             let mut sealed = auth
                 .seal(Seq::new(1), Stamp::new(0), b"payload")
                 .expect("encrypted");
-            // Flip a ciphertext byte (past the nonce): authentication must fail.
             let last = sealed.len() - 1;
             sealed[last] ^= 0x01;
             assert!(auth.open(&sealed).is_none());
@@ -655,7 +557,6 @@ mod tests {
         #[test]
         fn truncated_is_rejected() {
             let auth = encryptor(0x11);
-            // Shorter than nonce + replay_header + tag can never carry a valid datagram.
             assert!(auth
                 .open(&[0u8; super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + super::AEAD_TAG_LEN - 1])
                 .is_none());

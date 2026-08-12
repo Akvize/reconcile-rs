@@ -6,22 +6,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Durability for a [`ReplicatedMap`](crate::ReplicatedMap): the port, and the file adapter.
+//! Durability for a [`ReplicatedMap`](crate::ReplicatedMap), re-exported so
+//! `reconcile::persistence::*` resolves unchanged.
 //!
-//! Persistence is split along the line between contract and adapter (ARCHITECTURE.md §2), but
-//! only one of the two halves left this package:
-//!
-//! - [`lww_register::persistence`] holds the [`Persistence`] port, the [`PersistedState`] snapshot
-//!   type, and [`InMemoryPersistence`] — the non-durable default, which sits next to the trait it
-//!   trivially implements so that the default backend costs no extra crate. Nothing there touches a
-//!   filesystem or a wire codec, which is exactly why [`FileSnapshot`] could not stay with it.
-//! - `crate::snapshot` holds [`FileSnapshot`], the durable adapter, together with the versioned
-//!   on-disk header that makes a stale-format snapshot a clean load error rather than a silent
-//!   misread. It is a module of this package, not a crate of its own.
-//!
-//! Everything is re-exported here so `reconcile::persistence::*` keeps resolving exactly as before.
-//! See [`lww_register::persistence`] for what is persisted and why it matters for tombstone
-//! resurrection.
+//! The [`Persistence`] port, [`PersistedState`] and [`InMemoryPersistence`] live in
+//! [`lww_register::persistence`]; [`FileSnapshot`], the durable adapter with its versioned on-disk
+//! header, lives in `crate::snapshot` (`ARCHITECTURE.md` §2).
 
 pub use crate::snapshot::FileSnapshot;
 pub use lww_register::persistence::{

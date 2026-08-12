@@ -15,25 +15,13 @@ use chrono::{DateTime, Utc};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A wheel that tracks per-value expiry instants and yields expired values.
+/// Tracks per-value expiry instants and yields expired values.
 ///
-/// # Collision safety
-///
-/// The wheel maps each `DateTime<Utc>` expiry instant to a **`HashSet<T>`** rather than a single
-/// `T`. Multiple entries sharing the same millisecond instant (e.g. two keys passed to `remove_bulk`
-/// in the same wall-clock millisecond) each occupy their own slot inside the set, so neither
-/// silently overwrites the other.
-///
-/// Using a `HashSet` (rather than a `Vec`) for the bucket keeps per-value `insert`/`remove` O(1):
-/// removing one of `n` entries sharing an instant no longer scans the whole bucket, so a
-/// `remove_bulk` of `n` same-instant keys is O(n) overall instead of O(n²).
+/// Each instant maps to a `HashSet<T>`, so same-millisecond entries do not overwrite each other
+/// and per-value `insert`/`remove` stays `O(1)`.
 #[derive(Clone, Default)]
 pub(crate) struct TimeoutWheel<T: Clone + Hash + std::cmp::Eq> {
     /// Primary ordering structure: `expiry_instant` → `HashSet<value>`.
-    ///
-    /// A set per instant means that two entries sharing the same timestamp are stored as
-    /// separate elements in the same bucket; `remove_bulk` of ≥2 keys in the same millisecond
-    /// no longer silently drops one of them, and locating a single value in the bucket is O(1).
     wheel: Arc<RwLock<BTreeMap<DateTime<Utc>, HashSet<T>>>>,
     /// Reverse index: value → expiry instant, used by `remove` to locate the wheel bucket.
     map: Arc<RwLock<HashMap<T, DateTime<Utc>>>>,
@@ -62,18 +50,11 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         *self.timeout.write().unwrap() = timeout;
     }
 
-    /// Track `e` as expiring at `instant`.
-    ///
-    /// If `e` was already tracked under a different instant, the old wheel slot is removed first
-    /// so no orphan entry is left behind.
+    /// Track `e` as expiring at `instant`, clearing any slot it already held.
     pub fn insert(&self, e: T, instant: DateTime<Utc>) {
         let mut wheel = self.wheel.write().unwrap();
         let mut map = self.map.write().unwrap();
 
-        // If the value is already tracked, remove it from its current wheel bucket before
-        // inserting it at the new instant. This keeps wheel and map consistent when the same
-        // value is re-inserted with a new instant (e.g. a tombstone whose HLC timestamp was
-        // bumped by a re-remove).
         if let Some(old_instant) = map.get(&e) {
             if let Some(bucket) = wheel.get_mut(old_instant) {
                 bucket.remove(&e);
@@ -88,11 +69,8 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         map.insert(e, instant);
     }
 
-    /// Return all entries whose timeout has elapsed, **without removing them**.
-    ///
-    /// Used by causal-stability-gated tombstone GC: a tombstone may be old enough to
-    /// expire by wall-clock age but must be retained until every replica has acknowledged
-    /// it, so the caller needs to peek expired candidates without dropping the tracking.
+    /// Entries whose timeout has elapsed, **without removing them** — causal-stability-gated GC
+    /// needs to peek candidates it may still have to retain.
     pub fn expired(&self) -> Vec<T> {
         let now = Utc::now();
         let timeout = *self.timeout.read().unwrap();
@@ -105,12 +83,8 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
             .collect()
     }
 
-    /// The instant `value` is currently tracked under, if any.
-    ///
-    /// Test-only introspection: the tombstone-expiry tests assert on the *derived* instant itself,
-    /// not merely on whether the value eventually expires, because the defect being guarded
-    /// against (an unbounded, peer-controlled instant) is invisible to an "it expired" assertion —
-    /// it is precisely a tombstone that never does.
+    /// The instant `value` is tracked under. Test-only: a tombstone that never expires is
+    /// invisible to an "it expired" assertion, so the tests assert on the instant itself.
     #[cfg(test)]
     pub(crate) fn instant_of(&self, value: &T) -> Option<DateTime<Utc>> {
         self.map.read().unwrap().get(value).copied()

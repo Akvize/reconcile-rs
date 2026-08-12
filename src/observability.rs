@@ -6,15 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Centralized observability helpers.
+//! Centralized observability helpers: the one place the `#[cfg(feature = "metrics")]` gate lives.
+//! Each helper is an `#[inline]` no-op when the feature is off.
 //!
-//! Every metric emission in the crate goes through one of the helpers defined here, so that
-//! the `#[cfg(feature = "metrics")]` gate lives in exactly one place and hot-path call sites
-//! stay clean and unconditional. When the `metrics` feature is disabled, each helper compiles
-//! to an `#[inline]` no-op, so the default build keeps its lean dependency footprint and the
-//! call sites are optimized away.
-//!
-//! Metric names use a flat `reconcile_` prefix, following Prometheus conventions:
+//! Metric names use a flat `reconcile_` prefix:
 //!
 //! | Metric | Type | Meaning |
 //! |---|---|---|
@@ -55,8 +50,7 @@ mod imp {
     pub(crate) const ROUND_DURATION_SECONDS: &str = "reconcile_round_duration_seconds";
     pub(crate) const HANDLE_DURATION_SECONDS: &str = "reconcile_handle_messages_duration_seconds";
 
-    /// Start a timer for a latency histogram. Returns `None` (and costs nothing) when the
-    /// `metrics` feature is disabled, so callers can keep the timer unconditional.
+    /// Start a latency-histogram timer; `None` when the `metrics` feature is off.
     #[inline]
     pub(crate) fn timer() -> Option<Instant> {
         Some(Instant::now())
@@ -109,9 +103,8 @@ mod imp {
         counter!(TOMBSTONE_ACKS_RESENT_TOTAL).increment(n as u64);
     }
 
-    /// A tombstone's expiry instant could not be taken from its stored stamp verbatim. `outcome`
-    /// is `"capped"` or `"unrepresentable"` (see `crate::clock::StampBound`); a non-zero rate here
-    /// means some peer is planting stamps far ahead of this node's clock.
+    /// A tombstone's expiry instant had to be bounded. A non-zero rate means a peer is planting
+    /// stamps far ahead of this node's clock.
     #[inline]
     pub(crate) fn record_tombstone_stamp_bounded(outcome: &'static str) {
         counter!(TOMBSTONE_STAMP_BOUNDED_TOTAL, "outcome" => outcome).increment(1);
@@ -131,8 +124,8 @@ mod imp {
         }
     }
 
-    /// Register human-readable descriptions and units for all metrics. Safe to call more than
-    /// once; intended to be invoked right after a recorder is installed (see [`crate::prometheus`]).
+    /// Register descriptions and units for all metrics. Idempotent; call after installing a
+    /// recorder.
     #[cfg(feature = "metrics-prometheus")]
     pub(crate) fn describe() {
         use metrics::{describe_counter, describe_histogram, Unit};

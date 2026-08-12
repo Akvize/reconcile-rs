@@ -59,28 +59,17 @@ const MAX_SENDTO_RETRIES: u32 = 4;
 
 type PreInsertCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &V)>;
 
-/// Compute a deterministic, cross-node version token for a value.
+/// A deterministic, cross-node version token for a value: the low 64 bits of `rsos::digest`
+/// (`ARCHITECTURE.md` §5 invariant 7).
 ///
-/// Used to acknowledge a *specific* version of a tombstone across replicas: a peer
-/// acknowledges the exact value it holds, so a stale acknowledgment for an older
-/// tombstone cannot authorize GC of a newer one.
-///
-/// Derived from `rsos`'s canonical serde encoding — the same byte source range fingerprints use —
-/// and truncated to its low 64 bits. It used to be `DefaultHasher`, whose *keys* are fixed but
-/// whose algorithm and byte consumption std explicitly does not stabilize across releases; that
-/// made "the same value hashes identically on every node" true only for nodes on the same
-/// toolchain. The canonical encoding makes it true unconditionally, and drops the `Hash` bound
-/// that would otherwise have to survive on every value type.
+/// A peer acknowledges the exact tombstone version it holds, so a stale ack cannot authorize GC of
+/// a newer one.
 pub(crate) fn version_hash<V: Serialize>(value: &V) -> u64 {
     rsos::digest(value).0[0]
 }
 
-/// Hard cap on the number of distinct tracked peers a receive loop admits.
-///
-/// Owns the single admission rule shared by the dated engine and the dateless read replica: a datagram
-/// from a sender is admitted while that sender is already known, or while the tracked-peer count
-/// is under the cap. Centralizing the rule here means it is defined exactly once instead of being
-/// re-derived (and risking drift) at each receive loop. Sourced from
+/// Hard cap on distinct tracked peers, owning the one admission rule both receive loops share: a
+/// sender is admitted while already known, or while the count is under the cap. Sourced from
 /// [`Config::max_peers`](crate::replicated_map::Config::max_peers).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PeerCap(usize);
@@ -101,15 +90,12 @@ impl PeerCap {
     }
 }
 
-/// Derive a node's **local network** from the declared `nets` and its `listen_addr`.
+/// Derive a node's **local network** — whichever declared net contains `listen_addr`, and the one
+/// reconciled with every round.
 ///
-/// The local network is whichever declared net contains the listen address — the one a node
-/// reconciles with aggressively (every round). When none does (a misconfiguration), this falls back
-/// to the node's own host route (`/32`-`/128`), so only the node itself is local and every peer is
-/// treated as remote (throttled) rather than silently mis-qualified.
-///
-/// Reused on construction **and** on every runtime mutation of `nets`, so the warning fires only at
-/// those mutation boundaries — never once per reconciliation round.
+/// With no match, falls back to the node's own host route, so every peer is treated as remote
+/// rather than mis-qualified. Called at construction and on each `nets` mutation, so the warning
+/// fires only there.
 fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
     net_of(nets, listen_addr).unwrap_or_else(|| {
         warn!(
@@ -122,45 +108,32 @@ fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
     })
 }
 
-/// The internal reconciliation engine at the network level.
-/// This struct does not handle removals, which are managed by the external layer.
-/// For more information, see [`ReplicatedMap`](crate::replicated_map::ReplicatedMap).
+/// The internal reconciliation engine at the network level; removals are the outer layer's
+/// ([`ReplicatedMap`](crate::replicated_map::ReplicatedMap)).
 ///
-/// `V` is the plain user value type; the engine internally stores and exchanges the dated
-/// [`Entry<Timestamp, V>`](crate::entry::Entry) domain type (see `ARCHITECTURE.md` §4).
-///
-/// The datagram-I/O [`Transport`] port is carried as `Arc<dyn Transport<Addr = SocketAddr>>` inside
-/// [`Inner`], since it is always reached behind a trait object. Wire encoding goes through the
-/// free functions in [`gossip::bincode`] (not a port), so the engine names no codec type
-/// parameter.
+/// `V` is the plain user value type, stored and exchanged as
+/// [`Entry<Timestamp, V>`](crate::entry::Entry) (`ARCHITECTURE.md` §4). [`Transport`] is held as a
+/// trait object; encoding goes through [`gossip::bincode`], so no codec parameter appears.
 pub(crate) struct Replica<K, V> {
-    /// All engine state lives behind a single [`Arc`] so that cloning the engine (every clone
-    /// shares the same maps, peers, clock, …) is a single refcount bump. Cloning is therefore
-    /// cheap and bound-free, and the previously hand-written `Clone` impl reduces to a derive.
-    /// Fields are reached transparently through the [`Deref`] impl below, so every existing
-    /// `self.field` / `engine.field` access keeps working unchanged.
+    /// All engine state behind one [`Arc`], so a clone is a refcount bump. Fields are reached
+    /// through the [`Deref`] impl below.
     inner: Arc<Inner<K, V>>,
 }
 
 /// Shared, refcounted state of a [`Replica`]; see that struct for the rationale.
 pub(crate) struct Inner<K, V> {
     pub(crate) map: Arc<RwLock<FingerprintTreeMap<K, Entry<Timestamp, V>>>>,
-    /// Value-only **projection** of [`map`](Self::map), kept in sync at every map mutation.
+    /// Value-only **projection** of [`map`](Self::map), kept in sync at every mutation.
     ///
-    /// Its range fingerprints are timestamp-less by construction (see
-    /// [`State`](crate::entry::State)), which is what lets a dateless read replica
-    /// converge with this dated store over the existing range-diff protocol. It is read-only state
-    /// for the dated↔dated path and never touches the causal-stability bookkeeping.
+    /// Timestamp-less by construction (`ARCHITECTURE.md` §5 invariant 8), which is what lets a
+    /// dateless read replica converge with this dated store. Never touches causal stability.
     pub(crate) projection: Arc<RwLock<FingerprintTreeMap<K, State<V>>>>,
     port: u16,
     /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
     /// only through this, so it never names a concrete socket type.
     transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    /// The geographical networks the cluster spans, each a CIDR. One random address is
-    /// probed per network each round for auto-discovery, and a peer's network is derived from its IP
-    /// via `IpNet::contains`. Shared and mutable at runtime (see [`set_nets`](Self::set_nets)) so the
-    /// topology can be retuned live without recreating the node — the [`run`](Self::run) loop snapshots
-    /// it at the start of each round.
+    /// The geographical networks the cluster spans. One random probe per network per round; a
+    /// peer's net comes from its IP. Mutable at runtime, snapshotted per round.
     nets: Arc<RwLock<Vec<IpNet>>>,
     /// The network containing this node's listen address — the one it reconciles with aggressively.
     /// When no configured net contains the listen address, this is the node's own host route, so
@@ -184,18 +157,12 @@ pub(crate) struct Inner<K, V> {
     /// `None` to send back-to-back. Mirrors [`Config::bulk_send_rate`](crate::replicated_map::Config::bulk_send_rate)
     /// and is read by [`spawn_paced_send`](Self::spawn_paced_send).
     bulk_send_rate: Option<usize>,
-    /// Peers with a bulk value transfer currently in flight. At most one paced dump
-    /// runs per peer at a time: while one is in flight, the reconcile timer re-firing (the receiver
-    /// applies updates silently, so the holder sees a lull and re-initiates) must NOT spawn a second
-    /// dump over ranges still in transit — that is precisely the byte amplification this prevents.
-    /// Entries are inserted before a dump is spawned and removed (via an RAII guard, so it survives a
-    /// panic in the send task) when it finishes.
+    /// Peers with a bulk transfer in flight: at most one paced dump per peer, or a re-firing
+    /// reconcile timer would re-dump ranges still in transit. Cleared by an RAII guard.
     bulk_in_flight: Arc<RwLock<HashSet<SocketAddr>>>,
-    /// Count of bulk dump tasks currently in flight across all peers. When this reaches
-    /// [`max_concurrent_bulk_dumps`](Self::max_concurrent_bulk_dumps), new dumps are skipped before
-    /// allocating their snapshot Vec; the protocol is retry-driven, so the requesting peer's next
-    /// diff round re-triggers the dump once a slot is free. Decremented by an RAII guard on the
-    /// spawned task, so a panicking task never leaks a slot.
+    /// Bulk dump tasks in flight across all peers. At
+    /// [`max_concurrent_bulk_dumps`](Self::max_concurrent_bulk_dumps) a new dump is skipped before
+    /// its snapshot is allocated; the peer's next diff round retries. Released by an RAII guard.
     bulk_dumps_in_flight: Arc<AtomicUsize>,
     /// Global cap on the number of concurrently active paced bulk dumps.
     max_concurrent_bulk_dumps: usize,
@@ -219,29 +186,18 @@ pub(crate) struct Inner<K, V> {
     /// window for all inbound datagrams in authenticated modes. Shared across clones (the same
     /// receive loop instance holds the only clone that calls `check_and_record`).
     replay_filter: Arc<replay::ReplayFilter>,
-    /// Monotonic set of every peer this node has ever exchanged messages with.
+    /// Monotonic set of every peer this node has exchanged messages with; never expired, unlike
+    /// [`peers`](Self::peers).
     ///
-    /// Unlike [`peers`](Self::peers), entries are never expired automatically: a tombstone
-    /// must be acknowledged by every member (or the member explicitly decommissioned) before
-    /// it can be garbage-collected. This is what gates tombstone GC on *causal stability* and
-    /// prevents a peer that is partitioned for longer than the peer-expiration window from
-    /// resurrecting a deleted value on its return.
-    ///
-    /// Multi-network note: remote-network members are gossiped to on a slower cadence, so
-    /// their tombstone acknowledgments arrive later and cross-network GC is correspondingly slower —
-    /// but still strictly correct, since GC never proceeds before *every* member has acked. Lowering
-    /// [`Config::remote_interval`] or raising [`Config::remote_fanout`] speeds it up at the
-    /// cost of WAN traffic.
+    /// This is the causal-stability gate on tombstone GC (`ARCHITECTURE.md` §5 invariant 6).
+    /// Remote-net members ack on the slower cross-network cadence, so GC is slower there but no
+    /// less correct.
     pub(crate) members: Arc<RwLock<HashSet<IpAddr>>>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub(crate) tombstone_acks: Arc<RwLock<HashMap<K, HashMap<IpAddr, u64>>>>,
-    /// The set of keys this node currently holds as a tombstone, maintained at the single map
-    /// mutation sink ([`map_insert`](Replica::map_insert) /
-    /// [`gc_remove`](Replica::gc_remove)). It lets each reconciliation round enumerate
-    /// held tombstones in O(1) (without scanning the map) and resend an ack for each of them to
-    /// every member every round, so causal-stability acknowledgments keep flowing until a
-    /// tombstone is collected — without which the acknowledgment matrix never completes in a
-    /// cluster of three or more nodes (acks are otherwise pairwise and non-transitive).
+    /// The keys held as tombstones, maintained at the single map mutation sink. Lets a round
+    /// enumerate them without scanning the map and resend an ack for each — without which the ack
+    /// matrix never completes past two nodes, acks being pairwise.
     pub(crate) live_tombstones: Arc<RwLock<HashSet<K>>>,
     /// This node's clock, reached only through the [`Clock`] port so the engine never reads
     /// physical time itself ([`HlcClock`] is the default adapter; a test injects a deterministic
@@ -272,18 +228,14 @@ impl<K, V> std::ops::Deref for Replica<K, V> {
     }
 }
 
-/// Represent an atomic message for the reconciliation protocol.
+/// One atomic message of the reconciliation protocol.
 ///
-/// The three original variants form the **dated** channel (`ComparisonItem` / `Update` / `Ack`),
-/// exchanged between full dated stores exactly as before — their bincode tags (0, 1, 2) and wire
-/// bytes are unchanged. The two trailing variants form the additive **value-only** channel used by
-/// lightweight dateless read replicas: they are tagged 3 and 4, so a node that does not
-/// understand them simply fails to deserialize and drops the datagram (the receive loop is hardened
-/// against that), keeping the protocol backward compatible on a single port.
+/// Variant order is the wire tag order: the **dated** channel is 0-2
+/// (`ComparisonItem`/`Update`/`Ack`), the **value-only** channel read replicas use is 3-4. A node
+/// that does not know the latter fails to deserialize and drops the datagram, which the receive
+/// loop tolerates.
 ///
-/// `V` is the dated value carried by `Update` (in practice
-/// [`Entry<Timestamp, T>`](crate::entry::Entry)); `P` is its timestamp-less projection carried by
-/// `ValueUpdate` (in practice [`State<T>`](crate::entry::State)).
+/// `V` is the dated value, `P` its timestamp-less projection.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// Provides information about a set of keys that allows checking
@@ -306,14 +258,11 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
 }
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
-    /// Create a new engine over the default transport adapter: a [`UdpTransport`] bound to the
-    /// gossip socket. Wire encoding always goes through [`gossip::bincode`].
+    /// Create an engine over the default [`UdpTransport`].
     ///
     /// # Errors
     ///
-    /// Returns an `io::Error` if the UDP socket cannot be bound to
-    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
-    /// the address is not available on this host.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
     pub async fn new(config: Config) -> io::Result<Self> {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
@@ -625,11 +574,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         self.map_insert(&mut guard, key, value)
     }
 
-    /// Broadcast a batch of protocol messages to every currently-known peer.
-    ///
-    /// Spawns a detached task so the calling write path does not block on the network. Shared by
-    /// every local-mutation broadcast path (`insert` / `insert_bulk`) so the spawn/loop/send
-    /// boilerplate lives in exactly one place.
+    /// Broadcast a batch of messages to every known peer, on a detached task so the write path
+    /// does not block on the network.
     fn broadcast(&self, messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>) {
         let peers = self.get_peers();
         let port = self.port;
@@ -650,12 +596,10 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         });
     }
 
-    /// Try to claim both a per-peer in-flight slot and a global concurrent-dump slot.
+    /// Claim both a per-peer in-flight slot and a global dump slot, or `None` if either is taken.
     ///
-    /// Returns `Some((peer_guard, global_guard))` when both slots are available, or `None` when
-    /// either is already taken. The caller checks this **before** snapshotting the differing range
-    /// into a `Vec`, so a skipped dump allocates nothing. The guards release their slots on drop,
-    /// ensuring cleanup even if the spawned task panics.
+    /// Called **before** snapshotting the range, so a skipped dump allocates nothing; the guards
+    /// release on drop, panic included.
     fn try_claim_dump_slot(
         &self,
         peer: SocketAddr,
@@ -694,28 +638,15 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         ))
     }
 
-    /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task.
+    /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task —
+    /// the cold-sync path.
     ///
-    /// This is the cold/bulk anti-entropy path: when a peer differs over a whole range it must
-    /// receive every value in that range (most starkly, a cold/empty peer pulling the whole
-    /// dataset). Dumping them back-to-back inline on the receive loop would (a) overrun the
-    /// receiver's socket buffer — datagrams dropped in the kernel — and (b) hold the receive loop for
-    /// the whole transfer, so no other peer is served meanwhile.
-    ///
-    /// Two cooperating mechanisms fix the cold-sync amplification:
-    ///
-    /// 1. **Pacing** to [`bulk_send_rate`](Inner::bulk_send_rate) bytes/sec, on a spawned task, keeps
-    ///    the burst below the receiver's overrun threshold and off the receive loop.
-    /// 2. A **single-dump-per-peer guard**: while a dump is in flight to a peer, a second is not
-    ///    started. The receiver applies updates *silently* (an `Update` triggers no reply), so the
-    ///    holder's own reconcile timer sees a lull and re-initiates — without this guard it would
-    ///    re-dump ranges still in transit, which is the byte amplification we are removing. Anything
-    ///    genuinely still missing (e.g. a dropped datagram) is picked up by the next reconcile round
-    ///    once the current dump finishes.
-    /// 3. A **global concurrent-dump budget** (`max_concurrent_bulk_dumps`): even with the per-peer
-    ///    guard, M peers diffing simultaneously would each hold a full snapshot Vec. This cap limits
-    ///    total in-flight dump tasks. The caller checks the budget via [`try_claim_dump_slot`](Self::try_claim_dump_slot)
-    ///    **before** building the snapshot Vec, so a skipped dump allocates nothing.
+    /// Three mechanisms bound it, all against the same amplification: pacing to
+    /// [`bulk_send_rate`](Inner::bulk_send_rate) off the receive loop, one dump per peer (an
+    /// `Update` triggers no reply, so the holder's reconcile timer would otherwise re-dump ranges
+    /// in transit), and a global [`try_claim_dump_slot`](Self::try_claim_dump_slot) budget
+    /// bounding total in-flight snapshot memory. Anything genuinely missed is picked up by the
+    /// next round.
     fn spawn_paced_send(
         &self,
         messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>,
@@ -842,12 +773,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                                     observability::record_datagram_dropped("peer_cap");
                                     continue;
                                 }
-                                // `Payload<Authenticated>::verify_replay` is the only way to reach
-                                // a `Payload<Verified>`, which is the only state
-                                // `handle_messages` accepts — the compiler, not call-site
-                                // discipline, enforces that replay-checking happens before message
-                                // processing (see `auth` module docs). In unauthenticated mode
-                                // `replay_filter` was built disabled, so the check is a no-op.
+                                // A no-op in unauthenticated mode: the filter was built disabled.
                                 let (seq, stamp) = (payload.seq, payload.stamp);
                                 let Some(payload) =
                                     payload.verify_replay(&self.replay_filter, sender)
@@ -861,18 +787,10 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                                 };
                                 let spoke_dated =
                                     self.handle_messages(payload, peer, &mut send_buf).await;
-                                // Only record senders whose datagram was accepted. With
-                                // authentication enabled this stops a spoofed/unauthenticated host
-                                // from being registered as a peer (and receiving DB dumps) or as a
-                                // permanent member (which would block tombstone GC forever, since
-                                // causal stability requires an ack from every member). In
-                                // unauthenticated mode `open` always succeeds, so this is unchanged.
-                                //
-                                // Crucially, a sender that spoke *only* the value-only channel is a
-                                // dateless read replica: it never acknowledges tombstones, so it
-                                // must NOT join the causal-stability membership set or it would block GC
-                                // forever (the very regression we must avoid). Such a replica is
-                                // served reactively off `peer` and is not tracked as a peer/member.
+                                // Only accepted datagrams register a sender, so a spoofed host
+                                // cannot become a member and block GC forever. A sender that spoke
+                                // only the value-only channel is a read replica: it never acks
+                                // tombstones, so it must never join `members` either.
                                 if spoke_dated {
                                     self.peers.write().insert(sender, Instant::now());
                                     self.members.write().insert(sender);
@@ -905,12 +823,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             )
             .expect("serializing a ComparisonItem into an in-memory buffer cannot fail");
         }
-        // Geography-aware target selection. With a single network this reduces to the
-        // historical behaviour: every known peer is local, so all of them are contacted each round,
-        // plus a single random discovery probe.
-        //
-        // Snapshot the runtime-tunable topology/throttle once per round, so a concurrent mutation
-        // cannot tear a round and we never hold a lock across the sends below.
+        // Snapshot the runtime-tunable topology once per round: no torn round, no lock held
+        // across the sends below.
         let nets = self.nets.read().clone();
         let local = *self.local_net.read();
         let remote_interval = self.remote_interval.load(Ordering::Relaxed).max(1);
@@ -923,11 +837,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         // De-duplicate so a discovery probe that happens to hit a known peer is not sent twice.
         let mut targets: HashSet<IpAddr> = HashSet::new();
 
-        // Speculative discovery through the `Discovery` port (default: one random probe per network,
-        // see `RandomProbe`). The probed address might not correspond to a real peer, so we do NOT
-        // add it to the known-peer list; if a peer exists there, it will reply and be registered
-        // then. An authoritative source (e.g. DNS) instead drives the store's seed/decommission loop
-        // and is not consulted here. A transient failure simply yields no extra targets this round.
+        // Speculative probes only: an address that answers is registered then, not now. An
+        // authoritative source drives the store's seed/decommission loop instead.
         targets.extend(self.probe.discover().await.unwrap_or_default());
 
         // Local network: contact every known peer, every round (fast intra-network convergence).
@@ -937,13 +848,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             }
         }
 
-        // Remote peers: only on cross-network rounds, a bounded random subset per network — PLUS an
-        // `unclassified` bucket for known peers matching no declared network. Anti-entropy repair is
-        // deliberately **decoupled from net membership**: a peer learned by actual contact is never
-        // excluded from repair regardless of the declared topology. Nets only steer discovery and the
-        // local/remote throttle split, so changing the topology at runtime can never orphan a real
-        // peer from repair (worst case: suboptimal WAN traffic, never silent divergence). Fan-out is
-        // applied per bucket to keep WAN traffic bounded without designating any node as a relay.
+        // Remote peers on cross-network rounds only, a bounded subset per bucket, plus an
+        // `unclassified` bucket: repair is decoupled from net membership, so a topology change
+        // can never orphan a contacted peer from repair.
         if do_remote {
             let remote_nets: Vec<IpNet> = nets.iter().copied().filter(|&n| n != local).collect();
             let mut buckets: HashMap<Option<usize>, Vec<IpAddr>> = HashMap::new();
@@ -982,23 +889,16 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         observability::record_round_duration(timer);
     }
 
-    /// Resend a causal-stability acknowledgment (`Message::Ack`) for each tombstone this node
-    /// currently holds onto `send_buf`, returning the number appended.
+    /// Append an ack for each held tombstone to `send_buf`, returning the count.
     ///
-    /// Acks otherwise only flow back to the node a tombstone was *received* from, so in a cluster
-    /// of three or more nodes two non-originating replicas never learn that the other holds the
-    /// deletion and [`is_tombstone_stable`](Self::is_tombstone_stable) never completes. Resending
-    /// the ack for every held tombstone every round — riding the broadcast `send_buf` to the same
-    /// geography-throttled targets as the diff itself — makes the ack matrix converge
-    /// transitively. It also dissolves the ack-before-tombstone ordering hazard: a receiver that
-    /// does not hold the tombstone yet drops the ack (the admission gate in `handle_messages`,
-    /// which records an ack only for a locally-held tombstone) and simply records it on a later
-    /// round.
+    /// Acks are otherwise pairwise, so past two nodes
+    /// [`is_tombstone_stable`](Self::is_tombstone_stable) never completes; resending every round
+    /// makes the matrix converge transitively, and makes an ack that arrived before its tombstone
+    /// (dropped by the admission gate) recoverable on a later round.
     ///
-    /// The datagram is kept bounded: at most [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes of acks
-    /// are appended, and when more tombstones are held than fit, the window start advances with
-    /// `round` so every tombstone's ack is resent within a bounded number of rounds. The keys are
-    /// sorted so the window is deterministic across rounds (`HashSet` iteration order is not).
+    /// Bounded to [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes per datagram, over a window whose
+    /// start advances with `round` across sorted keys, so every tombstone is covered within a
+    /// bounded number of rounds.
     fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
         let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
         if keys.is_empty() {
@@ -1041,16 +941,13 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         appended
     }
 
-    /// Handle the messages contained in an already-authenticated, replay-checked [`Payload`].
+    /// Handle the messages in an already-authenticated, replay-checked [`Payload`] — taking
+    /// [`auth::Payload<auth::Verified>`](auth::Payload) rather than bytes makes an unchecked
+    /// datagram unrepresentable here.
     ///
-    /// Taking a [`auth::Payload<auth::Verified>`](auth::Payload) rather than raw bytes makes it
-    /// structurally impossible to process a datagram that has not cleared both the authentication
-    /// gate and the anti-replay filter.
-    ///
-    /// Returns `true` if the datagram contained at least one **dated** protocol message
-    /// (`ComparisonItem` / `Update` / `Ack`). The caller uses this to decide whether to register
-    /// the sender in the causal-stability membership set: a sender that spoke only the value-only channel is a
-    /// read replica and must not gate tombstone GC.
+    /// Returns whether the datagram carried at least one **dated** message, which is what
+    /// qualifies the sender for membership: a value-only sender is a read replica and must not
+    /// gate tombstone GC.
     #[instrument(name = "reconcile.handle", skip_all, fields(peer = %peer))]
     async fn handle_messages(
         &self,
@@ -1096,19 +993,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             let map_guard = self.map.read();
             let mut guard = self.tombstone_acks.write();
             for (key, version) in acks {
-                // Accept an ack only for a key we locally hold as a tombstone. Acks for
-                // never-existent or non-tombstone keys are dropped here so they cannot accumulate
-                // in `tombstone_acks` without bound.
-                //
-                // This gate cannot tell "a key we will never hold" from "a key we don't hold YET":
-                // in a cluster of three or more nodes an ack can arrive before the deletion it
-                // acknowledges (the acking peer learned the deletion via a different gossip edge),
-                // and the dropped ack is not re-delivered by the sender. That is benign because
-                // every node resends the ack for the tombstones it holds on every reconciliation
-                // round (see `start_reconciliation`): once we hold the tombstone, the next round's
-                // ack resend records the peer's acknowledgment. Pairwise reciprocation is not
-                // needed -- the periodic ack resend is what makes the ack matrix complete across
-                // three or more replicas.
+                // Only acks for locally-held tombstones, so `tombstone_acks` cannot grow
+                // unbounded. An ack arriving before its deletion is dropped here and recovered by
+                // the next round's ack resend.
                 if map_guard.get(&key).is_some_and(|v| v.is_tombstone()) {
                     guard.entry(key).or_default().insert(peer_ip, version);
                 } else {
@@ -1189,12 +1076,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                     self.clock.observe(remote_v.stamp);
                     match guard.get(&k) {
                         Some(local_v) => {
-                            // Under last-write-wins, `Entry::merge` returns `other` exactly when
-                            // the remote stamp is strictly greater and `self` otherwise, so the
-                            // stamp comparison decides "would merging change state?" on its own.
-                            // Comparing stamps rather than merged values avoids cloning the value
-                            // on this hot path and is why `Value` needs no `PartialEq` bound. The
-                            // equivalence holds *only* under LWW conflict resolution.
+                            // Under LWW the stamp comparison alone answers "would merging change
+                            // state?", so the value is never cloned or compared here.
                             if remote_v.stamp > local_v.stamp {
                                 to_apply.push((k, remote_v));
                             } else if local_v.is_tombstone() {
@@ -1216,12 +1099,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             for (k, v) in &to_apply {
                 (self.pre_insert.read())(k, v);
             }
-            // 3) Re-acquire the write lock and apply. We re-reconcile against the now-current local
-            //    value because the lock was released between steps 1 and 3: a concurrent write (for
-            //    instance one performed by the hook itself) may have installed a newer value, which
-            //    LWW must not clobber. `reconcile` is idempotent `max` over the timestamp total
-            //    order, so re-applying a value that became stale meanwhile is a no-op — the stale
-            //    case is handled identically to the direct path.
+            // 3) Re-acquire and re-reconcile: the lock was released, so a concurrent write may
+            //    have landed. `reconcile` is idempotent `max`, so re-applying is safe either way.
             if !to_apply.is_empty() {
                 let mut guard = self.map.write();
                 for (k, v) in to_apply {
@@ -1291,12 +1170,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         spoke_dated
     }
 
-    /// Returns `true` if the tombstone for `key` with the given version token has been
-    /// acknowledged by every member (causal stability) and is therefore safe to
-    /// garbage-collect.
-    ///
-    /// When no other replica is known, there is nothing that could resurrect the value, so
-    /// GC is allowed.
+    /// Whether the tombstone for `key` at this version has been acknowledged by every member and
+    /// is safe to collect. With no members known, GC is allowed.
     pub(crate) fn is_tombstone_stable(&self, key: &K, version: u64) -> bool {
         let members = self.members.read();
         if members.is_empty() {
@@ -1316,14 +1191,12 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         self.tombstone_acks.write().remove(key);
     }
 
-    /// Returns `true` if `peer` has not yet acknowledged the current version of at least one
-    /// tombstone this node currently holds.
+    /// Whether `peer` still owes an acknowledgment on some held tombstone — i.e. whether its
+    /// absence would block GC.
     ///
-    /// Mirrors [`is_tombstone_stable`](Self::is_tombstone_stable)'s per-key acknowledgment test —
-    /// this is `true` precisely when `peer`'s absence would still block causal-stability GC on some
-    /// held tombstone — by walking [`live_tombstones`](Self::live_tombstones) (the local tombstone
-    /// set), not [`tombstone_acks`](Self::tombstone_acks): a freshly deleted tombstone has no ack
-    /// entry at all yet, and must still count as pending rather than reading as "no acks owed".
+    /// Walks [`live_tombstones`](Self::live_tombstones), not
+    /// [`tombstone_acks`](Self::tombstone_acks): a freshly deleted tombstone has no ack entry yet
+    /// and must still count as pending.
     pub(crate) fn has_pending_tombstone_acks(&self, peer: IpAddr) -> bool {
         let live = self.live_tombstones.read();
         if live.is_empty() {
@@ -1340,14 +1213,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         })
     }
 
-    /// Permanently remove a peer from the membership set so that tombstones are no longer held
-    /// back waiting for its acknowledgment. Use when a replica is decommissioned or will never
-    /// return. Also clears any acknowledgments it had recorded.
+    /// Permanently remove a peer from membership, clearing its recorded acks, so tombstones stop
+    /// waiting for it.
     ///
-    /// Per-peer replay state is intentionally **not** evicted: a replay attacker who captured a
-    /// datagram from this peer while it was active and replays it within the freshness window
-    /// would otherwise bypass the bitmap duplicate check (the entry was removed) and re-add the
-    /// peer to membership. Keeping the replay state lets the bitmap reject the captured datagram.
+    /// Per-peer replay state is deliberately **kept** (AGENTS.md §8): dropping it would let a
+    /// captured datagram replayed inside the freshness window re-add the peer.
     pub(crate) fn decommission_peer(&self, peer: IpAddr) {
         self.members.write().remove(&peer);
         self.peers.write().remove(&peer);
@@ -1356,15 +1226,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         }
     }
 
-    /// Register (or refresh) a known peer at runtime, the `&self` counterpart of the
-    /// [`with_seed`](crate::ReplicatedMap::with_seed) builder.
+    /// Register or refresh a known peer at runtime — what a discovery source calls per resolved
+    /// address.
     ///
-    /// Inserting into [`peers`](Self::peers) (re)arms the `PEER_EXPIRATION` window and makes the
-    /// address a gossip target on the next round. This is what a dynamic discovery source (e.g.
-    /// DNS-based Kubernetes discovery) calls each round for every resolved peer. It deliberately
-    /// does **not** touch [`members`](Self::members): membership — which gates tombstone GC — must
-    /// still be *earned* by a genuine authenticated, dated datagram, so an unverified discovered
-    /// address can never block garbage collection.
+    /// Re-arms `PEER_EXPIRATION` and makes the address a gossip target. Never touches
+    /// [`members`](Self::members) (`ARCHITECTURE.md` §5 invariant 6).
     pub(crate) fn seed_peer(&self, peer: IpAddr) {
         self.peers.write().insert(peer, Instant::now());
     }
@@ -1412,13 +1278,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 }
 
-/// Bundles the outbound [`Transport`] port and per-node send state that a batched-message send
-/// needs: the transport, the datagram authenticator, and the per-sender replay counter. Wire
-/// encoding itself goes through the free functions in [`gossip::bincode`], which need no state to
-/// bundle here. These three pieces always travel together into [`send_messages_to`] and
-/// [`send_messages_paced`] from both call sites (the engine and
-/// [`ReadReplicaMap`](crate::read_replica_map::ReadReplicaMap)); bundling them into one reference keeps
-/// each helper's signature short instead of repeating the same three parameters everywhere.
+/// The three things a batched send needs, which always travel together: the [`Transport`], the
+/// authenticator, and the per-sender replay counter.
 pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) transport: &'a T,
     pub(crate) authenticator: &'a auth::Authenticator,
@@ -1457,11 +1318,8 @@ pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
     res
 }
 
-/// Send `messages` to `peer` back-to-back (unpaced).
-///
-/// Used for the small, latency-sensitive batches — refinement comparison items, tombstone acks, and
-/// local-write broadcasts. The bulk anti-entropy value dump uses the paced variant instead;
-/// see [`send_messages_paced`] and [`Replica::spawn_paced_send`].
+/// Send `messages` to `peer` back-to-back: the small latency-sensitive batches. Bulk dumps use
+/// [`send_messages_paced`].
 pub(crate) async fn send_messages_to<K, V, P, T>(
     messages: &[Message<K, V, P>],
     ports: &SendPorts<'_, T>,
@@ -1476,14 +1334,10 @@ pub(crate) async fn send_messages_to<K, V, P, T>(
     send_messages_paced(messages, ports, peer, send_buf, None).await
 }
 
-/// Send `messages` to `peer` as ≤64 KiB datagrams, optionally metered to `rate` bytes/sec.
+/// Send `messages` to `peer` as ≤64 KiB datagrams, metered to `rate` bytes/sec when set.
 ///
-/// With `rate = None` the datagrams go out back-to-back (the historical behaviour). With
-/// `rate = Some(bytes_per_sec)` the function sleeps between datagrams so the average send rate stays
-/// at or below that bound — used for bulk anti-entropy value transfers so the burst cannot overrun
-/// the receiver's socket buffer. Because it sleeps, it must run **off** the receive
-/// loop (see [`Replica::spawn_paced_send`]); pacing inline in `handle_messages` would stall
-/// reception of every other peer for the duration of the transfer.
+/// Sleeps between datagrams, so it must run **off** the receive loop
+/// ([`Replica::spawn_paced_send`]) — pacing inline would stall reception for every other peer.
 #[instrument(name = "reconcile.send", skip_all, fields(peer = %peer, count = messages.len()))]
 pub(crate) async fn send_messages_paced<K, V, P, T>(
     messages: &[Message<K, V, P>],
@@ -1557,11 +1411,8 @@ async fn pace(rate: Option<usize>, start: Instant, sent_bytes: usize) {
     }
 }
 
-/// RAII marker that a bulk dump to `peer` is in flight. Removing the peer on `Drop` —
-/// rather than at the end of the send task's body — guarantees the in-flight mark is cleared even if
-/// the send task panics, so a transient failure can never wedge a peer into "permanently
-/// transferring" (which would silently stop it from ever syncing again). See
-/// [`Replica::spawn_paced_send`].
+/// RAII marker that a bulk dump to `peer` is in flight. Clearing on `Drop` means a panicking send
+/// task cannot wedge a peer into permanently transferring.
 struct BulkInFlightGuard {
     set: Arc<RwLock<HashSet<SocketAddr>>>,
     peer: SocketAddr,
@@ -1647,17 +1498,11 @@ mod deadlock_regressions {
         buf
     }
 
-    /// Network-path counterpart of [`pre_insert_hook_can_call_insert_again_without_deadlock`]:
-    /// a value arriving over the wire is integrated by [`handle_messages`], which must
-    /// run the pre-insert hook *outside* the map's write lock, just like the direct `just_insert`
-    /// path. Otherwise a hook that re-inserts re-enters the (non-reentrant) write lock and deadlocks
-    /// the receive loop.
+    /// [`handle_messages`] must run the pre-insert hook outside the map write lock, or a hook
+    /// that re-inserts deadlocks the receive loop.
     ///
-    /// Unlike the direct-path test above (which can assert synchronously), the regression here is a
-    /// deadlock that would *hang* the task processing the datagram and, with it, runtime teardown.
-    /// So the whole scenario runs on a dedicated thread owning a current-thread runtime, reporting
-    /// over a channel; the test body waits with `recv_timeout`, failing fast (and merely leaking the
-    /// wedged thread) instead of hanging the runner if the fix ever regresses.
+    /// The failure mode is a hang, so the scenario runs on its own thread and the body waits with
+    /// `recv_timeout`.
     #[test]
     fn pre_insert_hook_can_call_insert_again_from_network_path_without_deadlock() {
         let (tx, rx) = mpsc::channel();
@@ -2162,11 +2007,8 @@ mod socket_buffers {
             .expect("bind failed")
     }
 
-    /// The receive-buffer knob must actually size the gossip socket. Asserting an
-    /// absolute byte count would be flaky — the kernel clamps `SO_RCVBUF` to `net.core.rmem_max`,
-    /// which varies per host (and CI sandbox) — so we assert *monotonicity* instead: a multi-MiB
-    /// request must yield a strictly larger buffer than an explicitly tiny one. That holds for
-    /// any `rmem_max` above a few KiB, which is true on every realistic host.
+    /// The receive-buffer knob must size the socket. Asserted as monotonicity, not an absolute
+    /// count: the kernel clamps `SO_RCVBUF` to a per-host `net.core.rmem_max`.
     #[tokio::test]
     async fn recv_buffer_size_is_configurable() {
         let big = bound("127.0.0.90:0", Some(4 * 1024 * 1024), None).await;

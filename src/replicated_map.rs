@@ -33,16 +33,11 @@ use rsos::Fingerprint;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
 
-/// How far a **stored** tombstone stamp may lead this node's physical time before the wall-clock
-/// instant derived from it (and only that instant — never the stamp) is capped.
+/// How far a **stored** tombstone stamp may lead this node's physical time before the instant
+/// derived from it — never the stamp itself — is capped.
 ///
-/// Deliberately the same budget the clock's far-future clamp uses ([`MAX_CLOCK_DRIFT`]): both
-/// answer the same question, "how far ahead of local physical time can a remote reading plausibly
-/// be?", and giving the tombstone path a second, different answer would be one more number to keep
-/// in step. The clock's own threshold is per-instance
-/// (`HlcClock::with_max_clock_drift`) but is not reachable through the [`Clock`](crate::clock::Clock)
-/// port, so this side reads the constant; if that knob is ever exposed on `Config`, this should
-/// follow it rather than stay pinned here.
+/// The same budget as the clock's far-future clamp ([`MAX_CLOCK_DRIFT`]), which is not reachable
+/// through the [`Clock`](crate::clock::Clock) port; if it ever reaches `Config`, this follows it.
 const TOMBSTONE_STAMP_DRIFT_BUDGET: ClockDrift = MAX_CLOCK_DRIFT;
 
 /// How often the background task writes a full snapshot to the persistence backend.
@@ -55,52 +50,34 @@ const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// decommissioned (see [`ReplicatedMap::with_discovery_miss_threshold`]).
 const DEFAULT_DISCOVERY_MISS_THRESHOLD: u32 = 3;
 
-/// Default wall-time floor a member with pending unacknowledged tombstones must be continuously
-/// absent for before it is decommissioned (see
-/// [`ReplicatedMap::with_discovery_decommission_floor`]). Ten minutes is far above any DNS blip or
-/// readiness-probe flap, so it only ever engages against a resolver that is wrong for a sustained
-/// period.
+/// Default wall-time floor a member with pending unacknowledged tombstones must be absent for
+/// before decommissioning (see [`ReplicatedMap::with_discovery_decommission_floor`]). Ten minutes
+/// is far above any DNS blip, so it engages only against a sustainedly wrong resolver.
 const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
 
-/// Default rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
-/// peer is metered (see [`Config::bulk_send_rate`]). 32 MiB/s keeps a cold-sync fast
-/// while spacing datagrams (~2 ms apart at the 64 KiB datagram size) so the burst cannot overrun the
-/// receiver's socket buffer, and so the receiver keeps being fed and does not re-issue a full diff
-/// over ranges still in flight (the byte amplification this caps).
+/// Default metering rate of a single bulk transfer (see [`Config::bulk_send_rate`]). 32 MiB/s
+/// spaces 64 KiB datagrams ~2 ms apart: fast, but under the receiver's socket-buffer overrun
+/// threshold.
 const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 
-/// Default size requested for the gossip socket's send/receive buffers (`SO_SNDBUF` / `SO_RCVBUF`),
-/// in bytes (see [`Config::recv_buffer_size`]). A generous 8 MiB: the kernel silently clamps the
-/// request to the OS maximum (`net.core.rmem_max` / `wmem_max` on Linux), so this is an improvement
-/// on a tuned host and a harmless no-op on an untuned one. The stock OS default holds only a handful
-/// of full-size datagrams, which a bulk/cold sync burst overruns — dropping datagrams in the kernel
-/// before the application ever sees them.
+/// Default `SO_SNDBUF`/`SO_RCVBUF` request (see [`Config::recv_buffer_size`]). 8 MiB: the kernel
+/// clamps to the OS maximum, so it helps on a tuned host and costs nothing on an untuned one,
+/// while the stock default holds too few datagrams for a cold-sync burst.
 const DEFAULT_SOCKET_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
-/// Default cap on the number of distinct tracked peers (see [`Config::max_peers`]).
-///
-/// 1024 is generous for a gossip cluster that typically spans tens to a few hundred nodes;
-/// raise the limit via [`Config::with_max_peers`] for larger deployments.
+/// Default cap on tracked peers (see [`Config::max_peers`]). Raise via
+/// [`Config::with_max_peers`].
 const DEFAULT_MAX_PEERS: usize = 1024;
 
-/// Default cap on the number of concurrently active paced bulk dumps (see
-/// [`Config::max_concurrent_bulk_dumps`]).
-///
-/// 4 is a conservative default that bounds total in-flight snapshot memory without
-/// starving small clusters; raise via [`Config::with_max_concurrent_bulk_dumps`].
+/// Default cap on concurrent paced bulk dumps (see [`Config::max_concurrent_bulk_dumps`]), which
+/// bounds total in-flight snapshot memory.
 const DEFAULT_MAX_CONCURRENT_BULK_DUMPS: usize = 4;
 
-/// Core service wrapping a key-value map to enable reconciliation between different instances over a network.
+/// Core service wrapping a key-value map, reconciled with peers over the network.
 ///
-/// The store also keeps track of the addresses of other instances.
-///
-/// Provides wrappers for its underlying [`FingerprintTreeMap`](crate::FingerprintTreeMap)'s insertion and deletion methods,
-/// as well as its main service method: `run()`,
-/// which must be called to actually synchronize with peers.
-///
-/// Known peers can optionally be provided using the [`with_seed`](ReplicatedMap::with_seed) method. In
-/// any case, the store will periodically look for new peers by sampling a random address from
-/// the given peer network.
+/// Wraps its [`FingerprintTreeMap`](crate::FingerprintTreeMap)'s insertion and deletion; `run()`
+/// must be called to synchronize. Peers come from [`with_seed`](ReplicatedMap::with_seed) and from
+/// periodic probing of the declared networks.
 pub struct ReplicatedMap<K, V>
 where
     K: Clone + Hash + std::cmp::Eq + Send + Sync,
@@ -129,13 +106,8 @@ where
 
 /// Per-member discovery-absence tracking for [`ReplicatedMap::discover_periodically`].
 ///
-/// A member starts (implicitly, by having no entry yet) present. Missing from a discovery round
-/// moves it to [`Absent`](Self::Absent), which owns the round-miss counter and the wall-clock
-/// instant the absence began as a single atomic unit; reappearing ([`mark_seen`](Self::mark_seen))
-/// drops it straight back to [`Present`](Self::Present). Bundling `since` and `misses` into one
-/// state — rather than two parallel maps threaded through the discovery loop by hand — makes them
-/// desyncing structurally impossible: there is exactly one absence lifetime per member, and it is
-/// created and cleared atomically with the state transition.
+/// [`Absent`](Self::Absent) owns the miss counter and the instant the absence began as one unit,
+/// so the two cannot desync.
 #[derive(Clone, Copy, Debug, Default)]
 enum MemberPresence {
     #[default]
@@ -167,13 +139,9 @@ impl MemberPresence {
         };
     }
 
-    /// Whether this absence now warrants decommissioning.
-    ///
-    /// Below `miss_threshold` consecutive misses: never. At or above it: immediately when the
-    /// member has no pending unacknowledged tombstone (the fast path) — otherwise only once the
-    /// absence has *also* lasted at least `floor`, the wall-time floor that keeps a spoofed or
-    /// flaky resolver from letting causal-stability GC collect a tombstone the member never acked
-    /// (see `has_pending_tombstone_acks`).
+    /// Whether this absence warrants decommissioning: at `miss_threshold` misses, immediately
+    /// without a pending unacknowledged tombstone, otherwise only past `floor` — which is what
+    /// keeps a flaky resolver from releasing the GC gate early.
     fn eligible_for_decommission(
         &self,
         miss_threshold: u32,
@@ -209,33 +177,22 @@ where
 }
 
 impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
-    /// Create a new `ReplicatedMap`, binding the gossip UDP socket and setting up tombstone tracking.
+    /// Create a `ReplicatedMap`, binding the gossip UDP socket.
     ///
     /// # Errors
     ///
-    /// Returns an `io::Error` if the UDP socket cannot be bound to
-    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
-    /// the address is not available on this host.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
     pub async fn new(config: Config) -> io::Result<Self> {
         Ok(Self::from_engine(Replica::<K, V>::new(config).await?))
     }
 
-    /// Create a `ReplicatedMap` over a caller-supplied [`Transport`] adapter instead of the
-    /// default UDP one.
+    /// Create a `ReplicatedMap` over a caller-supplied [`Transport`] instead of the default UDP
+    /// one — a different datagram transport, or a lossy one to test convergence under adversity.
     ///
-    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
-    /// which the caller has already done, or does not need to do at all. Two uses motivate this
-    /// seam:
-    ///
-    /// - a different datagram transport, e.g. QUIC unreliable datagrams (RFC 9221), whose shape
-    ///   fits this trait;
-    /// - a lossy, reordering or delaying transport, so convergence can be tested under adversity;
-    ///   [`InMemoryNetwork`](crate::InMemoryNetwork) provides the reliable in-process case.
-    ///
-    /// The protocol already assumes datagrams may be lost, duplicated or reordered, so a transport
-    /// cannot violate an invariant by being unreliable. (The [`Clock`](crate::Clock) port is
-    /// deliberately *not* injectable for the opposite reason: a non-monotonic clock silently breaks
-    /// the causal ordering that tombstone collection depends on.)
+    /// Infallible: the caller has already done the one fallible step, binding. An unreliable
+    /// transport cannot violate an invariant, since the protocol already assumes loss, duplication
+    /// and reordering. ([`Clock`](crate::Clock) is deliberately not injectable: a non-monotonic
+    /// clock silently breaks the ordering tombstone collection depends on.)
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
@@ -254,10 +211,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         Self::from_engine(Replica::<K, V>::with_transport(config, transport))
     }
 
-    /// Test-only constructor that accepts an explicit [`Clock`] adapter.
-    ///
-    /// Injects a deterministic clock (e.g. `ManualClock`) so that persistence and HLC-ordering
-    /// tests are fully reproducible without relying on real wall-clock time.
+    /// Test-only constructor taking an explicit [`Clock`], for reproducible ordering tests.
     #[cfg(test)]
     pub(crate) async fn new_with_clock(
         config: Config,
@@ -285,42 +239,27 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         svc
     }
 
-    /// This node's Hybrid-Logical-Clock identity — the `node_id` component of every
-    /// [`Timestamp`] it mints, and the deterministic tie-break that makes the conflict order
-    /// total.
+    /// This node's HLC identity: the `node_id` on every [`Timestamp`] it mints.
     ///
-    /// Set explicitly with [`Config::with_node_id`]; otherwise randomly generated at construction,
-    /// in which case it changes on every restart. Reading it back is useful for diagnostics and for
-    /// asserting that a durable deployment really did pin a stable identity.
+    /// Random per construction unless pinned with [`Config::with_node_id`].
     pub fn node_id(&self) -> NodeId {
         self.engine.node_id()
     }
 
     /// Plug in a durable persistence backend, **loading any previously saved state first**.
     ///
-    /// Every store always owns a backend; by default that is the non-durable
-    /// [`InMemoryPersistence`], so a process restart starts empty. Call this with a durable
-    /// backend (e.g. [`FileSnapshot`](crate::FileSnapshot)) between
-    /// [`new`](ReplicatedMap::new) and [`run`](ReplicatedMap::run) to recover the previous
-    /// state — entries, tombstones, and the causal-stability membership/acks — **before** the
-    /// node rejoins the gossip protocol, so a restart does not look like a fresh, empty replica.
-    ///
-    /// Loaded entries are replayed through the pre-insert hook, which preserves each tombstone's
-    /// original deletion timestamp and rebuilds the tombstone-expiry wheel.
+    /// Call between [`new`](ReplicatedMap::new) and [`run`](ReplicatedMap::run), so entries,
+    /// tombstones and the causal-stability membership are recovered before the node rejoins gossip.
+    /// Loaded entries replay through the pre-insert hook, preserving each tombstone's deletion
+    /// timestamp and rebuilding the expiry wheel.
     ///
     /// # Panics
     ///
-    /// Panics if the backend fails to load (e.g. a corrupt snapshot file): recovering from a
-    /// damaged durable state is a deliberate, explicit decision rather than a silent fresh start.
+    /// If the backend fails to load: a damaged durable state must be an explicit decision, never a
+    /// silent fresh start.
     pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
-        // Warn operators when a durable backend is used with a randomly-generated node id.
-        // A random id changes on every restart, which silently alters this node's LWW
-        // conflict-resolution identity: a write made before the restart by "node X" will now
-        // race against a write made after the restart by "node Y" (a different random id), so
-        // the deterministic total order that guarantees SEC is only maintained within a single
-        // process lifetime. Stability across restarts requires an explicit id set via
-        // Config::with_node_id. Note: persisting node_id would require a format change and is
-        // deferred to a later migration.
+        // A random node id changes every restart, so the LWW tie-break is stable only within one
+        // process lifetime — durable state wants an explicit `Config::with_node_id`.
         if self.engine.node_id_is_random() {
             warn!(
                 "persistence is enabled but no stable node_id was configured \
@@ -334,29 +273,13 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         if let Some(state) = backend.load().expect("failed to load persisted state") {
             *self.engine.members.write() = state.members;
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
-            // Advance the clock past every persisted timestamp so that the first post-restart
-            // write is strictly ordered after all pre-restart writes. Without this, the HLC
-            // starts cold at (physical:0, logical:0); if the wall clock regressed across the
-            // restart (NTP step, VM resume — exactly the hazard HLC defends against), the first
-            // post-restart now() could be ≤ the max persisted stamp, causing a fresh write to
-            // silently lose last-write-wins to its own older persisted value.
-            //
-            // We use the trusted path (observe_trusted / clock_observe_trusted), which skips the
-            // far-future clamp that guards against hostile remote peers. Persisted stamps are
-            // self-authored: this node wrote them, so there is no remote adversary to protect
-            // against here. More importantly, after a wall-clock step BACKWARD by more than
-            // MAX_CLOCK_DRIFT (NTP correction, VM resume — exactly the scenario we are
-            // defending against), an honest persisted stamp will exceed phys_now + MAX_CLOCK_DRIFT
-            // and the clamped path would refuse to chase it, re-introducing the bug. The
-            // far-future clamp protects the clock during live gossip; this restore path is not
-            // live gossip. A poisoned stamp that made it into the snapshot is accepted here and
-            // consumed where stored stamps are used (e.g. tombstone expiry arithmetic).
+            // Advance past every persisted stamp, or a fresh write can lose LWW to this node's
+            // own older value after a backward clock step. Trusted path: these stamps are
+            // self-authored, and the clamp would refuse to chase them in exactly that scenario.
             for (_, entry) in &state.entries {
                 self.engine.clock_observe_trusted(entry.stamp);
             }
-            // Replay through the wrapped pre-insert hook so the tombstone wheel is rebuilt with the
-            // original deletion timestamps (do NOT route through the public insert helpers, which
-            // would overwrite timestamps with `Utc::now()`).
+            // Replay through the wrapped hook: the public insert helpers would re-stamp.
             self.engine.just_insert_bulk(&state.entries);
         }
         self.persistence = backend;
@@ -399,32 +322,26 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self
     }
 
-    /// Register (or refresh) a known peer **at runtime**, the `&self` counterpart of
-    /// [`with_seed`](Self::with_seed).
+    /// Register or refresh a known peer at runtime — the `&self` counterpart of
+    /// [`with_seed`](Self::with_seed), and what a discovery source feeds in.
     ///
-    /// This re-arms the peer-expiration window and makes the address a gossip target on the next
-    /// round. It is what a dynamic discovery source feeds into the store; it never grants
-    /// causal-stability membership (which a peer must still earn via an authenticated dated
-    /// datagram), so injecting an unverified address can never block tombstone garbage collection.
+    /// Re-arms the peer-expiration window and makes the address a gossip target. Never grants
+    /// causal-stability membership (`ARCHITECTURE.md` §5 invariant 6).
     pub fn seed_peer(&self, peer: IpAddr) {
         self.engine.seed_peer(peer);
     }
 
-    /// Attach an **authoritative** peer-discovery source (e.g. [`DnsDiscovery`]) that maintains the
-    /// known-peer set, on top of the engine's default speculative [`RandomProbe`](crate::RandomProbe).
+    /// Attach an **authoritative** peer-discovery source that maintains the known-peer set, on top
+    /// of the default speculative [`RandomProbe`](crate::RandomProbe).
     ///
-    /// While the store is [`run`](Self::run)ning, a background task calls
-    /// [`Discovery::discover`] every
-    /// [`discovery_interval`](Self::with_discovery_interval), seeds every returned address as a
-    /// known peer, and — after a member has been absent for
-    /// [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) consecutive successful
-    /// rounds — decommissions it (see [`forget_peer`](Self::forget_peer)) so its tombstones stop
-    /// gating garbage collection. See [`with_dns_discovery`](Self::with_dns_discovery) for the
-    /// Kubernetes-native default.
+    /// While [`run`](Self::run)ning, a background task discovers every
+    /// [`discovery_interval`](Self::with_discovery_interval), seeds each address, and
+    /// decommissions a member absent for
+    /// [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) rounds, releasing the GC
+    /// gate it held.
     ///
-    /// The source must be [`Authoritative`](crate::DiscoveryKind::Authoritative): an absence is read
-    /// as a vanished peer and drives decommissioning. A speculative source like
-    /// [`RandomProbe`](crate::RandomProbe) belongs in the engine's per-round probe, not here.
+    /// The source must be [`Authoritative`](crate::DiscoveryKind::Authoritative): absence here
+    /// drives decommissioning.
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
         debug_assert!(
             matches!(discovery.kind(), DiscoveryKind::Authoritative),
@@ -435,12 +352,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self
     }
 
-    /// Discover peers by resolving a DNS name — the Kubernetes-native default.
+    /// Discover peers by resolving a DNS name — [`with_discovery`](Self::with_discovery) with a
+    /// [`DnsDiscovery`].
     ///
-    /// Point `name` at a **headless** `Service` (`clusterIP: None`): its DNS name resolves to one
-    /// address record per ready pod, so the store learns every peer with a single lookup, with no
-    /// Kubernetes API client and no RBAC. `port` is the reconciliation UDP port. Shorthand for
-    /// [`with_discovery`](Self::with_discovery) with a [`DnsDiscovery`].
+    /// Point `name` at a **headless** `Service` (`clusterIP: None`): one address record per ready
+    /// pod, no API client and no RBAC.
     pub fn with_dns_discovery(self, name: impl Into<String>, port: u16) -> Self {
         self.with_discovery(Arc::new(DnsDiscovery::new(name, port)))
     }
@@ -461,16 +377,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Set the wall-time floor a member **with pending unacknowledged tombstones** must be
-    /// continuously absent for before it is decommissioned (default 10 minutes).
+    /// continuously absent for before decommissioning (default 10 minutes).
     ///
-    /// A member absent from DNS with no pending unacked tombstones still decommissions after
-    /// [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) rounds regardless of this
-    /// setting (the fast path is unaffected). This floor exists so that a spoofed resolver, flaky
-    /// cluster DNS, or a readiness-probe blip cannot let causal-stability tombstone GC collect a
-    /// tombstone a healthy member never acknowledged — which would let that member resurrect the
-    /// deleted value on its return. Raising it further bounds a DNS-spoofing attacker at the cost of
-    /// holding tombstones (and their GC gate) longer during a genuine, sustained outage; lowering it
-    /// trades that residual attack surface for faster GC.
+    /// The fast path — no pending acks — is unaffected. The floor is what keeps a spoofed or
+    /// flaky resolver from releasing the GC gate on a tombstone a healthy member never acked, and
+    /// so from letting that member resurrect the value. Raising it bounds the attacker further and
+    /// holds tombstones longer during a genuine outage.
     pub fn with_discovery_decommission_floor(mut self, floor: Duration) -> Self {
         self.discovery_decommission_floor = floor;
         self
@@ -483,15 +395,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self
     }
 
-    /// Register a pre-insert hook.
+    /// Register a pre-insert hook, invoked before each key/value pair reaches the map. Callable
+    /// more than once.
     ///
-    /// The hook is invoked **before** inserting each key/value pair into the internal map.
-    /// Calling this does **not** consume the `ReplicatedMap` instance; you can call it multiple times.
-    ///
-    /// # Deadlock Safety
-    ///
-    /// Hooks are executed outside of the map’s write lock, so calling back into any insert
-    /// method from within a hook will not block or deadlock.
+    /// Hooks run outside the map's write lock, so a hook may call back into an insert method.
     pub fn add_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, V>) + 'static>(
         &self,
         pre_insert: F,
@@ -502,26 +409,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             if v.value().is_some() {
                 tombstones.remove(k);
             } else {
-                // The timeout wheel ages tombstones by wall-clock time. We derive that instant
-                // from the HLC's physical component — within the drift budget it is used verbatim,
-                // so honest replicas still expire a tombstone at the same logical wall time — but
-                // bounded to `local now + TOMBSTONE_STAMP_DRIFT_BUDGET` beyond it. `v.stamp` comes
-                // off the wire and the socket is unauthenticated by default, so an unbounded stamp
-                // here would let any host that can reach the port date a tombstone past every
-                // plausible expiry and retain it forever. `v.stamp` itself is never modified: it is
-                // LWW data, and only the value handed to the wheel is bounded.
-                //
-                // Trade-off, taken deliberately: the cap is `local now + budget`, so for an
-                // out-of-budget stamp the instant becomes replica-dependent and the old comment's
-                // "all replicas expire at the same logical wall time" weakens. It was already only
-                // approximate — `TimeoutWheel::expired()` reads `Utc::now()` locally, so expiry
-                // timing is a local decision either way — and nothing rests on it, since GC is
-                // additionally gated on causal stability. Within the budget (every honest stamp)
-                // the physical component is still used verbatim, so the uniformity that was real
-                // is kept. Capping at local *now* instead would be tighter but expires a
-                // legitimately-skewed peer's tombstone earlier than an equally legitimate
-                // unskewed one, for no gain: the budget is already the answer this crate gives to
-                // "how far ahead can a remote reading plausibly be".
+                // `v.stamp` is peer-controlled on a socket unauthenticated by default, so the
+                // instant handed to the wheel is bounded — the stamp itself is LWW data and is
+                // never rewritten. Beyond the budget the instant becomes replica-dependent, which
+                // costs nothing: expiry timing is already local and GC is gated on causal
+                // stability besides.
                 let bounded = BoundedInstant::from_stored_stamp(
                     v.stamp.physical(),
                     TOMBSTONE_STAMP_DRIFT_BUDGET,
@@ -563,11 +455,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.fingerprint(range)
     }
 
-    /// Fingerprint of the **value-only projection** over a range — the timestamp-less counterpart of
-    /// [`fingerprint`](Self::fingerprint).
-    ///
-    /// A [`ReadReplicaMap`](crate::read_replica_map::ReadReplicaMap) that has converged with this
-    /// store computes the same value over the same range, even though it never stores timestamps.
+    /// Fingerprint of the **value-only projection** over a range: the timestamp-less counterpart
+    /// of [`fingerprint`](Self::fingerprint), which a converged
+    /// [`ReadReplicaMap`](crate::read_replica_map::ReadReplicaMap) reproduces.
     pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.value_fingerprint(range)
     }
@@ -577,11 +467,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
     }
 
-    /// The number of **live** entries currently held.
-    ///
-    /// Deletions are tombstones that linger in the map until causal-stability-gated GC reclaims
-    /// them, so this excludes them and can be smaller than the raw map size. It is `O(n)`: it scans
-    /// the map filtering out tombstones.
+    /// The number of **live** entries. `O(n)`, and smaller than the raw map size: tombstones
+    /// linger until causal-stability-gated GC reclaims them.
     pub fn len(&self) -> usize {
         self.engine
             .map
@@ -632,11 +519,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         None
     }
 
-    /// Call `f` for every live entry, in key order.
-    ///
-    /// The map read lock is held only for the duration of the call, and the borrows handed to `f`
-    /// cannot escape it — so a long-running scan cannot leak the guard and stall the reconciliation
-    /// loop. Do not perform blocking work or call back into the store from `f`.
+    /// Call `f` for every live entry, in key order, under the map read lock. Do not block or call
+    /// back into the store from `f`.
     pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
         let guard = self.engine.map.read();
         for (k, entry) in guard.iter() {
@@ -695,19 +579,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             .collect()
     }
 
-    /// Insert a single key/value pair, running the pre-insert hook first.
+    /// Insert one pair — hook outside the lock, then insert under it — returning the overwritten
+    /// value.
     ///
-    /// # Behavior
-    ///
-    /// 1. Calls the registered `pre_insert` hook outside of any locks.
-    /// 2. Acquires the write lock on the map, performs the insertion, then drops the lock.
-    ///
-    /// Returns the overwritten value if the key already existed.
-    ///
-    /// Local-only (no broadcast), so it is **not** part of the published API (available only
-    /// under `cfg(test)` / the `internal-testing` feature). For deliberate no-broadcast seeding
-    /// use the public [`load_bulk`](Self::load_bulk); for a propagating write use
-    /// [`insert`](Self::insert).
+    /// Local-only and off the published API: [`load_bulk`](Self::load_bulk) for no-broadcast
+    /// seeding, [`insert`](Self::insert) for a propagating write.
     #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
@@ -716,19 +592,14 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
-    /// Fully-qualified insert: `just_insert` + async broadcast.
+    /// Fully-qualified insert: `just_insert` plus an async broadcast.
     ///
     /// # Value-size ceiling
     ///
-    /// The send path packs protocol messages into datagrams but never **fragments** one, so a
-    /// single encoded `(key, entry)` must fit in `65507 - authentication overhead` bytes. Above
-    /// that ceiling the update is never delivered and **the key never converges on any peer** —
-    /// the local map still holds it, so the failure is silent from this node's point of view and
-    /// shows up only as a `warn!` on the send path.
-    ///
-    /// The API stays infallible deliberately: the fix belongs at the root (chunking), not in an
-    /// `io::Result` on every write. Keep values well clear of the ceiling — and well clear of the
-    /// network MTU, since an IP-fragmented datagram is lost entirely if any fragment is.
+    /// A single encoded `(key, entry)` must fit `65507 - authentication overhead` bytes: the send
+    /// path packs messages into datagrams but never fragments one. Above that the key **never
+    /// converges on any peer**, visible only as a `warn!` on the send path. Stay well clear of the
+    /// ceiling, and of the MTU.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -736,15 +607,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
-    /// Bulk-insert multiple key/value pairs with hook invocation.
+    /// Bulk-insert with hooks — every hook outside any lock, then one write lock for all entries.
     ///
-    /// # Behavior
-    ///
-    /// 1. Runs the pre-insert hook for each entry (outside any lock).
-    /// 2. Acquires the write lock once and inserts all entries.
-    ///
-    /// Local-only; off the published API (test/`internal-testing` only). Use the public
-    /// [`load_bulk`](Self::load_bulk) for no-broadcast seeding.
+    /// Local-only and off the published API; [`load_bulk`](Self::load_bulk) is the public
+    /// no-broadcast seeding path.
     #[cfg(any(test, feature = "internal-testing"))]
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         self.load_bulk(key_values);
@@ -765,11 +631,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         );
     }
 
-    /// Bulk-insert many entries **locally, without broadcasting** — the one deliberate
-    /// no-broadcast write on the public API. Each entry gets a fresh HLC stamp and runs the
-    /// pre-insert hook, but propagates only on the next anti-entropy round; use this to seed a
-    /// large initial dataset without a broadcast storm. For a propagating write see
-    /// [`insert`](Self::insert)/[`insert_bulk`](Self::insert_bulk).
+    /// Bulk-insert **locally, without broadcasting** — the one deliberate no-broadcast write on
+    /// the public API, for seeding a large dataset without a broadcast storm.
+    ///
+    /// Entries are stamped and hooked as usual, and propagate on the next anti-entropy round.
     pub fn load_bulk(&self, key_values: &[(K, V)]) {
         self.engine.just_insert_bulk(
             &key_values
@@ -813,12 +678,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         );
     }
 
-    /// Bulk-remove: stamps a fresh Hybrid Logical Clock timestamp for each key and
-    /// broadcasts the resulting tombstones.
+    /// Bulk-remove: a fresh HLC stamp per key, broadcast as tombstones.
     ///
-    /// Unlike the previous physical-clock API, callers no longer supply timestamps: a
-    /// caller-chosen `DateTime` could collide with another replica's and trigger the
-    /// non-commutative tie-break that caused permanent divergence.
+    /// Callers cannot supply the timestamp: a chosen `DateTime` can collide with another
+    /// replica's and make the tie-break non-commutative.
     pub fn remove_bulk(&self, keys: &[K]) {
         self.engine.insert_bulk(
             &keys
@@ -883,23 +746,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.start_reconciliation(&mut buf).await;
     }
 
-    /// Permanently forget a peer (e.g. a replica that has been decommissioned and will never
-    /// return), so that tombstones are no longer held back waiting for its acknowledgment
-    /// before garbage collection.
+    /// Permanently forget a peer, so tombstones stop waiting for its acknowledgment.
     ///
-    /// This is the escape hatch for the causal-stability contract: a tombstone is normally
-    /// retained until every peer this node has ever communicated with has acknowledged it.
-    /// A replica that is permanently gone must be decommissioned, otherwise its tombstones are
-    /// retained forever.
+    /// The escape hatch from the causal-stability gate: a replica that is never coming back must
+    /// be decommissioned, or its tombstones are retained forever.
     pub fn forget_peer(&self, peer: IpAddr) {
         self.engine.decommission_peer(peer);
     }
 
-    /// Return the current membership set.
-    ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate. Members
-    /// are peers that have sent at least one dated, authenticated datagram and gate tombstone
-    /// garbage collection via causal stability.
+    /// The current membership set: peers that have sent a dated, authenticated datagram, and that
+    /// gate tombstone GC.
     #[cfg(any(test, feature = "internal-testing"))]
     pub fn members_snapshot(&self) -> std::collections::HashSet<std::net::IpAddr> {
         self.engine.members_snapshot()
@@ -937,15 +793,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.bulk_dumps_in_flight_count()
     }
 
-    /// (runtime) Replace the declared geographical networks, retuning the gossip topology **without
-    /// recreating the node**. The local network is re-derived automatically (whichever new net
-    /// contains the listen address). See [`Config::nets`].
+    /// (runtime) Replace the declared geographical networks, re-deriving the local one. See
+    /// [`Config::nets`].
     ///
-    /// Topology is per-node and coordination-free (the wire format carries no network tag), and is
-    /// safe to change live: anti-entropy *repair* of already-known peers is **not** gated on net
-    /// membership, so reshaping the topology never orphans a real peer from repair — it only changes
-    /// which addresses are probed for discovery and the local/remote throttle split. Worst case is
-    /// suboptimal WAN traffic, never silent divergence.
+    /// Safe live: topology is per-node and carries no wire tag, and repair of known peers is not
+    /// gated on net membership, so the worst case is suboptimal WAN traffic, never divergence.
     pub fn set_nets(&self, nets: &[IpNet]) {
         self.engine.set_nets(nets);
     }
@@ -956,10 +808,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.add_net(net)
     }
 
-    /// (runtime) Stop declaring a network (e.g. decommissioning a region). Returns whether it was
-    /// present. Known peers keep being repaired regardless (see [`set_nets`](Self::set_nets)); to
-    /// also reclaim a region quickly elsewhere, prefer adding the new net **before** removing the old
-    /// so discovery keeps the cluster well-connected throughout the migration.
+    /// (runtime) Stop declaring a network, returning whether it was present. Known peers keep
+    /// being repaired; add a replacement net before removing the old one to keep discovery
+    /// connected through a migration.
     pub fn remove_net(&self, net: IpNet) -> bool {
         self.engine.remove_net(net)
     }
@@ -998,14 +849,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.set_reconcile_interval(interval);
     }
 
-    /// Garbage-collect tombstones, **gated on causal stability**.
-    ///
-    /// A tombstone is removed from the map only once it is both older than the configured
-    /// timeout *and* acknowledged by every replica this node has ever communicated with (or
-    /// those replicas have been decommissioned via [`forget_peer`](Self::forget_peer)). This
-    /// prevents the classic tombstone-resurrection hazard: a replica partitioned for longer
-    /// than the timeout cannot resurrect a deleted value on its return, because the tombstone
-    /// is kept until that replica has seen it.
+    /// Garbage-collect tombstones, **gated on causal stability** (`ARCHITECTURE.md` §5
+    /// invariant 6): older than the timeout *and* acknowledged by every replica this node has
+    /// communicated with, or decommissioned via [`forget_peer`](Self::forget_peer).
     async fn clear_expired_tombstones(&self) {
         loop {
             for key in self.tombstones.expired() {
@@ -1030,26 +876,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Drive the dynamic discovery source: inject discovered peers and decommission vanished ones.
+    /// A no-op with no source configured.
     ///
-    /// Returns immediately (a no-op) when no discovery source is configured, so the default
-    /// random-probing behaviour is unchanged. Otherwise, every
-    /// [`discovery_interval`](Self::with_discovery_interval):
+    /// - A **successful** resolution seeds every returned address as a known peer.
+    /// - An absent **member** accrues a miss; at
+    ///   [`discovery_miss_threshold`](Self::with_discovery_miss_threshold) it is decommissioned per
+    ///   [`MemberPresence::eligible_for_decommission`], releasing its GC gate.
+    /// - A **failed** resolution is skipped entirely, never counted as a miss.
     ///
-    /// - On a **successful** resolution, every returned address (except this node's own) is seeded
-    ///   as a known peer, re-arming its expiration and feeding it to the next gossip round.
-    /// - A previously-seen **member** that is now absent has its [`MemberPresence`] miss count
-    ///   incremented. Once it reaches [`discovery_miss_threshold`](Self::with_discovery_miss_threshold)
-    ///   it is decommissioned — immediately if it holds no pending unacknowledged tombstone, or once
-    ///   it has *also* been continuously absent for
-    ///   [`discovery_decommission_floor`](Self::with_discovery_decommission_floor) if it does (see
-    ///   [`MemberPresence::eligible_for_decommission`]). Decommissioning releases the
-    ///   causal-stability gate the member held on tombstone GC.
-    /// - A **failed** resolution (DNS blip) is skipped entirely — it never counts as a miss — so a
-    ///   transient resolver hiccup cannot decommission a healthy peer.
-    ///
-    /// Only `members` are considered for decommissioning: membership is what gates tombstone GC, it
-    /// is earned through a real authenticated datagram, and discovery never writes to it — so a
-    /// spoofable or never-contacted address can neither block nor be the subject of GC release.
+    /// Only `members` are decommissioned: discovery never writes membership, so a spoofable
+    /// address can neither block nor release GC (`ARCHITECTURE.md` §5 invariant 6).
     async fn discover_periodically(&self) {
         let Some(discovery) = self.discovery.clone() else {
             return; // no discovery source: leave peer-finding to the engine's per-net probing
@@ -1103,10 +939,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         }
     }
 
-    /// Drive the gossip and reconciliation loops forever.
-    ///
-    /// This method does not return and cannot fail: network send errors are logged and
-    /// counted, never fatal, so a vanished or unreachable peer cannot stop the loops.
+    /// Drive the gossip and reconciliation loops forever. Never returns and cannot fail: send
+    /// errors are logged and counted.
     #[instrument(name = "reconcile.store", skip_all)]
     pub async fn run(self) {
         info!("reconcile store starting");
@@ -1122,18 +956,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 }
 
-// `get_mut` shares the same `V: Value` bound as the rest of the store: an in-place edit is
-// re-stamped and broadcast (see below), and that broadcast serializes `V` through the engine's
-// `Value`-bounded path, so the bound set matches `insert`/`remove` exactly.
 impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
-    /// Mutate the value for `k` in place, then propagate the edit like [`insert`](ReplicatedMap::insert).
+    /// Mutate the value for `k` in place, then propagate like [`insert`](ReplicatedMap::insert).
     ///
-    /// The callback receives `Some(&mut V)` when the key is live, or `None` when it is absent or
-    /// tombstoned. When it mutated a live value, the entry is then **re-stamped with a fresh Hybrid
-    /// Logical Clock timestamp and broadcast** to peers, exactly as a regular `insert` would be — so
-    /// an in-place edit converges across the cluster instead of remaining local. The whole
-    /// read-modify-write holds the map write lock for the duration of the callback, so it is atomic
-    /// against the reconciliation loop.
+    /// The callback sees `Some(&mut V)` for a live key, `None` for an absent or tombstoned one; a
+    /// mutated entry is re-stamped and broadcast. Holds the write lock for the whole
+    /// read-modify-write, so it is atomic against the reconciliation loop.
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         // Mint the timestamp before taking the map lock, matching the lock order of `insert`
         // (clock, then map → projection).
@@ -1143,35 +971,27 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         guard.with_mut(k, |maybe_entry| {
             if let Some(entry) = maybe_entry {
                 callback(entry.value_mut());
-                // Re-stamp so the edit wins last-write-wins on peers and reconciles; `with_mut`
-                // recomputes the dated fingerprint from the whole entry afterwards.
                 entry.stamp = now;
                 updated = Some(entry.clone());
             } else {
                 callback(None);
             }
         });
-        // The in-place mutation bypassed `insert`, so refresh the value-only projection for this
-        // key directly (lock order map → projection, as everywhere else) to keep it in sync.
+        // The mutation bypassed `insert`: refresh the projection (lock order map → projection).
         if let Some(entry) = guard.get(k) {
             let projected = entry.project();
             self.engine.projection.write().insert(k.clone(), projected);
         }
         drop(guard);
-        // Notify peers of the re-stamped entry, just like `insert`, so the edit propagates eagerly
-        // rather than being left to the next anti-entropy round (or failing to converge at all).
         if let Some(value) = updated {
             self.engine.broadcast_update(k.clone(), value);
         }
     }
 
-    /// Mutate the value for `k` in place **only when it is live**, then re-stamp and broadcast
-    /// the edit. Returns whether a live value was present (and thus mutated). Absent or
-    /// tombstoned keys leave the map untouched and are not re-broadcast. The whole
-    /// read-modify-write holds the map write lock for the duration of `callback`, so it is atomic
-    /// against the reconciliation loop.
+    /// Mutate `k` in place **only when live**, re-stamping and broadcasting; returns whether it
+    /// was. Atomic against the reconciliation loop.
     ///
-    /// This is the shared core of [`update`](Self::update) and [`upsert`](Self::upsert).
+    /// The shared core of [`update`](Self::update) and [`upsert`](Self::upsert).
     fn mutate_live<F: FnOnce(&mut V)>(&self, k: &K, callback: F) -> bool {
         // Mint the timestamp before taking the map lock, matching the lock order of `insert`.
         let now = self.engine.clock_now();
@@ -1181,15 +1001,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             if let Some(entry) = maybe_entry {
                 if let Some(value) = entry.value_mut() {
                     callback(value);
-                    // Re-stamp so the edit wins last-write-wins on peers; `with_mut` recomputes
-                    // the dated fingerprint from the whole entry afterwards.
                     entry.stamp = now;
                     updated = Some(entry.clone());
                 }
             }
         });
-        // Keep the value-only projection in sync, as `get_mut` does (lock order map →
-        // projection).
         if updated.is_some() {
             if let Some(entry) = guard.get(k) {
                 let projected = entry.project();
@@ -1205,22 +1021,15 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         }
     }
 
-    /// Atomically mutate the live value for `k` in place, then re-stamp and broadcast — the
-    /// ergonomic, presence-reporting evolution of [`get_mut`](Self::get_mut).
-    ///
-    /// `f` runs only if the key is live; the return value reports whether it existed. This is the
-    /// race-free replacement for a `get`-then-`insert` read-modify-write: the whole operation
-    /// holds the map write lock, so a concurrent reconciliation cannot interleave.
+    /// Atomically mutate the live value for `k`, then re-stamp and broadcast; returns whether the
+    /// key was live. The race-free replacement for a `get`-then-`insert`.
     pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
         self.mutate_live(k, f)
     }
 
-    /// Update the live value for `k` with `f`, or insert `default` if the key is
-    /// absent/tombstoned.
+    /// Update the live value for `k` with `f`, or insert `default` if it is absent or tombstoned.
     ///
-    /// The update branch is atomic (holds the write lock); the insert branch stamps a fresh
-    /// timestamp and broadcasts like [`insert`](Self::insert), so under last-write-wins a
-    /// concurrent write is resolved by timestamp order (no lost-update within a single node).
+    /// The update branch is atomic; the insert branch behaves like [`insert`](Self::insert).
     pub fn upsert<F: FnOnce(&mut V)>(&self, k: K, default: V, f: F) {
         if !self.mutate_live(&k, f) {
             self.insert(k, default);
@@ -1248,21 +1057,14 @@ pub const MAX_NETS: usize = 8;
 pub struct Config {
     pub port: u16,
     pub listen_addr: IpAddr,
-    /// The geographical networks the cluster spans, each a CIDR. Empty slots are `None`.
+    /// The geographical networks the cluster spans, each a CIDR; declare them with
+    /// [`with_net`](Config::with_net). Empty slots are `None`.
     ///
-    /// Declare every network with [`with_net`](Config::with_net); a *network* is just an address
-    /// range, sized to your topology (a whole cloud region, an availability zone, or a single
-    /// subnet). This node's **local** network is whichever declared net contains
-    /// [`listen_addr`](Self::listen_addr); all others are **remote**. (If none contains it, the node
-    /// logs a loud warning and treats only itself as local — see [`ReplicatedMap::new`].)
-    ///
-    /// A node auto-discovers peers in every network (one random probe per network per round) but
-    /// gossips the full anti-entropy comparison to local-network peers every round and to
-    /// remote-network peers only every [`remote_interval`](Self::remote_interval) rounds, to a
-    /// bounded [`remote_fanout`](Self::remote_fanout) subset — so cross-network (WAN) traffic stays
-    /// bounded. A peer's network is derived purely from its IP (`IpNet::contains`), so the wire
-    /// format is unchanged. With no network declared, the node uses the loopback default and behaves
-    /// like a flat single-CIDR cluster (the historical behaviour).
+    /// The **local** net is whichever contains [`listen_addr`](Self::listen_addr) — none matching
+    /// means the node warns and treats only itself as local. Remote-net peers are gossiped to
+    /// every [`remote_interval`](Self::remote_interval) rounds, to a bounded
+    /// [`remote_fanout`](Self::remote_fanout), which is what bounds WAN traffic. A peer's net comes
+    /// from its IP alone, so the wire format carries no tag.
     pub nets: [Option<IpNet>; MAX_NETS],
     /// Send the full anti-entropy comparison to remote-network peers every `remote_interval`
     /// reconciliation rounds (default `6`). Local-network peers are always contacted every round.
@@ -1274,102 +1076,65 @@ pub struct Config {
     pub remote_fanout: usize,
     /// Optional shared cluster secret enabling per-datagram MAC authentication.
     ///
-    /// When `None` (the default), the protocol is **unauthenticated**: any host able to send a
-    /// UDP datagram to the port can forge updates and poison the cluster. When set, every node in
-    /// the cluster must use the **same** 32-byte key (and the same MAC backend feature). See
-    /// [`Config::with_cluster_key`].
+    /// `None` — the default — is **unauthenticated**: any host reaching the port can forge
+    /// updates. When set, every node needs the same key and the same MAC backend feature.
     pub cluster_key: Option<[u8; 32]>,
-    /// Identity of this node, used as the deterministic tie-break in the Hybrid Logical
-    /// Clock total order. When `None` (the default), a random id is generated at startup.
+    /// Identity of this node: the tie-break in the HLC total order. Random at startup when
+    /// `None`.
     ///
-    /// Two nodes must not share the same id, or conflicts between equal `(wall, counter)`
-    /// timestamps would no longer be resolved deterministically. A random 64-bit id makes
-    /// collisions negligible; set an explicit id only when you need a stable, reproducible
-    /// ordering (e.g. in tests).
+    /// Two nodes must never share an id, or equal `(physical, logical)` stamps stop resolving
+    /// deterministically. Set one explicitly for a stable ordering across restarts.
     pub node_id: Option<NodeId>,
-    /// Whether to encrypt datagram payloads (not just authenticate them).
-    ///
-    /// Only ever set through `Config::with_encryption` (available with the `encryption` cargo
-    /// feature), which also requires a [`cluster_key`](Self::cluster_key). When `false` (the
-    /// default), a set cluster key authenticates plaintext datagrams with a MAC; when `true`, the
-    /// same key is used to authenticate *and* encrypt them with XChaCha20-Poly1305.
+    /// Whether to encrypt datagram payloads as well as authenticate them, with the same
+    /// [`cluster_key`](Self::cluster_key). Set only through `Config::with_encryption`.
     pub encrypt: bool,
-    /// How long the reconciliation loop waits for inbound activity before initiating a round — the
-    /// effective **background** anti-entropy cadence (default 1 s). It governs only divergence
-    /// detection and loss repair: local writes propagate immediately (broadcast), independent of it.
+    /// How long the loop waits for inbound activity before initiating a round: the **background**
+    /// anti-entropy cadence (default 1 s). Local writes broadcast immediately, independent of it.
     ///
-    /// A shorter interval repairs dropped/missed updates sooner, but background traffic grows roughly
-    /// as `1/interval` per local peer. It is also **counterproductive below a floor** of a few × the
-    /// peer RTT (and below the bulk pacing gap — see [`bulk_send_rate`](Self::bulk_send_rate)): the
-    /// diff is multi-round-trip, so re-initiating before the previous round's reply lands — or
-    /// between a bulk transfer's paced datagrams — only floods the single receive loop with redundant
-    /// comparisons, slowing convergence rather than speeding it. Keep it ≥ a few × RTT;
-    /// the 1 s default is a safe, low-overhead choice. Retunable at runtime via
+    /// Background traffic grows as `1/interval` per local peer, and the setting is
+    /// counterproductive below a few × RTT (and below the bulk pacing gap, see
+    /// [`bulk_send_rate`](Self::bulk_send_rate)): the diff is multi-round-trip, so re-initiating
+    /// early only floods the single receive loop. Retunable via
     /// [`set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
     pub reconcile_interval: Duration,
-    /// Rate, in bytes per second, at which a single **bulk** anti-entropy value transfer to one peer
-    /// is metered. Defaults to 32 MiB/s; `None` disables pacing (the historical
-    /// back-to-back burst).
+    /// Metering rate of a single **bulk** value transfer to one peer (default 32 MiB/s); `None`
+    /// bursts back-to-back.
     ///
-    /// When a peer differs over a whole range — most starkly a cold/empty peer pulling the entire
-    /// dataset — the holder would otherwise dump every value back-to-back in one burst. That burst
-    /// overruns the receiver's socket buffer (datagrams are dropped in the kernel) and, because the
-    /// receiver applies updates silently, the holder sees a lull and its own
-    /// [`reconcile_interval`](Self::reconcile_interval) timer re-issues a full diff over ranges still
-    /// in flight, which are then re-sent — inflating bytes transferred far beyond the dataset size.
-    /// Pacing the transfer on a background task (off the receive loop) keeps it below the receiver's
-    /// overrun threshold; the engine additionally sends at most one bulk transfer per peer at a time,
-    /// so a re-issued diff cannot re-send in-flight ranges. Together these make a cold sync transfer
-    /// ≈ the dataset size, fast, regardless of `reconcile_interval`. Only the bulk value dump is
-    /// paced; small refinement comparisons, acks, and local-write broadcasts are sent immediately.
+    /// An unpaced burst overruns the receiver's socket buffer, and the resulting lull makes this
+    /// node's own [`reconcile_interval`](Self::reconcile_interval) re-issue a diff over ranges
+    /// still in flight — byte amplification far past the dataset size. Pacing on a background task,
+    /// plus at most one bulk transfer per peer, keeps a cold sync ≈ the dataset size. Only the
+    /// bulk dump is paced; comparisons, acks and broadcasts go immediately.
     pub bulk_send_rate: Option<usize>,
-    /// Size to request for the gossip socket's receive buffer (`SO_RCVBUF`), in bytes.
+    /// `SO_RCVBUF` request in bytes, default 8 MiB; `None` leaves the OS default.
     ///
-    /// Defaults to 8 MiB. The kernel clamps the request to the OS
-    /// maximum (`net.core.rmem_max` on Linux) and never errors for asking too much, so a large
-    /// default is safe — it only ever helps. The stock OS default holds only a few full-size
-    /// datagrams, so a bulk/cold-sync burst overruns it and the kernel silently drops the excess
-    /// (counted as `Udp.RcvbufErrors` in `/proc/net/snmp`, invisible to the application); a
-    /// multi-MiB buffer absorbs the burst instead. Set to `None` to leave the inherited OS default
-    /// untouched. See [`with_recv_buffer_size`](Config::with_recv_buffer_size).
+    /// The kernel clamps rather than failing, so a large request is safe. The stock default holds
+    /// too few datagrams for a cold-sync burst, and the excess is dropped in the kernel
+    /// (`Udp.RcvbufErrors` in `/proc/net/snmp`), invisible to the application.
     pub recv_buffer_size: Option<usize>,
-    /// Size to request for the gossip socket's send buffer (`SO_SNDBUF`), in bytes.
+    /// `SO_SNDBUF` request in bytes, default 8 MiB; `None` leaves the OS default.
     ///
-    /// Defaults to 8 MiB, clamped by the kernel to the OS maximum
-    /// (`net.core.wmem_max` on Linux). A larger send buffer lets a bulk send burst queue in the
-    /// kernel instead of failing with `EWOULDBLOCK`/`ENOBUFS` (which the engine must then retry).
-    /// Set to `None` to leave the inherited OS default untouched. See
-    /// [`with_send_buffer_size`](Config::with_send_buffer_size).
+    /// A larger buffer queues a bulk burst in the kernel instead of failing
+    /// `EWOULDBLOCK`/`ENOBUFS`, which the engine would have to retry.
     pub send_buffer_size: Option<usize>,
-    /// Maximum age (past or future) of a datagram's sender wall-clock stamp before it is silently
-    /// dropped as a replay. Authenticated modes only; ignored unkeyed. Default 5 minutes — see
-    /// [`with_freshness_window`](Config::with_freshness_window).
+    /// Maximum age, past or future, of a datagram's sender stamp before it is dropped as a
+    /// replay. Authenticated modes only; default 5 minutes.
     ///
-    /// Must tolerate normal clock skew and network jitter between peers, or legitimate traffic is
-    /// silently dropped: [`Duration::ZERO`] accepts only a stamp bit-for-bit equal to the
-    /// receiver's local clock, which real network latency alone makes unlikely to ever pass. This
-    /// is a self-inflicted footgun, not a security hole — no validation rejects it — because it
-    /// only ever makes the filter *stricter*, never unsafe.
+    /// Must tolerate real skew and jitter or legitimate traffic is dropped — [`Duration::ZERO`]
+    /// accepts almost nothing. Unvalidated, because too small is stricter, never unsafe.
     pub freshness_window: Duration,
-    /// Maximum number of distinct remote peers (members) this node will track.
+    /// Maximum number of distinct remote peers tracked (default 1024).
     ///
-    /// At capacity, a datagram from a completely unknown sender is dropped before any per-sender
-    /// state is allocated; already-tracked senders are unaffected, and
-    /// [`forget_peer`](crate::ReplicatedMap::forget_peer) frees a slot immediately. Defence in
-    /// depth for unauthenticated deployments, a hard ceiling for authenticated ones. Default 1024
-    /// — see [`with_max_peers`](Config::with_max_peers).
-    ///
-    /// Applies to read replicas too, which never become members: a saturated set also blocks
-    /// new read replicas from syncing. Size for members *plus* expected read replicas.
+    /// At capacity an unknown sender's datagram is dropped before any per-sender state is
+    /// allocated; tracked senders are unaffected and
+    /// [`forget_peer`](crate::ReplicatedMap::forget_peer) frees a slot. Read replicas count too,
+    /// so size for members *plus* replicas.
     pub max_peers: usize,
-    /// Maximum number of concurrently active paced bulk dumps across all peers.
+    /// Maximum concurrently active paced bulk dumps across all peers (default 4).
     ///
-    /// A bulk dump holds a full snapshot `Vec` of the differing range — potentially the whole
-    /// dataset — for the transfer's duration, so M simultaneous cold peers would otherwise cost
-    /// M × dataset memory. Exhausting the budget skips a new dump before the snapshot is
-    /// allocated; the protocol is retry-driven, so the peer's next diff round retries once a slot
-    /// frees. Default 4 — see
-    /// [`with_max_concurrent_bulk_dumps`](Config::with_max_concurrent_bulk_dumps).
+    /// Each holds a snapshot of the differing range for the transfer's duration, so M cold peers
+    /// would otherwise cost M × dataset memory. An exhausted budget skips the dump before
+    /// allocating; the peer's next diff round retries.
     pub max_concurrent_bulk_dumps: usize,
 }
 impl Default for Config {
@@ -1402,16 +1167,12 @@ impl Config {
         self.listen_addr = listen_addr;
         self
     }
-    /// Declare a geographical network the cluster spans, by its CIDR.
-    ///
-    /// Call once per network — **including this node's own**. The node's local network is whichever
-    /// declared net contains [`listen_addr`](Config::listen_addr); the rest are remote and gossiped
-    /// to over WAN-bounded, geography-aware anti-entropy (see [`nets`](Config::nets)). With none
-    /// declared, the node uses the loopback default (a flat single-CIDR cluster).
+    /// Declare a geographical network by its CIDR — once per network, **including this node's
+    /// own** (see [`nets`](Config::nets)).
     ///
     /// # Panics
     ///
-    /// Panics if more than [`MAX_NETS`] networks are declared.
+    /// If more than [`MAX_NETS`] networks are declared.
     pub fn with_net(mut self, net: IpNet) -> Self {
         let slot = self
             .nets
@@ -1426,7 +1187,7 @@ impl Config {
     ///
     /// # Panics
     ///
-    /// Panics if the total number of networks exceeds [`MAX_NETS`].
+    /// If the total exceeds [`MAX_NETS`].
     pub fn with_nets(mut self, nets: &[IpNet]) -> Self {
         for &net in nets {
             self = self.with_net(net);
@@ -1465,66 +1226,46 @@ impl Config {
         self
     }
 
-    /// Request `size` bytes for the gossip socket's receive buffer (`SO_RCVBUF`).
-    ///
-    /// The kernel clamps the request to the OS maximum (`net.core.rmem_max` on Linux), so passing
-    /// more than the host allows is harmless — it is simply capped. Raising this (together with the
-    /// matching sysctl) is the cheap fix for datagrams dropped during bulk/cold syncs.
-    /// See [`recv_buffer_size`](Config::recv_buffer_size); to leave the OS default untouched, set
-    /// that field to `None` directly.
+    /// Request `size` bytes for `SO_RCVBUF`; the kernel clamps to the OS maximum. Raising this
+    /// with the matching sysctl is the fix for datagrams dropped during a cold sync. Set
+    /// [`recv_buffer_size`](Config::recv_buffer_size) to `None` for the OS default.
     pub fn with_recv_buffer_size(mut self, size: usize) -> Self {
         self.recv_buffer_size = Some(size);
         self
     }
 
-    /// Request `size` bytes for the gossip socket's send buffer (`SO_SNDBUF`).
-    ///
-    /// Clamped by the kernel to the OS maximum (`net.core.wmem_max` on Linux). See
-    /// [`send_buffer_size`](Config::send_buffer_size); to leave the OS default untouched, set that
-    /// field to `None` directly.
+    /// Request `size` bytes for `SO_SNDBUF`; the kernel clamps to the OS maximum. Set
+    /// [`send_buffer_size`](Config::send_buffer_size) to `None` for the OS default.
     pub fn with_send_buffer_size(mut self, size: usize) -> Self {
         self.send_buffer_size = Some(size);
         self
     }
 
-    /// Enable per-datagram MAC authentication using a shared 32-byte cluster secret.
+    /// Enable per-datagram MAC authentication with a shared 32-byte cluster secret, closing the
+    /// unauthenticated LWW poisoning vector.
     ///
-    /// Every outgoing datagram is then framed with a keyed MAC over its payload, and every
-    /// incoming datagram is verified **before** deserialization; datagrams with a missing or
-    /// invalid tag are silently dropped. This closes the unauthenticated last-write-wins
-    /// poisoning vector.
-    ///
-    /// All nodes in the same cluster **must** share the identical key and be built with the same
-    /// MAC backend feature (`mac-blake3`, the default, or `mac-hmac`). Without a key, the store
-    /// logs a loud warning at startup and runs unauthenticated.
+    /// Incoming datagrams are verified before deserialization and silently dropped on failure.
+    /// Every node must share the key and the MAC backend feature (`mac-blake3` or `mac-hmac`);
+    /// without one the store warns loudly at startup and runs unauthenticated.
     pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
         self.cluster_key = Some(key);
         self
     }
 
-    /// Set an explicit node identity for the Hybrid Logical Clock tie-break.
-    ///
-    /// Each node in a cluster must use a distinct id. Leave unset to use a random id (the
-    /// default); set it for a stable, reproducible conflict ordering.
+    /// Set an explicit node identity for the HLC tie-break; must be distinct per node.
     pub fn with_node_id(mut self, node_id: NodeId) -> Self {
         self.node_id = Some(node_id);
         self
     }
 
-    /// Set [`freshness_window`](Config::freshness_window): the max stamp deviation tolerated in
-    /// authenticated modes before a datagram is dropped as a replay. No effect unkeyed. See the
-    /// field doc for why an unrealistically small window is a footgun, not something this setter
-    /// rejects.
+    /// Set [`freshness_window`](Config::freshness_window). No effect unkeyed.
     pub fn with_freshness_window(mut self, window: Duration) -> Self {
         self.freshness_window = window;
         self
     }
 
-    /// Set the maximum number of distinct peers this node will track (default 1024).
-    ///
-    /// Datagrams from unknown senders are silently dropped when the membership set is at capacity,
-    /// before any per-sender state is created. Already-tracked peers are unaffected.
-    /// See [`max_peers`](Config::max_peers) for the full semantics.
+    /// Set the maximum number of distinct peers tracked (default 1024). See
+    /// [`max_peers`](Config::max_peers).
     pub fn with_max_peers(mut self, max: usize) -> Self {
         self.max_peers = max;
         self
@@ -1536,19 +1277,13 @@ impl Config {
         self
     }
 
-    /// Encrypt datagram payloads with XChaCha20-Poly1305, upgrading the keyed protocol from
-    /// authentication-only to authenticated **encryption**.
+    /// Encrypt datagram payloads with XChaCha20-Poly1305, reusing
+    /// [`cluster_key`](Self::cluster_key) as the AEAD key — so
+    /// [`with_cluster_key`](Self::with_cluster_key) is required on every node.
     ///
-    /// This reuses the shared [`cluster_key`](Self::cluster_key) as the AEAD key, so
-    /// [`with_cluster_key`](Self::with_cluster_key) must also be set on every node; a node
-    /// without a key will not converge with encrypted peers. Each datagram is framed as
-    /// `nonce || ciphertext || tag`, adding 40 bytes of overhead, and is decrypted-and-verified
-    /// before deserialization; datagrams that fail are silently dropped.
-    ///
-    /// The trust model is unchanged from the MAC mode: a single shared secret, so any holder can
-    /// read and write. It provides confidentiality and integrity but **not** per-peer identity,
-    /// forward secrecy, or replay protection — those would require a handshake (TLS/Noise), which
-    /// is intentionally out of scope.
+    /// Framed as `nonce || ciphertext || tag`, 40 bytes of overhead, verified before
+    /// deserialization. The trust model is unchanged: one shared secret, so no per-peer identity
+    /// and no forward secrecy.
     ///
     /// Requires the `encryption` cargo feature.
     #[cfg(feature = "encryption")]
@@ -1662,9 +1397,7 @@ mod replicated_map_tests {
 
     #[tokio::test]
     async fn tombstones_expiration() {
-        // A dedicated port (and a singleton /32 net) isolates this test from the integration
-        // tests: peer discovery probes random addresses in the net on this port, so an overlapping
-        // port lets a concurrently-running test's node inject updates here.
+        // A dedicated port and /32 net keep a concurrent test's discovery from injecting here.
         let config = Config::default()
             .with_port(8090)
             .with_listen_addr("127.0.0.45".parse().unwrap())
@@ -1674,9 +1407,7 @@ mod replicated_map_tests {
             .expect("bind failed")
             .with_tombstone_timeout(Duration::from_millis(1));
 
-        // This test exercises the tombstone TimeoutWheel directly; it deliberately does *not*
-        // spawn `run()`, whose periodic causal-stability-gated GC would itself remove the
-        // expired tombstone and race these assertions.
+        // No `run()`: its periodic GC would race these assertions.
 
         // `remove` inserts a tombstone rather than deleting the key outright.
         store.remove(&0);
@@ -1686,12 +1417,8 @@ mod replicated_map_tests {
         assert_eq!(store.tombstones.remove(&0), None);
     }
 
-    /// A tombstone stamp is peer-controlled — it arrives over a socket that is unauthenticated by
-    /// default — so the wall-clock instant derived from it must be bounded. These tests drive the
-    /// real pre-insert hook (via `just_insert_bulk`, the same path an inbound update and a
-    /// persistence replay take) with a stamp per regime, and assert both the bound *and* that the
-    /// stored stamp came through byte-identical: it is LWW data, and rewriting it would change
-    /// conflict resolution and the wire contract.
+    /// The instant derived from a peer-controlled tombstone stamp must be bounded, and the
+    /// stored stamp must come through byte-identical.
     mod tombstone_expiry_bound {
         use super::*;
         use crate::clock::{Hlc, LogicalCounter, PhysicalTime};
@@ -1716,7 +1443,7 @@ mod replicated_map_tests {
                 .engine
                 .just_insert_bulk(&[(1, Entry::tombstone(stamp))]);
 
-            // Invariant most at risk from a careless fix: the *stored* stamp is untouched.
+            // The stored stamp must be untouched.
             assert_eq!(
                 store.engine.map.read().get(&1).unwrap().stamp,
                 stamp,
@@ -1747,14 +1474,11 @@ mod replicated_map_tests {
             assert_eq!(when.timestamp_millis(), physical as i64);
         }
 
-        /// Regime 2 — the reachable hole. A stamp far in the future but inside chrono's range
-        /// converted *exactly* under the old `as i64` cast, dating the tombstone past every
-        /// plausible expiry so `TimeoutWheel::expired()` never yielded it: unbounded retention,
-        /// plantable by any host that can reach the port. It must now land on the cap.
+        /// Regime 2: far future, inside chrono's range. Must land on the cap — converting it
+        /// exactly would date the tombstone past every plausible expiry.
         #[tokio::test]
         async fn a_far_future_representable_stamp_is_capped() {
-            // ~10 000 years ahead: comfortably inside chrono's year-262143 ceiling, so the old
-            // cast was lossless here and fixing only the cast would have changed nothing.
+            // ~10 000 years ahead: inside chrono's ceiling, so a lossless conversion is the hazard.
             let physical = now_ms() as u64 + 10_000 * 365 * 24 * 3_600_000;
             let (_store, when) = plant(physical).await;
             assert!(
@@ -1767,11 +1491,7 @@ mod replicated_map_tests {
             );
         }
 
-        /// Regime 3 — above `i64::MAX`, where the old cast wrapped negative into a pre-1970 date
-        /// and made the tombstone immediately eligible. (Less severe than it sounds: GC is
-        /// additionally gated on causal stability, so premature eligibility removed the wall-clock
-        /// safety margin rather than resurrecting data.) After the clamp the value is provably in
-        /// `i64` range, so the wrap is unrepresentable rather than handled.
+        /// Regime 3: above `i64::MAX`. Must land on the same cap, never a pre-1970 date.
         #[tokio::test]
         async fn a_stamp_above_i64_max_is_bounded_not_wrapped() {
             let (_store, when) = plant(u64::MAX).await;
@@ -1785,12 +1505,9 @@ mod replicated_map_tests {
             );
         }
 
-        /// The property the whole change exists for, stated directly: a hostile tombstone's
-        /// expiry *deadline* — the `instant + tombstone_timeout` the wheel fires on — is now a
-        /// finite horizon the operator controls (`now + budget + timeout`, so at most about an
-        /// hour and a minute out here), rather than a date the peer picked. The assertion is on
-        /// the deadline rather than on "it expired by now" because a capped instant is one budget
-        /// in the future by construction: bounding it makes expiry *reachable*, not immediate.
+        /// A hostile tombstone's expiry deadline must be a finite operator-controlled horizon
+        /// (`now + budget + timeout`), not a date the peer picked. Bounding makes expiry
+        /// reachable, not immediate — hence asserting on the deadline.
         #[tokio::test]
         async fn a_capped_tombstone_has_a_finite_expiry_horizon() {
             let timeout = Duration::from_secs(60);
@@ -1802,9 +1519,7 @@ mod replicated_map_tests {
                 deadline <= cap_ms() + timeout.as_millis() as i64,
                 "expiry deadline {deadline} is beyond now + budget + timeout"
             );
-            // For contrast, the deadline the old `as i64` cast produced from the same stamp: the
-            // cast was exact here, so the wheel would not have yielded this tombstone for ten
-            // millennia. A century of margin is plenty to make the assertion unambiguous.
+            // For contrast, the deadline an unbounded conversion would produce.
             let unbounded = physical as i64 + timeout.as_millis() as i64;
             assert!(
                 unbounded > deadline + 100 * 365 * 24 * 3_600_000,
@@ -1890,10 +1605,8 @@ mod replicated_map_tests {
         );
     }
 
-    /// Regression: a restart must not turn a held-back tombstone into a
-    /// collectable (and thus resurrectable) one. A fresh, empty store would treat the tombstone as
-    /// causally stable (no members ⇒ GC allowed); a store that recovered its membership must still
-    /// gate GC because the unacknowledged peer is restored too.
+    /// A restart must not turn a held-back tombstone into a collectable one: recovered
+    /// membership must keep gating GC.
     #[tokio::test]
     async fn restart_keeps_tombstone_gc_gated() {
         let dir = tempfile::tempdir().unwrap();
@@ -2116,10 +1829,9 @@ mod replicated_map_tests {
         assert!(state.eligible_for_decommission(3, Duration::ZERO, true));
     }
 
-    /// A member with an unacknowledged tombstone must survive past `miss_threshold` and only be
-    /// decommissioned once its absence clears the wall-time floor — the guard this PR adds against
-    /// a spoofed/flaky resolver letting GC collect a tombstone the member never acked
-    /// (invariant 6: no resurrection).
+    /// A member with an unacknowledged tombstone survives past `miss_threshold` and is
+    /// decommissioned only once its absence clears the wall-time floor
+    /// (`ARCHITECTURE.md` §5 invariant 6).
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_tombstone_acks_hold_decommission_past_the_miss_threshold() {
         let member: IpAddr = "127.0.0.210".parse().unwrap();
@@ -2207,16 +1919,8 @@ mod replicated_map_tests {
 
     // ----- Observe-on-load (HLC monotonicity across restarts) tests -----
 
-    /// After loading persisted state, the clock must be advanced past the maximum persisted
-    /// timestamp so that the first post-restart write is strictly ordered after all pre-restart
-    /// writes.
-    ///
-    /// This test FAILS without the observe-on-load fix and PASSES with it.
-    ///
-    /// Technique: use a `ManualClock` whose counter starts at zero and then load a
-    /// `PersistedState` whose max stamp is in the future relative to that clock (but within
-    /// MAX_CLOCK_DRIFT, so the observe clamp does not interfere). After loading, the first
-    /// `insert` must mint a timestamp strictly greater than the persisted max.
+    /// Loading persisted state must advance the clock past the maximum persisted stamp, so the
+    /// first post-restart write outranks every pre-restart one.
     #[tokio::test]
     async fn restart_clock_advanced_past_persisted_max_stamp() {
         use crate::clock::{Hlc, LogicalCounter, ManualClock, NodeId, PhysicalTime};
@@ -2268,15 +1972,8 @@ mod replicated_map_tests {
         );
     }
 
-    /// Variant of the monotonicity test where the maximum persisted stamp is on a **tombstone**.
-    ///
-    /// The critical property: a post-restart `insert` on the same key must mint a timestamp
-    /// strictly greater than the tombstone's stamp. If it does not, an anti-entropy round with a
-    /// peer that still holds the tombstone would re-apply the tombstone via LWW (tombstone stamp
-    /// > fresh insert's stamp), silently undoing the insert — the classic tombstone-resurrection
-    /// hazard.
-    ///
-    /// This test FAILS without the observe-on-load fix and PASSES with it.
+    /// Same, where the maximum persisted stamp is on a **tombstone**: a post-restart insert must
+    /// outrank it, or a peer still holding the tombstone re-applies it via LWW.
     #[tokio::test]
     async fn restart_insert_beats_persisted_tombstone() {
         use crate::clock::{Hlc, LogicalCounter, ManualClock, NodeId, PhysicalTime};
@@ -2334,10 +2031,7 @@ mod replicated_map_tests {
         );
     }
 
-    /// `new` must return `Err` rather than panic when the requested port is already in use.
-    ///
-    /// We hold a `std::net::UdpSocket` on the same address/port first; the OS will refuse the
-    /// second bind and the fallible constructor must surface that error to the caller.
+    /// `new` must return `Err`, not panic, when the port is already in use.
     #[tokio::test]
     async fn new_returns_err_on_bind_failure() {
         // Occupy a loopback port chosen by the OS (bind to :0, then read it back) so this test
@@ -2370,10 +2064,8 @@ mod replicated_map_tests {
         assert_eq!(Config::default().max_peers, 1024);
     }
 
-    /// Helper: craft a raw bincode payload containing a single `ComparisonItem` drawn from an empty
-    /// tree, suitable for sending to an unauthenticated store.  The engine deserializes any
-    /// `ComparisonItem` as a dated message, so `spoke_dated` becomes `true` and the receive path
-    /// would add the sender to `members` — unless the cap fires first.
+    /// A raw payload with one `ComparisonItem`: a dated message, so the receive path would add
+    /// the sender to `members` unless the cap fires first.
     fn dated_comparison_payload() -> Vec<u8> {
         use crate::replica::Message;
         use crate::FingerprintTreeMap;
@@ -2513,11 +2205,7 @@ mod replicated_map_tests {
         task.abort();
     }
 
-    /// Decommissioning a member frees its slot: the engine's membership set shrinks and the
-    /// cap check allows a new sender through once a slot becomes available.
-    ///
-    /// This test verifies the state invariants directly (without the network path, which is
-    /// already exercised by [`peer_cap_blocks_unknown_sender_at_capacity`]).
+    /// Decommissioning a member frees its slot, letting a new sender through the cap.
     #[tokio::test]
     async fn decommission_frees_peer_cap_slot() {
         let peer1: std::net::IpAddr = "127.1.0.1".parse().unwrap();
