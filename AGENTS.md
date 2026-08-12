@@ -143,7 +143,10 @@ reference, not updated for routine changes.
 (`ARCHITECTURE.md` §2/§3 is the model), a table, a code block, or a link. State the rule, the shape
 or the evidence — never narrate it. Scope is every doc **about** this repo, in it or not — issues,
 PRs, review comments — not only committed files; `.github/ISSUE_TEMPLATE/`/`pull_request_template.md`
-carry the shape so it isn't re-derived per post.
+carry the shape so it isn't re-derived per post. Two failure modes worth naming, because both recur
+in agent-written threads: paraphrasing what a cited issue/PR/paper/source already says instead of
+linking it, and narrating the process that produced a finding instead of stating the finding and
+what it supersedes.
 
 ## 10. Commit, PR, and gating conventions
 
