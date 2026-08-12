@@ -6,62 +6,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Range fingerprint primitive used by the reconciliation protocol.
+//! Range fingerprint primitive: `ARCHITECTURE.md` §5 invariant 1, §6.
 //!
-//! The reconciliation protocol compares two collections by exchanging a
-//! *fingerprint* (a combined hash) of the elements in a range of keys. For this
-//! to be correct and safe, the fingerprint must satisfy two properties:
+//! `[u64; 4]`, per-element BLAKE3 over the [canonical encoding](crate::encoding), combined by
+//! addition mod 2²⁵⁶ — an abelian group whose carries are not `GF(2)`-linear, unlike the XOR
+//! combiner it must never become. Hash function *and* input encoding are both pinned here; either
+//! one changing is a wire break, frozen by this module's golden vectors.
 //!
-//! 1. **Algebraically strong combiner.** Fingerprints of sub-ranges are
-//!    combined into the fingerprint of their union, and elements are added and
-//!    removed incrementally as the tree mutates. The naive combiner — a 64-bit
-//!    XOR of per-element hashes — is `GF(2)`-linear and self-inverse: cancelling
-//!    or repeated element hashes vanish, and an adversary can *solve* (Gaussian
-//!    elimination) for crafted elements that make a divergent range collide in
-//!    fingerprint, causing silent missed differences. 64 bits also invites
-//!    accidental birthday collisions (~2³²) over a cluster's lifetime.
-//!
-//!    Instead we use a **256-bit "hash-then-add" combiner**: each element hashes
-//!    to a 256-bit value and fingerprints combine by **addition modulo 2²⁵⁶**
-//!    (with carry propagation across the whole 256-bit word). This forms an
-//!    abelian group — combine is `+`, remove is `-` — and, unlike XOR, addition
-//!    with carries is *not* `GF(2)`-linear, defeating offline collision crafting.
-//!    The 256-bit width pushes accidental birthday collisions to ~2¹²⁸.
-//!
-//! 2. **Stable, versioned hash function *and* stable input encoding.** The
-//!    fingerprint is the **wire reconciliation token**: two nodes must compute
-//!    the *same* fingerprint for the same data, forever, across Rust versions,
-//!    platforms (32- vs 64-bit), and endianness. That takes two halves, and
-//!    pinning only one of them is not enough.
-//!
-//!    The *hash function* is the first half: `std`'s
-//!    [`DefaultHasher`](std::collections::hash_map::DefaultHasher) is explicitly
-//!    documented as unspecified and unstable across releases, so the element
-//!    hash is pinned to **BLAKE3**.
-//!
-//!    The *input encoding* is the other half, and it is the one this crate used
-//!    to get wrong. Feeding BLAKE3 through a [`std::hash::Hasher`] adapter pins
-//!    how bytes are written but not which bytes std's `Hash` impls choose to
-//!    write — and Rust makes no stability promise about that. `Hash for str`,
-//!    `Hash for Option<T>` or any other impl may change its byte sequence in a
-//!    future release, which would change every fingerprint in a cluster and
-//!    leave a mixed-version cluster re-exchanging ranges forever: exactly the
-//!    failure this property is meant to prevent. `Hash` is also not implemented
-//!    for [`HashMap`](std::collections::HashMap)/[`HashSet`](std::collections::HashSet),
-//!    so such values were unusable.
-//!
-//!    So `rsos` owns the encoding end to end: [`lift`] serializes key and value
-//!    through the crate's own injective, length-prefixed
-//!    [canonical encoding](crate::encoding) (a `serde::Serializer` writing
-//!    straight into BLAKE3 — no codec crate involved) rather than through
-//!    `Hash`. Only with both halves owned here is "stable across Rust versions"
-//!    a claim this crate can actually make. The golden-vector tests at the
-//!    bottom of this module freeze the wire format so any change that would
-//!    break interoperability fails CI.
-//!
-//! See: A. Meyer, *Range-Based Set Reconciliation*
-//! (arXiv:2212.13567); Clarke et al., *Incremental Multiset Hash Functions*
-//! (ASIACRYPT 2003).
+//! Meyer, arXiv:2212.13567; Clarke et al., *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
@@ -69,18 +21,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::encoding;
 
-/// A 256-bit range fingerprint, stored as four little-endian 64-bit limbs
-/// (limb 0 is least significant).
+/// A 256-bit range fingerprint: four little-endian 64-bit limbs, limb 0 least significant.
 ///
-/// Fingerprints form an abelian group under addition modulo 2²⁵⁶:
-/// [`combine`](Fingerprint::combine)/`+` merges the fingerprints of disjoint
-/// ranges (and adds a single element), while `-` removes an element again. The
-/// identity [`ZERO`](Fingerprint::ZERO) is the fingerprint of the empty range.
+/// An abelian group under addition mod 2²⁵⁶ — `+`/[`combine`](Fingerprint::combine) merges
+/// disjoint ranges, `-` removes, [`ZERO`](Fingerprint::ZERO) is the identity.
 ///
-/// NOTE: a *non-empty* range can legitimately fingerprint to [`ZERO`](Fingerprint::ZERO) (elements
-/// whose hashes sum to a multiple of 2²⁵⁶). The reconciliation protocol must
-/// therefore never treat `fingerprint == ZERO` as "empty"; emptiness is decided
-/// on the element count.
+/// A non-empty range can fingerprint to [`ZERO`](Fingerprint::ZERO); never decide emptiness on
+/// the fingerprint, only on the element count.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fingerprint(pub [u64; 4]);
 
@@ -184,12 +131,7 @@ impl std::fmt::Display for Fingerprint {
     }
 }
 
-/// A BLAKE3 accumulator that yields a 256-bit [`Fingerprint`].
-///
-/// Bytes reach it exclusively through the crate's [canonical encoding](crate::encoding), which is
-/// what makes the digest a stable wire token: the encoding fixes integer widths and endianness,
-/// length-prefixes everything variable-length, and orders map entries — none of which the hash
-/// function itself can guarantee.
+/// A BLAKE3 accumulator fed exclusively through the [canonical encoding](crate::encoding).
 struct Blake3Hasher(blake3::Hasher);
 
 impl Blake3Hasher {
@@ -199,10 +141,10 @@ impl Blake3Hasher {
 
     /// Absorb `value`'s canonical encoding.
     ///
-    /// Infallible in practice: writing into a BLAKE3 accumulator has nothing that can fail, so the
-    /// only way this panics is a hand-written [`Serialize`] impl that refuses to serialize itself
-    /// (`serde::ser::Error::custom`) — a bug in that type, surfaced loudly rather than folded into
-    /// a wrong fingerprint. See [`encoding::Error`](crate::encoding::Error).
+    /// # Panics
+    ///
+    /// Only if a hand-written [`Serialize`] impl fails — surfaced loudly, never folded into a
+    /// wrong fingerprint.
     fn absorb<T: Serialize + ?Sized>(&mut self, value: &T) {
         encoding::encode_into(&mut self.0, value).expect("canonical encoding cannot fail");
     }
@@ -212,26 +154,12 @@ impl Blake3Hasher {
     }
 }
 
-/// The **lifting function**: map a single key-value element into the summary monoid
-/// [`Fingerprint`], i.e. Def. 3.4's `lift: U → M`.
+/// Def. 3.4's lifting function `lift: U → M`: BLAKE3 over the
+/// [canonically encoded](crate::encoding) key followed by the canonically encoded value.
 ///
-/// Named `lift`, not `hash`, for two reasons. It is the paper's own term — Def. 3.4 of
-/// arXiv:2603.19820 defines a *lifting function* from an element to the monoid `M`, and the
-/// Meyer/Willow-ecosystem reference implementation (`earthstar-project/range-reconcile`) names the
-/// same operation `lift` in its `BYOLiftingMonoid` (`lift`/`combine`/`neutral`), the vocabulary
-/// this crate's root docs already cite for the future generic-summary work. And it never collided
-/// with [`std::hash::Hash::hash`] — which, since the move to the canonical encoding, it no longer
-/// calls at all.
-///
-/// This is the per-element summary that the
-/// [`FingerprintTreeMap`](crate::fingerprint_tree_map::FingerprintTreeMap) combines into range
-/// fingerprints. It is BLAKE3 over the [canonically encoded](crate::encoding) key followed by the
-/// canonically encoded value, and is part of the wire protocol — see the golden-vector tests.
-///
-/// The bound is [`Serialize`], not [`Hash`](std::hash::Hash): the encoding is this crate's own, so
-/// types std does not implement `Hash` for (notably [`HashMap`](std::collections::HashMap) and
-/// [`HashSet`](std::collections::HashSet)) are usable as keys and values, and no future change to
-/// a std `Hash` impl can move a fingerprint.
+/// Part of the wire protocol — see this module's golden vectors. The [`Serialize`] bound admits
+/// keys and values std implements no [`Hash`](std::hash::Hash) for
+/// ([`HashMap`](std::collections::HashMap), [`HashSet`](std::collections::HashSet)).
 pub fn lift<K: Serialize + ?Sized, V: Serialize + ?Sized>(key: &K, value: &V) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
     hasher.absorb(key);
@@ -239,10 +167,7 @@ pub fn lift<K: Serialize + ?Sized, V: Serialize + ?Sized>(key: &K, value: &V) ->
     hasher.fingerprint()
 }
 
-/// The canonical 256-bit digest of a *single* value — [`lift`] with no key half.
-///
-/// Same encoding, same stability guarantee; used where a deterministic, cross-node content token
-/// for one value is needed rather than a per-element range summary.
+/// The canonical 256-bit digest of a single value — [`lift`] with no key half, same encoding.
 pub fn digest<T: Serialize + ?Sized>(value: &T) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
     hasher.absorb(value);
@@ -308,24 +233,10 @@ mod tests {
         );
     }
 
-    // --- Golden vectors: freeze the wire format. ---
-    //
-    // These pin the exact bytes that go on the wire. If a change to the element
-    // hash (BLAKE3, the feeding order/encoding) or the combiner ever alters
-    // them, this test fails — that change would silently break interoperability
-    // between nodes and must be a deliberate, versioned wire-format bump.
-    //
-    // The values below are NOT the ones this file carried before. The previous vectors were
-    // computed from `std::hash::Hash`'s byte stream; moving the input encoding to the crate's own
-    // canonical serde encoding changes every element fingerprint, so the old constants are gone on
-    // purpose. That is a deliberate, documented wire break — see the module docs and PROGRESS.md:
-    // a node on the new code and one on the old code never agree on a range fingerprint and would
-    // re-exchange indefinitely, so this is not a rolling upgrade.
+    // Golden vectors: changing these is a wire break, not a refactor.
 
     #[test]
     fn golden_element_hash() {
-        // BLAKE3 over the canonical encoding of the key (50u64, 8 bytes little-endian) followed by
-        // the canonical encoding of the value ("Hello": u64 length 5, then the 5 bytes).
         assert_eq!(
             lift(&50u64, &"Hello"),
             Fingerprint([
@@ -339,8 +250,6 @@ mod tests {
 
     #[test]
     fn golden_combined_fingerprint() {
-        // Order-independent combination of three elements (the building block of
-        // a range fingerprint).
         let combined =
             lift(&25u64, &"World!") + lift(&50u64, &"Hello") + lift(&75u64, &"Everyone!");
         assert_eq!(
@@ -354,21 +263,15 @@ mod tests {
         );
     }
 
-    // --- Properties of the canonical encoding, seen through `lift`. ---
-    //
-    // `encoding`'s own unit tests check the byte stream directly; these check that the properties
-    // survive the trip through BLAKE3, which is the form the protocol actually relies on.
+    // Encoding properties as the protocol sees them; `encoding`'s tests check the bytes.
 
     #[test]
     fn framing_is_unambiguous() {
-        // The classic ambiguity: unprefixed concatenation would make both of these "abc".
         assert_ne!(lift(&"ab", &"c"), lift(&"a", &"bc"));
-        // Same shape one level down, in a sequence.
         assert_ne!(
             lift(&0u8, &vec![vec![1u8, 2]]),
             lift(&0u8, &vec![vec![1u8], vec![2u8]])
         );
-        // And between a two-element sequence and a pair of one-element ones.
         assert_ne!(lift(&vec![1u8, 2], &()), lift(&(vec![1u8], vec![2u8]), &()));
     }
 
@@ -386,8 +289,6 @@ mod tests {
         }
         assert_eq!(lift(&0u8, &forward), lift(&0u8, &backward));
 
-        // ...and agrees with the ordered map holding the same entries. `HashMap` has no `Hash`
-        // impl at all, so neither of these was even expressible before the canonical encoding.
         let ordered: BTreeMap<u32, u32> = forward.iter().map(|(k, v)| (*k, *v)).collect();
         assert_eq!(lift(&0u8, &forward), lift(&0u8, &ordered));
     }
@@ -408,47 +309,35 @@ mod tests {
 
     #[test]
     fn none_does_not_collide_with_a_value() {
-        // `None` encodes as the single byte 0, `Some(0u8)` as 1 then 0: the tag is what keeps the
-        // "absent" case from being read as the payload of a present one.
         assert_ne!(lift(&0u8, &None::<u8>), lift(&0u8, &Some(0u8)));
-        // The same, where the payload is itself empty: `Some(vec![])` is the tag plus a zero-length
-        // prefix, never bare nothing.
         assert_ne!(
             lift(&0u8, &None::<Vec<u8>>),
             lift(&0u8, &Some(Vec::<u8>::new()))
         );
-        // Nested options stay distinct all the way down.
         assert_ne!(
             lift(&0u8, &Some(None::<u8>)),
             lift(&0u8, &None::<Option<u8>>)
         );
 
-        // Injectivity is a property *within* a type, which is all the protocol needs: a given tree
-        // has one `K` and one `V`. Across types it cannot hold and is not claimed — `None::<u8>`
-        // and `0u8` both encode to a single zero byte.
+        // Injectivity holds within a type, not across types.
         assert_eq!(lift(&0u8, &None::<u8>), lift(&0u8, &0u8));
     }
 
     #[test]
     fn integers_of_different_widths_differ() {
-        // Fixed-width, not varint: the same numeric value at two widths is two different elements.
         assert_ne!(lift(&0u8, &1u32), lift(&0u8, &1u64));
         assert_ne!(lift(&0u8, &1u8), lift(&0u8, &1u16));
-        // Signed and unsigned of the same width coincide on non-negative values, by construction.
         assert_eq!(lift(&0u8, &1u32), lift(&0u8, &1i32));
     }
 
     #[test]
     fn floats_follow_bit_patterns_not_partial_eq() {
-        // `+0.0 == -0.0`, but their bit patterns — and so their fingerprints — differ.
         assert_ne!(lift(&0u8, &0.0f64), lift(&0u8, &-0.0f64));
-        // `NaN != NaN`, but the same bit pattern fingerprints identically.
         assert_eq!(lift(&0u8, &f64::NAN), lift(&0u8, &f64::NAN));
     }
 
     #[test]
     fn digest_is_lift_without_a_key_half() {
-        // `digest` exists for single-value content tokens; it must be the same encoding.
         assert_eq!(digest(&"Hello"), lift(&(), &"Hello"));
         assert_ne!(digest(&"Hello"), digest(&"Hell"));
     }

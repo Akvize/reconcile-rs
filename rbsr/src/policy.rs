@@ -8,37 +8,23 @@
 
 //! The refinement-policy seam: [`RefinementPolicy`], the [`Comparison`] it is shown, the
 //! [`Decision`] it returns, and the three shipped instantiations.
-//!
-//! This module is private — everything public here is re-exported from the crate root, so any
-//! documentation a *user* needs belongs on an item, not in this header, which rustdoc never
-//! renders.
 
 use rsos::Aggregate;
 
-/// How wide a [`Decision::Split`] cuts: the number of elements **each child range covers**.
+/// How wide a [`Decision::Split`] cuts: elements **per child range**.
 ///
-/// The paper parameterizes the dual quantity — `SPLITBYRANK(O_X, l, u, b)` (Algorithm 2 of
-/// E. G. Amparore, arXiv:2603.19820) takes the *number of children* `b` — so both spellings are
-/// constructors here: [`per_child`](Self::per_child) states the stride directly,
-/// [`for_fan_out`](Self::for_fan_out) derives it from a [`FanOut`].
+/// The primitive, not the fan-out `b` of Algorithm 2 (arXiv:2603.19820) — a stride round-trips
+/// through a child count only when it divides the span, so [`SqrtFanOut`]'s cuts would move.
+/// [`for_fan_out`](Self::for_fan_out) derives one from a [`FanOut`].
 ///
-/// The stride is the primitive rather than the fan-out because it is the one that survives the
-/// round trip. This crate's historical rule is "cut every `⌊√m⌋` elements", whose child *count*
-/// (`⌈m / ⌊√m⌋⌉`) does not in general map back to the same cut positions — expressing it as a
-/// fan-out would silently move the cuts, which is exactly what [`SqrtFanOut`] must not do.
-///
-/// A stride of zero would emit no children at all and hang the protocol, so it is unrepresentable:
-/// every constructor raises it to [`ONE`](Self::ONE), the smallest stride that still refines.
+/// A zero stride emits no children and would hang the protocol; every constructor raises it to
+/// [`ONE`](Self::ONE).
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SplitStride(usize);
 
 impl SplitStride {
-    /// One element per child: the finest cut, `m` children for a range of `m` elements.
-    ///
-    /// Applied to a range of one element or fewer this is the **degenerate split** — a single
-    /// child equal to the parent, re-advertised with this peer's own aggregate. That emits no
-    /// local progress and is sound only because the peer holds more there and will refine it; see
-    /// the note on [`Decision::Split`].
+    /// One element per child. Over a span of one or fewer this is the degenerate split — see
+    /// [`Decision::Split`].
     pub const ONE: SplitStride = SplitStride(1);
 
     /// Cut every `elements` keys. `0` is raised to `1` — see the type-level note.
@@ -46,14 +32,8 @@ impl SplitStride {
         SplitStride(if elements == 0 { 1 } else { elements })
     }
 
-    /// The stride that cuts a range of `span` elements into **at most** `fan_out` children:
-    /// `⌈span / b⌉`, so every child but the last carries exactly that many elements and the last
-    /// absorbs the remainder.
-    ///
-    /// "At most" rather than "exactly": integer division loses a child whenever `span` is not a
-    /// multiple of the stride (`span = 9`, `b = 4` gives a stride of 3 and therefore 3 children,
-    /// not 4). Def. 3.8's balanced-partition property — children of near-equal rank width — holds
-    /// either way, and it is the property Proposition 4.1's correctness argument uses.
+    /// `⌈span / b⌉`: the stride cutting `span` elements into **at most** `fan_out` children —
+    /// integer division loses one whenever `span` is not a multiple of the stride.
     pub fn for_fan_out(span: usize, fan_out: FanOut) -> SplitStride {
         SplitStride::per_child(span.div_ceil(fan_out.get()))
     }
@@ -64,22 +44,18 @@ impl SplitStride {
     }
 }
 
-/// The paper's branching factor `b`: how many child ranges a `SPLITBYRANK` produces (Algorithm 2
-/// of arXiv:2603.19820; Negentropy, the paper's production comparison point, uses `b = 16`).
+/// The paper's branching factor `b` (Algorithm 2, arXiv:2603.19820).
 ///
-/// A fan-out of one is unrepresentable, and not for tidiness: a "1-partition" is the identity, so a
-/// policy returning it would replace every range by itself and the protocol would never terminate.
-/// [`new`](Self::new) raises it to `2`, the smallest fan-out that actually refines.
+/// A fan-out of one is the identity partition and would never terminate; [`new`](Self::new) raises
+/// `0` and `1` to `2`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FanOut(usize);
 
 impl FanOut {
-    /// The branching factor Negentropy ships and arXiv:2603.19820's §6 experiments compare
-    /// against: `b = 16`.
+    /// `b = 16`: what Negentropy ships and arXiv:2603.19820 §6 measures against.
     pub const NEGENTROPY: FanOut = FanOut(16);
 
-    /// Binary refinement, `b = 2`: the deepest recursion this crate can be asked for, and the
-    /// smallest fan-out that refines at all.
+    /// `b = 2`: the smallest fan-out that refines.
     pub const BINARY: FanOut = FanOut(2);
 
     /// A branching factor. `0` and `1` are raised to `2` — see the type-level note.
@@ -93,11 +69,10 @@ impl FanOut {
     }
 }
 
-/// Everything a [`RefinementPolicy`] is shown about one active range.
+/// Everything a [`RefinementPolicy`] is shown about one active range: two [`Aggregate`]s and a
+/// counter.
 ///
-/// Deliberately narrow: two [`Aggregate`]s and a counter. No keys, no bounds, no store — a policy
-/// decides *how* to refine a range, never *which* range, and giving it the bounds would invite
-/// key-dependent policies that the two peers could not both apply to the same range.
+/// No keys, no bounds, no store — a policy decides *how* to refine a range, never *which*.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Comparison {
     local: Aggregate,
@@ -106,8 +81,7 @@ pub struct Comparison {
 }
 
 impl Comparison {
-    /// Build a comparison. The protocol driver does this per active range; it is public so a
-    /// policy can be unit-tested without one.
+    /// Build a comparison. Public so a policy can be unit-tested without a driver.
     pub const fn new(local: Aggregate, remote: Aggregate, children_emitted: usize) -> Comparison {
         Comparison {
             local,
@@ -121,112 +95,68 @@ impl Comparison {
         self.local
     }
 
-    /// `A(Y ∩ [l, u))`: the aggregate the peer advertised for the same range — Def. 3.6's
-    /// comparison value, taken at face value. It is unauthenticated peer input: a policy may read
-    /// it, but must not assume it describes a set the peer really holds.
+    /// `A(Y ∩ [l, u))`: Def. 3.6's comparison value as advertised. Unauthenticated peer input —
+    /// readable, never to be assumed true.
     pub const fn remote(&self) -> Aggregate {
         self.remote
     }
 
-    /// `|X ∩ [l, u)|`: how many **local** elements the range covers.
-    ///
-    /// This is the quantity the paper's enumeration threshold `t` is compared against, and the
-    /// number of elements a [`Decision::Split`] has to cut — a split is by *local* rank, so the
-    /// peer's count says nothing about where the cuts land.
+    /// `|X ∩ [l, u)|`: **local** elements covered — what `t` is compared against, and what a
+    /// [`Decision::Split`] cuts, since a split is by local rank.
     pub const fn span(&self) -> usize {
         self.local.size()
     }
 
-    /// Whether the two aggregates agree, i.e. whether the range is already resolved.
+    /// Whether the range is already resolved.
     ///
-    /// **Compares the whole aggregate, never the fingerprint alone.** A range fingerprint combines
-    /// per-element lifts by addition modulo 2²⁵⁶ (`rsos::fingerprint`), so a non-empty range can
-    /// legitimately fingerprint to `ZERO` and two different ranges can fingerprint equally;
-    /// deciding on the fingerprint alone would alias them and cause silent, permanent divergence.
-    /// The check lives here so no policy has to re-derive it — and so none can get it wrong.
+    /// Compares the **whole** aggregate, never the fingerprint alone (`ARCHITECTURE.md` §5
+    /// invariant 3). Owned here so no policy can re-derive it wrongly.
     pub fn agrees(&self) -> bool {
         self.local == self.remote
     }
 
-    /// How many child ranges this round has already emitted, before this range was considered.
+    /// Child ranges already emitted this round: the round-budget seam
+    /// ([#257](https://github.com/Akvize/reconcile-rs/issues/257), `SOTA.md` §2.4 P3-9).
     ///
-    /// This is the round-budget seam. The children of one round travel together in one batch, so
-    /// their number is what decides whether the batch fits a datagram — a policy that cannot see
-    /// the running total cannot cap its own contribution to it, which is what makes the `√n`
-    /// fan-out's datagram cost structural rather than incidental
-    /// ([#257](https://github.com/Akvize/reconcile-rs/issues/257), design consideration 2; the
-    /// unbounded-output gap is `SOTA.md` §2.4 P3-9). The count is deliberately in *ranges* rather
-    /// than bytes: this crate owns no encoding, so bytes are not a quantity it can honestly report.
-    ///
-    /// No shipped policy reads it yet — capping a round's fan-out trades bytes for round-trips, and
-    /// this workspace has no round-trip measurement to price that trade with (every benchmark runs
-    /// at RTT ≈ 0, [#280](https://github.com/Akvize/reconcile-rs/issues/280)). See
-    /// [`RefinementPolicy`] for a worked capping policy.
+    /// Counted in ranges, not bytes — this crate owns no encoding. No shipped policy reads it;
+    /// [`RefinementPolicy`] carries a worked capping example.
     pub const fn children_emitted(&self) -> usize {
         self.children_emitted
     }
 }
 
-/// What a [`RefinementPolicy`] decides for one active range: the three outcomes of Algorithm 1
+/// What a [`RefinementPolicy`] decides for one active range: Algorithm 1's three outcomes
 /// (arXiv:2603.19820 §4), and nothing else.
-///
-/// The set is closed on purpose. A protocol round has exactly three ways to dispose of a range —
-/// resolve it, send its contents, or refine it — and every rule this crate has ever implemented is
-/// one of the three. There is deliberately no "send our contents *and* make the peer send theirs"
-/// variant: that is what [`Enumerate`](Self::Enumerate) already does whenever the peer advertised a
-/// non-empty range, which is the only case where it would be *unsound* not to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Decision {
-    /// **SKIP** — the range is resolved and leaves the active family.
+    /// **SKIP** — the range leaves the active family.
     ///
-    /// Correct when the two aggregates agree ([`Comparison::agrees`]). Returning it for a range
-    /// that *disagrees* abandons that difference: sound under periodic anti-entropy, where the next
-    /// cycle starts over from the outer range and will find it again, and a silent, permanent data
-    /// loss under a one-shot drive. `reconcile` is the former; a policy that skips deliberately
-    /// should say so in its own documentation.
+    /// Returning it for a range that *disagrees* abandons that difference: recoverable under a
+    /// periodic driver (`reconcile` is one), permanent data loss under a one-shot drive.
     Skip,
 
-    /// **IDLIST** — hand the range to the caller to enumerate (Def. 3.9's `Enumerate(l, u)`) and
-    /// ship its local contents to the peer.
+    /// **IDLIST** — enumerate the range locally and ship its contents to the peer.
     ///
-    /// If the peer advertised a **non-empty** range, the driver additionally bounces the parent
-    /// back advertised as empty, so the peer takes its own IDLIST branch and enumerates its side to
-    /// us. That is not an optimization but a soundness requirement: this crate's IDLIST is
-    /// one-directional (the paper's is answered by the receiver), so a range disposed of by a bare
-    /// enumeration would resolve without the peer's elements ever crossing. The driver derives the
-    /// bounce from the peer's advertised size, which is why the two cases are one variant here and
-    /// a policy cannot pick the unsound one.
+    /// This crate's IDLIST is one-directional, so when the peer advertised a **non-empty** range
+    /// the driver also bounces the parent back advertised as empty, forcing the peer's own IDLIST.
+    /// Required for soundness, and derived by the driver so a policy cannot omit it.
     Enumerate,
 
     /// **SPLIT** — replace the range by a balanced family of children, cut by local rank
-    /// (Algorithm 2's `SPLITBYRANK`), each re-advertised with this peer's aggregate over it.
+    /// (`SPLITBYRANK`), each re-advertised with this peer's aggregate.
     ///
-    /// The driver owns the invariant Proposition 4.1 needs — the children are pairwise disjoint and
-    /// their union is the parent — whatever stride is chosen. What it cannot own is *progress*: a
-    /// stride at or above [`Comparison::span`] emits a single child equal to the parent, which
-    /// refines nothing locally. That degenerate form is legitimate and used by every shipped policy
-    /// (a range holding one local element cannot be cut by rank, so it is re-advertised for the
-    /// peer — which holds more there — to cut instead), but it terminates only because the *other*
-    /// peer refines it. Two peers that both bounce the same range forever will do exactly that.
+    /// The driver owns Proposition 4.1's partition invariant whatever stride is chosen
+    /// (`ARCHITECTURE.md` §5 invariant 9); it cannot own *progress*. A stride at or above
+    /// [`Comparison::span`] emits one child equal to the parent — legitimate, used by every
+    /// shipped policy for a lone local element, and terminating only because the peer refines it.
     Split(SplitStride),
 }
 
-/// The rule that turns one range comparison into one [`Decision`] — the seam this crate's two
-/// tuning knobs live behind.
+/// The rule that turns one range comparison into one [`Decision`].
 ///
-/// # Why this is a seam at all
-///
-/// The refinement policy is a **purely local decision, not a wire contract**. A peer answers
-/// whatever segmentation it is asked about, the wire type carries no policy, and Proposition 4.1's
-/// soundness argument uses only that a SPLIT's children are pairwise disjoint with union the parent
-/// — which the driver guarantees regardless of policy. So two peers running *different* policies
-/// still converge, and a policy can be swapped, mixed or A/B-compared without a protocol break.
-/// That is unusually cheap ground for experimentation, and the reason this is a trait rather than a
-/// constant.
-///
-/// It is also the reason a policy must **never** be advertised or negotiated: putting it on the
-/// wire would turn a free experiment into a protocol break
-/// ([#257](https://github.com/Akvize/reconcile-rs/issues/257), design consideration 1).
+/// A **purely local decision, never a wire contract** (`ARCHITECTURE.md` §3.1): peers running
+/// different policies converge. A policy must therefore never be advertised or negotiated
+/// ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
 ///
 /// # The shipped policies
 ///
@@ -236,24 +166,18 @@ pub enum Decision {
 /// | [`SqrtFanOut`] | the same four | `⌊√m⌋` elements per child, so `Θ(√m)` children |
 /// | [`EnumerateBelowThreshold`] | the paper's `\|X ∩ [l, u)\| ≤ t` | a constant `b` |
 ///
-/// What each costs on the wire and locally is measured by `benches/protocol.rs`; which is the
-/// default, and on what evidence, is recorded in `PROGRESS.md`.
+/// Costs: `benches/protocol.rs`. Default and the evidence for it: `PROGRESS.md`.
 ///
 /// # Implementing your own
 ///
-/// `decide` takes `&self`, so a policy is shared, not owned per round; state that varies within a
-/// round arrives through [`Comparison`] instead. This example caps how many child ranges one round
-/// may emit — the round-budget case [`Comparison::children_emitted`] exists for — by resolving
-/// over-budget ranges to the next anti-entropy cycle rather than refining them now:
+/// `decide` takes `&self`; per-round state arrives through [`Comparison`]. This one caps a round's
+/// children, deferring the rest to the next anti-entropy cycle:
 ///
 /// ```
 /// use rbsr::{Comparison, Decision, RefinementPolicy, SqrtFanOut};
 /// use rsos::{Aggregate, Fingerprint};
 ///
-/// /// At most `max` children per round; anything past that waits for the next cycle.
-/// ///
-/// /// Sound only under a *periodic* driver, which starts over from the outer range every cycle
-/// /// and will rediscover the deferred difference. A one-shot drive would lose it.
+/// /// At most `max` children per round. Sound only under a periodic driver.
 /// struct Budgeted {
 ///     max: usize,
 /// }
@@ -275,27 +199,13 @@ pub enum Decision {
 /// assert_eq!(Budgeted { max: 256 }.decide(mismatch), Decision::Skip);
 /// ```
 pub trait RefinementPolicy {
-    /// Classify one active range. Called once per range per round, after the driver has computed
-    /// the local aggregate and validated the range's bounds.
+    /// Classify one active range, once per range per round.
     fn decide(&self, comparison: Comparison) -> Decision;
 }
 
-/// The three exchange-forcing cutoffs [`SqrtFanOut`] and [`FixedFanOut`] share, i.e. everything
-/// they decide before the fan-out rule they differ on. Returns `None` when the range is a genuine
-/// SPLIT of two or more local elements, which is the only case where the fan-out matters.
-///
-/// Each of the three is a case where a cut by rank is either impossible or wasteful:
-///
-/// - **the peer holds nothing here** — everything we hold is the local symmetric difference, so
-///   there is nothing left to narrow down: enumerate it;
-/// - **we hold nothing here** — there is nothing to cut *by*; `SplitStride::ONE` over an empty span
-///   re-advertises the range with our (empty) aggregate, so the peer takes the branch above on its
-///   side and enumerates it to us;
-/// - **both sides hold exactly one element** — they differ, so each owes the other precisely one
-///   element and comparing further cannot save a byte: enumerate, which also asks the peer to.
-///
-/// The paper reaches the same outcomes through a single threshold `t` instead
-/// ([`EnumerateBelowThreshold`]).
+/// The cutoffs [`SqrtFanOut`] and [`FixedFanOut`] share, where a cut by rank cannot help: the peer
+/// holds nothing, we hold nothing, or both hold exactly one element. `None` when the fan-out
+/// actually matters. [`EnumerateBelowThreshold`] reaches the same outcomes through `t`.
 fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
     let local = comparison.span();
     let remote = comparison.remote().size();
@@ -308,50 +218,22 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
     } else if local == 1 && remote == 1 {
         Some(Decision::Enumerate)
     } else if local == 1 {
-        // A single local element cannot be cut by rank: re-advertise the range with our real
-        // aggregate and let the peer, which holds more here, do the cutting.
+        // One local element cannot be cut by rank: let the peer, which holds more, cut.
         Some(Decision::Split(SplitStride::ONE))
     } else {
         None
     }
 }
 
-/// Cut every `⌊√m⌋` elements, so a range of `m` elements is replaced by `Θ(√m)` children.
+/// Cut every `⌊√m⌋` elements: `Θ(√m)` children, still a rank-balanced partition.
 ///
-/// A size-derived fan-out rather than Algorithm 2's constant `b`. The partition is still balanced
-/// by *rank* — cuts are materialized with [`RsosView`](crate::RsosView)'s `select` exactly as in
-/// `SPLITBYRANK` — and the children are still pairwise disjoint with union the parent, which is all
-/// Proposition 4.1's correctness argument uses.
+/// Enumeration cutoffs are [`FixedFanOut`]'s (`shared_cutoffs`), plus a lone local element facing
+/// a larger remote range, which is re-advertised for the peer to cut.
 ///
-/// # Enumeration cutoffs
-///
-/// Shared with [`FixedFanOut`], and standing in for the paper's threshold `t`. Each is a range that
-/// a cut by rank cannot usefully narrow:
-///
-/// - **the peer holds nothing here** — everything we hold is the local symmetric difference, so
-///   there is nothing left to locate: [`Enumerate`](Decision::Enumerate);
-/// - **we hold nothing here** — there is nothing to cut *by*, so the range is re-advertised with
-///   our (empty) aggregate and the peer enumerates it to us;
-/// - **both sides hold exactly one element** — they differ, so each owes the other precisely one
-///   element and comparing further cannot save a byte: enumerate, which also asks the peer to;
-/// - **a lone local element facing a larger remote range** — one element cannot be split by rank,
-///   so the range is re-advertised for the peer, which holds more there, to cut instead.
-///
-/// [`EnumerateBelowThreshold`] replaces all four with the paper's single `t`.
-///
-/// # Cost
-///
-/// Because the stride is derived from the range's own size, the *first* SPLIT of a whole-store round
-/// emits `~√n` children **whatever the difference size is**. Communication is therefore `Θ(√n)`,
-/// not the family's `O(d log n)`, and the paper's local-cost bound `T_loc = O(hL + bhI + K)` does
-/// not apply — its `bhI` term assumes a constant `b`. What the rule buys in exchange is depth:
-/// repeated square-rooting bottoms out in `Θ(log log n)` rounds rather than `Θ(log_b n)`, though the
-/// two coincide numerically below `n ≈ 10¹²`.
-///
-/// That shape makes it the wrong rule for the small-`d` regime RBSR exists for and a competitive one
-/// when `d` approaches `√n`, where `√n` ranges per round stop being overhead. `benches/protocol.rs`
-/// measures both regimes against [`FixedFanOut`]; `PROGRESS.md` records which is the default and on
-/// what evidence.
+/// **Cost.** A size-derived stride makes the first SPLIT of a whole-store round emit `~√n`
+/// children whatever `d` is: communication is `Θ(√n)`, not `O(d log n)`, and the paper's
+/// `T_loc = O(hL + bhI + K)` does not apply. It buys depth — `Θ(log log n)` rounds. Competitive
+/// only as `d` approaches `√n`; measured in `benches/protocol.rs`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqrtFanOut;
 
@@ -360,38 +242,22 @@ impl RefinementPolicy for SqrtFanOut {
         if let Some(decision) = shared_cutoffs(comparison) {
             return decision;
         }
-        // NOTE: span ≥ 2 here, so the stride is at least 1 and the split really refines.
-        //
-        // `f32`, not `f64`, and truncating rather than rounding: the two differ for spans past
-        // f32's 24-bit mantissa, and every cluster running this policy has to agree on which
-        // answer it is — the choice is part of the rule, not an implementation detail.
+        // `f32` and truncation are part of the rule: past f32's mantissa `f64` would disagree.
         let stride = (comparison.span() as f32).sqrt() as usize;
         Decision::Split(SplitStride::per_child(stride))
     }
 }
 
-/// **This crate's default policy**: Algorithm 2's `SPLITBYRANK(O_X, l, u, b)` for a constant
-/// branching factor `b`, with this crate's enumeration cutoffs — everything [`SqrtFanOut`] does,
-/// except that a SPLIT emits at most `b` children whatever the range's size.
+/// **The default policy**: `SPLITBYRANK(O_X, l, u, b)` at a constant `b`, with this crate's
+/// enumeration cutoffs.
 ///
-/// Because `b` is constant, the family's published bounds describe this crate: communication is
-/// `O(d log n)`, sequential rounds are `Θ(log_b n)`, and the paper's local-cost bound
-/// `T_loc = O(hL + bhI + K)` — whose `bhI` term assumes a constant `b` — may be quoted.
+/// A constant `b` is what makes the family's published bounds apply: `O(d log n)` communication,
+/// `Θ(log_b n)` rounds, `T_loc = O(hL + bhI + K)`.
 ///
-/// # `b`
-///
-/// [`Default`] is [`FanOut::NEGENTROPY`] (`b = 16`), the value Negentropy ships and
-/// arXiv:2603.19820 §6 measures against.
-///
-/// The two axes `b` trades between bottom out in different places, so neither picks it alone. A
-/// `d = 1` descent visits `~log_b n` levels advertising `~b` ranges each, so wire bytes and local
-/// work follow `b / ln b` — minimized near `b = 3` — while one-way messages fall as `log_b n` until
-/// they reach a floor no larger `b` improves on. Past that floor every extra unit of `b` is paid for
-/// and buys nothing. A third quantity is a hard ceiling rather than a trade: the widest single round
-/// grows linearly in `b`, and it is what must fit a datagram and survive IP fragmentation.
-///
-/// `benches/protocol.rs`'s `fan_out_sweep` measures all three over `b` = 2…256; `PROGRESS.md`
-/// records the value chosen for the default and why.
+/// [`Default`] is [`FanOut::NEGENTROPY`]. `b` trades three quantities that bottom out separately —
+/// bytes and local work follow `b / ln b`, one-way messages fall as `log_b n` to a floor, and the
+/// widest round grows linearly in `b` and must fit a datagram. Swept over 2…256 by
+/// `benches/protocol.rs`'s `fan_out_sweep`; the chosen value is in `PROGRESS.md`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,
@@ -425,23 +291,14 @@ impl RefinementPolicy for FixedFanOut {
 }
 
 /// **IDLIST when `|X ∩ [l, u)| ≤ t`, `SPLITBYRANK(b)` otherwise** — Algorithm 1 of
-/// arXiv:2603.19820 as written, with both of its parameters.
+/// arXiv:2603.19820 as written, replacing this crate's cutoffs as well as its fan-out.
 ///
-/// The name states the knob that distinguishes it; the fan-out half is a constant `b`, exactly
-/// [`FixedFanOut`]'s. The two policies above keep this crate's hand-picked enumeration cutoffs and
-/// vary only that fan-out. This one replaces the cutoffs too, so it is the point of comparison for
-/// "what do our hand-picked special cases actually cost", not just "what does `√m` cost".
+/// `t` trades refinement round-trips for *values*: a range of `t` local elements ships wholesale,
+/// including everything the peer already has, which is why `benches/protocol.rs` reports
+/// enumerated elements alongside advertised ranges.
 ///
-/// The threshold is where the two shapes differ most: `t` trades refinement round-trips for
-/// *values*. A range of `t` local elements is shipped wholesale, and all but the differing ones are
-/// elements the peer already has — so a large `t` can move far more bytes than it saves, in a
-/// column the refinement-traffic count does not show. `benches/protocol.rs` reports enumerated
-/// elements alongside advertised ranges for exactly this reason.
-///
-/// [`Default`] is the paper's own experimental configuration, `t = 32` and `b = 16`.
-///
-/// A threshold of zero is raised to one: with `t = 0`, two peers each holding a single differing
-/// element in a range would split it into itself forever, neither ever enumerating.
+/// [`Default`] is the paper's experimental configuration. `t = 0` is raised to `1`, which would
+/// otherwise split a range into itself forever.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EnumerateBelowThreshold {
     threshold: usize,
@@ -449,15 +306,14 @@ pub struct EnumerateBelowThreshold {
 }
 
 impl EnumerateBelowThreshold {
-    /// The parameters arXiv:2603.19820 §6 runs its experiments with: `t = 32`, `b = 16`.
+    /// arXiv:2603.19820 §6's experimental parameters: `t = 32`, `b = 16`.
     pub const PAPER: EnumerateBelowThreshold = EnumerateBelowThreshold {
         threshold: 32,
         fan_out: FanOut::NEGENTROPY,
     };
 
-    /// A policy enumerating ranges of at most `threshold` local elements and splitting the rest
-    /// into at most `fan_out` children. `threshold` of `0` is raised to `1` — see the type-level
-    /// note.
+    /// Enumerate ranges of at most `threshold` local elements, split the rest into at most
+    /// `fan_out` children. `0` is raised to `1`.
     pub const fn new(threshold: usize, fan_out: FanOut) -> EnumerateBelowThreshold {
         EnumerateBelowThreshold {
             threshold: if threshold == 0 { 1 } else { threshold },
@@ -488,20 +344,16 @@ impl RefinementPolicy for EnumerateBelowThreshold {
             // SKIP: `f_X = f_Y`, on the whole aggregate rather than the fingerprint alone.
             Decision::Skip
         } else if comparison.span() <= self.threshold {
-            // IDLIST: `|X ∩ [l, u)| ≤ t`. This also subsumes the peer-is-empty and both-sides-hold-
-            // one cases that `shared_cutoffs` names separately, since `t ≥ 1`.
+            // IDLIST: `|X ∩ [l, u)| ≤ t`, which subsumes `shared_cutoffs` since `t ≥ 1`.
             Decision::Enumerate
         } else {
-            // SPLIT: `SPLITBYRANK(O_X, l, u, b)`. `span > t ≥ 1`, so the stride is below the span
-            // and the range really is refined.
+            // SPLIT: `span > t ≥ 1`, so the stride is below the span and really refines.
             Decision::Split(SplitStride::for_fan_out(comparison.span(), self.fan_out))
         }
     }
 }
 
-/// Blanket forwarding so a `&P`, a `Box<P>` or a `&dyn RefinementPolicy` is itself a policy — the
-/// driver takes `&P` with `P: ?Sized`, so this exists for callers holding a policy behind a smart
-/// pointer rather than for the driver.
+/// Blanket forwarding, so a policy behind a smart pointer is itself a policy.
 impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
     fn decide(&self, comparison: Comparison) -> Decision {
         (**self).decide(comparison)
@@ -514,9 +366,7 @@ mod tests {
 
     use rsos::Fingerprint;
 
-    /// Two aggregates of the given sizes that are guaranteed *not* to agree, plus a fresh round
-    /// budget. The fingerprints are arbitrary and distinct; what matters is that no policy may
-    /// conclude SKIP.
+    /// Two aggregates of the given sizes guaranteed not to agree, plus a fresh round budget.
     fn mismatch(local: usize, remote: usize) -> Comparison {
         Comparison::new(
             Aggregate::new(local, Fingerprint([1, 0, 0, 0])),
@@ -525,8 +375,7 @@ mod tests {
         )
     }
 
-    /// How many children a stride emits over a span, mirroring the driver's loop: every child but
-    /// the last carries `stride` elements and the last absorbs the remainder.
+    /// How many children a stride emits over a span, mirroring the driver's loop.
     fn children(span: usize, stride: SplitStride) -> usize {
         span.div_ceil(stride.get()).max(1)
     }
@@ -543,8 +392,7 @@ mod tests {
         );
     }
 
-    /// Matching fingerprints with mismatched sizes must not be read as agreement — the aliasing
-    /// hazard `Comparison::agrees` exists to close.
+    /// Matching fingerprints with mismatched sizes must not be read as agreement.
     #[test]
     fn matching_fingerprint_with_wrong_size_does_not_agree() {
         let comparison = Comparison::new(Aggregate::new(2, Fingerprint::ZERO), Aggregate::ZERO, 0);
@@ -568,7 +416,7 @@ mod tests {
         }
     }
 
-    /// The one-knob difference from the default: the child count stops growing with the range.
+    /// The child count must stop growing with the range.
     #[test]
     fn fixed_fan_out_is_constant_in_the_range_size() {
         let policy = FixedFanOut::default();
@@ -598,9 +446,8 @@ mod tests {
         assert!(stride.get() < 33);
     }
 
-    /// The two knobs are validated by their types, not by their callers: neither a zero stride
-    /// (which emits no children) nor a fan-out of one (which replaces a range by itself) is
-    /// representable, so neither can hang the protocol.
+    /// Neither a zero stride nor a fan-out of one is representable, so neither can hang the
+    /// protocol.
     #[test]
     fn degenerate_parameters_are_unrepresentable() {
         assert_eq!(SplitStride::per_child(0), SplitStride::ONE);

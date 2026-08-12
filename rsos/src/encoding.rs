@@ -6,39 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The **canonical encoding**: the byte source for element fingerprints.
+//! The **canonical encoding**: the byte source for element fingerprints
+//! (`ARCHITECTURE.md` §6).
 //!
-//! # Why this module exists
-//!
-//! A [`Fingerprint`](crate::Fingerprint) is a wire token: two nodes must derive the *same* 256-bit
-//! value from the same element, forever, across Rust versions, platforms (32- vs 64-bit) and
-//! endianness. Pinning the *hash function* (BLAKE3) only pins half of that. The other half is the
-//! byte sequence fed into it.
-//!
-//! `rsos` used to take those bytes from [`std::hash::Hash`], feeding a `Hasher` adapter that
-//! carefully wrote fixed little-endian integers. That was not enough: the adapter pins how the
-//! bytes are *written*, not which bytes std's `Hash` impls *choose to write*. Rust explicitly does
-//! not promise that `Hash for str`, `Hash for Option<T>` or any other impl keeps emitting the same
-//! byte sequence across releases — so a future std could silently change every fingerprint in a
-//! cluster, and a mixed-version cluster would stop converging. `Hash` is also not implemented for
-//! [`HashMap`](std::collections::HashMap)/[`HashSet`](std::collections::HashSet), which made such
-//! values unusable as `rsos` keys or values at all.
-//!
-//! So `rsos` owns the encoding end to end: this module is a [`serde::Serializer`] that writes a
-//! canonical byte stream straight into BLAKE3. `serde` was already a dependency, and no codec crate
-//! is involved — the crate stays a zero-infrastructure leaf.
-//!
-//! # The encoding
-//!
-//! The encoding is **injective**: no two distinct values of the same type produce the same byte
-//! stream. That is what makes distinct elements distinct fingerprints; everything variable-length
-//! is therefore length-prefixed rather than concatenated. Multi-byte lengths, counts and variant
-//! indices are themselves fixed-width little-endian, so nothing is self-delimiting by accident.
-//!
-//! Injectivity is *within* a type, which is exactly what the protocol needs — a given store has one
-//! key type and one value type. It cannot hold across types and is not claimed: `None::<u8>` and
-//! `0u8` both encode to a single zero byte, and no self-describing scheme without type tags could
-//! avoid that.
+//! A [`serde::Serializer`] writing straight into BLAKE3, **injective within a type** — everything
+//! variable-length is length-prefixed; counts, lengths and variant indices are fixed-width
+//! little-endian. Injectivity across types is not claimed (`None::<u8>` and `0u8` both encode to
+//! one zero byte).
 //!
 //! | serde form | bytes |
 //! |---|---|
@@ -60,45 +34,16 @@
 //! | `tuple_variant` | variant index, then element count, then the elements |
 //! | `struct_variant` | variant index, then the fields in declaration order |
 //!
-//! Struct fields carry neither names nor a count because a struct's arity is fixed by its type: two
-//! values of the *same* type always emit the same number of fields, so the stream stays
-//! unambiguous. Enum variants carry the **index**, not the name, so renaming a variant is not a
-//! wire break but reordering variants is.
-//!
-//! ## Maps are sorted by encoded key
-//!
-//! Map entries are emitted in ascending order of the **serialized bytes of the key**, not in
-//! iteration order and not by `Ord`. Sorting on the encoded key is what lets a
-//! [`HashMap`](std::collections::HashMap) fingerprint deterministically despite its
-//! iteration order being unspecified and seed-dependent, and it needs no `Ord` bound on the key
-//! type — which a `Serializer` could not require anyway. A consequence worth stating: a `HashMap`
-//! and a [`BTreeMap`](std::collections::BTreeMap) holding the same entries fingerprint
-//! *identically*.
-//!
-//! ## Floats: bit patterns, not `PartialEq`
-//!
-//! Floats are encoded by their raw bits, so the encoding disagrees with `PartialEq` in the two
-//! places IEEE-754 disagrees with itself. `NaN != NaN`, yet two identical NaN bit patterns
-//! fingerprint identically; `+0.0 == -0.0`, yet they fingerprint *differently*. This is a caveat of
-//! summarizing floats by content, not a defect: any bit-exact canonical encoding has it, and the
-//! alternative (normalizing zeros and NaNs) would break injectivity. Prefer integer or decimal key
-//! types if this matters.
-//!
-//! ## `is_human_readable` is `false`
-//!
-//! The serializer reports itself as non-human-readable, so types that offer two representations
-//! (notably [`IpAddr`](std::net::IpAddr)) take their compact binary one. The choice is arbitrary;
-//! what matters is that it is fixed and part of the wire contract.
+//! Renaming an enum variant is not a wire break; reordering variants is. Maps sort on the
+//! **encoded** key, so a `HashMap` and a `BTreeMap` with the same entries encode identically and
+//! no `Ord` bound is needed. Floats encode by bit pattern, so `+0.0`/`-0.0` differ and two equal
+//! NaN patterns agree. `is_human_readable` is fixed at `false` and is part of the wire contract.
 
 use std::fmt::{self, Display};
 
 use serde::{ser, Serialize};
 
-/// A byte sink the canonical encoder writes into.
-///
-/// Two sinks are used: a `blake3::Hasher` (the real one, for fingerprinting) and a `Vec<u8>` (for
-/// the buffering the encoding needs — map keys that must be sorted before they are emitted, and
-/// sequences whose length is not known up front).
+/// A byte sink the canonical encoder writes into: `blake3::Hasher`, or `Vec<u8>` for buffering.
 pub trait Sink {
     /// Append `bytes` to the sink.
     fn put(&mut self, bytes: &[u8]);
@@ -118,13 +63,9 @@ impl Sink for blake3::Hasher {
 
 /// The error type of the canonical encoder.
 ///
-/// Writing into a byte sink cannot fail — there is no I/O, no allocation limit and no
-/// representation a sink can reject — so the encoder itself never constructs one of these. The only
-/// way to obtain an `Error` is for a hand-written [`Serialize`] impl to call
-/// [`ser::Error::custom`] and refuse to serialize itself, which is a bug in *that* type rather than
-/// a condition the fingerprint path can recover from. That is why
-/// [`lift`](crate::lift)/[`digest`](crate::digest) are infallible and panic on it instead of
-/// swallowing it.
+/// Only constructible by a hand-written [`Serialize`] impl calling [`ser::Error::custom`]; the
+/// encoder itself never fails, which is why [`lift`](crate::lift)/[`digest`](crate::digest) are
+/// infallible.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -143,8 +84,6 @@ impl ser::Error for Error {
 }
 
 /// Write `value`'s canonical encoding into `sink`.
-///
-/// See the [module docs](self) for the encoding itself.
 pub fn encode_into<S: Sink, T: Serialize + ?Sized>(sink: &mut S, value: &T) -> Result<(), Error> {
     value.serialize(Serializer { sink })
 }
@@ -156,25 +95,18 @@ fn encode_to_vec<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
-/// The canonical [`serde::Serializer`]: writes the encoding described in the [module docs](self)
-/// into a [`Sink`].
+/// The canonical [`serde::Serializer`] (see the [module docs](self)), writing into a [`Sink`].
 struct Serializer<'a, S: Sink> {
     sink: &'a mut S,
 }
 
-/// Writes each element straight through to the sink, with no framing of its own.
-///
-/// Used for every compound whose element count is already fixed by the time elements start
-/// arriving: tuples, tuple structs, tuple variants (count written up front) and structs / struct
-/// variants (arity fixed by the type, so no count at all).
+/// Elements straight through, no framing: compounds whose arity is already fixed.
 struct Streaming<'a, S: Sink> {
     sink: &'a mut S,
 }
 
-/// A sequence: `u64` element count, then the elements.
-///
-/// A sequence that declares its length up front streams directly; one that does not is buffered so
-/// the count can still be written *before* the elements.
+/// A sequence: `u64` element count, then the elements. Buffered when the length is unknown up
+/// front, so the count still precedes the elements.
 enum SeqSerializer<'a, S: Sink> {
     Streaming(&'a mut S),
     Buffered {
@@ -184,10 +116,8 @@ enum SeqSerializer<'a, S: Sink> {
     },
 }
 
-/// A map: `u64` entry count, then the entries sorted by their encoded key.
-///
-/// Both halves of every entry are buffered, because the sort order is only known once every key has
-/// been encoded.
+/// A map: `u64` entry count, then the entries sorted by encoded key — buffered, since the order
+/// is known only once every key is encoded.
 struct MapSerializer<'a, S: Sink> {
     sink: &'a mut S,
     entries: Vec<(Vec<u8>, Vec<u8>)>,
@@ -353,7 +283,6 @@ impl<'a, S: Sink> ser::Serializer for Serializer<'a, S> {
                 put_len(self.sink, len as u64);
                 Ok(SeqSerializer::Streaming(self.sink))
             }
-            // Length unknown up front: buffer the elements so the count still precedes them.
             None => Ok(SeqSerializer::Buffered {
                 sink: self.sink,
                 buf: Vec::new(),
@@ -397,7 +326,6 @@ impl<'a, S: Sink> ser::Serializer for Serializer<'a, S> {
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Streaming<'a, S>, Error> {
-        // No count: a struct's arity is fixed by its type, so the stream stays unambiguous.
         Ok(Streaming { sink: self.sink })
     }
 
@@ -489,7 +417,6 @@ impl<S: Sink> ser::SerializeStruct for Streaming<'_, S> {
         _key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        // Field names are not encoded: declaration order plus the fixed arity identifies them.
         encode_into(self.sink, value)
     }
 
@@ -525,8 +452,6 @@ impl<S: Sink> ser::SerializeMap for MapSerializer<'_, S> {
     }
 
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Error> {
-        // `serde` always drives `serialize_key` before `serialize_value` for an entry; a
-        // hand-written `SerializeMap` caller that violates that contract would land here.
         let key = self
             .pending_key
             .take()
@@ -536,10 +461,7 @@ impl<S: Sink> ser::SerializeMap for MapSerializer<'_, S> {
     }
 
     fn end(mut self) -> Result<(), Error> {
-        // Sort on the *encoded* key: makes an unordered map (`HashMap`) canonical without demanding
-        // `Ord`, and makes it agree byte-for-byte with an ordered map holding the same entries.
-        // Encoded keys are distinct because a map's keys are distinct and the encoding is injective,
-        // so the comparison never has to fall back on the value.
+        // Sort on the encoded key: canonical without an `Ord` bound.
         self.entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         put_len(self.sink, self.entries.len() as u64);
         for (key, value) in &self.entries {
@@ -567,7 +489,6 @@ mod tests {
         assert_eq!(enc(&1u32), vec![1, 0, 0, 0]);
         assert_eq!(enc(&1u64), vec![1, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(enc(&(-1i32)), vec![0xff; 4]);
-        // `usize` is forwarded to `u64` by serde, so pointer width does not leak.
         assert_eq!(enc(&1usize), enc(&1u64));
         assert_eq!(enc(&(-1isize)), enc(&(-1i64)));
     }
@@ -581,8 +502,6 @@ mod tests {
 
     #[test]
     fn strings_are_unambiguously_framed() {
-        // The classic framing ambiguity: without a length prefix both pairs would concatenate to
-        // "abc".
         assert_ne!(enc(&("ab", "c")), enc(&("a", "bc")));
     }
 
@@ -608,9 +527,7 @@ mod tests {
     #[test]
     fn floats_use_raw_bits() {
         assert_eq!(enc(&1.5f64), 1.5f64.to_bits().to_le_bytes().to_vec());
-        // `+0.0 == -0.0` under `PartialEq`, but their bit patterns differ.
         assert_ne!(enc(&0.0f64), enc(&(-0.0f64)));
-        // `NaN != NaN`, but the same bit pattern encodes identically.
         assert_eq!(enc(&f64::NAN), enc(&f64::NAN));
     }
 
@@ -621,7 +538,7 @@ mod tests {
 
     #[test]
     fn seq_of_unknown_length_still_writes_its_count_first() {
-        // `Iterator`-backed `collect_seq` has no size hint here, so this exercises the buffered arm.
+        // No size hint: exercises the buffered arm.
         struct Unsized(Vec<u8>);
         impl Serialize for Unsized {
             fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
