@@ -52,9 +52,9 @@
 //! **This crate instantiates the protocol; it is not a transcription of Algorithm 1.** One decision
 //! rule deliberately differs in the default policy: there is no enumeration threshold `t` — four
 //! hand-picked special cases stand in for it, listed on [`SqrtFanOut`]. The SPLIT fan-out *is* the
-//! paper's constant `b`, at Negentropy's 16. Until 2026-08 it was not: the default cut every `⌊√m⌋`
-//! elements, which made communication `Θ(√n)` rather than the family's `O(d log n)`. That rule is
-//! still shipped as [`SqrtFanOut`], and the measurement that retired it is on its documentation.
+//! paper's constant `b`, at Negentropy's 16, so the family's published bounds — `O(d log n)`
+//! communication, `Θ(log_b n)` sequential rounds, `T_loc = O(hL + bhI + K)` — describe the default
+//! configuration.
 //!
 //! # The refinement policy is swappable
 //!
@@ -66,11 +66,10 @@
 //!
 //! [`RefinementPolicy`] is that seam and [`protocol_round_with_policy`] takes one. Three are
 //! shipped, each named for the rule it applies rather than for where it comes from:
-//! [`FixedFanOut`] (**the default**, the paper's constant `b` at 16), [`SqrtFanOut`] (the default
-//! until 2026-08, fan-out `⌊√m⌋`) and [`EnumerateBelowThreshold`] (Algorithm 1 as written, both
-//! parameters). `benches/protocol.rs` prices them against each other over store size, difference
-//! size and how the differences cluster, and sweeps `b` on its own — which is how the default came
-//! to be chosen rather than inherited.
+//! [`FixedFanOut`] (**the default**, the paper's constant `b` at 16), [`SqrtFanOut`] (fan-out
+//! `⌊√m⌋`, so `Θ(√n)` communication and `Θ(log log n)` rounds) and [`EnumerateBelowThreshold`]
+//! (Algorithm 1 as written, both parameters). `benches/protocol.rs` prices them against each other
+//! over store size, difference size and how the differences cluster, and sweeps `b` on its own.
 //!
 //! Because the choice is local, changing it is a **behaviour** change and never a wire break: a
 //! node on one policy reconciles correctly with a node on another, so a cluster migrates one node

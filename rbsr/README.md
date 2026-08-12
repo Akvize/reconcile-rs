@@ -19,7 +19,7 @@ fingerprints over shrinking key ranges and exchanging only the entries that actu
   A/B-compared without a protocol break, and a cluster can be migrated one node at a time.
   `protocol_round` uses the default `FixedFanOut` (the paper's constant `b`, at Negentropy's 16);
   `protocol_round_with_policy` takes any. Each shipped policy is named for the rule it applies:
-  `FixedFanOut` (the default), `SqrtFanOut` (the default until 2026-08, fan-out `⌊√m⌋`) and
+  `FixedFanOut` (the default), `SqrtFanOut` (fan-out `⌊√m⌋` rather than a constant `b`) and
   `EnumerateBelowThreshold` (Algorithm 1 as written, `t` *and* `b`).
 
 The crate-root docs carry a full correspondence table between the protocol vocabulary of

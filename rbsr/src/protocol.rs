@@ -33,9 +33,8 @@ use crate::rsos_view::RsosView;
 /// Negentropy's `b = 16`, with this crate's enumeration cutoffs.
 ///
 /// Named rather than spelled inline so "what does this crate do by default" is one `grep`, and so
-/// the switch away from [`SqrtFanOut`](crate::SqrtFanOut) — measured in `benches/protocol.rs`,
-/// decided in [#257](https://github.com/Akvize/reconcile-rs/issues/257) — is a one-line diff if it
-/// ever needs revisiting.
+/// changing it is a one-line diff. `benches/protocol.rs` measures what each shipped policy costs;
+/// `PROGRESS.md` records why this one is the default.
 const DEFAULT_POLICY: FixedFanOut = FixedFanOut::new(FanOut::NEGENTROPY);
 
 /// The start bound of a [`RangeAggregate`] range, as this protocol actually emits it: `Included` or
@@ -337,22 +336,18 @@ impl AddAssign for RoundOutcome {
 ///
 /// - **no enumeration threshold `t`.** The paper takes IDLIST whenever `|X ∩ [l, u)| ≤ t` for a
 ///   fixed parameter `t` (its experiments use `t = 32`); this crate uses four hand-picked special
-///   cases instead, listed on [`SqrtFanOut`](crate::SqrtFanOut). They are not a byte-saving:
-///   enumerating a range of up
-///   to `t` elements ships values the peer mostly already holds, which is why
-///   [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) — Algorithm 1 as written, for
-///   anyone who wants it — is not the default either.
+///   cases instead, listed on [`SqrtFanOut`](crate::SqrtFanOut).
+///   [`EnumerateBelowThreshold`](crate::EnumerateBelowThreshold) is Algorithm 1 with `t` as written,
+///   for anyone who wants it.
 /// - **the branching factor is the paper's.** `SPLITBYRANK(O_X, l, u, b)` produces a `b`-balanced
-///   partition for a constant `b`, and `b = 16` is Negentropy's, arXiv:2603.19820 §6's comparison
-///   point, and the value `benches/protocol.rs`'s sweep settles on. Because `b` is constant, the
-///   paper's local-cost bound `T_loc = O(hL + bhI + K)` describes this crate again.
+///   partition for a constant `b`; `b = 16` is Negentropy's and arXiv:2603.19820 §6's comparison
+///   point. Because `b` is constant, the paper's local-cost bound `T_loc = O(hL + bhI + K)`
+///   describes this crate.
 ///
-/// Until 2026-08 the default was [`SqrtFanOut`](crate::SqrtFanOut), whose fan-out grew as `⌊√m⌋`;
-/// it is still shipped,
-/// and the measurement that retired it is on its own documentation. Use
+/// [`SqrtFanOut`](crate::SqrtFanOut), whose fan-out grows as `⌊√m⌋`, is shipped alongside. Use
 /// [`protocol_round_with_policy`] to run it, or any other rule — the wire type carries no policy,
-/// so two peers running different ones still converge, and a cluster can therefore be migrated one
-/// node at a time.
+/// so two peers running different ones still converge, and a cluster can therefore run mixed
+/// policies or be migrated one node at a time.
 ///
 /// What the driver keeps regardless of policy is Proposition 4.1's requirement: a SPLIT's children
 /// are pairwise disjoint and their union is the parent range.
@@ -664,7 +659,8 @@ mod tests {
     }
 
     /// The **default** fan-out is a constant: a SPLIT emits at most `b = 16` children whatever the
-    /// range's size. Changing `DEFAULT_POLICY` fails here.
+    /// range's size. Changing `DEFAULT_POLICY` fails here, which is the point — the fan-out is
+    /// every cluster's bandwidth profile.
     #[test]
     fn default_split_fan_out_is_constant_at_sixteen() {
         for m in [100usize, 400, 2_500, 250_000] {
@@ -682,9 +678,8 @@ mod tests {
         }
     }
 
-    /// And the rule the default replaced in 2026-08 (#257) is still available and still `Θ(√m)`:
-    /// `SqrtFanOut` is shipped for anyone who wants the historical bandwidth/round profile back,
-    /// so its behaviour is pinned too rather than left to rot.
+    /// The other shipped fan-out rule is `Θ(√m)`, and pinned for the same reason: `SqrtFanOut` is
+    /// public API, so its cut positions are a contract, not an implementation detail.
     #[test]
     fn sqrt_fan_out_is_still_the_square_root_of_the_range_size() {
         for m in [100usize, 400, 2_500] {
@@ -710,8 +705,8 @@ mod tests {
 
     /// The children of a SPLIT partition the parent exactly: consecutive, non-overlapping, and
     /// spanning the whole parent range. This is what Proposition 4.1's correctness argument needs,
-    /// and it holds independently of *how many* children the fan-out rule chooses — so it kept
-    /// holding across the 2026-08 default change, and must keep holding through any future one.
+    /// and it holds independently of *how many* children the fan-out rule chooses — so it must keep
+    /// holding through any change to that rule, and under any caller-supplied policy.
     #[test]
     fn split_children_partition_the_parent_range() {
         let store = tree(&(0..400).collect::<Vec<_>>());

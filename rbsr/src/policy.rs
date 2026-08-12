@@ -233,11 +233,11 @@ pub enum Decision {
 /// | policy | enumeration cutoff | fan-out |
 /// |---|---|---|
 /// | [`FixedFanOut`] (**the default**, `b = 16`) | four hand-picked special cases | a constant `b` |
-/// | [`SqrtFanOut`] (the default until 2026-08) | the same four | `⌊√m⌋` elements per child, so `Θ(√m)` children |
+/// | [`SqrtFanOut`] | the same four | `⌊√m⌋` elements per child, so `Θ(√m)` children |
 /// | [`EnumerateBelowThreshold`] | the paper's `\|X ∩ [l, u)\| ≤ t` | a constant `b` |
 ///
-/// Why the default is what it is — and what each of the other two costs — is measured on each of
-/// them.
+/// What each costs on the wire and locally is measured by `benches/protocol.rs`; which is the
+/// default, and on what evidence, is recorded in `PROGRESS.md`.
 ///
 /// # Implementing your own
 ///
@@ -316,92 +316,42 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
     }
 }
 
-/// **The default until 2026-08**: cut every `⌊√m⌋` elements, so a range of `m` elements is replaced
-/// by `Θ(√m)` children.
+/// Cut every `⌊√m⌋` elements, so a range of `m` elements is replaced by `Θ(√m)` children.
 ///
-/// Still shipped and still supported — it is the profile every pre-2026-08 cluster ran, and the one
-/// to reach for if you want its bandwidth-for-depth trade back. It is no longer what
-/// [`protocol_round`](crate::protocol_round) applies; [`FixedFanOut`] is, and the measurement that
-/// decided the swap is below.
+/// A size-derived fan-out rather than Algorithm 2's constant `b`. The partition is still balanced
+/// by *rank* — cuts are materialized with [`RsosView`](crate::RsosView)'s `select` exactly as in
+/// `SPLITBYRANK` — and the children are still pairwise disjoint with union the parent, which is all
+/// Proposition 4.1's correctness argument uses.
 ///
-/// # What it is
+/// # Enumeration cutoffs
 ///
-/// The fan-out grows with the range instead of staying constant, and the enumeration cutoffs are
-/// three hand-picked special cases rather than the paper's threshold `t` — each one a range a cut
-/// by rank cannot usefully narrow:
+/// Shared with [`FixedFanOut`], and standing in for the paper's threshold `t`. Each is a range that
+/// a cut by rank cannot usefully narrow:
 ///
 /// - **the peer holds nothing here** — everything we hold is the local symmetric difference, so
 ///   there is nothing left to locate: [`Enumerate`](Decision::Enumerate);
 /// - **we hold nothing here** — there is nothing to cut *by*, so the range is re-advertised with
 ///   our (empty) aggregate and the peer enumerates it to us;
 /// - **both sides hold exactly one element** — they differ, so each owes the other precisely one
-///   element and comparing further cannot save a byte: enumerate, which also asks the peer to.
+///   element and comparing further cannot save a byte: enumerate, which also asks the peer to;
+/// - **a lone local element facing a larger remote range** — one element cannot be split by rank,
+///   so the range is re-advertised for the peer, which holds more there, to cut instead.
 ///
-/// A fourth case falls out of the third: a lone local element facing a larger remote range is
-/// re-advertised rather than enumerated, because one element cannot be split by rank and the peer
-/// is the side that can. [`FixedFanOut`] — the default — keeps all four and changes only the
-/// fan-out; [`EnumerateBelowThreshold`] replaces all four with the paper's single threshold.
+/// [`EnumerateBelowThreshold`] replaces all four with the paper's single `t`.
 ///
-/// # Why it stopped being the default
+/// # Cost
 ///
-/// Because the stride is derived from the range's own size, the *first* SPLIT of a whole-store
-/// round emits ~√n children **whatever the difference size is**: communication is `Θ(√n)`, not the
-/// family's `O(d log n)`. The compensation was supposed to sit in the other column — repeated
-/// square-rooting bottoms out in `Θ(log log n)` rounds against a fixed `b`'s `Θ(log_b n)` — and
-/// `benches/protocol.rs` now prices both columns instead of assuming one. Locating a **single**
-/// missing element (`u64` keys, differences scattered):
+/// Because the stride is derived from the range's own size, the *first* SPLIT of a whole-store round
+/// emits `~√n` children **whatever the difference size is**. Communication is therefore `Θ(√n)`,
+/// not the family's `O(d log n)`, and the paper's local-cost bound `T_loc = O(hL + bhI + K)` does
+/// not apply — its `bhI` term assumes a constant `b`. What the rule buys in exchange is depth:
+/// repeated square-rooting bottoms out in `Θ(log log n)` rounds rather than `Θ(log_b n)`, though the
+/// two coincide numerically below `n ≈ 10¹²`.
 ///
-/// | n | this policy | | [`FixedFanOut`] `b = 16` | |
-/// |---:|---:|---:|---:|---:|
-/// | | bytes | messages | bytes | messages |
-/// | 10³ | 2 041 | 6 | 1 701 | 6 |
-/// | 10⁴ | 5 395 | 8 | 2 195 | 6 |
-/// | 10⁵ | 16 553 | 6 | 2 789 | 6 |
-/// | 10⁶ | **53 046** | 8 | **3 834** | 8 |
-///
-/// **The compensation does not materialize in the range this crate targets.** `Θ(log log n)` beats
-/// `Θ(log_16 n)` asymptotically, but at `n = 10⁶` the iterated square root bottoms out in ~4 levels
-/// and `log_16 10⁶ ≈ 5`: the two are the same number, and the measured message counts agree. The
-/// separation only reaches a factor of two around `n ≈ 10¹²`, far outside what a fully-replicated
-/// in-memory store holds. So the `√m` rule pays ~14× the bytes, ~13× the local RSOS queries and
-/// ~5× the IP fragments at `n = 10⁶` and buys nothing back that is observable at that size.
-///
-/// The paper's local cost `T_loc` is the widest gap of all, and it is pure local CPU — no network,
-/// so no RTT caveat applies to it. `reconciliation_drive` times the whole two-peer drive at `d = 1`:
-///
-/// | n | this policy | [`FixedFanOut`] `b = 16` | ratio |
-/// |---:|---:|---:|---:|
-/// | 10³ | 12.9 µs | 8.2 µs | 1.6× |
-/// | 10⁴ | 43.8 µs | 18.2 µs | 2.4× |
-/// | 10⁵ | 460 µs | 25.2 µs | 18× |
-/// | 10⁶ | **2.10 ms** | **45.0 µs** | **47×** |
-///
-/// Steeper than the 13× query-count ratio because the queries themselves get dearer: a `√n` fan-out
-/// `select`s at ~1 000 spread-out ranks and aggregates over ~1 000 wide ranges per round, touching
-/// far more of the tree than a narrow descent, and grows the output `Vec` to ~42 kB of
-/// `RangeAggregate` against ~3 kB.
-///
-/// # Where it still wins
-///
-/// The `√m` rule is not simply worse — it is well-sized when the difference is *large*, because a
-/// fan-out of `√n` is the right width once `d` approaches `√n`. At `n = 10⁵`, `d = 100` scattered it
-/// spends 147 726 B against `b = 16`'s 162 993 B; at `n = 10³`/`10⁴` with `d = 10` it wins by ~30 %.
-/// What retired it is that this is the *bulk-divergence* regime, where the refinement traffic is
-/// dominated by the value dump that follows it anyway — while steady-state anti-entropy, the case
-/// that actually recurs, is `d` of 0 to a handful, and there `√m` costs an order of magnitude for
-/// nothing.
-///
-/// Two caveats keep this from being a one-line verdict. Every benchmark here runs at RTT ≈ 0
-/// ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), so the message column is a *count*
-/// rather than a latency — equal counts do mean equal round-trips, but a policy that lost on that
-/// column could not be priced. And the gap narrows sharply as the difference grows and scatters: at
-/// `d = 100` over 10⁶ elements the two policies are within 7 % of each other, because ~√n ranges
-/// stop being overhead once the difference genuinely needs that many. The `√m` rule is worst
-/// exactly in the small-`d` regime RBSR exists for.
-///
-/// What does **not** carry over from the paper is its local-cost bound `T_loc = O(hL + bhI + K)`,
-/// whose `bhI` term assumes a constant `b`. Under [`FixedFanOut`] or [`EnumerateBelowThreshold`]
-/// that bound is quotable again; under this policy it is not.
+/// That shape makes it the wrong rule for the small-`d` regime RBSR exists for and a competitive one
+/// when `d` approaches `√n`, where `√n` ranges per round stop being overhead. `benches/protocol.rs`
+/// measures both regimes against [`FixedFanOut`]; `PROGRESS.md` records which is the default and on
+/// what evidence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqrtFanOut;
 
@@ -412,68 +362,36 @@ impl RefinementPolicy for SqrtFanOut {
         }
         // NOTE: span ≥ 2 here, so the stride is at least 1 and the split really refines.
         //
-        // `f32`, not `f64`, and truncating rather than rounding: this expression *is* the
-        // historical rule, and the wire bytes of every existing cluster depend on it giving the
-        // same answer. The two differ for spans past f32's 24-bit mantissa.
+        // `f32`, not `f64`, and truncating rather than rounding: the two differ for spans past
+        // f32's 24-bit mantissa, and every cluster running this policy has to agree on which
+        // answer it is — the choice is part of the rule, not an implementation detail.
         let stride = (comparison.span() as f32).sqrt() as usize;
         Decision::Split(SplitStride::per_child(stride))
     }
 }
 
-/// **This crate's default policy** (`b = 16`): the paper's constant branching factor, with this
-/// crate's enumeration cutoffs — everything [`SqrtFanOut`] does, except that a SPLIT emits at most
-/// `b` children whatever the range's size.
+/// **This crate's default policy**: Algorithm 2's `SPLITBYRANK(O_X, l, u, b)` for a constant
+/// branching factor `b`, with this crate's enumeration cutoffs — everything [`SqrtFanOut`] does,
+/// except that a SPLIT emits at most `b` children whatever the range's size.
 ///
-/// It is a one-knob change from the rule this crate shipped until 2026-08: same four enumeration
-/// cutoffs, different fan-out. That is what makes the comparison honest, and the comparison is what
-/// promoted it — `benches/protocol.rs` measured it against `⌊√m⌋` across `n`, `d` and difference
-/// clustering, and it is **never worse on the round-trip axis in any measured configuration** while
-/// costing 13.8× fewer bytes, ~45× less local CPU and a 63× narrower widest round at `n = 10⁶`,
-/// `d = 1`. The numbers, and the one regime where `√m` still wins, are on [`SqrtFanOut`].
+/// Because `b` is constant, the family's published bounds describe this crate: communication is
+/// `O(d log n)`, sequential rounds are `Θ(log_b n)`, and the paper's local-cost bound
+/// `T_loc = O(hL + bhI + K)` — whose `bhI` term assumes a constant `b` — may be quoted.
 ///
-/// Two things come back with a constant `b`. Communication returns to the family's `O(d log n)`
-/// rather than the `Θ(√n)` a size-derived fan-out produces, and the paper's local-cost bound
-/// `T_loc = O(hL + bhI + K)` — whose `bhI` term assumes a constant `b` — describes this crate again
-/// and may be quoted.
-///
-/// Switching the default is a **behaviour** change, not a wire change: the policy never crosses the
-/// wire, and a `b = 16` node reconciles with a `⌊√m⌋` node correctly (pinned by
-/// `peers_running_different_policies_still_converge` and a proptest over every mixed pair), so a
-/// cluster migrates one node at a time with no flag day.
-///
-/// # Choosing `b`
+/// # `b`
 ///
 /// [`Default`] is [`FanOut::NEGENTROPY`] (`b = 16`), the value Negentropy ships and
-/// arXiv:2603.19820 §6 measures against — and, once swept, the value the measurement also lands on.
-/// `benches/protocol.rs`'s `fan_out_sweep` runs `b` from 2 to 256; at `n = 10⁶`, `d = 1`:
+/// arXiv:2603.19820 §6 measures against.
 ///
-/// | `b` | bytes | one-way messages | widest round | `T_loc` |
-/// |---:|---:|---:|---:|---:|
-/// | 2 | 2 061 | 22 | 96 B | 25.1 µs |
-/// | 4 | **1 960** | 12 | 202 B | **21.8 µs** |
-/// | 8 | 2 613 | 10 | 414 B | 33.0 µs |
-/// | 16 | 3 834 | 8 | 802 B | 48.5 µs |
-/// | 32 | 5 021 | **6** | 1 614 B | 73.3 µs |
-/// | 64 | 9 668 | 6 | 3 238 B | 172 µs |
-/// | 256 | 25 880 | 6 | 12 982 B | 975 µs |
+/// The two axes `b` trades between bottom out in different places, so neither picks it alone. A
+/// `d = 1` descent visits `~log_b n` levels advertising `~b` ranges each, so wire bytes and local
+/// work follow `b / ln b` — minimized near `b = 3` — while one-way messages fall as `log_b n` until
+/// they reach a floor no larger `b` improves on. Past that floor every extra unit of `b` is paid for
+/// and buys nothing. A third quantity is a hard ceiling rather than a trade: the widest single round
+/// grows linearly in `b`, and it is what must fit a datagram and survive IP fragmentation.
 ///
-/// The two columns bottom out in different places, so neither picks `b` alone. A `d = 1` descent
-/// visits `~log_b n` levels advertising `~b` ranges each, so bytes and local work follow `b / ln b`
-/// — minimized near `b = 3` — while messages fall as `log_b n` until they hit a floor of 6 that no
-/// larger `b` improves on. Past that floor (`b ≥ 32` at `n = 10⁶`, `b ≥ 16` at `n = 10⁵`) every extra
-/// unit of `b` is paid for and buys nothing.
-///
-/// `b = 16` is the value that is **never worse than [`SqrtFanOut`] on the round-trip axis** in any
-/// configuration measured — `n` from 10³ to 10⁶, `d` from 1 to 100, scattered or clustered — which
-/// is what let it become the default without any deployment trading latency for bandwidth.
-/// `b = 32` saves one further round-trip at `n = 10⁶` only, and pays ~31 % more bytes and ~51 % more
-/// CPU for it — including at `n = 10⁵`, where it saves nothing at all. It also doubles the widest
-/// round, and that column is the one bounded by a datagram.
-///
-/// If bandwidth rather than latency is the binding constraint — an in-process or unix-socket peer,
-/// a metered WAN link — `b = 4` is the optimum on both bytes and CPU, at two extra round-trips.
-/// The break-even sits near an RTT of 8 µs at 1 Gb/s, so on anything that is actually a network,
-/// `b = 16` is the better end of that trade.
+/// `benches/protocol.rs`'s `fan_out_sweep` measures all three over `b` = 2…256; `PROGRESS.md`
+/// records the value chosen for the default and why.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,
@@ -512,9 +430,7 @@ impl RefinementPolicy for FixedFanOut {
 /// The name states the knob that distinguishes it; the fan-out half is a constant `b`, exactly
 /// [`FixedFanOut`]'s. The two policies above keep this crate's hand-picked enumeration cutoffs and
 /// vary only that fan-out. This one replaces the cutoffs too, so it is the point of comparison for
-/// "what do our hand-picked special cases actually cost", not just "what does `√m` cost". The
-/// answer — and why it is not the default despite winning the refinement column — is the value
-/// amplification below.
+/// "what do our hand-picked special cases actually cost", not just "what does `√m` cost".
 ///
 /// The threshold is where the two shapes differ most: `t` trades refinement round-trips for
 /// *values*. A range of `t` local elements is shipped wholesale, and all but the differing ones are

@@ -81,37 +81,33 @@ elements would pick the wrong default. The message column is the round-trip coun
 benchmark here runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)): weigh it
 by your own RTT before concluding.
 
-**Why it exists, and what it decided.** RBSR's published bounds — `O(d log n)` communication,
-`O(log n)` sequential rounds — assume the fixed branching factor `b` of the paper's Algorithm 2, and
-until 2026-08 `rbsr`'s default did not use one: `SqrtFanOut` cuts at `step = ⌊√m⌋`, so neither bound
-described the shipped configuration. Once [#257](https://github.com/Akvize/reconcile-rs/issues/257)
-made the rule a swappable `RefinementPolicy`, this benchmark compared them head to head instead of
-comparing a measurement against an estimate — **and the default changed on the result**. Headline,
-for a **single** missing element in a 10⁶-entry store: ~53 kB over ~1 048 ranges under `√m` against
-**3.8 kB over 78 ranges** for `b = 16` — at the *same* 8 one-way messages, because log₁₆ 10⁶ ≈ 5 is
-already the iterated-square-root depth at that size. The
-`Θ(log log n)` round advantage `√m` is supposed to buy does not appear below n ≈ 10¹². The timed
-`reconciliation_drive` group widens it further, in a column no RTT caveat touches: 2.10 ms against
-45.0 µs, ≈47×. The widest
+**Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
+rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out
+a swappable `RefinementPolicy`, so what a given configuration costs is a measurement rather than a
+quotation: this target supplies it. For a **single** missing element in a 10⁶-entry store, `b = 16`
+spends 3.8 kB over 78 ranges against `SqrtFanOut`'s ~53 kB over ~1 048 ranges, at the *same* 8
+one-way messages — log₁₆ 10⁶ ≈ 5 is already the iterated-square-root depth at that size, so the
+`Θ(log log n)` round advantage `√m` offers asymptotically does not appear below n ≈ 10¹². The timed
+`reconciliation_drive` group widens the gap further, in a column no RTT caveat touches: 2.10 ms
+against 45.0 µs, ≈47×. Interpretation lives in `SOTA.md` §2.2; the decisions these numbers drove are
+in `PROGRESS.md`. The widest
 single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP fragments at a
 1500-byte MTU); at d = 100 it reaches 160 908 B, i.e. three datagrams. Discussion in `SOTA.md` §2.2.
 
-`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256) — the sweep
-that chose the current default rather than inheriting Negentropy's value. Bytes and local work follow `b / ln b`
+`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256). Bytes and local work follow `b / ln b`
 (minimized near `b = 3`); one-way messages fall as `log_b n` until they hit a floor — 6 at
 `n = 10⁶`, reached at `b = 32` — past which extra `b` is paid for and buys nothing. The widest single
 round grows linearly in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one
-datagram at `b = 16`. `b = 16` was picked because it is the only swept value **never worse than the
-outgoing `√m` rule on rounds** across every measured `(n, d, clustering)` — so no deployment traded
-latency for the bandwidth win. `b = 4` is the bytes-and-CPU optimum, two round-trips behind, and is
-the value to reach for when bandwidth rather than latency binds.
+datagram at `b = 16`. Across every measured `(n, d, clustering)`, `b = 16` is the only swept value
+never worse than `√m` on rounds; `b = 4` is the bytes-and-CPU optimum, two round-trips behind, and
+is the value to reach for when bandwidth rather than latency binds.
 
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,
 `split_children_partition_the_parent_range`), so changing the *default* fails CI rather than
 silently changing every cluster's bandwidth profile — this benchmark quantifies such a change, it
-does not guard it. `split_children_partition_the_parent_range` is policy-independent and survived
-the 2026-08 default change unaltered, as any future one must leave it.
+does not guard it. `split_children_partition_the_parent_range` is policy-independent and must hold
+under any fan-out rule.
 
 ## Not covered yet
 

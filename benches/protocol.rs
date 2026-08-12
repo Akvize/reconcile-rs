@@ -14,13 +14,12 @@
 //! This target exists because the two published cost bounds for range-based set reconciliation —
 //! `O(d log n)` communication and `O(log n)` sequential rounds — are stated for the **fixed**
 //! branching factor `b` of Algorithm 2 in E. G. Amparore, *RBSR via Range-Summarizable
-//! Order-Statistics Stores* (arXiv:2603.19820), and until 2026-08 this crate's default did not use
-//! a fixed `b`: `rbsr::SqrtFanOut` cuts every `⌊√m⌋` elements, so neither bound described what
-//! actually went on the wire. This target is what changed that. Since
-//! [#257](https://github.com/Akvize/reconcile-rs/issues/257) made the policy a swappable seam, the
-//! alternatives could be priced against each other rather than estimated, and the default is now
-//! `rbsr::FixedFanOut` at `b = 16` — chosen here, in the sweep below, not inherited from
-//! Negentropy. `rbsr::EnumerateBelowThreshold` is Algorithm 1 as written, with both parameters.
+//! Order-Statistics Stores* (arXiv:2603.19820), and `rbsr` makes the fan-out a swappable
+//! `RefinementPolicy` — so which bounds apply depends on which policy runs, and what each costs is
+//! a measurement rather than a quotation. The default `rbsr::FixedFanOut` at `b = 16` is the
+//! paper's constant; `rbsr::SqrtFanOut` cuts every `⌊√m⌋` elements, for which neither published
+//! bound holds; `rbsr::EnumerateBelowThreshold` is Algorithm 1 as written, with both parameters.
+//! This target prices all three, and sweeps `b` on its own.
 //!
 //! **Read the two traffic columns together.** A policy that splits less advertises fewer ranges but
 //! reaches its IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire
@@ -127,12 +126,11 @@ const SWEEP_CASES: &[(usize, &[usize])] = &[
     (1_000_000, &[1, 10, 100]),
 ];
 
-/// The policies compared: the shipped default, the rule it replaced, and Algorithm 1 as written.
-/// Keeping the retired rule in the comparison is deliberate — it is what the numbers below are a
-/// verdict on, and it is still shipped.
+/// The three shipped policies, compared head to head: the default constant `b`, the size-derived
+/// `√m` fan-out, and Algorithm 1 as written.
 fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
     vec![
-        ("sqrt (pre-2026-08)", Box::new(SqrtFanOut)),
+        ("sqrt", Box::new(SqrtFanOut)),
         (
             "fixed b=16 (default)",
             Box::new(FixedFanOut::new(FanOut::NEGENTROPY)),

@@ -181,53 +181,77 @@ but one High resolved or mitigated.
   (`ReplicatedMap::upsert`/`get_or_insert_with`).
 - ✅ **The split fan-out was a communication-complexity regression, not a tuning gap** —
   [#257](https://github.com/Akvize/reconcile-rs/issues/257), reclassified 2026-08-10 (it read
-  "unbenchmarked and hard-coded"). **Step A is done** (2026-08-11): the two decisions are now a
-  `RefinementPolicy` seam in `rbsr` (`Decision` = SKIP/IDLIST/SPLIT, `Comparison`, `SplitStride`,
-  `FanOut`), `protocol_round_with_policy` takes one, and `protocol_round` pins the default to
-  `SqrtFanOut` — the then-current behaviour byte-for-byte, so `tests/wire_format.rs`'s golden vector
-  and the convergence proptests passed unchanged (the default moved only afterwards, below). Two alternatives ship alongside it (`FixedFanOut`, the
-  paper's constant `b`; `EnumerateBelowThreshold`, Algorithm 1 as written, `t` *and* `b`) — each
-  named for the rule it applies, not for where it comes from. The policy is local and
-  never advertised — mixed pairs converge, pinned by
-  `peers_running_different_policies_still_converge` and a proptest over every pair.
-  **Step B is done**: `benches/protocol.rs` now sweeps policy × `n` × `d` × difference clustering and
-  reports rounds, bytes, datagrams, IP fragments, IDLIST elements and local `Aggregate`/`Rank`/
-  `Select` counts.
+  "unbenchmarked and hard-coded"), closed 2026-08-11.
 
-  **What the measurement changed.** Locating one missing element in a 10⁶-entry store costs
-  **53 046 B over 1 048 advertised ranges** under `√m` against **3 834 B / 78 ranges** for
-  `b = 16` — ~13× the local RSOS queries, and **47× the local CPU** (2.10 ms against 45.0 µs on the
-  timed `reconciliation_drive`, a pure-CPU figure no RTT caveat touches). The claimed compensation **does not hold in the
-  reachable range**: this file previously recorded rounds as "`Θ(log log n)`, flat at 6–8 … where
-  fixed-`b` pays `O(log n)`", but measured head to head at n = 10⁶ *both* policies take 8 one-way
-  messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2× near
-  n ≈ 10¹². So `√m` pays ~14× the bytes and buys nothing observable back. Corrected in `SOTA.md`
-  §1.3/§2.2. Two qualifications: every bench runs at RTT ≈ 0
-  ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), and the gap closes to ~7 % at
-  d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for. The earlier
-  ceiling finding also sharpens: at n = 10⁶ with d = 100 the widest round reaches **160 908 B over
-  3 300 ranges = 3 datagrams / ~189 fragments**, so the ceiling is reachable at 10⁶, not only at
-  10 M — still degrading into extra datagrams rather than being dropped, as `send_messages_paced`
-  chunks at `BUFFER_SIZE`.
+  **Step A — the seam.** The loop's two tuning decisions are now a `RefinementPolicy` in `rbsr`
+  (`Decision` = SKIP/IDLIST/SPLIT, `Comparison`, `SplitStride`, `FanOut`); `protocol_round_with_policy`
+  takes one, `protocol_round` pins a named `DEFAULT_POLICY`. It landed behaviour-preserving — the
+  default was `SqrtFanOut`, byte-for-byte the previous rule, so `tests/wire_format.rs`'s golden
+  vector and the convergence proptests passed unchanged. Three policies ship, each named for the
+  rule it applies rather than for where it comes from: `FixedFanOut`, `SqrtFanOut`,
+  `EnumerateBelowThreshold`. The policy is local and never advertised; mixed pairs converge, pinned
+  by `peers_running_different_policies_still_converge` and a proptest over every pair.
+  `protocol_round` also returns a `RoundOutcome` tally, which is the only signal a consumer without
+  a `tracing` subscriber gets for the malformed-segment drop path.
 
-  **The branching factor is swept too** (`fan_out_sweep`, *b* = 2…256): bytes and `T_loc` follow
-  *b*/ln *b* with a minimum near *b* = 4, messages fall as log_*b* n to a floor of 6 reached at
-  *b* = 32, and the widest round grows linearly in *b* — already past one datagram at *b* = 16 for
-  n = 10⁵, d = 100. **`b = 16` is the only swept value never worse than `√m` on rounds** across every
-  measured (n, d, clustering); `b = 4` is the bytes/CPU optimum at two extra round-trips.
+  **Step B — the measurement.** `benches/protocol.rs` sweeps policy × `n` × `d` × difference
+  clustering, reporting rounds, bytes, datagrams, IP fragments, IDLIST *elements* and local
+  `Aggregate`/`Rank`/`Select` counts, plus a timed drive (the paper's `T_loc`). Locating one missing
+  element, differences scattered:
 
-  **The default is now `FixedFanOut(FanOut::NEGENTROPY)`** (2026-08-11), on that evidence.
-  `protocol_round` pins it via a named `DEFAULT_POLICY` const; `SqrtFanOut` stays shipped and
-  pinned by its own test. The switch is a **behaviour** change, not a wire change — the policy never
-  crosses the wire and mixed pairs converge — so a cluster migrates one node at a time with no flag
-  day. What comes back with a constant `b`: communication is `O(d log n)` again rather than `Θ(√n)`,
-  and the paper's `T_loc = O(hL + bhI + K)` is quotable for this crate.
+  | n | `√m` bytes / msgs / `T_loc` | `b`=16 bytes / msgs / `T_loc` |
+  |---:|---:|---:|
+  | 10³ | 2 041 / 6 / 12.9 µs | 1 701 / 6 / 8.2 µs |
+  | 10⁴ | 5 395 / 8 / 43.8 µs | 2 195 / 6 / 18.2 µs |
+  | 10⁵ | 16 553 / 6 / 460 µs | 2 789 / 6 / 25.2 µs |
+  | 10⁶ | **53 046** / 8 / **2.10 ms** | **3 834** / 8 / **45.0 µs** |
+
+  **This corrected a claim this file used to make.** Rounds were recorded here as "`Θ(log log n)`,
+  flat at 6–8 … where fixed-`b` pays `O(log n)`". Measured head to head at n = 10⁶, *both* take 8
+  one-way messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2×
+  near n ≈ 10¹². So `√m` paid ~14× the bytes, ~13× the local RSOS queries and 47× the local CPU and
+  bought nothing observable back. Corrected in `SOTA.md` §1.3/§2.2. Two qualifications: every bench
+  runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), and the gap closes to
+  ~7 % at d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for, and
+  competitive once `d` approaches `√n`. The earlier ceiling finding also sharpens: at n = 10⁶ with
+  d = 100 the widest round reaches **160 908 B over 3 300 ranges = 3 datagrams / ~189 fragments**, so
+  the ceiling is reachable at 10⁶, not only at 10 M — still degrading into extra datagrams rather
+  than being dropped, as `send_messages_paced` chunks at `BUFFER_SIZE`.
+
+  `EnumerateBelowThreshold` wins the refinement column and loses on values: at n = 10⁵, d = 100 it
+  saves 40 % of refinement bytes while enumerating **5 036 elements against 100**. Break-even is
+  13–37 B per entry, and a `Timestamp` alone encodes to 23 B, so the paper's `t` is a net loss on
+  this wire format. That is why `benches/protocol.rs` reports IDLIST elements alongside ranges.
+
+  **The branching factor was swept** (`fan_out_sweep`, *b* = 2…256) rather than inherited from
+  Negentropy. At n = 10⁶, d = 1:
+
+  | `b` | 2 | 4 | 8 | 16 | 32 | 64 | 256 |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | bytes | 2 061 | **1 960** | 2 613 | 3 834 | 5 021 | 9 668 | 25 880 |
+  | one-way msgs | 22 | 12 | 10 | 8 | **6** | 6 | 6 |
+  | widest round | 96 B | 202 B | 414 B | 802 B | 1 614 B | 3 238 B | 12 982 B |
+  | `T_loc` | 25.1 µs | **21.8 µs** | 33.0 µs | 48.5 µs | 73.3 µs | 172 µs | 975 µs |
+
+  Bytes and `T_loc` follow *b*/ln *b* (minimum near *b* = 3–4); messages fall as log_*b* n to a floor
+  no larger *b* improves on; the widest round grows linearly in *b* and is the hard ceiling — already
+  past one datagram at *b* = 16 for n = 10⁵, d = 100.
+
+  **Decision: the default is `FixedFanOut(FanOut::NEGENTROPY)`** (2026-08-11). *b* = 16 is the only
+  swept value **never worse than `√m` on rounds** in any measured (n, d, clustering), so no
+  deployment traded latency for the bandwidth win — which is what made the switch decidable without
+  an RTT lane. *b* = 32 saves one more round-trip at 10⁶ alone, for +31 % bytes, +51 % CPU and double
+  the widest round; *b* = 4 is the bytes/CPU optimum at two extra round-trips, break-even near an RTT
+  of 8 µs at 1 Gb/s, i.e. worth it only in-process. The switch is a **behaviour** change, not a wire
+  change — mixed pairs converge — so a cluster migrates one node at a time with no flag day. With a
+  constant *b*, communication is `O(d log n)` again rather than `Θ(√n)` and the paper's
+  `T_loc = O(hL + bhI + K)` is quotable for this crate. `SqrtFanOut` stays shipped, supported and
+  pinned by its own test.
 
   **Still open.** Exposing a policy through `reconcile`'s facade (`Config` is `Copy`, so a boxed
   policy needs a different carrier), and the interaction with the 40 B/range wire aggregate (~79 % of
   the bytes measured under `√m`) — now separable, since the fan-out is a caller's choice rather than
   an edit to the protocol loop.
-
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
