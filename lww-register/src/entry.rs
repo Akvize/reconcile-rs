@@ -46,9 +46,7 @@ use serde::{Deserialize, Serialize};
 /// encoding fingerprints are computed from or in the derived [`Hash`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum State<V> {
-    /// A live value.
     Present(V),
-    /// A deletion marker.
     Tombstone,
 }
 
@@ -61,7 +59,6 @@ impl<V> State<V> {
         }
     }
 
-    /// Returns `true` if this is a deletion marker (tombstone).
     pub fn is_tombstone(&self) -> bool {
         matches!(self, State::Tombstone)
     }
@@ -108,7 +105,6 @@ pub struct Entry<T, V> {
 }
 
 impl<T, V> Entry<T, V> {
-    /// Build a live entry.
     pub fn present(stamp: T, value: V) -> Self {
         Entry {
             stamp,
@@ -116,7 +112,6 @@ impl<T, V> Entry<T, V> {
         }
     }
 
-    /// Build a tombstone entry.
     pub fn tombstone(stamp: T) -> Self {
         Entry {
             stamp,
@@ -132,7 +127,6 @@ impl<T, V> Entry<T, V> {
         }
     }
 
-    /// Returns `true` if this entry is a deletion marker (tombstone).
     pub fn is_tombstone(&self) -> bool {
         self.state.is_tombstone()
     }
@@ -299,8 +293,6 @@ mod tests {
             "same-value",
         );
 
-        // The dated entries differ (different stamp) and, overwhelmingly likely, hash
-        // differently.
         assert_ne!(early, late);
         assert_ne!(
             hash_of(&early),
@@ -308,12 +300,9 @@ mod tests {
             "dated Entry hashes should differ when only the stamp differs"
         );
 
-        // Their projections are the identical `State::Present("same-value")` and therefore hash
-        // identically, regardless of which node/timestamp produced them.
         assert_eq!(early.project(), late.project());
         assert_eq!(hash_of(&early.project()), hash_of(&late.project()));
 
-        // Same check for tombstones.
         let early_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(
             Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
             NodeId::new(0),

@@ -171,7 +171,6 @@ mod in_memory {
     }
 
     impl InMemoryNetwork {
-        /// Create an empty network.
         pub fn new() -> Self {
             InMemoryNetwork::default()
         }

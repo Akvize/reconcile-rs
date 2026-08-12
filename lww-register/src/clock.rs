@@ -448,19 +448,15 @@ impl Hlc {
         let remote_physical = remote_physical.physical();
         let max_physical = phys_now.max(self.physical).max(remote_physical);
 
-        // Pick the base counter from the dominant physical-time bucket, then advance one logical
-        // tick. next_tick() handles u32::MAX → (physical + 1, 0) so the result can never wrap.
+        // next_tick() handles u32::MAX overflow below, so base_logical never needs to.
         let base_logical = if max_physical == self.physical && max_physical == remote_physical {
-            // Both self and the (admitted) remote share max_physical: take the larger counter.
             self.logical.max(remote_logical)
         } else if max_physical == self.physical {
             self.logical
         } else if max_physical == remote_physical {
             remote_logical
         } else {
-            // Physical time leapt past both: fresh bucket, logical counter starts at 0.
-            // We return early here rather than running through next_tick() to preserve the
-            // original semantics (counter = 0, not 1) for the physical-time-dominates case.
+            // Early return, not next_tick(), to keep the fresh-bucket counter at 0 rather than 1.
             *self = Hlc {
                 physical: max_physical,
                 logical: LogicalCounter::ZERO,

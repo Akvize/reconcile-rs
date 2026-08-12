@@ -181,7 +181,7 @@ mod tests {
                         Hlc::new(PhysicalTime::from_millis(2_000), LogicalCounter::new(1)),
                         NodeId::new(7),
                     )),
-                ), // tombstone
+                ),
             ],
             members,
             tombstone_acks: acks,
