@@ -130,7 +130,8 @@ a single embeddable Rust library. The pitch is "replicated state without standin
 Fit-for-purpose guidance (good fit / wrong tool) lives once, in README.md's "When to use this" —
 not duplicated here. **Path to best-of-breed:** the open performance/scaling roadmap that moves
 reconcile-rs from the "real but narrow" niche of §1.2 to a credible Rust IMDG is tracked in
-[`PROGRESS.md`](./PROGRESS.md) §4, not here.
+[`PROGRESS.md`](./PROGRESS.md) §4 — its *SOTA axis index* is the per-axis view, one row per axis
+below — not here.
 
 ---
 
@@ -382,7 +383,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 These are the axes along which an RSOS is judged against the state of the art — the **design
 target** for a structure of this family ("persistent RSOS with a secure, generic fingerprint").
 They are described here as durable design goals; which of them `reconcile-rs` has since addressed
-is tracked in [`PROGRESS.md`](./PROGRESS.md) (the `Fxx` pointers below map to that table).
+is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row per axis below (the
+`Fxx` pointers map to its §2 table).
 
 **P0 — Correctness of the structure itself:**
 1. **Secure and wide fingerprint**: replace the 64-bit XOR with a **≥256-bit, non-GF(2)-linear**

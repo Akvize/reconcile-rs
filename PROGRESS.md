@@ -104,6 +104,30 @@ but one High resolved or mitigated.
 
 ## 4. Open items & roadmap
 
+### SOTA axis index
+
+Where each axis of [`SOTA.md`](./SOTA.md) §2.4 (structure) and §1.3/§2.2 (algorithm) currently
+stands. An index, not an analysis: the target is stated in `SOTA.md`, the work in the issue, the
+status here. The subsections below organize the same issues by delivery area instead.
+
+| Axis | Target | State |
+|---|---|---|
+| Secure, wide summary | §2.4 P0-1 | ✅ F6/[#111](https://github.com/Akvize/reconcile-rs/issues/111) — 256-bit additive BLAKE3 |
+| Emptiness decided on size, not hash | §2.4 P0-2 | ✅ F1/[#106](https://github.com/Akvize/reconcile-rs/issues/106); the map's own `==` re-fixed by `cc4d7c4` ([#282](https://github.com/Akvize/reconcile-rs/issues/282)) |
+| Stable hash as a wire contract | §2.4 P0-3 | ✅ F8/[#111](https://github.com/Akvize/reconcile-rs/issues/111) + `rsos::encoding` |
+| Generic monoid summary | §2.4 P1-4 | **waived to 2.0** — [#298](https://github.com/Akvize/reconcile-rs/issues/298), §6 Waivers |
+| RSOS contract exposed | §2.4 P1-5 | ✅ `rank`/`select`/`range` `pub` on `rsos`; iterator residue [#92](https://github.com/Akvize/reconcile-rs/issues/92), [#291](https://github.com/Akvize/reconcile-rs/issues/291) |
+| Persistence / content-addressing | §2.4 P2-6 | ◯ [#271](https://github.com/Akvize/reconcile-rs/issues/271) (+#272–#277), [#188](https://github.com/Akvize/reconcile-rs/issues/188). Build-vs-adopt call recorded on #271, undecided |
+| Conflict metadata in the value | §2.4 P2-7 | ✅ HLC F5/[#110](https://github.com/Akvize/reconcile-rs/issues/110), causal-stability GC F4/[#109](https://github.com/Akvize/reconcile-rs/issues/109); pluggable CRDT deferred — [#184](https://github.com/Akvize/reconcile-rs/issues/184) |
+| Property-testing + fuzzing | §2.4 P3-8 | ✅ F11/[#113](https://github.com/Akvize/reconcile-rs/issues/113) |
+| Adversarial robustness | §2.4 P3-9 | ◐ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
+| Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); `t` unsettled — [#315](https://github.com/Akvize/reconcile-rs/issues/315); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
+| Single-shot latency (hybrid sketch) | §2.2 conclusion | ◯ [#185](https://github.com/Akvize/reconcile-rs/issues/185), gated on [#280](https://github.com/Akvize/reconcile-rs/issues/280) |
+| Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` — [#232](https://github.com/Akvize/reconcile-rs/issues/232) item 4c, rides [#309](https://github.com/Akvize/reconcile-rs/issues/309)'s wire break |
+
+The axis cuts across §6's gate rule: an item can be SOTA-critical and post-1.0 (#185), or a release
+gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
+
 ### Security / confidentiality (umbrella [#96](https://github.com/Akvize/reconcile-rs/issues/96))
 - ✅ Confidentiality + integrity — XChaCha20-Poly1305 AEAD on payloads.
 - ◯ Per-node authentication / anti-MITM — [#136](https://github.com/Akvize/reconcile-rs/issues/136).
