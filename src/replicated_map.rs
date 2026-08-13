@@ -600,6 +600,13 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// path packs messages into datagrams but never fragments one. Above that the key **never
     /// converges on any peer**, visible only as a `warn!` on the send path. Stay well clear of the
     /// ceiling, and of the MTU.
+    ///
+    /// # Panics
+    ///
+    /// The broadcast is dispatched on a detached `tokio::spawn`ed task, which panics with "there
+    /// is no reactor running" unless called from inside a Tokio runtime (`#[tokio::main]`,
+    /// `#[tokio::test]`, or an explicit `Runtime::block_on`/`Handle::enter`). This holds for every
+    /// write method on this type.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -617,6 +624,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Bulk-insert + async broadcast.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         self.engine.insert_bulk(
             &key_values
@@ -635,6 +646,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// the public API, for seeding a large dataset without a broadcast storm.
     ///
     /// Entries are stamped and hooked as usual, and propagate on the next anti-entropy round.
+    ///
+    /// Deliberately **not** subject to [`insert`](Self::insert)'s Tokio-runtime panic: this is the
+    /// one write path that never broadcasts.
     pub fn load_bulk(&self, key_values: &[(K, V)]) {
         self.engine.just_insert_bulk(
             &key_values
@@ -659,6 +673,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn remove(&self, key: &K) -> Option<V> {
         let ret = self
             .engine
@@ -682,6 +699,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Callers cannot supply the timestamp: a chosen `DateTime` can collide with another
     /// replica's and make the tie-break non-commutative.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn remove_bulk(&self, keys: &[K]) {
         self.engine.insert_bulk(
             &keys
@@ -709,6 +729,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Delete every live entry, as broadcast tombstones (so the deletion reconciles to peers
     /// rather than mutating the map only locally). Tombstoned keys are reclaimed later by
     /// causal-stability GC. A no-op if the store holds no live entry.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the store is non-empty; a no-op call never spawns).
     pub fn clear(&self) {
         let keys = self.live_keys_where(|_, _| true);
         if !keys.is_empty() {
@@ -719,6 +743,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Delete every live entry for which `keep` returns `false`, as broadcast tombstones. Keys
     /// where `keep` returns `true` are retained. The predicate runs under the read lock; keep it
     /// cheap and side-effect free.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// at least one entry is removed; a no-op call never spawns).
     pub fn retain<P: FnMut(&K, &V) -> bool>(&self, mut keep: P) {
         let keys = self.live_keys_where(|k, v| !keep(k, v));
         if !keys.is_empty() {
@@ -728,6 +756,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Delete every live entry whose key falls in `range`, as broadcast tombstones. Mirrors the
     /// [`fingerprint`](Self::fingerprint) range signature.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the range is non-empty; a no-op call never spawns).
     pub fn delete_range<R: RangeBounds<K>>(&self, range: R) {
         let keys: Vec<K> = {
             let guard = self.engine.map.read();
@@ -962,6 +994,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// The callback sees `Some(&mut V)` for a live key, `None` for an absent or tombstoned one; a
     /// mutated entry is re-stamped and broadcast. Holds the write lock for the whole
     /// read-modify-write, so it is atomic against the reconciliation loop.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the callback mutates a live entry).
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         // Mint the timestamp before taking the map lock, matching the lock order of `insert`
         // (clock, then map → projection).
@@ -1023,6 +1060,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Atomically mutate the live value for `k`, then re-stamp and broadcast; returns whether the
     /// key was live. The race-free replacement for a `get`-then-`insert`.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// `k` is live).
     pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
         self.mutate_live(k, f)
     }
@@ -1030,6 +1072,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Update the live value for `k` with `f`, or insert `default` if it is absent or tombstoned.
     ///
     /// The update branch is atomic; the insert branch behaves like [`insert`](Self::insert).
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn upsert<F: FnOnce(&mut V)>(&self, k: K, default: V, f: F) {
         if !self.mutate_live(&k, f) {
             self.insert(k, default);
@@ -1039,6 +1085,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Return the live value for `k`, inserting (and broadcasting) `f()` first if it is
     /// absent/tombstoned. Under last-write-wins, two nodes racing to insert converge by timestamp
     /// order; this node returns the value it observed/created.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// `k` is absent/tombstoned).
     pub fn get_or_insert_with<F: FnOnce() -> V>(&self, k: &K, f: F) -> V {
         if let Some(value) = self.get(k) {
             return value.clone();
