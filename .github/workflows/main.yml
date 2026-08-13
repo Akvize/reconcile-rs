@@ -71,6 +71,46 @@ jobs:
     - name: Check that the whole workspace packages cleanly
       run: cargo package --workspace --allow-dirty
 
+  # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
+  # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
+  # user-selectable crypto backend — was compiled by no CI job at all. This is the one job that
+  # selects it explicitly.
+  mac-hmac:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Lint (mac-hmac)
+      run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
+    - name: Build (mac-hmac)
+      run: cargo build --workspace --no-default-features --features mac-hmac --verbose
+    - name: Run tests (mac-hmac)
+      run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
+
+  # #203: build + unit tests only, on a non-Linux platform — the DNS resolver path, socket-buffer
+  # clamping, and endianness-sensitive code otherwise never run anywhere but ubuntu-latest.
+  macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Build
+      run: cargo build --workspace --verbose
+    - name: Run tests
+      run: cargo test --workspace --features internal-testing --verbose
+
   coverage:
     runs-on: ubuntu-latest
     steps:
