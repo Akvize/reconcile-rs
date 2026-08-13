@@ -146,7 +146,8 @@ PRs, review comments — not only committed files; `.github/ISSUE_TEMPLATE/`/`pu
 carry the shape so it isn't re-derived per post. Two failure modes worth naming, because both recur
 in agent-written threads: paraphrasing what a cited issue/PR/paper/source already says instead of
 linking it, and narrating the process that produced a finding instead of stating the finding and
-what it supersedes.
+what it supersedes. An agent does not post comments at all — it may update an issue/PR **body or
+title**, and only when explicitly asked. The body is the single source of truth; threads stay empty.
 
 ## 10. Commit, PR, and gating conventions
 
