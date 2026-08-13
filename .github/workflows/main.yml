@@ -111,6 +111,15 @@ jobs:
     - name: Run tests
       run: cargo test --workspace --features internal-testing --verbose
 
+  # #312: advisories (RustSec), license compliance, and a dependency-source allowlist. Config in
+  # `deny.toml`. `checks: advisories` alone would silently skip a license/bans/sources regression;
+  # the action's default `all` is deliberate here.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: EmbarkStudios/cargo-deny-action@v2
+
   coverage:
     runs-on: ubuntu-latest
     steps:

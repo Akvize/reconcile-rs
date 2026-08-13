@@ -6,7 +6,7 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-12.
+- **Last updated:** 2026-08-13.
 - **Release 1.0.0:** what the release commits to and what gates it — **§6 below**, mirroring
   [#206](https://github.com/Akvize/reconcile-rs/issues/206) (rewritten 2026-08-11 around an explicit
   definition of 1.0; the 2026-06 phase plan it replaced is dissolved into the issues each
@@ -76,9 +76,9 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F16 | Medium | loopback benches + README inconsistency | ◐ | README updated; benches still loopback-only |
 | F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps landed (#151); the `peers` map is bounded by `Config::max_peers` (default 1024, `src/replicated_map.rs:84`) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) closed by PR #245 |
-| F19 | Low | dependency hygiene | ◐ | bincode `with_limit` landed (#151); `overflow-checks` and `cargo audit`/`cargo deny` in CI still absent — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (previously mis-cited here as #203/#205, neither of which mentions either item) |
+| F19 | Low | dependency hygiene | ✅ | bincode `with_limit` landed (#151); `overflow-checks = true` and a `cargo deny` CI lane landed 2026-08-13 — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 14 resolved · 5 partial (F9, F10, F16, F17, F19) · 0 open. All Critical resolved; all
+**Score:** 15 resolved · 4 partial (F9, F10, F16, F17) · 0 open. All Critical resolved; all
 but one High resolved or mitigated.
 
 ---
@@ -94,10 +94,17 @@ but one High resolved or mitigated.
       see the publish status above; semver cadence is a per-release maintainer call
 - [ ] `CHANGELOG.md` + a `0.2.1` → 1.0 migration guide — [#310](https://github.com/Akvize/reconcile-rs/issues/310)
 - [x] CI code coverage + doc-tests (#97) — Codecov (`cargo llvm-cov`, informational) + `cargo test --doc`
-- [ ] `cargo audit` / `cargo deny` in CI — [#312](https://github.com/Akvize/reconcile-rs/issues/312)
+- [x] `cargo audit` / `cargo deny` in CI — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (`deny.toml` + `main.yml`'s `deny` job, 2026-08-13; RUSTSEC-2025-0141 (bincode 1.x unmaintained) recorded as an accepted `ignore` — no safe upgrade exists short of the wire-format break #309 already tracks)
 - [ ] Declare + CI-pin MSRV (`rust-version`), on all five manifests — [#189](https://github.com/Akvize/reconcile-rs/issues/189)
 - [ ] `[package.metadata.docs.rs] all-features` + `keywords`/`categories` on `reconcile` — [#189](https://github.com/Akvize/reconcile-rs/issues/189)
-- [ ] `overflow-checks = true` in the release profile — [#312](https://github.com/Akvize/reconcile-rs/issues/312)
+- [x] `overflow-checks = true` in the release profile — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (2026-08-13). **Decision, recorded per the issue's own requirement**: a
+  silent-wraparound arithmetic bug reaching a release build is worse than a panic — it would
+  surface as a divergent fingerprint the reconciliation protocol has no way to explain, rather
+  than a bounded, alertable liveness event (the same class of trade-off F2/#107 already resolved
+  in the other direction for remote-*parseable* input, by dropping a malformed datagram instead of
+  panicking on it — arithmetic overflow deep inside a computation is not the wire-parsing
+  boundary). F7/#112's known crafted-input path (`RangeAggregate`) is already defended by an
+  explicit bound check, not by this flag; this closes the residual, unaudited surface
 - [x] Bound the `peers` map in unauthenticated mode — [#150](https://github.com/Akvize/reconcile-rs/issues/150) (PR #245; `Config::max_peers`, default 1024)
 - [ ] `SECURITY.md` + private vulnerability reporting — [#313](https://github.com/Akvize/reconcile-rs/issues/313)
 - [ ] Mechanical semver / public-API gate in CI — [#311](https://github.com/Akvize/reconcile-rs/issues/311)
@@ -424,7 +431,7 @@ flowchart LR
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
 | [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
-| [#312](https://github.com/Akvize/reconcile-rs/issues/312) | `cargo audit`/`cargo deny` and `overflow-checks`, previously mis-cited in this file as tracked by #203/#205 |
+| [#312](https://github.com/Akvize/reconcile-rs/issues/312) | ✅ resolved 2026-08-13 — `deny.toml` + `main.yml`'s `deny` job, `overflow-checks = true` with the trade-off recorded (§3) |
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
 | [#204](https://github.com/Akvize/reconcile-rs/issues/204) | **Mostly resolved in the tree**: `tags.yml` verifies tag against manifest and publishes in dependency order; the docs no longer say `0.0.0-git`. What remains is its Problem 3 — the version decision |
 
