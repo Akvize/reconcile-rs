@@ -101,7 +101,9 @@ where
 
 /// A durable, file-based [`Persistence`] backend holding one bincode-encoded snapshot.
 ///
-/// Saves are **atomic**: written to a sibling `*.tmp`, flushed, then renamed over the target.
+/// Saves are **atomic**: written to a sibling `*.tmp`, flushed, then renamed over the target, then
+/// the containing directory is synced (best-effort — some filesystems do not support syncing a
+/// directory handle) so the rename itself survives a crash, not only the file's bytes.
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,
@@ -150,6 +152,17 @@ where
             file.sync_all()?;
         }
         fs::rename(&tmp, &self.path)?;
+        // The rename itself is not durable until the *directory entry* is synced: on a crash
+        // before this, POSIX makes no guarantee the rename survived, even though `sync_all` above
+        // guaranteed the file's own bytes did — a reader could see the pre-rename directory state
+        // (missing file, or the old target) after an unclean shutdown. Best-effort: some
+        // filesystems (e.g. exFAT) don't support syncing a directory handle, so a failure here is
+        // not fatal to an otherwise-successful save.
+        if let Some(parent) = self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
         Ok(())
     }
 }

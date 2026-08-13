@@ -53,11 +53,14 @@ pub trait Discovery: Send + Sync + 'static {
     /// Resolve the current candidate peer set.
     fn discover(&self) -> DiscoverFuture<'_>;
 
-    /// How [`discover`](Self::discover)'s result is read. Defaults to
-    /// [`Authoritative`](DiscoveryKind::Authoritative).
-    fn kind(&self) -> DiscoveryKind {
-        DiscoveryKind::Authoritative
-    }
+    /// How [`discover`](Self::discover)'s result is read.
+    ///
+    /// No default: an implementor who does not think about this returns the dangerous choice by
+    /// accident rather than the safe one. [`Authoritative`](DiscoveryKind::Authoritative) seeds
+    /// every result as a permanent known peer and decommissions members on its absences —
+    /// [`Speculative`](DiscoveryKind::Speculative) is the fail-safe default to reach for when in
+    /// doubt.
+    fn kind(&self) -> DiscoveryKind;
 }
 
 /// The default, **speculative** discovery: one random address per declared network each round,
@@ -112,6 +115,10 @@ impl Discovery for DnsDiscovery {
             let addrs = tokio::net::lookup_host(host).await?;
             Ok(addrs.map(|sock_addr| sock_addr.ip()).collect())
         })
+    }
+
+    fn kind(&self) -> DiscoveryKind {
+        DiscoveryKind::Authoritative
     }
 }
 

@@ -1,0 +1,44 @@
+# cargo-deny configuration: dependency advisories, license compliance, and a source allowlist
+# (#312). Run locally with `cargo deny check`; CI gates it in `.github/workflows/main.yml`.
+
+[graph]
+targets = []
+# EmbarkStudios/cargo-deny-action (CI) resolves the graph with every feature enabled by default;
+# match that locally, or `cargo deny check` passes on a default-features graph that omits the
+# `encryption` feature's dependency chain (chacha20poly1305 -> ... -> subtle) entirely, then fails
+# in CI on a license this file never saw.
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # bincode 1.3.3 is the wire codec (ARCHITECTURE.md §6); the maintainers have declared 1.x
+    # "complete" and ceased development (no safe upgrade — 2.x is a different, incompatible API).
+    # Migrating off it is a wire-format-breaking change of the scale #309 already tracks, not a
+    # dependency bump. Not a vulnerability: RUSTSEC-2025-0141 is an unmaintained notice.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x frozen by its maintainers; migrating is a wire-format break tracked by #309, not a dependency bump" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

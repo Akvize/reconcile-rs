@@ -1,0 +1,28 @@
+name: issue-integrity
+
+# Runs on a schedule, not per-push: this audits the *existing* state of the issue tracker (every
+# closed issue's cited SHAs), not the diff of any one commit, so there is no single push it
+# belongs to. `workflow_dispatch` lets it be re-run on demand -- e.g. right after closing a batch
+# of issues, instead of waiting for the next scheduled tick.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  issues: read
+  contents: read
+
+jobs:
+  closed-issue-shas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone: `check-closed-issue-shas.sh` needs every
+          # commit reachable, to tell "cited SHA never merged" apart from "cited SHA is just old".
+          fetch-depth: 0
+      - name: Closed issues must not cite commits that never reached main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/check-closed-issue-shas.sh

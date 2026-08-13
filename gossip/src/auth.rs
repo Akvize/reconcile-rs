@@ -8,18 +8,33 @@
 
 //! Per-datagram message authentication. Unauthenticated by default: README "Security model".
 //!
-//! # Wire layout (authenticated modes)
+//! # Wire layout
 //!
-//! MAC mode: `tag (32 B) || seq (8 B LE) || stamp (8 B LE) || protocol_messages`
+//! Disabled: `version (1 B) || protocol_messages`
 //!
-//! Encryption mode: `nonce (24 B) || encrypt(seq (8 B LE) || stamp (8 B LE) || protocol_messages) || tag (16 B)`
+//! MAC mode: `tag (32 B) || seq (8 B LE) || stamp (8 B LE) || version (1 B) || protocol_messages`
 //!
-//! The replay header sits inside the authenticated/encrypted region in both cases.
+//! Encryption mode: `nonce (24 B) || encrypt(seq (8 B LE) || stamp (8 B LE) || version (1 B) || protocol_messages) || tag (16 B)`
+//!
+//! The version byte sits **after** the replay header, not before it: `decode_replay_header`
+//! parses a fixed 16-byte prefix, so putting anything ahead of it would need every existing
+//! authenticated-mode offset recomputed. It always ends up as the first byte `Payload::bytes`
+//! exposes, which is what lets [`Payload::check_version`] treat all three modes uniformly.
+//!
+//! The replay header sits inside the authenticated/encrypted region in both cases; the wire
+//! version byte sits inside it too, and — unlike the replay header, which is absent when
+//! disabled — is present on **every** datagram regardless of authentication mode: a
+//! mixed-version cluster must be diagnosable whether or not a cluster key is configured, and
+//! unauthenticated is the default (`ARCHITECTURE.md` §8).
 //!
 //! The layering carries the security invariants in the types: [`Authenticator`] is the sole
 //! producer of a [`Payload`], and message handling consumes `Payload<`[`Verified`]`>`, obtainable
 //! only from [`Payload::verify_replay`] — so authenticate-before-decode
 //! (`ARCHITECTURE.md` §5 invariant 5) and check-replay-before-handle are both compile-time.
+//! [`Payload::check_version`] is the mandatory step between the two: version-checking runs on
+//! authenticated bytes (so a forged version claim is rejected the same way a forged payload is),
+//! but ahead of replay bookkeeping (so a differently-versioned peer never consumes a replay-filter
+//! slot over a datagram this build cannot even interpret).
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -32,6 +47,20 @@ pub const TAG_LEN: usize = 32;
 
 /// Length in bytes of a cluster key.
 pub const KEY_LEN: usize = 32;
+
+/// Length in bytes of the wire-version byte prepended to every datagram's protected region,
+/// regardless of authentication mode.
+pub const VERSION_LEN: usize = 1;
+
+/// The wire protocol version this build produces and accepts.
+///
+/// Bumping it is the sanctioned way to make a non-additive change to the `Message` wire format:
+/// a peer running a different version is rejected with a distinguishable, counted reason
+/// (`reconcile_datagrams_dropped_total{reason="version"}`) rather than silently misread or
+/// indistinguishably dropped as malformed. There is currently no accepted-version *window* — a
+/// mismatch of any kind is rejected; widening that is a policy change to make deliberately, not a
+/// side effect of the next bump.
+pub const WIRE_VERSION: u8 = 1;
 
 /// Length in bytes of the XChaCha20-Poly1305 nonce prepended to each encrypted datagram.
 ///
@@ -104,6 +133,33 @@ pub struct Payload<'a, State = Authenticated> {
 }
 
 impl<'a> Payload<'a, Authenticated> {
+    /// Strip and check the leading wire-version byte. Call this before
+    /// [`verify_replay`](Self::verify_replay) — see the module doc for why the ordering matters.
+    ///
+    /// `Err(actual)` on a mismatch (or an empty payload, reported as version `0`), carrying the
+    /// version the peer actually sent so the caller can log it. The caller should count this
+    /// distinctly from an authentication failure: [`WIRE_VERSION`] mismatches are a mixed-version
+    /// cluster, not an attack or a malformed datagram.
+    pub fn check_version(self) -> Result<Self, u8> {
+        let version = *self.bytes.first().unwrap_or(&0);
+        if version != WIRE_VERSION {
+            return Err(version);
+        }
+        let bytes = match self.bytes {
+            Cow::Borrowed(b) => Cow::Borrowed(&b[VERSION_LEN..]),
+            Cow::Owned(mut b) => {
+                b.drain(..VERSION_LEN);
+                Cow::Owned(b)
+            }
+        };
+        Ok(Payload {
+            bytes,
+            seq: self.seq,
+            stamp: self.stamp,
+            _state: PhantomData,
+        })
+    }
+
     /// The sole path from [`Authenticated`] to [`Verified`].
     ///
     /// `None` when the datagram is a replay, a duplicate, or outside the freshness window — the
@@ -250,40 +306,50 @@ impl Authenticator {
     }
 
     /// Extra bytes a sealed datagram adds over the raw messages, for MTU accounting: crypto
-    /// overhead plus the replay header.
+    /// overhead plus the replay header, plus the wire-version byte present in every mode.
     pub fn overhead(&self) -> usize {
         match self {
-            Authenticator::Disabled => 0,
-            Authenticator::Enabled(_) => TAG_LEN + REPLAY_HEADER_LEN,
+            Authenticator::Disabled => VERSION_LEN,
+            Authenticator::Enabled(_) => TAG_LEN + VERSION_LEN + REPLAY_HEADER_LEN,
             #[cfg(feature = "encryption")]
-            Authenticator::Encrypted(_) => AEAD_NONCE_LEN + REPLAY_HEADER_LEN + AEAD_TAG_LEN,
+            Authenticator::Encrypted(_) => {
+                AEAD_NONCE_LEN + VERSION_LEN + REPLAY_HEADER_LEN + AEAD_TAG_LEN
+            }
         }
     }
 
-    /// Frame an outgoing datagram, injecting the replay header.
-    ///
-    /// `None` when disabled: the caller sends `payload` unchanged.
-    pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Option<Vec<u8>> {
+    /// Frame an outgoing datagram: inject the wire-version byte (every mode) and, when
+    /// enabled, the replay header.
+    pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Vec<u8> {
         match self {
-            Authenticator::Disabled => None,
+            Authenticator::Disabled => {
+                let mut framed = Vec::with_capacity(VERSION_LEN + payload.len());
+                framed.push(WIRE_VERSION);
+                framed.extend_from_slice(payload);
+                framed
+            }
             Authenticator::Enabled(key) => {
                 let header = encode_replay_header(seq, stamp);
-                let mut protected = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
+                let mut protected =
+                    Vec::with_capacity(REPLAY_HEADER_LEN + VERSION_LEN + payload.len());
                 protected.extend_from_slice(&header);
+                protected.push(WIRE_VERSION);
                 protected.extend_from_slice(payload);
                 let tag = ClusterMac::tag(key, &protected);
                 let mut framed = Vec::with_capacity(TAG_LEN + protected.len());
                 framed.extend_from_slice(tag.as_bytes());
                 framed.extend_from_slice(&protected);
-                Some(framed)
+                framed
             }
             #[cfg(feature = "encryption")]
             Authenticator::Encrypted(key) => {
                 let header = encode_replay_header(seq, stamp);
-                let mut plaintext = Vec::with_capacity(REPLAY_HEADER_LEN + payload.len());
+                let mut plaintext =
+                    Vec::with_capacity(REPLAY_HEADER_LEN + VERSION_LEN + payload.len());
                 plaintext.extend_from_slice(&header);
+                plaintext.push(WIRE_VERSION);
                 plaintext.extend_from_slice(payload);
-                Some(encryption::seal(key, &plaintext))
+                encryption::seal(key, &plaintext)
             }
         }
     }
@@ -291,7 +357,9 @@ impl Authenticator {
     /// Authenticate (and in encrypted mode decrypt) an incoming datagram.
     ///
     /// Produces [`Authenticated`], never [`Verified`]: the caller must still
-    /// [`Payload::verify_replay`]. `None` on any failure, and the caller drops it silently.
+    /// [`Payload::check_version`] then [`Payload::verify_replay`]. `None` on any authentication
+    /// failure, and the caller drops it silently — a wire-version mismatch is reported
+    /// separately, by `check_version`, once authentication has already cleared it.
     pub fn open<'a>(&self, datagram: &'a [u8]) -> Option<Payload<'a, Authenticated>> {
         match self {
             Authenticator::Disabled => Some(Payload {
@@ -381,12 +449,15 @@ mod tests {
         ClusterKey::new([byte; KEY_LEN])
     }
 
-    /// Replay-check with a throwaway wide-open filter: these tests seal fixed near-epoch stamps,
-    /// so the window must span the gap to real wall-clock time.
+    /// The full receive-side pipeline (`ARCHITECTURE.md` §5 invariant 5, module doc): check the
+    /// wire version, then replay-check with a throwaway wide-open filter — these tests seal fixed
+    /// near-epoch stamps, so the window must span the gap to real wall-clock time.
     fn verify(payload: Payload<'_, Authenticated>) -> Payload<'_, Verified> {
         let filter = ReplayFilter::new(Duration::from_secs(200 * 365 * 24 * 3600), true);
         let sender: IpAddr = "127.0.0.1".parse().unwrap();
         payload
+            .check_version()
+            .expect("this module's own seal() always stamps the current wire version")
             .verify_replay(&filter, sender)
             .expect("a freshly-sealed datagram must clear the replay check")
     }
@@ -423,10 +494,11 @@ mod tests {
     fn seal_open_roundtrip() {
         let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
         let payload = b"some serialized message";
-        let sealed = auth
-            .seal(Seq::new(1), Stamp::new(12345), payload)
-            .expect("enabled");
-        assert_eq!(sealed.len(), TAG_LEN + REPLAY_HEADER_LEN + payload.len());
+        let sealed = auth.seal(Seq::new(1), Stamp::new(12345), payload);
+        assert_eq!(
+            sealed.len(),
+            TAG_LEN + REPLAY_HEADER_LEN + VERSION_LEN + payload.len()
+        );
         let p = verify(auth.open(&sealed).expect("should open"));
         assert_eq!(p.as_bytes(), payload);
         assert_eq!(p.seq, Seq::new(1));
@@ -443,25 +515,27 @@ mod tests {
 
     #[test]
     fn open_wrong_key() {
-        let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false)
-            .seal(Seq::new(1), Stamp::new(99), b"payload")
-            .expect("enabled");
+        let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false).seal(
+            Seq::new(1),
+            Stamp::new(99),
+            b"payload",
+        );
         assert!(Authenticator::new(Some([0x22; KEY_LEN]), false)
             .open(&sealed)
             .is_none());
     }
 
+    /// Disabled still frames — the wire-version byte is present regardless of
+    /// authentication mode, since unauthenticated is the default.
     #[test]
-    fn disabled_passes_through_and_does_not_seal() {
+    fn disabled_still_stamps_the_wire_version() {
         let auth = Authenticator::new(None, false);
         assert!(matches!(auth, Authenticator::Disabled));
-        assert_eq!(auth.overhead(), 0);
-        assert!(auth.seal(Seq::new(0), Stamp::new(0), b"payload").is_none());
-        let p = verify(
-            auth.open(b"raw bytes")
-                .expect("unauthenticated always clears"),
-        );
-        assert_eq!(p.as_bytes(), b"raw bytes");
+        assert_eq!(auth.overhead(), VERSION_LEN);
+        let sealed = auth.seal(Seq::new(0), Stamp::new(0), b"payload");
+        assert_eq!(sealed, [&[WIRE_VERSION], &b"payload"[..]].concat());
+        let p = verify(auth.open(&sealed).expect("unauthenticated always clears"));
+        assert_eq!(p.as_bytes(), b"payload");
         assert_eq!(p.seq, Seq::new(0));
         assert_eq!(p.stamp, Stamp::new(0));
     }
@@ -471,13 +545,58 @@ mod tests {
     fn replay_header_round_trips_seq_and_stamp() {
         let auth = Authenticator::new(Some([0xAB; KEY_LEN]), false);
         let payload = b"hello";
-        let sealed = auth
-            .seal(Seq::new(42), Stamp::new(9999), payload)
-            .expect("enabled");
+        let sealed = auth.seal(Seq::new(42), Stamp::new(9999), payload);
         let p = verify(auth.open(&sealed).expect("valid tag"));
         assert_eq!(p.seq, Seq::new(42));
         assert_eq!(p.stamp, Stamp::new(9999));
         assert_eq!(p.as_bytes(), payload);
+    }
+
+    /// A peer on a different wire version is rejected distinguishably from an
+    /// authentication failure — `open` still succeeds (the MAC/decrypt is valid), only
+    /// `check_version` fails, and it reports the version actually received.
+    #[test]
+    fn version_mismatch_is_distinguishable_from_auth_failure() {
+        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
+        let sealed = auth.seal(Seq::new(1), Stamp::new(0), b"payload");
+        // Flip the version byte in place: it sits right after the replay header, ahead of the
+        // payload (module doc's wire-layout table).
+        let mut tampered = sealed.clone();
+        let version_offset = TAG_LEN + REPLAY_HEADER_LEN;
+        assert_eq!(tampered[version_offset], WIRE_VERSION);
+        tampered[version_offset] = WIRE_VERSION + 1;
+        // The MAC no longer verifies over the tampered bytes either, so re-tag it — this test is
+        // about `check_version`, not about tamper detection (already covered above).
+        let key = ClusterKey::new([0x11; KEY_LEN]);
+        let protected = &tampered[TAG_LEN..];
+        let tag = ClusterMac::tag(&key, protected);
+        tampered[..TAG_LEN].copy_from_slice(tag.as_bytes());
+
+        let opened = auth.open(&tampered).expect("MAC now verifies");
+        match opened.check_version() {
+            Err(version) => assert_eq!(version, WIRE_VERSION + 1),
+            Ok(_) => panic!("expected a version mismatch"),
+        }
+
+        // The untampered datagram still opens and checks clean, proving the mismatch above is
+        // about the version byte specifically, not some other corruption.
+        assert!(auth
+            .open(&sealed)
+            .expect("should open")
+            .check_version()
+            .is_ok());
+    }
+
+    /// An empty authenticated payload reports version `0` rather than panicking on the missing
+    /// byte — still a clean, distinguishable rejection, not a crash.
+    #[test]
+    fn empty_payload_reports_version_zero() {
+        let auth = Authenticator::new(None, false);
+        let opened = auth.open(b"").expect("unauthenticated always clears");
+        match opened.check_version() {
+            Err(version) => assert_eq!(version, 0),
+            Ok(_) => panic!("expected a version mismatch"),
+        }
     }
 
     #[cfg(feature = "encryption")]
@@ -494,16 +613,21 @@ mod tests {
             assert!(matches!(auth, Authenticator::Encrypted(_)));
             assert_eq!(
                 auth.overhead(),
-                super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + super::AEAD_TAG_LEN
+                super::AEAD_NONCE_LEN
+                    + super::VERSION_LEN
+                    + REPLAY_HEADER_LEN
+                    + super::AEAD_TAG_LEN
             );
 
             let payload = b"some serialized message";
-            let sealed = auth
-                .seal(Seq::new(1), Stamp::new(555), payload)
-                .expect("encrypted");
+            let sealed = auth.seal(Seq::new(1), Stamp::new(555), payload);
             assert_eq!(
                 sealed.len(),
-                super::AEAD_NONCE_LEN + REPLAY_HEADER_LEN + payload.len() + super::AEAD_TAG_LEN
+                super::AEAD_NONCE_LEN
+                    + REPLAY_HEADER_LEN
+                    + super::VERSION_LEN
+                    + payload.len()
+                    + super::AEAD_TAG_LEN
             );
             let p = verify(auth.open(&sealed).expect("should decrypt"));
             assert_eq!(p.as_bytes(), payload);
@@ -514,9 +638,7 @@ mod tests {
         #[test]
         fn ciphertext_hides_plaintext() {
             let payload = b"the quick brown fox jumps over the lazy dog";
-            let sealed = encryptor(0x11)
-                .seal(Seq::new(1), Stamp::new(0), payload)
-                .expect("encrypted");
+            let sealed = encryptor(0x11).seal(Seq::new(1), Stamp::new(0), payload);
             assert!(!sealed
                 .windows(payload.len())
                 .any(|window| window == payload));
@@ -528,19 +650,15 @@ mod tests {
             let auth = encryptor(0x11);
             let payload = b"identical payload";
             assert_ne!(
-                auth.seal(Seq::new(1), Stamp::new(0), payload)
-                    .expect("encrypted"),
+                auth.seal(Seq::new(1), Stamp::new(0), payload),
                 auth.seal(Seq::new(2), Stamp::new(0), payload)
-                    .expect("encrypted")
             );
         }
 
         #[test]
         fn tamper_is_rejected() {
             let auth = encryptor(0x11);
-            let mut sealed = auth
-                .seal(Seq::new(1), Stamp::new(0), b"payload")
-                .expect("encrypted");
+            let mut sealed = auth.seal(Seq::new(1), Stamp::new(0), b"payload");
             let last = sealed.len() - 1;
             sealed[last] ^= 0x01;
             assert!(auth.open(&sealed).is_none());
@@ -548,9 +666,7 @@ mod tests {
 
         #[test]
         fn wrong_key_is_rejected() {
-            let sealed = encryptor(0x11)
-                .seal(Seq::new(1), Stamp::new(0), b"payload")
-                .expect("encrypted");
+            let sealed = encryptor(0x11).seal(Seq::new(1), Stamp::new(0), b"payload");
             assert!(encryptor(0x22).open(&sealed).is_none());
         }
 
@@ -566,9 +682,7 @@ mod tests {
         #[test]
         fn replay_header_survives_encryption() {
             let auth = encryptor(0x33);
-            let sealed = auth
-                .seal(Seq::new(77), Stamp::new(888888), b"data")
-                .expect("encrypted");
+            let sealed = auth.seal(Seq::new(77), Stamp::new(888888), b"data");
             let p = verify(auth.open(&sealed).expect("should decrypt"));
             assert_eq!(p.seq, Seq::new(77));
             assert_eq!(p.stamp, Stamp::new(888888));

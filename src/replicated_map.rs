@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,6 +42,31 @@ const TOMBSTONE_STAMP_DRIFT_BUDGET: ClockDrift = MAX_CLOCK_DRIFT;
 
 /// How often the background task writes a full snapshot to the persistence backend.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Attempts [`with_persistence`](ReplicatedMap::with_persistence) makes to load persisted state
+/// before giving up.
+const LOAD_RETRY_ATTEMPTS: u32 = 5;
+
+/// Base delay before the first load retry; each subsequent attempt doubles it (see
+/// [`backoff_delay`]) — 100 ms, 200 ms, 400 ms, 800 ms, under 2 s of total backoff across
+/// [`LOAD_RETRY_ATTEMPTS`].
+const LOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
+
+/// Delay before retry `attempt` (1-indexed): `LOAD_RETRY_BASE_DELAY` doubled `attempt - 1` times.
+fn backoff_delay(attempt: u32) -> Duration {
+    LOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1)
+}
+
+/// Entries cloned per map read-lock acquisition while building a snapshot (`Self::snapshot`).
+///
+/// Cloning the whole map under one continuous read lock stalls every writer for as long as the
+/// clone takes — proportional to map size, unbounded. Chunking bounds a single stall to
+/// the time to clone this many entries, releasing the lock between chunks so a waiting writer can
+/// interleave. The resulting snapshot is not a single linearizable instant — later chunks can
+/// reflect writes concurrent with earlier ones — but that is no different from what the gossip
+/// protocol itself already reconciles range-by-range, and each individual entry is still read
+/// atomically (`ARCHITECTURE.md` §5 invariant 8's per-key LWW model needs no more).
+const SNAPSHOT_CHUNK_SIZE: usize = 4096;
 
 /// Default cadence of the dynamic-discovery task (see [`ReplicatedMap::with_discovery_interval`]).
 const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
@@ -256,7 +281,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Panics
     ///
     /// If the backend fails to load: a damaged durable state must be an explicit decision, never a
-    /// silent fresh start.
+    /// silent fresh start. A *transient* failure (anything other than
+    /// [`InvalidData`](io::ErrorKind::InvalidData) — a not-yet-mounted volume, a momentary
+    /// permission or I/O hiccup) is retried up to `LOAD_RETRY_ATTEMPTS` (5) times with exponential
+    /// backoff before this panics, so a slow-starting environment does not crash-loop on every
+    /// restart attempt; a decode/format error ([`InvalidData`](io::ErrorKind::InvalidData)) is
+    /// never transient and panics immediately, unretried.
     pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
         // A random node id changes every restart, so the LWW tie-break is stable only within one
         // process lifetime — durable state wants an explicit `Config::with_node_id`.
@@ -270,7 +300,32 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
                  Config::with_node_id to preserve consistent LWW ordering across restarts."
             );
         }
-        if let Some(state) = backend.load().expect("failed to load persisted state") {
+        let loaded = {
+            let mut attempt = 0u32;
+            loop {
+                match backend.load() {
+                    Ok(state) => break state,
+                    Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+                        panic!("persisted state is corrupt or from an incompatible format, refusing to silently start fresh: {err}");
+                    }
+                    Err(err) if attempt + 1 < LOAD_RETRY_ATTEMPTS => {
+                        attempt += 1;
+                        let delay = backoff_delay(attempt);
+                        warn!(
+                            "transient failure loading persisted state (attempt {attempt}/{LOAD_RETRY_ATTEMPTS}): \
+                             {err}; retrying in {delay:?}"
+                        );
+                        std::thread::sleep(delay);
+                    }
+                    Err(err) => {
+                        panic!(
+                            "failed to load persisted state after {LOAD_RETRY_ATTEMPTS} attempts: {err}"
+                        );
+                    }
+                }
+            }
+        };
+        if let Some(state) = loaded {
             *self.engine.members.write() = state.members;
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
             // Advance past every persisted stamp, or a fresh write can lose LWW to this node's
@@ -287,14 +342,35 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Capture the full store state and hand it to the persistence backend.
+    ///
+    /// Clones the map in [`SNAPSHOT_CHUNK_SIZE`]-entry chunks, releasing the read lock between
+    /// chunks, rather than holding it for one continuous `O(map size)` clone — see
+    /// [`SNAPSHOT_CHUNK_SIZE`]'s doc for why a non-instantaneous snapshot is an acceptable
+    /// trade-off here.
     fn snapshot(&self) {
-        let entries: DatedEntries<K, V> = self
-            .engine
-            .map
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut entries: DatedEntries<K, V> = Vec::new();
+        let mut cursor: Option<K> = None;
+        loop {
+            let guard = self.engine.map.read();
+            let chunk: Vec<(K, Entry<Timestamp, V>)> = match &cursor {
+                None => guard
+                    .range(..)
+                    .take(SNAPSHOT_CHUNK_SIZE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                Some(last) => guard
+                    .range((Bound::Excluded(last.clone()), Bound::Unbounded))
+                    .take(SNAPSHOT_CHUNK_SIZE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            };
+            drop(guard);
+            let Some((last_key, _)) = chunk.last() else {
+                break;
+            };
+            cursor = Some(last_key.clone());
+            entries.extend(chunk);
+        }
         let state = PersistedState {
             entries,
             members: self.engine.members.read().clone(),
@@ -342,8 +418,15 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// The source must be [`Authoritative`](crate::DiscoveryKind::Authoritative): absence here
     /// drives decommissioning.
+    ///
+    /// # Panics
+    ///
+    /// Panics — in release builds too, not only under `debug_assertions` — if `discovery.kind()`
+    /// is [`Speculative`](crate::DiscoveryKind::Speculative). A speculative source's absences must
+    /// never decommission a live member: that would release the causal-stability GC gate
+    /// (`ARCHITECTURE.md` §5 invariant 6) on a member that never actually left.
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
-        debug_assert!(
+        assert!(
             matches!(discovery.kind(), DiscoveryKind::Authoritative),
             "with_discovery expects an authoritative source; a speculative prober would be seeded \
              as permanent known peers and its absences would wrongly decommission members"
@@ -462,9 +545,34 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.value_fingerprint(range)
     }
 
+    /// # Deadlock
+    ///
+    /// The returned guard holds the map **read** lock for as long as it is alive. Calling any
+    /// write method (`insert`, `remove`, `get_mut`, `update`, …) — which takes the **write** lock
+    /// — while the guard from an earlier `get` on the same thread is still in scope self-deadlocks
+    /// (`parking_lot`'s `RwLock` is not reentrant, and blocks with no timeout rather than
+    /// panicking):
+    ///
+    /// ```ignore
+    /// if let Some(v) = map.get(&k) {
+    ///     map.insert(k, new_value); // deadlocks: `v` is still borrowing the read lock
+    /// }
+    /// ```
+    ///
+    /// Prefer [`get_cloned`](Self::get_cloned), which drops the lock before returning, as the
+    /// default read when the value will be compared against or fed into a subsequent write.
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.engine.map.read();
         RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
+    }
+
+    /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
+    /// released before this returns, so the result can be safely followed by a write on the same
+    /// thread — this is the documented default read for that pattern. Still racy against a
+    /// concurrent write between the read and the write; use [`update`](Self::update) instead when
+    /// the write must be atomic with the read.
+    pub fn get_cloned(&self, k: &K) -> Option<V> {
+        self.get(k).map(|v| v.clone())
     }
 
     /// The number of **live** entries. `O(n)`, and smaller than the raw map size: tombstones
@@ -521,6 +629,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Call `f` for every live entry, in key order, under the map read lock. Do not block or call
     /// back into the store from `f`.
+    ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map read lock is held. Calling a write method (`insert`, `get_mut`,
+    /// …) from `f` self-deadlocks — see [`get`](Self::get)'s `# Deadlock` section.
     pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
         let guard = self.engine.map.read();
         for (k, entry) in guard.iter() {
@@ -533,6 +646,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Call `f` for every live entry whose key falls in `range`, in key order. Mirrors the
     /// [`fingerprint`](Self::fingerprint) range signature; same locking discipline as
     /// [`for_each`](Self::for_each).
+    ///
+    /// # Deadlock
+    ///
+    /// Same hazard as [`for_each`](Self::for_each) — see [`get`](Self::get)'s `# Deadlock`
+    /// section.
     pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
         let guard = self.engine.map.read();
         for (k, entry) in guard.range(range) {
@@ -600,6 +718,13 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// path packs messages into datagrams but never fragments one. Above that the key **never
     /// converges on any peer**, visible only as a `warn!` on the send path. Stay well clear of the
     /// ceiling, and of the MTU.
+    ///
+    /// # Panics
+    ///
+    /// The broadcast is dispatched on a detached `tokio::spawn`ed task, which panics with "there
+    /// is no reactor running" unless called from inside a Tokio runtime (`#[tokio::main]`,
+    /// `#[tokio::test]`, or an explicit `Runtime::block_on`/`Handle::enter`). This holds for every
+    /// write method on this type.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -617,6 +742,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Bulk-insert + async broadcast.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn insert_bulk(&self, key_values: &[(K, V)]) {
         self.engine.insert_bulk(
             &key_values
@@ -635,6 +764,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// the public API, for seeding a large dataset without a broadcast storm.
     ///
     /// Entries are stamped and hooked as usual, and propagate on the next anti-entropy round.
+    ///
+    /// Deliberately **not** subject to [`insert`](Self::insert)'s Tokio-runtime panic: this is the
+    /// one write path that never broadcasts.
     pub fn load_bulk(&self, key_values: &[(K, V)]) {
         self.engine.just_insert_bulk(
             &key_values
@@ -659,6 +791,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn remove(&self, key: &K) -> Option<V> {
         let ret = self
             .engine
@@ -682,6 +817,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Callers cannot supply the timestamp: a chosen `DateTime` can collide with another
     /// replica's and make the tie-break non-commutative.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn remove_bulk(&self, keys: &[K]) {
         self.engine.insert_bulk(
             &keys
@@ -709,6 +847,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Delete every live entry, as broadcast tombstones (so the deletion reconciles to peers
     /// rather than mutating the map only locally). Tombstoned keys are reclaimed later by
     /// causal-stability GC. A no-op if the store holds no live entry.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the store is non-empty; a no-op call never spawns).
     pub fn clear(&self) {
         let keys = self.live_keys_where(|_, _| true);
         if !keys.is_empty() {
@@ -719,6 +861,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Delete every live entry for which `keep` returns `false`, as broadcast tombstones. Keys
     /// where `keep` returns `true` are retained. The predicate runs under the read lock; keep it
     /// cheap and side-effect free.
+    ///
+    /// # Deadlock
+    ///
+    /// `keep` runs while the map read lock is held. Calling a write method from `keep`
+    /// self-deadlocks — see [`get`](Self::get)'s `# Deadlock` section.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// at least one entry is removed; a no-op call never spawns).
     pub fn retain<P: FnMut(&K, &V) -> bool>(&self, mut keep: P) {
         let keys = self.live_keys_where(|k, v| !keep(k, v));
         if !keys.is_empty() {
@@ -728,6 +880,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Delete every live entry whose key falls in `range`, as broadcast tombstones. Mirrors the
     /// [`fingerprint`](Self::fingerprint) range signature.
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the range is non-empty; a no-op call never spawns).
     pub fn delete_range<R: RangeBounds<K>>(&self, range: R) {
         let keys: Vec<K> = {
             let guard = self.engine.map.read();
@@ -962,6 +1118,17 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// The callback sees `Some(&mut V)` for a live key, `None` for an absent or tombstoned one; a
     /// mutated entry is re-stamped and broadcast. Holds the write lock for the whole
     /// read-modify-write, so it is atomic against the reconciliation loop.
+    ///
+    /// # Deadlock
+    ///
+    /// `callback` runs while the map **write** lock is held. Calling any read or write method
+    /// (`get`, `insert`, `for_each`, another `get_mut`, …) from `callback` self-deadlocks — see
+    /// [`get`](Self::get)'s `# Deadlock` section.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// the callback mutates a live entry).
     pub fn get_mut<F: FnOnce(Option<&mut V>)>(&self, k: &K, callback: F) {
         // Mint the timestamp before taking the map lock, matching the lock order of `insert`
         // (clock, then map → projection).
@@ -1023,6 +1190,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Atomically mutate the live value for `k`, then re-stamp and broadcast; returns whether the
     /// key was live. The race-free replacement for a `get`-then-`insert`.
+    ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map write lock is held — same hazard as
+    /// [`get_mut`](Self::get_mut)'s `# Deadlock` section.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// `k` is live).
     pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
         self.mutate_live(k, f)
     }
@@ -1030,6 +1207,15 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Update the live value for `k` with `f`, or insert `default` if it is absent or tombstoned.
     ///
     /// The update branch is atomic; the insert branch behaves like [`insert`](Self::insert).
+    ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map write lock is held on the update branch — same hazard as
+    /// [`get_mut`](Self::get_mut)'s `# Deadlock` section.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
     pub fn upsert<F: FnOnce(&mut V)>(&self, k: K, default: V, f: F) {
         if !self.mutate_live(&k, f) {
             self.insert(k, default);
@@ -1039,6 +1225,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Return the live value for `k`, inserting (and broadcasting) `f()` first if it is
     /// absent/tombstoned. Under last-write-wins, two nodes racing to insert converge by timestamp
     /// order; this node returns the value it observed/created.
+    ///
+    /// # Panics
+    ///
+    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
+    /// `k` is absent/tombstoned).
     pub fn get_or_insert_with<F: FnOnce() -> V>(&self, k: &K, f: F) -> V {
         if let Some(value) = self.get(k) {
             return value.clone();
@@ -1300,7 +1491,7 @@ mod replicated_map_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::persistence::Persistence;
+    use crate::persistence::{PersistedState, Persistence};
     use crate::replica::version_hash;
     use crate::{
         replicated_map::{Config, MemberPresence, MAX_NETS},
@@ -1561,6 +1752,131 @@ mod replicated_map_tests {
         assert!(restarted.tombstones.remove(&2).is_some());
     }
 
+    /// A [`Persistence`] backend that fails `load` with a given `io::ErrorKind` a fixed number of
+    /// times before succeeding with `Ok(None)` — simulates a transient environmental failure (a
+    /// not-yet-mounted volume, a momentary permission error) that clears up on its own.
+    struct FlakyLoad {
+        kind: std::io::ErrorKind,
+        failures_remaining: std::sync::atomic::AtomicU32,
+    }
+
+    impl<K: Send + Sync + 'static, V: Send + Sync + 'static> Persistence<K, V> for FlakyLoad {
+        fn load(&self) -> std::io::Result<Option<PersistedState<K, V>>> {
+            use std::sync::atomic::Ordering;
+            if self
+                .failures_remaining
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                    (n > 0).then(|| n - 1)
+                })
+                .is_ok()
+            {
+                return Err(std::io::Error::new(
+                    self.kind,
+                    "simulated transient failure",
+                ));
+            }
+            Ok(None)
+        }
+        fn save(&self, _state: &PersistedState<K, V>) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Doubles from `LOAD_RETRY_BASE_DELAY` each attempt, 1-indexed: attempt 1 is the base delay
+    /// itself, not one doubling of it.
+    #[test]
+    fn backoff_delay_doubles_from_the_base() {
+        assert_eq!(super::backoff_delay(1), super::LOAD_RETRY_BASE_DELAY);
+        assert_eq!(super::backoff_delay(2), super::LOAD_RETRY_BASE_DELAY * 2);
+        assert_eq!(super::backoff_delay(3), super::LOAD_RETRY_BASE_DELAY * 4);
+        assert_eq!(super::backoff_delay(4), super::LOAD_RETRY_BASE_DELAY * 8);
+    }
+
+    /// A transient load failure (anything but `InvalidData`) must be retried, not turned
+    /// into an immediate crash — a slow-mounting volume at boot must not crash-loop the process.
+    #[tokio::test]
+    async fn transient_load_failure_is_retried_not_fatal() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::PermissionDenied,
+            failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS - 1),
+        });
+        // Must not panic: the store construction below succeeds once the backend stops failing,
+        // within the retry budget.
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+    }
+
+    /// A load failure that exhausts the retry budget still panics — retrying is a bounded
+    /// mitigation for a transient hiccup, not a way to silently start fresh forever.
+    #[tokio::test]
+    #[should_panic(expected = "failed to load persisted state after")]
+    async fn load_failure_beyond_retry_budget_still_panics() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::PermissionDenied,
+            failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS),
+        });
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+    }
+
+    /// `InvalidData` (corrupt or incompatible format) must panic **immediately**, with no
+    /// retry — corruption does not clear up on its own, and retrying would only delay the loud
+    /// failure the doc comment promises.
+    #[tokio::test]
+    #[should_panic(expected = "persisted state is corrupt or from an incompatible format")]
+    async fn invalid_data_panics_without_retrying() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::InvalidData,
+            failures_remaining: std::sync::atomic::AtomicU32::new(1),
+        });
+        let start = std::time::Instant::now();
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+        // Unreachable on panic, but documents intent: this must not have gone through even one
+        // retry backoff.
+        assert!(start.elapsed() < super::LOAD_RETRY_BASE_DELAY);
+    }
+
+    /// `snapshot` clones the map in `SNAPSHOT_CHUNK_SIZE`-entry chunks, releasing and
+    /// re-acquiring the read lock between them. Insert enough entries to force several chunk
+    /// boundaries and confirm every one of them still round-trips — the chunking must not drop,
+    /// duplicate, or reorder entries relative to the previous whole-map-under-one-lock snapshot.
+    #[tokio::test]
+    async fn snapshot_across_multiple_chunks_recovers_every_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        let n = super::SNAPSHOT_CHUNK_SIZE * 2 + 17; // spans three chunks, last one partial
+
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        for k in 0..n as i32 {
+            store.just_insert(k, k * 2);
+        }
+        let expected = store.fingerprint(..);
+        store.snapshot();
+
+        let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        assert_eq!(
+            restarted.fingerprint(..),
+            expected,
+            "chunked snapshot must recover every entry across chunk boundaries"
+        );
+        for k in 0..n as i32 {
+            assert_eq!(restarted.get(&k).as_deref(), Some(&(k * 2)));
+        }
+    }
+
     /// The causal-stability state (membership + per-tombstone acks) must survive a
     /// restart, otherwise GC gating is lost.
     #[tokio::test]
@@ -1662,7 +1978,7 @@ mod replicated_map_tests {
 
     use std::sync::Mutex;
 
-    use crate::discovery::{DiscoverFuture, Discovery};
+    use crate::discovery::{DiscoverFuture, Discovery, DiscoveryKind};
 
     /// A scriptable discovery source for the grace/decommission tests. The test thread swaps the
     /// response while the discovery loop runs.
@@ -1700,6 +2016,36 @@ mod replicated_map_tests {
                 }
             })
         }
+
+        fn kind(&self) -> DiscoveryKind {
+            DiscoveryKind::Authoritative
+        }
+    }
+
+    /// A discovery source that never lies about its kind — used to prove `with_discovery` rejects
+    /// a speculative source unconditionally, not only under `debug_assertions`.
+    struct SpeculativeDiscovery;
+
+    impl Discovery for SpeculativeDiscovery {
+        fn discover(&self) -> DiscoverFuture<'_> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn kind(&self) -> DiscoveryKind {
+            DiscoveryKind::Speculative
+        }
+    }
+
+    /// The guard must be `assert!`, not `debug_assert!` — a no-op in `--release` would let a
+    /// speculative source through, whose absences then wrongly decommission live members and
+    /// release the causal-stability GC gate.
+    #[tokio::test]
+    #[should_panic(expected = "with_discovery expects an authoritative source")]
+    async fn with_discovery_rejects_a_speculative_source() {
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
+            .await
+            .expect("bind failed");
+        let _ = store.with_discovery(Arc::new(SpeculativeDiscovery));
     }
 
     fn discovery_config() -> Config {
@@ -2065,7 +2411,9 @@ mod replicated_map_tests {
     }
 
     /// A raw payload with one `ComparisonItem`: a dated message, so the receive path would add
-    /// the sender to `members` unless the cap fires first.
+    /// the sender to `members` unless the cap fires first. Starts with the wire-version byte
+    /// every datagram carries, unauthenticated included — `Authenticator::Disabled` no
+    /// longer passes bytes through unversioned.
     fn dated_comparison_payload() -> Vec<u8> {
         use crate::replica::Message;
         use crate::FingerprintTreeMap;
@@ -2074,7 +2422,7 @@ mod replicated_map_tests {
 
         let tree = FingerprintTreeMap::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
         let segments = rbsr::initial_ranges(&tree);
-        let mut buf = Vec::new();
+        let mut buf = vec![gossip::auth::WIRE_VERSION];
         for seg in segments {
             Message::<
                 i32,
@@ -2294,9 +2642,11 @@ mod replicated_map_tests {
         // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
         let payload = dated_comparison_payload();
         let counter = gossip::replay::SenderCounter::new();
-        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false)
-            .seal(counter.next_seq(), counter.next_stamp(), &payload)
-            .expect("enabled authenticator always seals");
+        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false).seal(
+            counter.next_seq(),
+            counter.next_stamp(),
+            &payload,
+        );
 
         let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
             .await
@@ -2316,5 +2666,25 @@ mod replicated_map_tests {
         );
 
         task.abort();
+    }
+
+    /// `get_cloned` must not hold the read lock past its return, so a write immediately
+    /// following it (the `get`-then-`insert` pattern `get`'s own guard would self-deadlock on)
+    /// completes without hanging.
+    #[tokio::test]
+    async fn get_cloned_does_not_hold_the_lock_across_a_following_write() {
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .unwrap();
+        store.insert(1, 10);
+
+        let value = store.get_cloned(&1);
+        assert_eq!(value, Some(10));
+        // If `get_cloned` still held the read lock here, this write lock acquisition would hang
+        // forever instead of returning.
+        store.insert(1, 20);
+
+        assert_eq!(store.get_cloned(&1), Some(20));
+        assert_eq!(store.get_cloned(&2), None);
     }
 }

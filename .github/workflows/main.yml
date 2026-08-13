@@ -71,6 +71,63 @@ jobs:
     - name: Check that the whole workspace packages cleanly
       run: cargo package --workspace --allow-dirty
 
+  # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
+  # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
+  # user-selectable crypto backend — was compiled by no CI job at all. This is the one job that
+  # selects it explicitly.
+  mac-hmac:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Lint (mac-hmac)
+      run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
+    - name: Build (mac-hmac)
+      run: cargo build --workspace --no-default-features --features mac-hmac --verbose
+    - name: Run tests (mac-hmac)
+      run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
+
+  # #203/#230/#283/#309/#312 were all closed by hand citing commits that, at the time, only
+  # existed on the PR branch meant to close them -- the PR hadn't merged yet. Nothing forced the
+  # PR description to say which issues it closes, so nothing caught the mismatch. This job:
+  # every *open* issue mentioned bare in this PR's own body must state its intent, either
+  # `Closes #N` (closes it at merge time, via GitHub's own keyword parsing) or an explicit
+  # non-closing lead-in (`relates to #N`, `see #N`, ...). See `scripts/check-pr-closes-issues.sh`.
+  #
+  # `pull_request` only: `github.event.pull_request` is unset on `push`/`merge_group`, and this
+  # check is about a PR description, which only exists in that event.
+  pr-issue-references:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+    - uses: actions/checkout@v3
+    - name: Every open issue mentioned in this PR's body must state its intent
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # An env var, not `${{ github.event.pull_request.body }}` interpolated straight into
+        # `run:` -- the latter is a known script-injection vector (a PR body is attacker-controlled
+        # text). The script only ever reads $PR_BODY, never evaluates it.
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: ./scripts/check-pr-closes-issues.sh
+
+  # #312: advisories (RustSec), license compliance, and a dependency-source allowlist. Config in
+  # `deny.toml`. `checks: advisories` alone would silently skip a license/bans/sources regression;
+  # the action's default `all` is deliberate here.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: EmbarkStudios/cargo-deny-action@v2
+
   coverage:
     runs-on: ubuntu-latest
     steps:

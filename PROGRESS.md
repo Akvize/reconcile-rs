@@ -6,7 +6,7 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-12.
+- **Last updated:** 2026-08-13.
 - **Release 1.0.0:** what the release commits to and what gates it — **§6 below**, mirroring
   [#206](https://github.com/Akvize/reconcile-rs/issues/206) (rewritten 2026-08-11 around an explicit
   definition of 1.0; the 2026-06 phase plan it replaced is dissolved into the issues each
@@ -36,17 +36,22 @@ payload encryption, pluggable persistence, runtime observability, a lightweight 
 replica. A 2026-06 adversarial audit filed further findings as
 [#195](https://github.com/Akvize/reconcile-rs/issues/195)–[#205](https://github.com/Akvize/reconcile-rs/issues/205)
 (tracking [#206](https://github.com/Akvize/reconcile-rs/issues/206)); all nine correctness/security
-findings (#195–#201) are **fixed**. Remaining open items
-([#202](https://github.com/Akvize/reconcile-rs/issues/202) persistence robustness,
-[#203](https://github.com/Akvize/reconcile-rs/issues/203) CI gaps,
-[#204](https://github.com/Akvize/reconcile-rs/issues/204) release pipeline,
-[#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch) are maturity-grade, not
-correctness-grade. **The 2026-08-10 public-API audit changed that picture** (§4): two of its nine P0s
-are correctness-grade rather than ergonomic — [#283](https://github.com/Akvize/reconcile-rs/issues/283)
-(`with_discovery`'s guard is a release-build no-op, so a speculative source releases the
-causal-stability gate) and [#284](https://github.com/Akvize/reconcile-rs/issues/284) (a third-party
-RSOS backend is a remote-driven panic surface). #284 is now **fixed** — the RSOS contract is stated
-on the traits and defended by construction (§6 Gate B); #283 remains open. Remaining work beyond the
+findings (#195–#201) are **fixed**. Of the maturity-grade items filed alongside them,
+[#202](https://github.com/Akvize/reconcile-rs/issues/202) (persistence operational robustness) and
+[#203](https://github.com/Akvize/reconcile-rs/issues/203) (mac-hmac CI lane; macOS lane **waived**,
+see §6 Waivers) and
+[#204](https://github.com/Akvize/reconcile-rs/issues/204) (release pipeline mechanics) are now
+**fixed** — #202's port-contract redesign and #203's poll-budget scaling are separable follow-ups,
+not correctness gaps; [#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch is
+still open. **The 2026-08-10 public-API audit** (§4) found two of its nine P0s correctness-grade
+rather than ergonomic — [#283](https://github.com/Akvize/reconcile-rs/issues/283) (`with_discovery`'s
+guard was a release-build no-op, so a speculative source could release the causal-stability gate)
+and [#284](https://github.com/Akvize/reconcile-rs/issues/284) (a third-party RSOS backend is a
+remote-driven panic surface) — both are now **fixed**: the RSOS contract is stated on the traits and
+defended by construction (§6 Gate B), and `with_discovery`'s guard is a real `assert!` with
+`Discovery::kind()` no longer defaulting to the dangerous choice. [#309](https://github.com/Akvize/reconcile-rs/issues/309)
+(no wire-version field, Gate A) and [#312](https://github.com/Akvize/reconcile-rs/issues/312)
+(`cargo deny`/`overflow-checks`, release mechanics) are also now **fixed**. Remaining work beyond the
 gate list is scaling and the confidentiality roadmap.
 
 ---
@@ -76,9 +81,9 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F16 | Medium | loopback benches + README inconsistency | ◐ | README updated; benches still loopback-only |
 | F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps landed (#151); the `peers` map is bounded by `Config::max_peers` (default 1024, `src/replicated_map.rs:84`) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) closed by PR #245 |
-| F19 | Low | dependency hygiene | ◐ | bincode `with_limit` landed (#151); `overflow-checks` and `cargo audit`/`cargo deny` in CI still absent — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (previously mis-cited here as #203/#205, neither of which mentions either item) |
+| F19 | Low | dependency hygiene | ✅ | bincode `with_limit` landed (#151); `overflow-checks = true` and a `cargo deny` CI lane landed 2026-08-13 — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 14 resolved · 5 partial (F9, F10, F16, F17, F19) · 0 open. All Critical resolved; all
+**Score:** 15 resolved · 4 partial (F9, F10, F16, F17) · 0 open. All Critical resolved; all
 but one High resolved or mitigated.
 
 ---
@@ -94,10 +99,17 @@ but one High resolved or mitigated.
       see the publish status above; semver cadence is a per-release maintainer call
 - [ ] `CHANGELOG.md` + a `0.2.1` → 1.0 migration guide — [#310](https://github.com/Akvize/reconcile-rs/issues/310)
 - [x] CI code coverage + doc-tests (#97) — Codecov (`cargo llvm-cov`, informational) + `cargo test --doc`
-- [ ] `cargo audit` / `cargo deny` in CI — [#312](https://github.com/Akvize/reconcile-rs/issues/312)
+- [x] `cargo audit` / `cargo deny` in CI — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (`deny.toml` + `main.yml`'s `deny` job, 2026-08-13; RUSTSEC-2025-0141 (bincode 1.x unmaintained) recorded as an accepted `ignore` — no safe upgrade exists short of a wire-format break riding the version-bump mechanism #309 delivered)
 - [ ] Declare + CI-pin MSRV (`rust-version`), on all five manifests — [#189](https://github.com/Akvize/reconcile-rs/issues/189)
 - [ ] `[package.metadata.docs.rs] all-features` + `keywords`/`categories` on `reconcile` — [#189](https://github.com/Akvize/reconcile-rs/issues/189)
-- [ ] `overflow-checks = true` in the release profile — [#312](https://github.com/Akvize/reconcile-rs/issues/312)
+- [x] `overflow-checks = true` in the release profile — [#312](https://github.com/Akvize/reconcile-rs/issues/312) (2026-08-13). **Decision, recorded per the issue's own requirement**: a
+  silent-wraparound arithmetic bug reaching a release build is worse than a panic — it would
+  surface as a divergent fingerprint the reconciliation protocol has no way to explain, rather
+  than a bounded, alertable liveness event (the same class of trade-off F2/#107 already resolved
+  in the other direction for remote-*parseable* input, by dropping a malformed datagram instead of
+  panicking on it — arithmetic overflow deep inside a computation is not the wire-parsing
+  boundary). F7/#112's known crafted-input path (`RangeAggregate`) is already defended by an
+  explicit bound check, not by this flag; this closes the residual, unaudited surface
 - [x] Bound the `peers` map in unauthenticated mode — [#150](https://github.com/Akvize/reconcile-rs/issues/150) (PR #245; `Config::max_peers`, default 1024)
 - [ ] `SECURITY.md` + private vulnerability reporting — [#313](https://github.com/Akvize/reconcile-rs/issues/313)
 - [ ] Mechanical semver / public-API gate in CI — [#311](https://github.com/Akvize/reconcile-rs/issues/311)
@@ -122,10 +134,10 @@ status here. The subsections below organize the same issues by delivery area ins
 | Persistence / content-addressing | §2.4 P2-6 | ◯ [#271](https://github.com/Akvize/reconcile-rs/issues/271) (+#272–#277), [#188](https://github.com/Akvize/reconcile-rs/issues/188). Build-vs-adopt call recorded on #271, undecided |
 | Conflict metadata in the value | §2.4 P2-7 | ✅ HLC F5/[#110](https://github.com/Akvize/reconcile-rs/issues/110), causal-stability GC F4/[#109](https://github.com/Akvize/reconcile-rs/issues/109); pluggable CRDT deferred — [#184](https://github.com/Akvize/reconcile-rs/issues/184) |
 | Property-testing + fuzzing | §2.4 P3-8 | ✅ F11/[#113](https://github.com/Akvize/reconcile-rs/issues/113) |
-| Adversarial robustness | §2.4 P3-9 | ◐ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
+| Adversarial robustness | §2.4 P3-9 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values, counted+dropped not silent), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
 | Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); `t` unsettled — [#315](https://github.com/Akvize/reconcile-rs/issues/315); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
 | Single-shot latency (hybrid sketch) | §2.2 conclusion | ◯ [#185](https://github.com/Akvize/reconcile-rs/issues/185), gated on [#280](https://github.com/Akvize/reconcile-rs/issues/280) |
-| Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` — [#232](https://github.com/Akvize/reconcile-rs/issues/232) item 4c, rides [#309](https://github.com/Akvize/reconcile-rs/issues/309)'s wire break |
+| Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` — [#232](https://github.com/Akvize/reconcile-rs/issues/232) item 4c, would ride a future wire-version bump (mechanism delivered by [#309](https://github.com/Akvize/reconcile-rs/issues/309)) |
 
 The axis cuts across §6's gate rule: an item can be SOTA-critical and post-1.0 (#185), or a release
 gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
@@ -141,9 +153,13 @@ gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
 - ✅ Runtime reconfiguration: live topology/gossip-cadence changes (README "Multiple geographical locations").
 - ✅ DNS-driven decommission hardened against resurrection — [#201](https://github.com/Akvize/reconcile-rs/issues/201) (closed).
 - ◯ Bounded-fan-out membership (SWIM/HyParView) instead of random probing — [#147](https://github.com/Akvize/reconcile-rs/issues/147)/[#190](https://github.com/Akvize/reconcile-rs/issues/190).
-- ◯ Persistence robustness (snapshot clone stalls writes, missing fsync, crash-loop on transient load
-  failure) — [#202](https://github.com/Akvize/reconcile-rs/issues/202).
-- ◯ Larger-than-datagram payloads — [#230](https://github.com/Akvize/reconcile-rs/issues/230) (documented gap, README "Value-size ceiling").
+- ✅ Persistence operational robustness (snapshot clone no longer stalls writes past one chunk,
+  directory fsync after rename, bounded retry on transient load failure) —
+  [#202](https://github.com/Akvize/reconcile-rs/issues/202) (closed 2026-08-13; the port-contract
+  redesign — async, associated error type — is a separable follow-up).
+- ✅ Larger-than-datagram payloads — [#230](https://github.com/Akvize/reconcile-rs/issues/230) (closed
+  2026-08-13: dropped with a dedicated counted signal, not silently; ceiling still documented,
+  README "Value-size ceiling").
 - ✅ Lightweight dateless read replica (`ReadReplicaMap`) — [#128](https://github.com/Akvize/reconcile-rs/issues/128) (closed).
 - ✅ Observability: `tracing` spans + `metrics` facade + optional Prometheus endpoint — [#94](https://github.com/Akvize/reconcile-rs/issues/94) (closed).
 - ✅ Collection-shaped read API on both `ReplicatedMap` and `ReadReplicaMap` — `len`/`is_empty`/
@@ -168,10 +184,12 @@ gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
   map's own `==`, against [`ARCHITECTURE.md`](./ARCHITECTURE.md) §5 invariant 3 — is **fixed**, with
   the two other defects in that issue: `cc4d7c4` (equality on the whole aggregate), `bb64f56`
   (ranges by value) and `5b8d138` (panic-safe `with_mut`); `Eq` is bounded at
-  `rsos/src/fingerprint_tree_map.rs:760`. Still open:
-  [#283](https://github.com/Akvize/reconcile-rs/issues/283) — every `ReplicatedMap` write panics
-  outside a Tokio runtime, and `with_discovery`'s authoritative-source precondition is a
-  `debug_assert!`, a no-op in release. Two needed a maintainer **decision** before the release
+  `rsos/src/fingerprint_tree_map.rs:648`, confirmed 2026-08-13 and the issue **closed**.
+  [#283](https://github.com/Akvize/reconcile-rs/issues/283) — every `ReplicatedMap` write panicking
+  outside a Tokio runtime (documented, `# Panics`), the get-then-insert self-deadlock
+  (`get_cloned` added), and `with_discovery`'s authoritative-source precondition being a
+  `debug_assert!` (a no-op in release, now a real `assert!`) — is also **fixed**, 2026-08-13. Two
+  needed a maintainer **decision** before the release
   freezes the signatures: [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` — a
   published port with no public implementor), still open, and
   [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid), **decided
@@ -354,7 +372,7 @@ the reasoning. Update a row when its issue moves; don't restate the argument.
 | 1.0.0 freezes | Holds today |
 |---|---|
 | `reconcile`'s public API — semver from then on | no — Gate A |
-| Wire — any 1.x node reconciles with any 1.x node | no — [#309](https://github.com/Akvize/reconcile-rs/issues/309) |
+| Wire — any 1.x node reconciles with any 1.x node | **yes** — [#309](https://github.com/Akvize/reconcile-rs/issues/309), resolved 2026-08-13 |
 | On-disk — `RCNL` + `u32`, foreign version rejected (`src/snapshot.rs:42-46`) | **yes** |
 
 | 1.0.0 does **not** claim | Where it is stated |
@@ -377,7 +395,7 @@ flowchart TD
 
 | Issue | Freezes wrong if shipped as-is |
 |---|---|
-| [#309](https://github.com/Akvize/reconcile-rs/issues/309) | The wire carries no version field. Adding one after the freeze **is** the break it prevents; today a peer on another wire generation is indistinguishable from noise (dropped by the F2/#107 hardening) |
+| ✅ [#309](https://github.com/Akvize/reconcile-rs/issues/309) | **Closed** 2026-08-13 — `gossip::auth::WIRE_VERSION` on every datagram (unauthenticated included), checked by `Payload::check_version` before replay bookkeeping, counted under its own `reconcile_datagrams_dropped_total{reason="version"}` reason (`ARCHITECTURE.md` §5 inv. 11) |
 | [#297](https://github.com/Akvize/reconcile-rs/issues/297) | Foreign types in public signatures (`parking_lot`, `ipnet`, `rand`, `tokio`, `bincode`) — every dependency bump becomes a breaking change of *our* API |
 | [#286](https://github.com/Akvize/reconcile-rs/issues/286) | `ClusterKey` at the boundary — forces dropping `Config: Copy`, which is what structurally forbids the `Drop` `zeroize` needs |
 | [#293](https://github.com/Akvize/reconcile-rs/issues/293) | `Config`: private fields, `#[non_exhaustive]`, one behaviour for the `MAX_NETS` cap; and `Config::default()` can never converge (`port: 0` doubles as destination) |
@@ -393,11 +411,11 @@ flowchart TD
 
 | Issue | Why a 1.0 cannot carry it |
 |---|---|
-| [#283](https://github.com/Akvize/reconcile-rs/issues/283) | `with_discovery`'s precondition is a `debug_assert!` — **a no-op in release** (`src/replicated_map.rs:429`), so a speculative source decommissions live members and releases the causal-stability gate (`ARCHITECTURE.md` §5 inv. 6). Plus: writes panic off-runtime; `get`-then-`insert` self-deadlocks |
+| ✅ [#283](https://github.com/Akvize/reconcile-rs/issues/283) | **Closed** 2026-08-13 — `with_discovery`'s guard is a real `assert!` (fires in release too) and `Discovery::kind()` no longer defaults to the dangerous `Authoritative` choice; writes document their Tokio-runtime dependency; `get_cloned` added as the documented get-then-write default |
 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) | **Closed** — laws stated on `RsosView`/`Rsos::aggregate`, bound made structural via `AdmittedRank` (`ARCHITECTURE.md` §5 inv. 9), property-tested |
-| [#203](https://github.com/Akvize/reconcile-rs/issues/203) | `mac-hmac` is compiled by **no** CI lane (`--all-features` lets `mac-blake3` win) — a published crypto backend never built. Also single-OS |
-| [#202](https://github.com/Akvize/reconcile-rs/issues/202) | Durability: snapshot clone stalls writes, missing dir fsync, crash-loop on transient load failure |
-| [#230](https://github.com/Akvize/reconcile-rs/issues/230) | A value larger than one datagram never converges, silently — reject at write time |
+| ✅ [#203](https://github.com/Akvize/reconcile-rs/issues/203) | **Closed** 2026-08-13 — dedicated `mac-hmac` CI job. The `macos` build was added, then made test-executing (loopback aliasing), then **removed entirely** the same day: the project claims no macOS deployment target, and a public repo's runner minutes are unbilled, so cost was never the trade-off — coverage-for-a-platform-nobody-ships-on was. Recorded as a waiver, §6 Waivers (poll-budget scaling under the coverage job's slower runtime is a separable follow-up, not tracked here) |
+| ✅ [#202](https://github.com/Akvize/reconcile-rs/issues/202) | **Closed** 2026-08-13 — chunked snapshot cloning bounds the write stall, directory fsync after rename, bounded retry with backoff on transient load failure (the port-contract redesign — async, associated error type — is a separable follow-up, not tracked here) |
+| ✅ [#230](https://github.com/Akvize/reconcile-rs/issues/230) | **Closed** 2026-08-13 — an oversized value is dropped with a dedicated, counted, alertable signal (`reconcile_values_oversized_total`) instead of the empty-datagram/EMSGSIZE failure loop |
 | [#205](https://github.com/Akvize/reconcile-rs/issues/205) | Items 1, 3, 5, 7, 8. Item **7** is also a Gate-A item: `internal-testing` is an ordinary feature of a published crate, so 1.0 would freeze `reconcile::testing` into the public surface |
 
 ### Gate C — release mechanics and semver coherence
@@ -424,7 +442,7 @@ flowchart LR
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
 | [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
-| [#312](https://github.com/Akvize/reconcile-rs/issues/312) | `cargo audit`/`cargo deny` and `overflow-checks`, previously mis-cited in this file as tracked by #203/#205 |
+| [#312](https://github.com/Akvize/reconcile-rs/issues/312) | ✅ resolved 2026-08-13 — `deny.toml` + `main.yml`'s `deny` job, `overflow-checks = true` with the trade-off recorded (§3) |
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
 | [#204](https://github.com/Akvize/reconcile-rs/issues/204) | **Mostly resolved in the tree**: `tags.yml` verifies tag against manifest and publishes in dependency order; the docs no longer say `0.0.0-git`. What remains is its Problem 3 — the version decision |
 
@@ -450,11 +468,12 @@ Open and wanted, none blocking.
 
 ### Waivers
 
-A Gate A row may also leave the list **waived** — cost named, accepted, recorded (#206 §8).
+A Gate A or Gate B row may also leave the list **waived** — cost named, accepted, recorded (#206 §8).
 
 | Issue | Accepted cost | Basis |
 |---|---|---|
 | #298 generic monoid *(2026-08-12)* | a 2.0.0 if a generic summary is ever wanted — `rsos::Rsos` is in `reconcile`'s public API, associated-type defaults are unstable | the seam's shape is undetermined with zero instances (`Group`/`Monoid` fork, `ARCHITECTURE.md` §7); both motivations lapsed — sketch-in-leaves dead at ~1.6 GB (#185), Meyer & Scherer 2024 weakens the theoretical half |
+| #203 macOS CI lane *(2026-08-13)* | non-Linux code paths (DNS resolver, socket-buffer clamping, endianness-sensitive code) compile and run on no platform but `ubuntu-latest` between now and whenever this is revisited | no macOS deployment target is claimed anywhere in the project; runner cost was never the real trade-off (public-repo Actions minutes are unbilled) — the lane was removed because untested-platform coverage for a platform nobody ships on isn't worth the workflow's complexity, not because it was expensive |
 
 The row's original justification — *`RangeAggregate` is the wire type* — was itself wrong by the
 time it was waived: #308 put `rbsr` outside that API and on a `0.x` line, and `M = Fingerprint`

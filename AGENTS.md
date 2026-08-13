@@ -50,6 +50,7 @@ cargo bench --no-run --features internal-testing              # benches must com
 cargo doc --workspace                                         # both matter: an intra-doc link to a
 cargo doc --workspace --all-features                          # feature-gated item dangles in only one
 cargo package --workspace --allow-dirty                       # release packaging, §11
+cargo deny check                                              # advisories/licenses/sources, deny.toml
 ```
 
 `--workspace`, never `--all`. This list is what CI runs and what "done" means. The two git hooks run

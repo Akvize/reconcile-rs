@@ -497,6 +497,19 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
+                                // Reject a differently-versioned peer distinguishably from an
+                                // authentication failure — see `Replica::run`'s identical gate.
+                                let payload = match payload.check_version() {
+                                    Ok(payload) => payload,
+                                    Err(version) => {
+                                        trace!(
+                                            "read replica dropped datagram from {peer}: wire \
+                                             version {version} != {}",
+                                            auth::WIRE_VERSION
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let sender = peer.ip();
                                 // Per-peer cap check: drop datagrams from unknown senders when the
                                 // peers map is at capacity, before any per-sender state is
