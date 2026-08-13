@@ -29,7 +29,20 @@ pub trait Rsos<K> {
     /// `size()` → `|X|`: the number of elements currently in the store.
     fn size(&self) -> usize;
 
-    /// `Aggregate(l, u)` → `A(X ∩ [l, u))` in one tree walk.
+    /// `Aggregate(l, u)` → `A(X ∩ [l, u))` in one tree walk. Concrete [`Aggregate`] over
+    /// [`Fingerprint`](crate::Fingerprint) rather than a generic-monoid associated type — see the
+    /// crate root docs' "lifting monoid" note on why that generalization is out of scope today.
+    ///
+    /// # Summary law (normative — the interop contract)
+    ///
+    /// `fingerprint` **must** be the `⊗`-fold of [`lift`](crate::lift) over the range's
+    /// `(key, value)` pairs, and `size` their count. Folding with [`Aggregate`]'s
+    /// [`Add`](std::ops::Add) gets `⊗` right by construction; the fingerprint must be *computed*
+    /// with [`lift`](crate::lift), not re-derived. Re-derive it and a backend reconciles
+    /// **silently wrongly** against a [`FingerprintTreeMap`] peer: no convergence, no error.
+    ///
+    /// The inter-method laws (rank/select/aggregate consistency, snapshot) live on `rbsr`'s
+    /// `RsosView`, the projection the reconciliation driver consumes.
     fn aggregate<R: RangeBounds<K>>(&self, range: R) -> Aggregate;
 
     /// `Rank(z)` → `Rank_X(z)`: the position `z` occupies (or would occupy) in the in-order

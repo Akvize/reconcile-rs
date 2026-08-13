@@ -578,3 +578,82 @@ proptest! {
         prop_assert_eq!(lift(&0u8, &forward), lift(&0u8, &ordered));
     }
 }
+
+// ---------------------------------------------------------------------------
+// 4. Adversarial RSOS backends
+//
+// `RsosView` is public, so a backend's answers are untrusted input (ARCHITECTURE.md §5 inv. 9).
+// `rbsr/src/protocol.rs` carries the worked example; this is the property behind it.
+// ---------------------------------------------------------------------------
+
+/// `rank` supplied by the test rather than derived from contents, so it can point anywhere —
+/// including past `size()`, which `RsosView`'s rank-within-store law forbids. `select` indexes a
+/// `Vec`, so it panics
+/// out of bounds: the trap the driver must not spring.
+#[cfg(feature = "internal-testing")]
+struct HostileRanks {
+    keys: Vec<u64>,
+    rank_answers: Vec<usize>,
+}
+
+#[cfg(feature = "internal-testing")]
+impl rbsr::RsosView<u64> for HostileRanks {
+    fn size(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn aggregate<R: std::ops::RangeBounds<u64>>(&self, _range: R) -> rsos::Aggregate {
+        // Non-empty and constant, so it never matches what the segments below advertise: the
+        // driver always reaches SPLIT, the branch that indexes.
+        rsos::Aggregate::new(self.keys.len(), Fingerprint([7, 0, 0, 0]))
+    }
+
+    fn rank(&self, z: &u64) -> usize {
+        // Deterministic per key — the driver ranks both bounds and compares the two answers — but
+        // otherwise unconstrained, and free to exceed `size()`.
+        self.rank_answers[(*z as usize) % self.rank_answers.len()]
+    }
+
+    fn select(&self, r: usize) -> &u64 {
+        &self.keys[r]
+    }
+}
+
+#[cfg(feature = "internal-testing")]
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+    /// No backend answer, and no peer segment, may panic the driver. Rank answers range well past
+    /// any plausible `size()`, so the bound is exercised rather than merely present; the tally
+    /// check catches a "fix" that drops such segments instead.
+    #[test]
+    fn no_backend_answer_can_drive_the_protocol_out_of_bounds(
+        keys in prop::collection::vec(0u64..64, 1..24),
+        rank_answers in prop::collection::vec(0usize..4096, 1..16),
+        start in prop::option::of(0u64..64),
+        end in prop::option::of(0u64..64),
+    ) {
+        let mut keys = keys;
+        keys.sort_unstable();
+        keys.dedup();
+        let store = HostileRanks { keys, rank_answers };
+
+        let segment = RangeAggregate::for_testing(
+            start,
+            end,
+            rsos::Aggregate::new(1, Fingerprint([1, 0, 0, 0])),
+        );
+
+        let mut child_ranges = Vec::new();
+        let mut enumeration_ranges = Vec::new();
+        let outcome = protocol_round(
+            &store,
+            vec![segment],
+            &mut child_ranges,
+            &mut enumeration_ranges,
+        );
+
+        prop_assert_eq!(child_ranges.len(), outcome.children());
+        prop_assert_eq!(enumeration_ranges.len(), outcome.enumerated());
+    }
+}

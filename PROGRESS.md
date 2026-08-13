@@ -6,7 +6,7 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-11.
+- **Last updated:** 2026-08-12.
 - **Release 1.0.0:** what the release commits to and what gates it — **§6 below**, mirroring
   [#206](https://github.com/Akvize/reconcile-rs/issues/206) (rewritten 2026-08-11 around an explicit
   definition of 1.0; the 2026-06 phase plan it replaced is dissolved into the issues each
@@ -45,7 +45,8 @@ correctness-grade. **The 2026-08-10 public-API audit changed that picture** (§4
 are correctness-grade rather than ergonomic — [#283](https://github.com/Akvize/reconcile-rs/issues/283)
 (`with_discovery`'s guard is a release-build no-op, so a speculative source releases the
 causal-stability gate) and [#284](https://github.com/Akvize/reconcile-rs/issues/284) (a third-party
-RSOS backend is a remote-driven panic surface). Both are Gate B in §6. Remaining work beyond the
+RSOS backend is a remote-driven panic surface). #284 is now **fixed** — the RSOS contract is stated
+on the traits and defended by construction (§6 Gate B); #283 remains open. Remaining work beyond the
 gate list is scaling and the confidentiality roadmap.
 
 ---
@@ -170,12 +171,13 @@ gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
   `rsos/src/fingerprint_tree_map.rs:760`. Still open:
   [#283](https://github.com/Akvize/reconcile-rs/issues/283) — every `ReplicatedMap` write panics
   outside a Tokio runtime, and `with_discovery`'s authoritative-source precondition is a
-  `debug_assert!`, a no-op in release. Two need a maintainer **decision**
-  before the first split-aware release freezes the signatures:
-  [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` is re-exported as a port with
-  zero public implementors and no injection seam) and
-  [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid — the one
-  non-additive change, since `RangeAggregate` is the wire type; see `ARCHITECTURE.md` §7).
+  `debug_assert!`, a no-op in release. Two needed a maintainer **decision** before the release
+  freezes the signatures: [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` — a
+  published port with no public implementor), still open, and
+  [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid), **decided
+  2026-08-12**, waived off Gate A (§6). [#284](https://github.com/Akvize/reconcile-rs/issues/284) is
+  fixed, and the two were one decision: keeping `Rsos` open to third-party backends is what makes
+  stating and defending its contract the price.
 - ◐ **RSOS/AELMDB literature pass (2026-08-10)** — arXiv:2603.19820 read in full against its four
   published repositories (`amparore/{aelmdb, negentropy-aelmdb, lmdbxx-aelmdb, bench-aelmdb}`). The
   design verdict is unchanged and now better evidenced: it *is* the same design, and its combiner is
@@ -375,7 +377,6 @@ flowchart TD
 
 | Issue | Freezes wrong if shipped as-is |
 |---|---|
-| [#298](https://github.com/Akvize/reconcile-rs/issues/298) | `Aggregate<M>` — the **only** truly non-additive item: `RangeAggregate` is the wire type, so generalizing later is a wire break *plus* an API break (`ARCHITECTURE.md` §7) |
 | [#309](https://github.com/Akvize/reconcile-rs/issues/309) | The wire carries no version field. Adding one after the freeze **is** the break it prevents; today a peer on another wire generation is indistinguishable from noise (dropped by the F2/#107 hardening) |
 | [#297](https://github.com/Akvize/reconcile-rs/issues/297) | Foreign types in public signatures (`parking_lot`, `ipnet`, `rand`, `tokio`, `bincode`) — every dependency bump becomes a breaking change of *our* API |
 | [#286](https://github.com/Akvize/reconcile-rs/issues/286) | `ClusterKey` at the boundary — forces dropping `Config: Copy`, which is what structurally forbids the `Drop` `zeroize` needs |
@@ -393,7 +394,7 @@ flowchart TD
 | Issue | Why a 1.0 cannot carry it |
 |---|---|
 | [#283](https://github.com/Akvize/reconcile-rs/issues/283) | `with_discovery`'s precondition is a `debug_assert!` — **a no-op in release** (`src/replicated_map.rs:429`), so a speculative source decommissions live members and releases the causal-stability gate (`ARCHITECTURE.md` §5 inv. 6). Plus: writes panic off-runtime; `get`-then-`insert` self-deadlocks |
-| [#284](https://github.com/Akvize/reconcile-rs/issues/284) | `RsosView` states no inter-method laws → a third-party backend is a panic surface driven by the remote peer's key choice (`rbsr/src/protocol.rs:389`). Publishing the crates means publishing the contract |
+| ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) | **Closed** — laws stated on `RsosView`/`Rsos::aggregate`, bound made structural via `AdmittedRank` (`ARCHITECTURE.md` §5 inv. 9), property-tested |
 | [#203](https://github.com/Akvize/reconcile-rs/issues/203) | `mac-hmac` is compiled by **no** CI lane (`--all-features` lets `mac-blake3` win) — a published crypto backend never built. Also single-OS |
 | [#202](https://github.com/Akvize/reconcile-rs/issues/202) | Durability: snapshot clone stalls writes, missing dir fsync, crash-loop on transient load failure |
 | [#230](https://github.com/Akvize/reconcile-rs/issues/230) | A value larger than one datagram never converges, silently — reject at write time |
@@ -437,7 +438,8 @@ Open and wanted, none blocking.
 
 | Area | Issues |
 |---|---|
-| Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307 |
+| Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307; #315 and #318 are its follow-ups (the enumeration threshold `t`; a divergence-adaptive policy) |
+| Generic monoid summary | #298 — **waived**, see below |
 | Persistent core map | #270–#277 |
 | Scaling & topology | #185, #186, #190, #147, #178 |
 | Grid layer | #193, #191, #192, #184 |
@@ -445,6 +447,18 @@ Open and wanted, none blocking.
 | Docs & ergonomics | #72, #92, #231, #232; additive remainder of #289–#291, #289 also gating `rbsr`'s promotion (#308) |
 
 #299 is a decision to write down, not code to build — rides along regardless.
+
+### Waivers
+
+A Gate A row may also leave the list **waived** — cost named, accepted, recorded (#206 §8).
+
+| Issue | Accepted cost | Basis |
+|---|---|---|
+| #298 generic monoid *(2026-08-12)* | a 2.0.0 if a generic summary is ever wanted — `rsos::Rsos` is in `reconcile`'s public API, associated-type defaults are unstable | the seam's shape is undetermined with zero instances (`Group`/`Monoid` fork, `ARCHITECTURE.md` §7); both motivations lapsed — sketch-in-leaves dead at ~1.6 GB (#185), Meyer & Scherer 2024 weakens the theoretical half |
+
+The row's original justification — *`RangeAggregate` is the wire type* — was itself wrong by the
+time it was waived: #308 put `rbsr` outside that API and on a `0.x` line, and `M = Fingerprint`
+moves no wire bytes. The non-additive edge is `rsos::Rsos`, one crate up.
 
 ---
 

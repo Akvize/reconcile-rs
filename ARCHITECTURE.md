@@ -316,7 +316,15 @@ guarantees `PROGRESS.md` tracks the resolution history of.
    (feeding `version_hash`); its `State<V>` projection has no timestamp field at all, so a dated
    store and a dateless `ReadReplicaMap` compute identical per-element fingerprints. Guarded by
    `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
-9. **A SPLIT's children partition their parent** — consecutive, pairwise disjoint, union the parent
+9. **The RSOS contract is defended, not trusted** — structurally, per §4: backend ranks become a
+   `AdmittedRank` clamped to that backend's `size()`, and the fan-out advances only through
+   `AdmittedRank::cut_before`, so the single `select` into a foreign backend cannot receive an
+   out-of-range position. The laws are stated where they are enforceable — inter-method laws on
+   `rbsr`'s `RsosView` (with an enforcement column), the interop law on `rsos::Rsos::aggregate`.
+   Guarded by `no_backend_answer_can_drive_the_protocol_out_of_bounds`
+   (`tests/proptest_fingerprint_tree_map.rs`) and, as a worked example,
+   `rbsr/src/protocol.rs::backend_with_unclamped_rank_is_defended_against_not_trusted`.
+10. **A SPLIT's children partition their parent** — consecutive, pairwise disjoint, union the parent
    range — whatever `RefinementPolicy` chose the width, and whatever policy the *peer* is running.
    This is what Proposition 4.1's soundness argument rests on, and therefore the reason the policy
    can stay a local, un-negotiated choice (§3.1). Guarded by
@@ -346,7 +354,7 @@ re-exchange indefinitely. It shipped before any release tag for exactly that rea
 
 ---
 
-## 7. Extension points (tracked, not implemented)
+## 7. Extension points
 
 The Meyer/Willow-ecosystem reference implementation
 (`github.com/earthstar-project/range-reconcile`) documents three "Bring Your Own …" extension
@@ -357,23 +365,25 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   encoding has exactly one implementation and no test-driven need for a second. Reintroducing it
   later is additive — bincode becomes the default behind the trait — so the cost of waiting for a
   real second consumer is low.
-- **`BYOLiftingMonoid`** names the generic-summary generalization tracked as a future gap in
-  [`SOTA.md`](./SOTA.md) §2.4 (P1): `rsos` today hardwires its range summary to the 256-bit BLAKE3
-  `Fingerprint`. `lift`/`combine`/`neutral` is the right vocabulary for it when that work happens;
-  `Rsos::aggregate`/`RsosView::aggregate` keep the concrete `(usize, Fingerprint)` return type until
-  a second summary type actually exists.
+- **`BYOLiftingMonoid`** — the generic summary ([`SOTA.md`](./SOTA.md) §2.4 P1-4). **Decided: out of
+  scope for 1.x, a 2.0 topic** ([#298](https://github.com/Akvize/reconcile-rs/issues/298)).
+  `Rsos::aggregate`/`RsosView::aggregate` keep the concrete `(usize, Fingerprint)` for the whole 1.x
+  line; `lift`/`combine`/`neutral` stays the vocabulary if it is revisited.
 
-  **Unlike the other two, this one is not additive, and that fixes its timing.** Generalizing
-  `Aggregate` to `Aggregate<M>` reshapes `RsosView::aggregate` into
-  `Aggregate<Self::Summary>` — and therefore turns `rbsr`'s `RangeAggregate<K>` into
-  `RangeAggregate<K, M>`. That type *is* the wire message: the codec bound moves from `K: Serialize`
-  to `K: Serialize, M: Serialize`, and the byte layout becomes `M`-dependent. Done before the first
-  published release it costs nothing; done after, it is a wire break *and* a breaking API change at
-  once. The seam is therefore worth landing with exactly one implementation (`M = Fingerprint`,
-  byte-identical to today, pinned by `tests/wire_format.rs`) rather than waiting for a second summary
-  type to justify it — which is the opposite of the `Encoding` reasoning above, and for a concrete
-  reason: an absent port can be added later, a monomorphic wire type cannot be generalized later for
-  free. Tracked in [#298](https://github.com/Akvize/reconcile-rs/issues/298).
+  Not "low value" — **undetermined shape**. `M` needs a bound and neither candidate wins without an
+  instance to judge against:
+
+  | bound | keeps | costs |
+  |---|---|---|
+  | `M: Group` | today's `remove`: subtract, O(log n) along one root→leaf path | excludes `min`/`max` — no inverse |
+  | `M: Monoid` | Def. 3.5's bound; admits `min`/`max` | every removal recomputes each ancestor from its children, ~B× on that path |
+
+  Unlike the other two entries, the cost of waiting is **a major version, accepted**: `rsos::Rsos` is
+  re-exported into `reconcile`'s public API (`src/lib.rs`) and associated-type defaults are unstable,
+  so `type Summary` has no additive path after 1.0. `rbsr`'s `RangeAggregate` is *not* the binding
+  constraint — `rbsr` stays 0.x (#308) and `M = Fingerprint` moves no wire bytes. The rejected
+  alternative (sealing `Rsos`, which keeps every option open at the cost of third-party backends) is
+  argued on #298.
 
 ---
 
