@@ -26,3 +26,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/check-closed-issue-shas.sh
+
+  # Same subject as the job above -- the tracker's existing state rather than any one diff -- so
+  # it belongs on this schedule rather than in a second weekly workflow of its own. It needs no
+  # history, hence the default shallow checkout.
+  open-issue-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open issues must satisfy .github/labels.tsv's invariants
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Unset for now: the backlog predates the taxonomy, so a deadline would fail the first
+          # run for reasons nobody chose. Set it once the backlog is labelled.
+          TRIAGE_SLA_DAYS: ''
+        run: ./scripts/check-issue-triage.sh

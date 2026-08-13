@@ -1,0 +1,128 @@
+# Label taxonomy — the single source of truth for this repository's issue labels.
+#
+# Format: name <TAB> color (6 hex digits, no #) <TAB> description.
+# Blank lines and `#` comments are ignored. `scripts/sync-labels.sh` applies this file to
+# GitHub; `scripts/check-issue-triage.sh` gates that every open issue carries a valid
+# combination. AGENTS.md §10: the rule lives in a failing command, not in prose someone
+# has to remember.
+#
+# Three namespaces, three different questions, answered independently, plus one marker:
+#
+#   C-           what the issue IS — what artifact closes it   exactly one   mandatory
+#   A-           where it lands                                one or more   mandatory
+#   S-           whether it can be acted on now                exactly one   mandatory
+#   M-breaking   deferring it costs a major version            optional
+#
+# "Does the 1.0.0 release wait on this?" is deliberately NOT a label: it is a **milestone**.
+# A label that means "blocks release X" is dead the day X ships and then lingers on every
+# issue that carried it, whereas a milestone closes with the release and takes its membership
+# with it. The membership question is also the only half that actually drifted — on
+# 2026-08-13 five rows of #206 §3-§5's hand-kept gate tables pointed at issues closed hours
+# earlier — and a milestone answers it as a live query that no one has to edit. #206's A/B/C
+# classes stay where the reasoning is: in #206.
+#
+# What survives the tag is the half that was never about 1.0 — "is this change non-additive"
+# — so that one is a label, under a name that does not expire. `M-` is bevy's migration
+# prefix (M-Needs-Migration-Guide), not tokio's module prefix.
+#
+# The single-letter dialect is the Rust ecosystem's, not an invention here: rust-lang/rust
+# (C-, A-, S-, P-, E-, I-, T-, O-, F-), tokio (C-, A-, M-, E-), bevy (C-, A-, S-, D-, X-),
+# rust-analyzer (C-, A-, S-, E-). A contributor who has filed an issue on any of them reads
+# `C-bug` / `A-rsos` / `S-blocked` without a key, and the labels stay short enough to fit
+# four or five in a table column. Kubernetes' `kind/`-style slash namespaces answer the same
+# need; the mechanism below is theirs, the spelling is Rust's. One colour per namespace so
+# the label bar reads as columns rather than as confetti.
+#
+# Casing follows rust-lang/rust (lowercase after the prefix), not bevy (Title-Case): the
+# A- values are crate names, and `A-lww-register` has to match the directory it names.
+#
+# The C-/S- split is load-bearing and is what the Rust dialect buys beyond familiarity:
+# C- names the artifact that closes the issue, S- names whether you can act on it today.
+# So an unbuilt feature that still needs designing is `C-design` while the design is the
+# deliverable, and `C-feature` + `S-parked` once the design exists but the work is deferred
+# — two facts, two namespaces, neither encoded twice.
+#
+# Deliberately absent — each of these would be a second, drifting order:
+#   P-*      the milestone already answers "does the release wait on it, and which release".
+#            A third axis maintained by hand would contradict it within a month. rust-lang/rust
+#            needs P- because it arbitrates between thousands of contributors; there is nothing
+#            here to arbitrate that the milestone does not already say.
+#   E-*      difficulty/mentoring grades (E-easy, E-mentor) pay off with a contributor queue.
+#            The two GitHub-special names below cover the same ground for now.
+#   T-*      team routing, for a project with teams.
+#   S-stale  the k8s stale->rotten->closed bot defends a backlog nobody reads. Here the
+#            equivalent is `S-parked` with a wake-up trigger written in the body: an issue is
+#            parked *by decision*, never by neglect.
+
+# ---------------------------------------------------------------------------------------
+# C- — category: what the issue is, i.e. what artifact closes it. Exactly one.
+#
+# `C-bug`, `C-feature`, `C-enhancement`, `C-cleanup`, `C-docs` and `C-tracking-issue` are
+# the ecosystem's own spellings. `C-investigation`, `C-design` and `C-decision` are added
+# here, and each earns its place from how this repository actually works: perf work is
+# evidence-gated (#174, #281), the parked roadmap is unsettled designs rather than unstarted
+# code (#185, #186, #190), and ARCHITECTURE.md §7 is a decision log a maintainer feeds by
+# making calls (#288, #299). Adding values inside an existing namespace is how this dialect
+# grows — bevy added C-Code-Quality and C-Performance the same way.
+# ---------------------------------------------------------------------------------------
+C-bug	1d76db	Behaviour, or an API, contradicts its documented or advertised contract
+C-feature	1d76db	A new capability, behind new API or new machinery
+C-enhancement	1d76db	Improves existing behaviour — performance, ergonomics — with no new capability
+C-cleanup	1d76db	Internal quality, hygiene or metadata; no observable behaviour change
+C-docs	1d76db	Documentation only — no code change closes it
+C-investigation	1d76db	Closes with evidence: a measurement, a reproduction, an instrument
+C-design	1d76db	Closes with a written design or RFC. The solution space is what is missing
+C-decision	1d76db	Closes with a recorded call, in ARCHITECTURE.md §7. The options are already framed
+C-tracking-issue	1d76db	Umbrella over sub-issues. Carries no work of its own
+
+# ---------------------------------------------------------------------------------------
+# A- — area: where it lands. One or more. The five crate values mirror ARCHITECTURE.md §2's
+# map exactly, so the label set cannot drift from the workspace; the seven cross-cutting
+# values name the concerns that span crates. Widening this list means updating
+# ARCHITECTURE.md §2 in the same change, exactly as scripts/check-domain-purity.sh requires.
+# (tokio splits this into A- for the crate and M- for the module; with five crates and no
+# module-level triage to do, one namespace is enough.)
+# ---------------------------------------------------------------------------------------
+A-rsos	c5def5	The ordered map, fingerprint and canonical encoding
+A-rbsr	c5def5	The range-based set-reconciliation algorithm and its refinement policy
+A-lww-register	c5def5	Domain types — Entry/State, Timestamp/HLC, the Clock and Persistence ports
+A-gossip	c5def5	Transport, authentication, replay protection, discovery
+A-reconcile	c5def5	The facade — ReplicatedMap, ReadReplicaMap, Config, wiring
+A-wire	c5def5	The on-the-wire and on-disk formats — compatibility is at stake
+A-security	c5def5	Threat model, cryptography, key handling
+A-persistence	c5def5	Snapshots, durability, recovery
+A-observability	c5def5	Metrics, tracing, operational signals
+A-perf	c5def5	Throughput, latency, memory, and the benchmarks that measure them
+A-release	c5def5	Packaging, semver, CI, publication mechanics
+A-meta	c5def5	The repository itself — its docs, its tracker, its agent instructions
+
+# ---------------------------------------------------------------------------------------
+# S- — status: whether it can be acted on now, and if not, what is in the way. Exactly one.
+# Four values, because "what is missing" is already answered by C-: an issue blocked on a
+# measurement is `C-investigation` + `S-ready` when someone can go measure, and `S-blocked`
+# on the issue that owns the measurement when they cannot. Encoding the same fact in both
+# namespaces is how a taxonomy starts contradicting itself.
+# ---------------------------------------------------------------------------------------
+S-needs-triage	fbca04	Not yet classified. The default on anything new; C-/A- are not required until it leaves
+S-ready	fbca04	Understood, unblocked, and actionable as written
+S-blocked	fbca04	Blocked by another issue, named in the body
+S-parked	fbca04	Deliberately not now. The body MUST state what would wake it up
+
+# ---------------------------------------------------------------------------------------
+# M-breaking — the one marker, and the only part of #206's gate vocabulary that outlives the
+# 1.0.0 tag. #206 §3 (Gate A) asks "is this non-additive?", and that question does not expire
+# with the release — it gets sharper afterwards, once semver is actually in force. Pair it
+# with the milestone to recover Gate A exactly: `is:open milestone:1.0.0 label:M-breaking`.
+#
+# It also has a downstream consumer, which is why "breaking" and not "gate": every issue
+# carrying it is a row #310's CHANGELOG and migration guide must eventually contain.
+# ---------------------------------------------------------------------------------------
+M-breaking	b60205	Non-additive: needs a major version and a migration-guide entry (#310)
+
+# ---------------------------------------------------------------------------------------
+# Meta — these two exact strings are what GitHub's own surfaces key off (the repository
+# "contribute" page, the good-first-issue discovery feeds), so they keep their canonical
+# spelling instead of becoming E-easy / E-help-wanted. A renamed label loses that.
+# ---------------------------------------------------------------------------------------
+good first issue	7057ff	Scoped, self-contained, and reachable without repository context
+help wanted	008672	Maintainers would take a contribution here

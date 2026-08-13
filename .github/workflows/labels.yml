@@ -1,0 +1,56 @@
+name: labels
+
+# Keeps the label set itself mechanical (AGENTS.md §10). Two jobs, two failure modes:
+#   sync     the label set drifts from `.github/labels.tsv` -> re-apply the file on every change
+#   triage   an issue opens with no labels at all           -> stamp `S-needs-triage`
+#
+# The third failure mode -- an issue carrying an invalid *combination* -- is audited weekly by
+# `issue-integrity.yml`, alongside the closed-issue-SHA audit: both look at the tracker's existing
+# state rather than at any one diff, so they share one schedule instead of two.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/labels.tsv'
+      - 'scripts/sync-labels.sh'
+      - '.github/workflows/labels.yml'
+  issues:
+    types: [ opened ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      # No `--prune`: deleting a label strips it from every issue carrying it, which is not
+      # recoverable from the file. Removing a label is therefore a deliberate local run
+      # (`./scripts/sync-labels.sh --apply --prune`), never a side effect of a merge.
+      - name: Apply .github/labels.tsv
+        run: ./scripts/sync-labels.sh --apply
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  triage:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      # The default state has to be applied by something, or "exactly one S-" is false for every
+      # issue the moment it is opened, and the weekly audit becomes noise. The issue template also
+      # sets it, which covers only template-created issues -- this covers the rest (API,
+      # `gh issue create`, transfers).
+      - name: Stamp S-needs-triage
+        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label S-needs-triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
