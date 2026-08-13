@@ -2072,7 +2072,10 @@ mod pacing {
             1,
             "expected exactly the one normal-sized datagram, got {sizes:?}"
         );
-        assert!(sizes[0] < super::BUFFER_SIZE, "unexpected datagram size {sizes:?}");
+        assert!(
+            sizes[0] < super::BUFFER_SIZE,
+            "unexpected datagram size {sizes:?}"
+        );
 
         // Oversized in the middle of the batch (pre-fix, this queued the oversized bytes for a
         // doomed EMSGSIZE send attempt).
@@ -2084,7 +2087,10 @@ mod pacing {
             1,
             "expected exactly the one normal-sized datagram, got {sizes:?}"
         );
-        assert!(sizes[0] < super::BUFFER_SIZE, "unexpected datagram size {sizes:?}");
+        assert!(
+            sizes[0] < super::BUFFER_SIZE,
+            "unexpected datagram size {sizes:?}"
+        );
     }
 }
 

@@ -1764,7 +1764,10 @@ mod replicated_map_tests {
                 })
                 .is_ok()
             {
-                return Err(std::io::Error::new(self.kind, "simulated transient failure"));
+                return Err(std::io::Error::new(
+                    self.kind,
+                    "simulated transient failure",
+                ));
             }
             Ok(None)
         }
