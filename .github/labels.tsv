@@ -8,87 +8,109 @@
 #
 # Four namespaces, four different questions, answered independently:
 #
-#   kind/    what the issue IS          exactly one   mandatory
-#   area/    where it lands             one or more   mandatory
-#   status/  what it is waiting on      exactly one   mandatory
-#   gate/    what shipping without it costs (#206)    at most one, optional
+#   C-   what the issue IS — what artifact closes it   exactly one   mandatory
+#   A-   where it lands                                one or more   mandatory
+#   S-   whether it can be acted on now                exactly one   mandatory
+#   G-   what shipping 1.0.0 without it costs (#206)   at most one   optional
 #
-# The multi-dimensional, prefixed shape is the practice of every tracker that outgrew a flat
-# label list — kubernetes/test-infra `label_sync` (kind/, area/, sig/, priority/, triage/,
-# lifecycle/), rust-lang/rust (C-, A-, T-, S-, P-), bevyengine/bevy (C-, A-, S-, D-, X-). One
-# colour per namespace so the label bar reads as columns rather than as confetti.
+# The single-letter dialect is the Rust ecosystem's, not an invention here: rust-lang/rust
+# (C-, A-, S-, P-, E-, I-, T-, O-, F-), tokio (C-, A-, M-, E-), bevy (C-, A-, S-, D-, X-),
+# rust-analyzer (C-, A-, S-, E-). A contributor who has filed an issue on any of them reads
+# `C-bug` / `A-rsos` / `S-blocked` without a key, and the labels stay short enough to fit
+# four or five in a table column. Kubernetes' `kind/`-style slash namespaces answer the same
+# need; the mechanism below is theirs, the spelling is Rust's. One colour per namespace so
+# the label bar reads as columns rather than as confetti.
 #
-# Deliberately absent — each of these would be a second, drifting ordering:
-#   priority/*   `gate/*` already answers "does the release wait on it", and the milestone
-#                answers "which release". A third axis maintained by hand would contradict
-#                the other two within a month.
-#   lifecycle/*  the k8s stale->rotten->closed bot is a defence against a backlog nobody
-#                reads. Here the equivalent is `status/parked` with a wake-up trigger
-#                written in the body: an issue is parked *by decision*, never by neglect.
-#   status/in-progress   assignees and the linked PR already carry it, mechanically.
+# Casing follows rust-lang/rust (lowercase after the prefix), not bevy (Title-Case): the
+# A- values are crate names, and `A-lww-register` has to match the directory it names.
+#
+# The C-/S- split is load-bearing and is what the Rust dialect buys beyond familiarity:
+# C- names the artifact that closes the issue, S- names whether you can act on it today.
+# So an unbuilt feature that still needs designing is `C-design` while the design is the
+# deliverable, and `C-feature` + `S-parked` once the design exists but the work is deferred
+# — two facts, two namespaces, neither encoded twice.
+#
+# Deliberately absent — each of these would be a second, drifting order:
+#   P-*      `G-*` already answers "does the release wait on it", and the milestone answers
+#            "which release". A third axis maintained by hand would contradict the other two
+#            within a month. rust-lang/rust needs P- because it arbitrates between thousands
+#            of contributors; there is nothing here to arbitrate that G- does not already say.
+#   E-*      difficulty/mentoring grades (E-easy, E-mentor) pay off with a contributor queue.
+#            The two GitHub-special names below cover the same ground for now.
+#   T-*      team routing, for a project with teams.
+#   S-stale  the k8s stale->rotten->closed bot defends a backlog nobody reads. Here the
+#            equivalent is `S-parked` with a wake-up trigger written in the body: an issue is
+#            parked *by decision*, never by neglect.
 
 # ---------------------------------------------------------------------------------------
-# kind/ — what the issue IS. Exactly one. The question it answers: what kind of work, if
-# any, closes this? `investigation`/`design`/`decision` are the three shapes of "not code
-# yet", kept apart because they are unblocked by different things: a measurement, a written
-# design, a maintainer call. The same three-step ladder golang/go runs as NeedsInvestigation
-# -> NeedsDecision -> NeedsFix.
+# C- — category: what the issue is, i.e. what artifact closes it. Exactly one.
+#
+# `C-bug`, `C-feature`, `C-enhancement`, `C-cleanup`, `C-docs` and `C-tracking-issue` are
+# the ecosystem's own spellings. `C-investigation`, `C-design` and `C-decision` are added
+# here, and each earns its place from how this repository actually works: perf work is
+# evidence-gated (#174, #281), the parked roadmap is unsettled designs rather than unstarted
+# code (#185, #186, #190), and ARCHITECTURE.md §7 is a decision log a maintainer feeds by
+# making calls (#288, #299). Adding values inside an existing namespace is how this dialect
+# grows — bevy added C-Code-Quality and C-Performance the same way.
 # ---------------------------------------------------------------------------------------
-kind/bug	1d76db	Behaviour, or an API, contradicts its documented or advertised contract
-kind/feature	1d76db	A new capability, behind new API or new machinery
-kind/enhancement	1d76db	Improves existing behaviour — performance, ergonomics — with no new capability
-kind/cleanup	1d76db	Internal quality, hygiene or metadata; no observable behaviour change
-kind/docs	1d76db	Documentation only — no code change closes it
-kind/investigation	1d76db	The answer is not known yet: measure, reproduce, instrument. Closes with evidence
-kind/design	1d76db	The solution space is open. Closes with a written design or RFC, not with code
-kind/decision	1d76db	Options are framed; a maintainer call is what is missing. Lands in ARCHITECTURE.md §7
-kind/epic	1d76db	Umbrella over sub-issues. Carries no work of its own
+C-bug	1d76db	Behaviour, or an API, contradicts its documented or advertised contract
+C-feature	1d76db	A new capability, behind new API or new machinery
+C-enhancement	1d76db	Improves existing behaviour — performance, ergonomics — with no new capability
+C-cleanup	1d76db	Internal quality, hygiene or metadata; no observable behaviour change
+C-docs	1d76db	Documentation only — no code change closes it
+C-investigation	1d76db	Closes with evidence: a measurement, a reproduction, an instrument
+C-design	1d76db	Closes with a written design or RFC. The solution space is what is missing
+C-decision	1d76db	Closes with a recorded call, in ARCHITECTURE.md §7. The options are already framed
+C-tracking-issue	1d76db	Umbrella over sub-issues. Carries no work of its own
 
 # ---------------------------------------------------------------------------------------
-# area/ — where it lands. One or more. The five crate values mirror ARCHITECTURE.md §2's
+# A- — area: where it lands. One or more. The five crate values mirror ARCHITECTURE.md §2's
 # map exactly, so the label set cannot drift from the workspace; the seven cross-cutting
 # values name the concerns that span crates. Widening this list means updating
 # ARCHITECTURE.md §2 in the same change, exactly as scripts/check-domain-purity.sh requires.
+# (tokio splits this into A- for the crate and M- for the module; with five crates and no
+# module-level triage to do, one namespace is enough.)
 # ---------------------------------------------------------------------------------------
-area/rsos	c5def5	The ordered map, fingerprint and canonical encoding
-area/rbsr	c5def5	The range-based set-reconciliation algorithm and its refinement policy
-area/lww-register	c5def5	Domain types — Entry/State, Timestamp/HLC, the Clock and Persistence ports
-area/gossip	c5def5	Transport, authentication, replay protection, discovery
-area/reconcile	c5def5	The facade — ReplicatedMap, ReadReplicaMap, Config, wiring
-area/wire	c5def5	The on-the-wire and on-disk formats — compatibility is at stake
-area/security	c5def5	Threat model, cryptography, key handling
-area/persistence	c5def5	Snapshots, durability, recovery
-area/observability	c5def5	Metrics, tracing, operational signals
-area/perf	c5def5	Throughput, latency, memory, and the benchmarks that measure them
-area/release	c5def5	Packaging, semver, CI, publication mechanics
-area/meta	c5def5	The repository itself — its docs, its tracker, its agent instructions
+A-rsos	c5def5	The ordered map, fingerprint and canonical encoding
+A-rbsr	c5def5	The range-based set-reconciliation algorithm and its refinement policy
+A-lww-register	c5def5	Domain types — Entry/State, Timestamp/HLC, the Clock and Persistence ports
+A-gossip	c5def5	Transport, authentication, replay protection, discovery
+A-reconcile	c5def5	The facade — ReplicatedMap, ReadReplicaMap, Config, wiring
+A-wire	c5def5	The on-the-wire and on-disk formats — compatibility is at stake
+A-security	c5def5	Threat model, cryptography, key handling
+A-persistence	c5def5	Snapshots, durability, recovery
+A-observability	c5def5	Metrics, tracing, operational signals
+A-perf	c5def5	Throughput, latency, memory, and the benchmarks that measure them
+A-release	c5def5	Packaging, semver, CI, publication mechanics
+A-meta	c5def5	The repository itself — its docs, its tracker, its agent instructions
 
 # ---------------------------------------------------------------------------------------
-# status/ — what it is waiting on. Exactly one. This is the field that decides whether an
-# issue is pickable *right now*, so it is the one worth keeping honest.
+# S- — status: whether it can be acted on now, and if not, what is in the way. Exactly one.
+# Four values, because "what is missing" is already answered by C-: an issue blocked on a
+# measurement is `C-investigation` + `S-ready` when someone can go measure, and `S-blocked`
+# on the issue that owns the measurement when they cannot. Encoding the same fact in both
+# namespaces is how a taxonomy starts contradicting itself.
 # ---------------------------------------------------------------------------------------
-status/needs-triage	fbca04	Not yet classified. The default on anything new; no other status may accompany it
-status/needs-investigation	fbca04	Blocked on evidence — a measurement or a reproduction, not a decision
-status/needs-decision	fbca04	Understood and framed; blocked on a maintainer call
-status/ready	fbca04	Understood, unblocked, and actionable as written
-status/blocked	fbca04	Blocked by another issue, named in the body
-status/parked	fbca04	Deliberately not now. The body MUST state what would wake it up
+S-needs-triage	fbca04	Not yet classified. The default on anything new; C-/A- are not required until it leaves
+S-ready	fbca04	Understood, unblocked, and actionable as written
+S-blocked	fbca04	Blocked by another issue, named in the body
+S-parked	fbca04	Deliberately not now. The body MUST state what would wake it up
 
 # ---------------------------------------------------------------------------------------
-# gate/ — what shipping 1.0.0 without it costs. At most one; absence means "not a gate".
+# G- — gate: what shipping 1.0.0 without it costs. At most one; absence means "not a gate".
 # Repo-specific, and the reason this namespace exists at all: #206 §2 already defines these
 # three classes and maintains them as hand-written tables in two files. Tables drift — on
 # 2026-08-13 five rows were stale within a day. A label is queryable and cannot fall out of
-# sync with itself.
+# sync with itself. The a/b/c keeps #206's and PROGRESS.md's own vocabulary greppable.
 # ---------------------------------------------------------------------------------------
-gate/a-breaking	b60205	Non-additive: deferring past the tag costs a 2.0.0 (#206 §3)
-gate/b-claim	b60205	A claim the 1.0.0 release makes would be false on day one (#206 §4)
-gate/c-mechanics	b60205	Cannot ship, be found, or be verified without it (#206 §5)
+G-a-breaking	b60205	Non-additive: deferring past the tag costs a 2.0.0 (#206 §3)
+G-b-claim	b60205	A claim the 1.0.0 release makes would be false on day one (#206 §4)
+G-c-mechanics	b60205	Cannot ship, be found, or be verified without it (#206 §5)
 
 # ---------------------------------------------------------------------------------------
-# Meta — GitHub gives these two exact names special treatment (repository "good first
-# issues" surfacing, the contribute API), so they keep their canonical spelling and stay
-# outside the namespaces.
+# Meta — these two exact strings are what GitHub's own surfaces key off (the repository
+# "contribute" page, the good-first-issue discovery feeds), so they keep their canonical
+# spelling instead of becoming E-easy / E-help-wanted. A renamed label loses that.
 # ---------------------------------------------------------------------------------------
 good first issue	7057ff	Scoped, self-contained, and reachable without repository context
 help wanted	008672	Maintainers would take a contribution here

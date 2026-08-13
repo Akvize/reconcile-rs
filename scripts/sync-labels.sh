@@ -18,8 +18,10 @@
 #
 # Renaming beats deleting: `gh label edit OLD --name NEW` keeps the label on every issue it
 # is already applied to. The three GitHub defaults this repository has used map straight
-# across, so migration keeps its history:
-#   bug -> kind/bug     documentation -> kind/docs     enhancement -> kind/feature
+# across, so run these *before* the first sync and migration keeps its history:
+#   gh label edit bug           --name C-bug
+#   gh label edit documentation --name C-docs
+#   gh label edit enhancement   --name C-feature
 #
 # Requires: gh (authenticated, or GH_TOKEN in the environment with `issues: write`).
 set -Eeuo pipefail

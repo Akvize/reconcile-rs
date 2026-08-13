@@ -4,7 +4,7 @@ name: labels
 #
 # Three jobs, three different failure modes of a label taxonomy:
 #   sync     the label set drifts from `.github/labels.tsv` -> re-apply the file on every change
-#   triage   an issue opens with no labels at all           -> stamp `status/needs-triage`
+#   triage   an issue opens with no labels at all           -> stamp `S-needs-triage`
 #   check    an issue carries an invalid combination        -> fail, weekly and on demand
 #
 # `check` runs on a schedule rather than per-PR because its subject is the tracker, not the
@@ -51,10 +51,12 @@ jobs:
     permissions:
       issues: write
     steps:
-      # The default state has to be applied by something, or "exactly one status/" is false
-      # for every issue the moment it is opened, and the weekly check becomes noise.
-      - name: Stamp status/needs-triage
-        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label status/needs-triage
+      # The default state has to be applied by something, or "exactly one S-" is false for
+      # every issue the moment it is opened, and the weekly check becomes noise. The issue
+      # template also sets it, which covers only template-created issues — this covers the
+      # rest (API, `gh issue create`, transfers).
+      - name: Stamp S-needs-triage
+        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label S-needs-triage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
