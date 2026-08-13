@@ -132,7 +132,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 in use, and the tombstone wheel and wire format are already coupled to its shape. `Transport` is
 `#[async_trait]` and object-safe (`Arc<dyn Transport<...>>`); `InMemoryTransport`/`InMemoryNetwork`
 are public (not test-gated) so downstream crates can drive a deterministic in-process cluster in
-their own tests. `Discovery::is_authoritative` distinguishes a speculative probe result (steers only
+their own tests. `Discovery::kind` distinguishes a speculative probe result (steers only
 the current round's targets) from an authoritative one (seeded into the known-peer set, an absence
 decommissions after a grace period) — either way discovery never grants causal-stability membership
 (§5 invariant 6), which a peer must earn via an authenticated dated datagram.
@@ -256,7 +256,7 @@ tombstone indexes, `TimeoutWheel`, the snapshot codec).
 
 ---
 
-### 4.1 State typing
+### 4.2 State typing
 
 A finite, named set of states carried by a **type** rather than by an `Option`, a `bool` or a bare
 primitive, so the state is a compile-time fact instead of call-site discipline. AGENTS.md §4 states
