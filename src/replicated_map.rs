@@ -462,9 +462,34 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.value_fingerprint(range)
     }
 
+    /// # Deadlock
+    ///
+    /// The returned guard holds the map **read** lock for as long as it is alive. Calling any
+    /// write method (`insert`, `remove`, `get_mut`, `update`, …) — which takes the **write** lock
+    /// — while the guard from an earlier `get` on the same thread is still in scope self-deadlocks
+    /// (`parking_lot`'s `RwLock` is not reentrant, and blocks with no timeout rather than
+    /// panicking):
+    ///
+    /// ```ignore
+    /// if let Some(v) = map.get(&k) {
+    ///     map.insert(k, new_value); // deadlocks: `v` is still borrowing the read lock
+    /// }
+    /// ```
+    ///
+    /// Prefer [`get_cloned`](Self::get_cloned), which drops the lock before returning, as the
+    /// default read when the value will be compared against or fed into a subsequent write.
     pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
         let guard = self.engine.map.read();
         RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
+    }
+
+    /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
+    /// released before this returns, so the result can be safely followed by a write on the same
+    /// thread — this is the documented default read for that pattern. Still racy against a
+    /// concurrent write between the read and the write; use [`update`](Self::update) instead when
+    /// the write must be atomic with the read.
+    pub fn get_cloned(&self, k: &K) -> Option<V> {
+        self.get(k).map(|v| v.clone())
     }
 
     /// The number of **live** entries. `O(n)`, and smaller than the raw map size: tombstones
@@ -521,6 +546,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// Call `f` for every live entry, in key order, under the map read lock. Do not block or call
     /// back into the store from `f`.
+    ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map read lock is held. Calling a write method (`insert`, `get_mut`,
+    /// …) from `f` self-deadlocks — see [`get`](Self::get)'s `# Deadlock` section.
     pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
         let guard = self.engine.map.read();
         for (k, entry) in guard.iter() {
@@ -533,6 +563,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Call `f` for every live entry whose key falls in `range`, in key order. Mirrors the
     /// [`fingerprint`](Self::fingerprint) range signature; same locking discipline as
     /// [`for_each`](Self::for_each).
+    ///
+    /// # Deadlock
+    ///
+    /// Same hazard as [`for_each`](Self::for_each) — see [`get`](Self::get)'s `# Deadlock`
+    /// section.
     pub fn for_each_in_range<R: RangeBounds<K>, F: FnMut(&K, &V)>(&self, range: R, mut f: F) {
         let guard = self.engine.map.read();
         for (k, entry) in guard.range(range) {
@@ -743,6 +778,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Delete every live entry for which `keep` returns `false`, as broadcast tombstones. Keys
     /// where `keep` returns `true` are retained. The predicate runs under the read lock; keep it
     /// cheap and side-effect free.
+    ///
+    /// # Deadlock
+    ///
+    /// `keep` runs while the map read lock is held. Calling a write method from `keep`
+    /// self-deadlocks — see [`get`](Self::get)'s `# Deadlock` section.
+    ///
     /// # Panics
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
@@ -995,6 +1036,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// mutated entry is re-stamped and broadcast. Holds the write lock for the whole
     /// read-modify-write, so it is atomic against the reconciliation loop.
     ///
+    /// # Deadlock
+    ///
+    /// `callback` runs while the map **write** lock is held. Calling any read or write method
+    /// (`get`, `insert`, `for_each`, another `get_mut`, …) from `callback` self-deadlocks — see
+    /// [`get`](Self::get)'s `# Deadlock` section.
+    ///
     /// # Panics
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
@@ -1061,6 +1108,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Atomically mutate the live value for `k`, then re-stamp and broadcast; returns whether the
     /// key was live. The race-free replacement for a `get`-then-`insert`.
     ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map write lock is held — same hazard as
+    /// [`get_mut`](Self::get_mut)'s `# Deadlock` section.
+    ///
     /// # Panics
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
@@ -1072,6 +1124,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Update the live value for `k` with `f`, or insert `default` if it is absent or tombstoned.
     ///
     /// The update branch is atomic; the insert branch behaves like [`insert`](Self::insert).
+    ///
+    /// # Deadlock
+    ///
+    /// `f` runs while the map write lock is held on the update branch — same hazard as
+    /// [`get_mut`](Self::get_mut)'s `# Deadlock` section.
     ///
     /// # Panics
     ///
@@ -2367,5 +2424,25 @@ mod replicated_map_tests {
         );
 
         task.abort();
+    }
+
+    /// #283: `get_cloned` must not hold the read lock past its return, so a write immediately
+    /// following it (the `get`-then-`insert` pattern `get`'s own guard would self-deadlock on)
+    /// completes without hanging.
+    #[tokio::test]
+    async fn get_cloned_does_not_hold_the_lock_across_a_following_write() {
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .unwrap();
+        store.insert(1, 10);
+
+        let value = store.get_cloned(&1);
+        assert_eq!(value, Some(10));
+        // If `get_cloned` still held the read lock here, this write lock acquisition would hang
+        // forever instead of returning.
+        store.insert(1, 20);
+
+        assert_eq!(store.get_cloned(&1), Some(20));
+        assert_eq!(store.get_cloned(&2), None);
     }
 }
