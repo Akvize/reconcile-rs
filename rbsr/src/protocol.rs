@@ -176,7 +176,7 @@ impl AdmittedRank {
     ///
     /// The result is `< end <= size()`, hence a valid [`RsosView::select`] argument by construction
     /// — the reason the fan-out walks through this rather than through bare `usize` arithmetic.
-    /// Saturating, since `overflow-checks` is off in release (#205).
+    /// Saturating, so this never panics regardless of the `overflow-checks` profile setting.
     fn cut_before(self, end: AdmittedRank, stride: usize) -> Option<AdmittedRank> {
         let next = AdmittedRank(self.0.saturating_add(stride));
         (next < end).then_some(next)

@@ -54,7 +54,7 @@ const LOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 /// Entries cloned per map read-lock acquisition while building a snapshot (`Self::snapshot`).
 ///
 /// Cloning the whole map under one continuous read lock stalls every writer for as long as the
-/// clone takes — proportional to map size, unbounded (#202). Chunking bounds a single stall to
+/// clone takes — proportional to map size, unbounded. Chunking bounds a single stall to
 /// the time to clone this many entries, releasing the lock between chunks so a waiting writer can
 /// interleave. The resulting snapshot is not a single linearizable instant — later chunks can
 /// reflect writes concurrent with earlier ones — but that is no different from what the gossip
@@ -1776,7 +1776,7 @@ mod replicated_map_tests {
         }
     }
 
-    /// #202: a transient load failure (anything but `InvalidData`) must be retried, not turned
+    /// A transient load failure (anything but `InvalidData`) must be retried, not turned
     /// into an immediate crash — a slow-mounting volume at boot must not crash-loop the process.
     #[tokio::test]
     async fn transient_load_failure_is_retried_not_fatal() {
@@ -1792,7 +1792,7 @@ mod replicated_map_tests {
             .with_persistence(backend);
     }
 
-    /// #202: a load failure that exhausts the retry budget still panics — retrying is a bounded
+    /// A load failure that exhausts the retry budget still panics — retrying is a bounded
     /// mitigation for a transient hiccup, not a way to silently start fresh forever.
     #[tokio::test]
     #[should_panic(expected = "failed to load persisted state after")]
@@ -1807,7 +1807,7 @@ mod replicated_map_tests {
             .with_persistence(backend);
     }
 
-    /// #202: `InvalidData` (corrupt or incompatible format) must panic **immediately**, with no
+    /// `InvalidData` (corrupt or incompatible format) must panic **immediately**, with no
     /// retry — corruption does not clear up on its own, and retrying would only delay the loud
     /// failure the doc comment promises.
     #[tokio::test]
@@ -1827,7 +1827,7 @@ mod replicated_map_tests {
         assert!(start.elapsed() < super::LOAD_RETRY_BASE_DELAY);
     }
 
-    /// #202: `snapshot` clones the map in `SNAPSHOT_CHUNK_SIZE`-entry chunks, releasing and
+    /// `snapshot` clones the map in `SNAPSHOT_CHUNK_SIZE`-entry chunks, releasing and
     /// re-acquiring the read lock between them. Insert enough entries to force several chunk
     /// boundaries and confirm every one of them still round-trips — the chunking must not drop,
     /// duplicate, or reorder entries relative to the previous whole-map-under-one-lock snapshot.
@@ -2020,7 +2020,7 @@ mod replicated_map_tests {
         }
     }
 
-    /// #283: the guard must be `assert!`, not `debug_assert!` — a no-op in `--release` would let a
+    /// The guard must be `assert!`, not `debug_assert!` — a no-op in `--release` would let a
     /// speculative source through, whose absences then wrongly decommission live members and
     /// release the causal-stability GC gate.
     #[tokio::test]
@@ -2396,7 +2396,7 @@ mod replicated_map_tests {
 
     /// A raw payload with one `ComparisonItem`: a dated message, so the receive path would add
     /// the sender to `members` unless the cap fires first. Starts with the wire-version byte
-    /// (#309) every datagram carries, unauthenticated included — `Authenticator::Disabled` no
+    /// every datagram carries, unauthenticated included — `Authenticator::Disabled` no
     /// longer passes bytes through unversioned.
     fn dated_comparison_payload() -> Vec<u8> {
         use crate::replica::Message;
@@ -2652,7 +2652,7 @@ mod replicated_map_tests {
         task.abort();
     }
 
-    /// #283: `get_cloned` must not hold the read lock past its return, so a write immediately
+    /// `get_cloned` must not hold the read lock past its return, so a write immediately
     /// following it (the `get`-then-`insert` pattern `get`'s own guard would self-deadlock on)
     /// completes without hanging.
     #[tokio::test]

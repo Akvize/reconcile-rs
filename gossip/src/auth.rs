@@ -23,7 +23,7 @@
 //!
 //! The replay header sits inside the authenticated/encrypted region in both cases; the wire
 //! version byte sits inside it too, and — unlike the replay header, which is absent when
-//! disabled — is present on **every** datagram regardless of authentication mode (#309): a
+//! disabled — is present on **every** datagram regardless of authentication mode: a
 //! mixed-version cluster must be diagnosable whether or not a cluster key is configured, and
 //! unauthenticated is the default (`ARCHITECTURE.md` §8).
 //!
@@ -52,7 +52,7 @@ pub const KEY_LEN: usize = 32;
 /// regardless of authentication mode.
 pub const VERSION_LEN: usize = 1;
 
-/// The wire protocol version this build produces and accepts (#309).
+/// The wire protocol version this build produces and accepts.
 ///
 /// Bumping it is the sanctioned way to make a non-additive change to the `Message` wire format:
 /// a peer running a different version is rejected with a distinguishable, counted reason
@@ -133,7 +133,7 @@ pub struct Payload<'a, State = Authenticated> {
 }
 
 impl<'a> Payload<'a, Authenticated> {
-    /// Strip and check the leading wire-version byte (#309). Call this before
+    /// Strip and check the leading wire-version byte. Call this before
     /// [`verify_replay`](Self::verify_replay) — see the module doc for why the ordering matters.
     ///
     /// `Err(actual)` on a mismatch (or an empty payload, reported as version `0`), carrying the
@@ -318,7 +318,7 @@ impl Authenticator {
         }
     }
 
-    /// Frame an outgoing datagram: inject the wire-version byte (#309, every mode) and, when
+    /// Frame an outgoing datagram: inject the wire-version byte (every mode) and, when
     /// enabled, the replay header.
     pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Vec<u8> {
         match self {
@@ -525,7 +525,7 @@ mod tests {
             .is_none());
     }
 
-    /// Disabled still frames — the wire-version byte (#309) is present regardless of
+    /// Disabled still frames — the wire-version byte is present regardless of
     /// authentication mode, since unauthenticated is the default.
     #[test]
     fn disabled_still_stamps_the_wire_version() {
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(p.as_bytes(), payload);
     }
 
-    /// #309: a peer on a different wire version is rejected distinguishably from an
+    /// A peer on a different wire version is rejected distinguishably from an
     /// authentication failure — `open` still succeeds (the MAC/decrypt is valid), only
     /// `check_version` fails, and it reports the version actually received.
     #[test]

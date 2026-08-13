@@ -116,7 +116,7 @@ impl Comparison {
     }
 
     /// Child ranges already emitted this round: the round-budget seam
-    /// ([#257](https://github.com/Akvize/reconcile-rs/issues/257), `SOTA.md` §2.4 P3-9).
+    /// (`SOTA.md` §2.4 P3-9).
     ///
     /// Counted in ranges, not bytes — this crate owns no encoding. No shipped policy reads it;
     /// [`RefinementPolicy`] carries a worked capping example.
@@ -155,8 +155,7 @@ pub enum Decision {
 /// The rule that turns one range comparison into one [`Decision`].
 ///
 /// A **purely local decision, never a wire contract** (`ARCHITECTURE.md` §3.1): peers running
-/// different policies converge. A policy must therefore never be advertised or negotiated
-/// ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
+/// different policies converge. A policy must therefore never be advertised or negotiated.
 ///
 /// # The shipped policies
 ///

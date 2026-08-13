@@ -755,7 +755,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                // #309: reject a differently-versioned peer with a distinguishable,
+                                // Reject a differently-versioned peer with a distinguishable,
                                 // counted reason — never confused with "malformed" or "bad_mac".
                                 // Runs on already-authenticated bytes (a forged version claim is
                                 // rejected the same way a forged payload is), but ahead of every
@@ -1311,7 +1311,7 @@ pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
     target: SocketAddr,
 ) -> std::io::Result<usize> {
     // Allocate a sequence number and stamp, then frame the datagram once and reuse it across
-    // retries. `seal` always frames — even disabled adds the wire-version byte (#309).
+    // retries. `seal` always frames — even disabled adds the wire-version byte.
     let seq = sender_counter.next_seq();
     let stamp = sender_counter.next_stamp();
     let wire = authenticator.seal(seq, stamp, buf);
@@ -1402,11 +1402,11 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
             send_buf.drain(..last_size);
             if this_message_len > max_payload {
                 // This message's own encoding exceeds `max_payload` on its own — no datagram it
-                // could ever be packed into, alone or otherwise. Sending it (as the pre-#230 code
-                // did, either as a bogus empty datagram when it was first in the batch, or as an
-                // oversized one otherwise) never converges the key and only ever fails with
-                // EMSGSIZE. Drop it, counted and logged distinctly from a transport send failure
-                // so it is alertable rather than silently retried forever.
+                // could ever be packed into, alone or otherwise. Sending it anyway (either as a
+                // bogus empty datagram when it was first in the batch, or as an oversized one
+                // otherwise) never converges the key and only ever fails with EMSGSIZE. Drop it,
+                // counted and logged distinctly from a transport send failure so it is alertable
+                // rather than silently retried forever.
                 error!(
                     "dropping oversized message to {peer}: encodes to {this_message_len} bytes, \
                      exceeding the {max_payload}-byte datagram budget; this key will never \
@@ -1418,7 +1418,7 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
         }
     }
     // Empty exactly when the batch was empty, or ended with an oversized message that was just
-    // dropped above (#230) — either way, an empty datagram is not a real send.
+    // dropped above — either way, an empty datagram is not a real send.
     if !send_buf.is_empty() {
         trace!("sending last {} bytes to {peer}", send_buf.len());
         if let Err(err) = send_to_retry(
@@ -1527,8 +1527,8 @@ mod deadlock_regressions {
 
     /// Serialize an `Update` so it can be fed straight into the engine's network ingest path
     /// (`handle_messages`), exactly as a peer's datagram would arrive once the (disabled)
-    /// authentication gate has been cleared — including the leading wire-version byte (#309)
-    /// every datagram carries regardless of authentication mode.
+    /// authentication gate has been cleared — including the leading wire-version byte every
+    /// datagram carries regardless of authentication mode.
     fn update_message_bytes(key: i32, value: Entry<Timestamp, u8>) -> Vec<u8> {
         let message = Message::Update::<i32, Entry<Timestamp, u8>, State<u8>>((key, value));
         let mut buf = vec![gossip::auth::WIRE_VERSION];
@@ -2034,11 +2034,11 @@ mod pacing {
         assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
     }
 
-    /// #230: a single message whose own encoding exceeds the datagram budget must be dropped —
-    /// never sent as a bogus empty datagram (the pre-fix behaviour when it was first in the
-    /// batch) and never sent as an oversized one (the pre-fix behaviour otherwise, which a real
-    /// UDP socket rejects with `EMSGSIZE`). A normal-sized message in the same batch must still
-    /// go out untouched, whether it comes before or after the oversized one.
+    /// A single message whose own encoding exceeds the datagram budget must be dropped — never
+    /// sent as a bogus empty datagram (when it was first in the batch) and never sent as an
+    /// oversized one (otherwise, which a real UDP socket rejects with `EMSGSIZE`). A
+    /// normal-sized message in the same batch must still go out untouched, whether it comes
+    /// before or after the oversized one.
     #[tokio::test]
     async fn oversized_message_is_dropped_not_sent_empty_or_oversized() {
         use crate::transport::{InMemoryNetwork, Transport};

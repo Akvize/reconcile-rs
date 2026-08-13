@@ -66,7 +66,7 @@ fn wire_format_is_unchanged_by_the_aggregate_collapse() {
 }
 
 /// Golden vector for the **envelope** `gossip::auth::Authenticator::seal` produces — the wire
-/// version byte's placement (#309), not the `Message`/`RangeAggregate` body above. Both
+/// version byte's placement, not the `Message`/`RangeAggregate` body above. Both
 /// authenticated and unauthenticated layouts are pinned: the version byte is present, and at the
 /// same relative position (right after the replay header, ahead of the payload) in both.
 #[test]

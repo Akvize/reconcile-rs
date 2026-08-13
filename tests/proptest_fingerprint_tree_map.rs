@@ -21,7 +21,7 @@
 //!    messages — modelling the lossy UDP transport. Convergence is also checked
 //!    under every shipped `RefinementPolicy` and under *mixed* pairs of them,
 //!    which is the property that makes the policy swappable without a protocol
-//!    break (#257).
+//!    break.
 
 use std::collections::BTreeMap;
 use std::ops::Bound;

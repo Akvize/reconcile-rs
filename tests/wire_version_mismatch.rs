@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! #309: a peer on a different wire version must be rejected with a distinguishable, counted
+//! A peer on a different wire version must be rejected with a distinguishable, counted
 //! reason — never confused with a merely malformed datagram. `metrics::set_global_recorder` (not
 //! the thread-local `with_local_recorder` `tests/observability.rs` uses) is what lets this
 //! capture counters incremented from the `run()` loop's own spawned task, on another thread.

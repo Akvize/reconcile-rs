@@ -25,9 +25,9 @@
 //! reaches its IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire
 //! — almost all of them elements the peer already holds. Reporting advertised ranges without
 //! enumerated elements would make a large enumeration threshold look free. The third column, one-way
-//! messages, is the round-trip count, and every benchmark in this repository runs at RTT ≈ 0
-//! ([#280](https://github.com/Akvize/reconcile-rs/issues/280)) — so this target prices bytes
-//! correctly and round-trips at zero, which is exactly the axis that separates `√m` from a fixed
+//! messages, is the round-trip count, and every benchmark in this repository runs at RTT ≈ 0 —
+//! so this target prices bytes correctly and round-trips at zero, which is exactly the axis that
+//! separates `√m` from a fixed
 //! `b`. Weigh the message column by your own RTT before drawing a conclusion from the byte column.
 //!
 //! Unlike `bench` (structure micro-benchmarks) and `system` (end-to-end over `ReplicatedMap`), this
@@ -333,7 +333,7 @@ where
 /// `(policy, n, d, clustering)` — alongside the timed drive loop, the paper's `T_loc`.
 fn reconciliation_cost(c: &mut Criterion) {
     println!(
-        "[protocol] full reconciliation, u64 keys. Refinement policy is a local decision (#257): \
+        "[protocol] full reconciliation, u64 keys. Refinement policy is a local decision: \
          the wire type carries none, so these are comparable runs of the same protocol.\n\
          [protocol] columns: refinement traffic | widest round | IDLIST (ranges/elements shipped) \
          | local RSOS queries, both peers"
@@ -390,8 +390,8 @@ fn reconciliation_cost(c: &mut Criterion) {
 /// evidence.
 ///
 /// **What to read.** Ranges grow as `b / ln b` (minimized near `b = 3`) while one-way messages
-/// fall as `log_b n`; with no RTT lane here ([#280](https://github.com/Akvize/reconcile-rs/issues/280))
-/// the message column has to be weighed by your own round-trip time. The hard limit is the widest
+/// fall as `log_b n`; with no RTT lane here the message column has to be weighed by your own
+/// round-trip time. The hard limit is the widest
 /// single round, linear in `b`, which must fit a datagram and survive fragmentation.
 fn fan_out_sweep(c: &mut Criterion) {
     println!(

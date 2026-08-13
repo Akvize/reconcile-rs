@@ -497,8 +497,8 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
                     } else {
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
-                                // #309: reject a differently-versioned peer distinguishably from
-                                // an authentication failure — see `Replica::run`'s identical gate.
+                                // Reject a differently-versioned peer distinguishably from an
+                                // authentication failure — see `Replica::run`'s identical gate.
                                 let payload = match payload.check_version() {
                                     Ok(payload) => payload,
                                     Err(version) => {

@@ -80,7 +80,7 @@ pub use replicated_map::ReplicatedMap;
 #[cfg(any(test, feature = "internal-testing"))]
 pub mod testing {
     /// Seal `payload` with MAC authentication: `tag(32) || seq(8 LE) || stamp(8 LE) ||
-    /// version(1) || payload` (the wire-version byte, #309).
+    /// version(1) || payload` (the wire-version byte).
     pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
         gossip::auth::Authenticator::new(Some(key), false).seal(
             gossip::replay::Seq::new(seq),
