@@ -9,8 +9,11 @@
 #   1. exactly one C-*   what artifact closes this issue
 #   2. at least one A-*  where it lands
 #   3. exactly one S-*   whether it can be acted on now
-#   4. at most one G-*   what shipping 1.0.0 without it costs
-#   5. S-blocked names its blocker as #NNN in the body
+#   4. S-blocked names its blocker as #NNN in the body
+#
+# "Does 1.0.0 wait on this" is a milestone, not a label (`.github/labels.tsv`), so there is
+# nothing here to check for it: GitHub maintains milestone membership natively, which is the
+# whole reason it is a milestone.
 #
 # `S-needs-triage` is the untriaged state, so it is exempt from 1 and 2 — that is the whole
 # point of having it, and it is how rust-lang/rust's own `needs-triage` works. It is not a
@@ -64,7 +67,7 @@ report() {
     printf '  #%-5s %s\n' "$1" "$2"
 }
 
-while IFS=$'\t' read -r number kinds areas statuses gates unknown blocked_ok title; do
+while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok title; do
     [ -n "$number" ] || continue
 
     if [ "$statuses" -ne 1 ]; then
@@ -85,7 +88,6 @@ while IFS=$'\t' read -r number kinds areas statuses gates unknown blocked_ok tit
         [ "$areas" -ge 1 ] || report "$number" "no A- label — $title"
     fi
 
-    [ "$gates" -le 1 ] || report "$number" "$gates G- labels, expected at most 1 — $title"
     [ "$unknown" -eq 0 ] || report "$number" "$unknown label(s) absent from $LABELS_FILE — $title"
     [ "$blocked_ok" = "ok" ] || report "$number" "S-blocked with no #NNN blocker in the body — $title"
 done < <(
@@ -96,7 +98,6 @@ done < <(
           ([.labels[].name | select(startswith("C-"))] | length),
           ([.labels[].name | select(startswith("A-"))] | length),
           ([.labels[].name | select(startswith("S-"))] | length),
-          ([.labels[].name | select(startswith("G-"))] | length),
           ([.labels[].name | select(. as $n | $known | index($n) | not)] | length),
           (if ([.labels[].name] | index("S-blocked"))
            then (if ((.body // "") | test("#[0-9]+")) then "ok" else "missing" end)

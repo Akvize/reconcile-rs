@@ -6,12 +6,24 @@
 # combination. AGENTS.md §10: the rule lives in a failing command, not in prose someone
 # has to remember.
 #
-# Four namespaces, four different questions, answered independently:
+# Three namespaces, three different questions, answered independently, plus one marker:
 #
-#   C-   what the issue IS — what artifact closes it   exactly one   mandatory
-#   A-   where it lands                                one or more   mandatory
-#   S-   whether it can be acted on now                exactly one   mandatory
-#   G-   what shipping 1.0.0 without it costs (#206)   at most one   optional
+#   C-           what the issue IS — what artifact closes it   exactly one   mandatory
+#   A-           where it lands                                one or more   mandatory
+#   S-           whether it can be acted on now                exactly one   mandatory
+#   M-breaking   deferring it costs a major version            optional
+#
+# "Does the 1.0.0 release wait on this?" is deliberately NOT a label: it is a **milestone**.
+# A label that means "blocks release X" is dead the day X ships and then lingers on every
+# issue that carried it, whereas a milestone closes with the release and takes its membership
+# with it. The membership question is also the only half that actually drifted — on
+# 2026-08-13 five rows of #206 §3-§5's hand-kept gate tables pointed at issues closed hours
+# earlier — and a milestone answers it as a live query that no one has to edit. #206's A/B/C
+# classes stay where the reasoning is: in #206.
+#
+# What survives the tag is the half that was never about 1.0 — "is this change non-additive"
+# — so that one is a label, under a name that does not expire. `M-` is bevy's migration
+# prefix (M-Needs-Migration-Guide), not tokio's module prefix.
 #
 # The single-letter dialect is the Rust ecosystem's, not an invention here: rust-lang/rust
 # (C-, A-, S-, P-, E-, I-, T-, O-, F-), tokio (C-, A-, M-, E-), bevy (C-, A-, S-, D-, X-),
@@ -31,10 +43,10 @@
 # — two facts, two namespaces, neither encoded twice.
 #
 # Deliberately absent — each of these would be a second, drifting order:
-#   P-*      `G-*` already answers "does the release wait on it", and the milestone answers
-#            "which release". A third axis maintained by hand would contradict the other two
-#            within a month. rust-lang/rust needs P- because it arbitrates between thousands
-#            of contributors; there is nothing here to arbitrate that G- does not already say.
+#   P-*      the milestone already answers "does the release wait on it, and which release".
+#            A third axis maintained by hand would contradict it within a month. rust-lang/rust
+#            needs P- because it arbitrates between thousands of contributors; there is nothing
+#            here to arbitrate that the milestone does not already say.
 #   E-*      difficulty/mentoring grades (E-easy, E-mentor) pay off with a contributor queue.
 #            The two GitHub-special names below cover the same ground for now.
 #   T-*      team routing, for a project with teams.
@@ -97,15 +109,15 @@ S-blocked	fbca04	Blocked by another issue, named in the body
 S-parked	fbca04	Deliberately not now. The body MUST state what would wake it up
 
 # ---------------------------------------------------------------------------------------
-# G- — gate: what shipping 1.0.0 without it costs. At most one; absence means "not a gate".
-# Repo-specific, and the reason this namespace exists at all: #206 §2 already defines these
-# three classes and maintains them as hand-written tables in two files. Tables drift — on
-# 2026-08-13 five rows were stale within a day. A label is queryable and cannot fall out of
-# sync with itself. The a/b/c keeps #206's and PROGRESS.md's own vocabulary greppable.
+# M-breaking — the one marker, and the only part of #206's gate vocabulary that outlives the
+# 1.0.0 tag. #206 §3 (Gate A) asks "is this non-additive?", and that question does not expire
+# with the release — it gets sharper afterwards, once semver is actually in force. Pair it
+# with the milestone to recover Gate A exactly: `is:open milestone:1.0.0 label:M-breaking`.
+#
+# It also has a downstream consumer, which is why "breaking" and not "gate": every issue
+# carrying it is a row #310's CHANGELOG and migration guide must eventually contain.
 # ---------------------------------------------------------------------------------------
-G-a-breaking	b60205	Non-additive: deferring past the tag costs a 2.0.0 (#206 §3)
-G-b-claim	b60205	A claim the 1.0.0 release makes would be false on day one (#206 §4)
-G-c-mechanics	b60205	Cannot ship, be found, or be verified without it (#206 §5)
+M-breaking	b60205	Non-additive: needs a major version and a migration-guide entry (#310)
 
 # ---------------------------------------------------------------------------------------
 # Meta — these two exact strings are what GitHub's own surfaces key off (the repository
