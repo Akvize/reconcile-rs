@@ -38,7 +38,8 @@ replica. A 2026-06 adversarial audit filed further findings as
 (tracking [#206](https://github.com/Akvize/reconcile-rs/issues/206)); all nine correctness/security
 findings (#195–#201) are **fixed**. Of the maturity-grade items filed alongside them,
 [#202](https://github.com/Akvize/reconcile-rs/issues/202) (persistence operational robustness) and
-[#203](https://github.com/Akvize/reconcile-rs/issues/203) (mac-hmac/macOS CI lanes) and
+[#203](https://github.com/Akvize/reconcile-rs/issues/203) (mac-hmac CI lane; macOS lane **waived**,
+see §6 Waivers) and
 [#204](https://github.com/Akvize/reconcile-rs/issues/204) (release pipeline mechanics) are now
 **fixed** — #202's port-contract redesign and #203's poll-budget scaling are separable follow-ups,
 not correctness gaps; [#205](https://github.com/Akvize/reconcile-rs/issues/205) hygiene batch is
@@ -412,7 +413,7 @@ flowchart TD
 |---|---|
 | ✅ [#283](https://github.com/Akvize/reconcile-rs/issues/283) | **Closed** 2026-08-13 — `with_discovery`'s guard is a real `assert!` (fires in release too) and `Discovery::kind()` no longer defaults to the dangerous `Authoritative` choice; writes document their Tokio-runtime dependency; `get_cloned` added as the documented get-then-write default |
 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) | **Closed** — laws stated on `RsosView`/`Rsos::aggregate`, bound made structural via `AdmittedRank` (`ARCHITECTURE.md` §5 inv. 9), property-tested |
-| ✅ [#203](https://github.com/Akvize/reconcile-rs/issues/203) | **Closed** 2026-08-13 — dedicated `mac-hmac` and `macos` CI jobs (poll-budget scaling under the coverage job's slower runtime is a separable follow-up, not tracked here) |
+| ✅ [#203](https://github.com/Akvize/reconcile-rs/issues/203) | **Closed** 2026-08-13 — dedicated `mac-hmac` CI job. The `macos` build was added, then made test-executing (loopback aliasing), then **removed entirely** the same day: the project claims no macOS deployment target, and a public repo's runner minutes are unbilled, so cost was never the trade-off — coverage-for-a-platform-nobody-ships-on was. Recorded as a waiver, §6 Waivers (poll-budget scaling under the coverage job's slower runtime is a separable follow-up, not tracked here) |
 | ✅ [#202](https://github.com/Akvize/reconcile-rs/issues/202) | **Closed** 2026-08-13 — chunked snapshot cloning bounds the write stall, directory fsync after rename, bounded retry with backoff on transient load failure (the port-contract redesign — async, associated error type — is a separable follow-up, not tracked here) |
 | ✅ [#230](https://github.com/Akvize/reconcile-rs/issues/230) | **Closed** 2026-08-13 — an oversized value is dropped with a dedicated, counted, alertable signal (`reconcile_values_oversized_total`) instead of the empty-datagram/EMSGSIZE failure loop |
 | [#205](https://github.com/Akvize/reconcile-rs/issues/205) | Items 1, 3, 5, 7, 8. Item **7** is also a Gate-A item: `internal-testing` is an ordinary feature of a published crate, so 1.0 would freeze `reconcile::testing` into the public surface |
@@ -467,11 +468,12 @@ Open and wanted, none blocking.
 
 ### Waivers
 
-A Gate A row may also leave the list **waived** — cost named, accepted, recorded (#206 §8).
+A Gate A or Gate B row may also leave the list **waived** — cost named, accepted, recorded (#206 §8).
 
 | Issue | Accepted cost | Basis |
 |---|---|---|
 | #298 generic monoid *(2026-08-12)* | a 2.0.0 if a generic summary is ever wanted — `rsos::Rsos` is in `reconcile`'s public API, associated-type defaults are unstable | the seam's shape is undetermined with zero instances (`Group`/`Monoid` fork, `ARCHITECTURE.md` §7); both motivations lapsed — sketch-in-leaves dead at ~1.6 GB (#185), Meyer & Scherer 2024 weakens the theoretical half |
+| #203 macOS CI lane *(2026-08-13)* | non-Linux code paths (DNS resolver, socket-buffer clamping, endianness-sensitive code) compile and run on no platform but `ubuntu-latest` between now and whenever this is revisited | no macOS deployment target is claimed anywhere in the project; runner cost was never the real trade-off (public-repo Actions minutes are unbilled) — the lane was removed because untested-platform coverage for a platform nobody ships on isn't worth the workflow's complexity, not because it was expensive |
 
 The row's original justification — *`RangeAggregate` is the wire type* — was itself wrong by the
 time it was waived: #308 put `rbsr` outside that API and on a `0.x` line, and `M = Fingerprint`
