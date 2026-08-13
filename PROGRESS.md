@@ -9,7 +9,8 @@
 - **Last updated:** 2026-08-11.
 - **Release 1.0.0:** what the release commits to and what gates it — **§6 below**, mirroring
   [#206](https://github.com/Akvize/reconcile-rs/issues/206) (rewritten 2026-08-11 around an explicit
-  definition of 1.0; the 2026-06 phase plan is archived in its comments).
+  definition of 1.0; the 2026-06 phase plan it replaced is dissolved into the issues each
+  disposition belonged to).
 - **Structural migration:** complete — five-crate workspace, ports on the correct side of each
   boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issues
   [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
@@ -62,7 +63,7 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F4 | Critical | tombstone resurrection (60 s wall-clock GC) | ✅ | #109 — GC gated on causal stability |
 | F5 | High | physical-clock LWW (lossy + non-commutative) | ✅ | #110 — Hybrid Logical Clock + total order |
 | F6 | High | 64-bit XOR fingerprint (weak, craftable) | ✅ | #111 — 256-bit additive BLAKE3 (`rsos/src/fingerprint.rs`, add/sub mod 2²⁵⁶) |
-| F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation + `checked_sub` |
+| F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation: an inverted range is rejected before indexing (`rbsr/src/protocol.rs:154`) |
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 + `rsos::encoding` (ARCHITECTURE.md §6) — wire fingerprint is BLAKE3 over an owned canonical byte encoding; `version_hash` derives from it, not `DefaultHasher` |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
 | F10 | High | IP-scan discovery, O(N²) membership | ◐ | `Discovery` port + `DnsDiscovery` (k8s headless-Service DNS, no IP-scan) lands a cloud-native path; bounded-fan-out membership (SWIM/HyParView) still open — [#147](https://github.com/Akvize/reconcile-rs/issues/147)/[#190](https://github.com/Akvize/reconcile-rs/issues/190) |
