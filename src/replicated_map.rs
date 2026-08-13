@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,6 +42,25 @@ const TOMBSTONE_STAMP_DRIFT_BUDGET: ClockDrift = MAX_CLOCK_DRIFT;
 
 /// How often the background task writes a full snapshot to the persistence backend.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Attempts [`with_persistence`](ReplicatedMap::with_persistence) makes to load persisted state
+/// before giving up (see [`load_persisted_state_with_retry`]).
+const LOAD_RETRY_ATTEMPTS: u32 = 5;
+
+/// Base delay between load retries, doubled each attempt (100 ms, 200 ms, 400 ms, 800 ms — under
+/// 2 s of total backoff across [`LOAD_RETRY_ATTEMPTS`]).
+const LOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
+
+/// Entries cloned per map read-lock acquisition while building a snapshot (`Self::snapshot`).
+///
+/// Cloning the whole map under one continuous read lock stalls every writer for as long as the
+/// clone takes — proportional to map size, unbounded (#202). Chunking bounds a single stall to
+/// the time to clone this many entries, releasing the lock between chunks so a waiting writer can
+/// interleave. The resulting snapshot is not a single linearizable instant — later chunks can
+/// reflect writes concurrent with earlier ones — but that is no different from what the gossip
+/// protocol itself already reconciles range-by-range, and each individual entry is still read
+/// atomically (`ARCHITECTURE.md` §5 invariant 8's per-key LWW model needs no more).
+const SNAPSHOT_CHUNK_SIZE: usize = 4096;
 
 /// Default cadence of the dynamic-discovery task (see [`ReplicatedMap::with_discovery_interval`]).
 const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
@@ -256,7 +275,12 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Panics
     ///
     /// If the backend fails to load: a damaged durable state must be an explicit decision, never a
-    /// silent fresh start.
+    /// silent fresh start. A *transient* failure (anything other than
+    /// [`InvalidData`](io::ErrorKind::InvalidData) — a not-yet-mounted volume, a momentary
+    /// permission or I/O hiccup) is retried up to [`LOAD_RETRY_ATTEMPTS`] times with exponential
+    /// backoff before this panics, so a slow-starting environment does not crash-loop on every
+    /// restart attempt; a decode/format error ([`InvalidData`](io::ErrorKind::InvalidData)) is
+    /// never transient and panics immediately, unretried.
     pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
         // A random node id changes every restart, so the LWW tie-break is stable only within one
         // process lifetime — durable state wants an explicit `Config::with_node_id`.
@@ -270,7 +294,32 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
                  Config::with_node_id to preserve consistent LWW ordering across restarts."
             );
         }
-        if let Some(state) = backend.load().expect("failed to load persisted state") {
+        let loaded = {
+            let mut attempt = 0u32;
+            loop {
+                match backend.load() {
+                    Ok(state) => break state,
+                    Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+                        panic!("persisted state is corrupt or from an incompatible format, refusing to silently start fresh: {err}");
+                    }
+                    Err(err) if attempt + 1 < LOAD_RETRY_ATTEMPTS => {
+                        attempt += 1;
+                        let delay = LOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+                        warn!(
+                            "transient failure loading persisted state (attempt {attempt}/{LOAD_RETRY_ATTEMPTS}): \
+                             {err}; retrying in {delay:?}"
+                        );
+                        std::thread::sleep(delay);
+                    }
+                    Err(err) => {
+                        panic!(
+                            "failed to load persisted state after {LOAD_RETRY_ATTEMPTS} attempts: {err}"
+                        );
+                    }
+                }
+            }
+        };
+        if let Some(state) = loaded {
             *self.engine.members.write() = state.members;
             *self.engine.tombstone_acks.write() = state.tombstone_acks;
             // Advance past every persisted stamp, or a fresh write can lose LWW to this node's
@@ -287,14 +336,35 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// Capture the full store state and hand it to the persistence backend.
+    ///
+    /// Clones the map in [`SNAPSHOT_CHUNK_SIZE`]-entry chunks, releasing the read lock between
+    /// chunks, rather than holding it for one continuous `O(map size)` clone — see
+    /// [`SNAPSHOT_CHUNK_SIZE`]'s doc for why a non-instantaneous snapshot is an acceptable
+    /// trade-off here.
     fn snapshot(&self) {
-        let entries: DatedEntries<K, V> = self
-            .engine
-            .map
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut entries: DatedEntries<K, V> = Vec::new();
+        let mut cursor: Option<K> = None;
+        loop {
+            let guard = self.engine.map.read();
+            let chunk: Vec<(K, Entry<Timestamp, V>)> = match &cursor {
+                None => guard
+                    .range(..)
+                    .take(SNAPSHOT_CHUNK_SIZE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                Some(last) => guard
+                    .range((Bound::Excluded(last.clone()), Bound::Unbounded))
+                    .take(SNAPSHOT_CHUNK_SIZE)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            };
+            drop(guard);
+            let Some((last_key, _)) = chunk.last() else {
+                break;
+            };
+            cursor = Some(last_key.clone());
+            entries.extend(chunk);
+        }
         let state = PersistedState {
             entries,
             members: self.engine.members.read().clone(),
@@ -1415,7 +1485,7 @@ mod replicated_map_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::persistence::Persistence;
+    use crate::persistence::{PersistedState, Persistence};
     use crate::replica::version_hash;
     use crate::{
         replicated_map::{Config, MemberPresence, MAX_NETS},
@@ -1674,6 +1744,118 @@ mod replicated_map_tests {
         );
         // The recovered tombstone is back in the expiry wheel (replayed through the hook).
         assert!(restarted.tombstones.remove(&2).is_some());
+    }
+
+    /// A [`Persistence`] backend that fails `load` with a given `io::ErrorKind` a fixed number of
+    /// times before succeeding with `Ok(None)` — simulates a transient environmental failure (a
+    /// not-yet-mounted volume, a momentary permission error) that clears up on its own.
+    struct FlakyLoad {
+        kind: std::io::ErrorKind,
+        failures_remaining: std::sync::atomic::AtomicU32,
+    }
+
+    impl<K: Send + Sync + 'static, V: Send + Sync + 'static> Persistence<K, V> for FlakyLoad {
+        fn load(&self) -> std::io::Result<Option<PersistedState<K, V>>> {
+            use std::sync::atomic::Ordering;
+            if self
+                .failures_remaining
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                    (n > 0).then(|| n - 1)
+                })
+                .is_ok()
+            {
+                return Err(std::io::Error::new(self.kind, "simulated transient failure"));
+            }
+            Ok(None)
+        }
+        fn save(&self, _state: &PersistedState<K, V>) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// #202: a transient load failure (anything but `InvalidData`) must be retried, not turned
+    /// into an immediate crash — a slow-mounting volume at boot must not crash-loop the process.
+    #[tokio::test]
+    async fn transient_load_failure_is_retried_not_fatal() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::PermissionDenied,
+            failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS - 1),
+        });
+        // Must not panic: the store construction below succeeds once the backend stops failing,
+        // within the retry budget.
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+    }
+
+    /// #202: a load failure that exhausts the retry budget still panics — retrying is a bounded
+    /// mitigation for a transient hiccup, not a way to silently start fresh forever.
+    #[tokio::test]
+    #[should_panic(expected = "failed to load persisted state after")]
+    async fn load_failure_beyond_retry_budget_still_panics() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::PermissionDenied,
+            failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS),
+        });
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+    }
+
+    /// #202: `InvalidData` (corrupt or incompatible format) must panic **immediately**, with no
+    /// retry — corruption does not clear up on its own, and retrying would only delay the loud
+    /// failure the doc comment promises.
+    #[tokio::test]
+    #[should_panic(expected = "persisted state is corrupt or from an incompatible format")]
+    async fn invalid_data_panics_without_retrying() {
+        let backend = Arc::new(FlakyLoad {
+            kind: std::io::ErrorKind::InvalidData,
+            failures_remaining: std::sync::atomic::AtomicU32::new(1),
+        });
+        let start = std::time::Instant::now();
+        let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(backend);
+        // Unreachable on panic, but documents intent: this must not have gone through even one
+        // retry backoff.
+        assert!(start.elapsed() < super::LOAD_RETRY_BASE_DELAY);
+    }
+
+    /// #202: `snapshot` clones the map in `SNAPSHOT_CHUNK_SIZE`-entry chunks, releasing and
+    /// re-acquiring the read lock between them. Insert enough entries to force several chunk
+    /// boundaries and confirm every one of them still round-trips — the chunking must not drop,
+    /// duplicate, or reorder entries relative to the previous whole-map-under-one-lock snapshot.
+    #[tokio::test]
+    async fn snapshot_across_multiple_chunks_recovers_every_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        let n = super::SNAPSHOT_CHUNK_SIZE * 2 + 17; // spans three chunks, last one partial
+
+        let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        for k in 0..n as i32 {
+            store.just_insert(k, k * 2);
+        }
+        let expected = store.fingerprint(..);
+        store.snapshot();
+
+        let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+        assert_eq!(
+            restarted.fingerprint(..),
+            expected,
+            "chunked snapshot must recover every entry across chunk boundaries"
+        );
+        for k in 0..n as i32 {
+            assert_eq!(restarted.get(&k).as_deref(), Some(&(k * 2)));
+        }
     }
 
     /// The causal-stability state (membership + per-tombstone acks) must survive a
