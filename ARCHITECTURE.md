@@ -330,6 +330,15 @@ guarantees `PROGRESS.md` tracks the resolution history of.
    can stay a local, un-negotiated choice (§3.1). Guarded by
    `rbsr/src/protocol.rs::split_children_partition_the_parent_range` and, across mixed policy pairs,
    `peers_running_different_policies_still_converge`.
+11. **A wire-version mismatch is diagnosable, never silently misread** (#309) — `gossip::auth`
+   stamps every datagram with a version byte inside the authenticated/encrypted region (present
+   even unauthenticated, since that is the default), checked by `Payload::check_version` between
+   `Authenticator::open` and `Payload::verify_replay` (invariant 5's ordering, extended). A
+   mismatch is rejected with a distinguishable, counted reason
+   (`reconcile_datagrams_dropped_total{reason="version"}`), not folded into "malformed" or
+   "bad_mac". No accepted-version window exists today — README "Wire versioning" states the
+   operational consequence. Guarded by `tests/wire_format.rs`'s envelope vector and
+   `mixed_wire_versions_are_reported_not_silently_dropped`.
 
 ---
 

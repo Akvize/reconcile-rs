@@ -277,7 +277,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// If the backend fails to load: a damaged durable state must be an explicit decision, never a
     /// silent fresh start. A *transient* failure (anything other than
     /// [`InvalidData`](io::ErrorKind::InvalidData) — a not-yet-mounted volume, a momentary
-    /// permission or I/O hiccup) is retried up to [`LOAD_RETRY_ATTEMPTS`] times with exponential
+    /// permission or I/O hiccup) is retried up to `LOAD_RETRY_ATTEMPTS` (5) times with exponential
     /// backoff before this panics, so a slow-starting environment does not crash-loop on every
     /// restart attempt; a decode/format error ([`InvalidData`](io::ErrorKind::InvalidData)) is
     /// never transient and panics immediately, unretried.
@@ -2395,7 +2395,9 @@ mod replicated_map_tests {
     }
 
     /// A raw payload with one `ComparisonItem`: a dated message, so the receive path would add
-    /// the sender to `members` unless the cap fires first.
+    /// the sender to `members` unless the cap fires first. Starts with the wire-version byte
+    /// (#309) every datagram carries, unauthenticated included — `Authenticator::Disabled` no
+    /// longer passes bytes through unversioned.
     fn dated_comparison_payload() -> Vec<u8> {
         use crate::replica::Message;
         use crate::FingerprintTreeMap;
@@ -2404,7 +2406,7 @@ mod replicated_map_tests {
 
         let tree = FingerprintTreeMap::<i32, (crate::clock::Timestamp, Option<i32>)>::new();
         let segments = rbsr::initial_ranges(&tree);
-        let mut buf = Vec::new();
+        let mut buf = vec![gossip::auth::WIRE_VERSION];
         for seg in segments {
             Message::<
                 i32,
@@ -2624,9 +2626,11 @@ mod replicated_map_tests {
         // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
         let payload = dated_comparison_payload();
         let counter = gossip::replay::SenderCounter::new();
-        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false)
-            .seal(counter.next_seq(), counter.next_stamp(), &payload)
-            .expect("enabled authenticator always seals");
+        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false).seal(
+            counter.next_seq(),
+            counter.next_stamp(),
+            &payload,
+        );
 
         let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
             .await

@@ -755,6 +755,23 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         // dropped silently (trace-only, to avoid attacker-driven log flooding).
                         match self.authenticator.open(&recv_buf[..size]) {
                             Some(payload) => {
+                                // #309: reject a differently-versioned peer with a distinguishable,
+                                // counted reason — never confused with "malformed" or "bad_mac".
+                                // Runs on already-authenticated bytes (a forged version claim is
+                                // rejected the same way a forged payload is), but ahead of every
+                                // other per-sender bookkeeping below.
+                                let payload = match payload.check_version() {
+                                    Ok(payload) => payload,
+                                    Err(version) => {
+                                        trace!(
+                                            "dropped datagram from {peer}: wire version {version} \
+                                             != {}",
+                                            gossip::auth::WIRE_VERSION
+                                        );
+                                        observability::record_datagram_dropped("version");
+                                        continue;
+                                    }
+                                };
                                 let sender = peer.ip();
                                 // If this sender is new and membership is at capacity, drop before
                                 // allocating any per-sender state (replay filter, peers map,
@@ -1294,15 +1311,13 @@ pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
     target: SocketAddr,
 ) -> std::io::Result<usize> {
     // Allocate a sequence number and stamp, then frame the datagram once and reuse it across
-    // retries. When authentication is disabled, `seal` returns `None` and the wire bytes are
-    // identical to the unauthenticated behavior.
+    // retries. `seal` always frames — even disabled adds the wire-version byte (#309).
     let seq = sender_counter.next_seq();
     let stamp = sender_counter.next_stamp();
-    let framed = authenticator.seal(seq, stamp, buf);
-    let wire: &[u8] = framed.as_deref().unwrap_or(buf);
+    let wire = authenticator.seal(seq, stamp, buf);
     let mut res = Ok(0);
     for _ in 0..MAX_SENDTO_RETRIES {
-        res = transport.send_to(wire, &target).await;
+        res = transport.send_to(&wire, &target).await;
         if res.is_ok() {
             break;
         }
@@ -1512,10 +1527,11 @@ mod deadlock_regressions {
 
     /// Serialize an `Update` so it can be fed straight into the engine's network ingest path
     /// (`handle_messages`), exactly as a peer's datagram would arrive once the (disabled)
-    /// authentication gate has been cleared.
+    /// authentication gate has been cleared — including the leading wire-version byte (#309)
+    /// every datagram carries regardless of authentication mode.
     fn update_message_bytes(key: i32, value: Entry<Timestamp, u8>) -> Vec<u8> {
         let message = Message::Update::<i32, Entry<Timestamp, u8>, State<u8>>((key, value));
-        let mut buf = Vec::new();
+        let mut buf = vec![gossip::auth::WIRE_VERSION];
         message
             .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
             .unwrap();
@@ -1578,7 +1594,9 @@ mod deadlock_regressions {
                 );
                 let payload = auth::Authenticator::new(None, false)
                     .open(&bytes)
-                    .expect("unauthenticated mode clears any datagram");
+                    .expect("unauthenticated mode clears any datagram")
+                    .check_version()
+                    .expect("update_message_bytes stamps the current wire version");
                 let peer: SocketAddr = "127.0.0.51:8083".parse().unwrap();
                 let payload = payload
                     .verify_replay(&engine.replay_filter, peer.ip())
@@ -1667,13 +1685,11 @@ mod auth_attack {
         // (a) forged update sent WITHOUT any authentication tag
         attacker.send_to(&forged, &target).await.unwrap();
         // (b) forged update sealed with the WRONG key
-        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false)
-            .seal(
-                gossip::replay::Seq::new(1),
-                gossip::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
-                &forged,
-            )
-            .expect("enabled");
+        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false).seal(
+            gossip::replay::Seq::new(1),
+            gossip::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
+            &forged,
+        );
         attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
 
         // give the victim time to (not) process the forged datagrams
@@ -2160,7 +2176,7 @@ mod tombstone_ack_bounds {
 
     fn ack_bytes(key: i32, version: u64) -> Vec<u8> {
         let msg = Message::Ack::<i32, Tombstoned, State<i32>>((key, version));
-        let mut buf = Vec::new();
+        let mut buf = vec![gossip::auth::WIRE_VERSION];
         msg.serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
             .unwrap();
         buf
@@ -2177,7 +2193,9 @@ mod tombstone_ack_bounds {
         let bytes = ack_bytes(42, 999);
         let payload = auth::Authenticator::new(None, false)
             .open(&bytes)
-            .expect("unauthenticated open");
+            .expect("unauthenticated open")
+            .check_version()
+            .expect("ack_bytes stamps the current wire version");
         let payload = payload
             .verify_replay(&eng.replay_filter, peer.ip())
             .expect("unauthenticated mode is exempt from the replay check");
@@ -2212,7 +2230,9 @@ mod tombstone_ack_bounds {
         let bytes = ack_bytes(key, 123);
         let payload = auth::Authenticator::new(None, false)
             .open(&bytes)
-            .expect("unauthenticated open");
+            .expect("unauthenticated open")
+            .check_version()
+            .expect("ack_bytes stamps the current wire version");
         let payload = payload
             .verify_replay(&eng.replay_filter, peer.ip())
             .expect("unauthenticated mode is exempt from the replay check");
@@ -2243,7 +2263,9 @@ mod tombstone_ack_bounds {
         let bytes = ack_bytes(key, version);
         let payload = auth::Authenticator::new(None, false)
             .open(&bytes)
-            .expect("unauthenticated open");
+            .expect("unauthenticated open")
+            .check_version()
+            .expect("ack_bytes stamps the current wire version");
         let payload = payload
             .verify_replay(&eng.replay_filter, peer.ip())
             .expect("unauthenticated mode is exempt from the replay check");

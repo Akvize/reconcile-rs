@@ -64,3 +64,62 @@ fn wire_format_is_unchanged_by_the_aggregate_collapse() {
     let decoded = RangeAggregate::<u32>::deserialize(&mut deserializer).unwrap();
     assert_eq!(decoded, segment);
 }
+
+/// Golden vector for the **envelope** `gossip::auth::Authenticator::seal` produces — the wire
+/// version byte's placement (#309), not the `Message`/`RangeAggregate` body above. Both
+/// authenticated and unauthenticated layouts are pinned: the version byte is present, and at the
+/// same relative position (right after the replay header, ahead of the payload) in both.
+#[test]
+fn envelope_pins_the_wire_version_byte() {
+    use gossip::auth::{Authenticator, KEY_LEN, TAG_LEN};
+    use gossip::replay::{Seq, Stamp, REPLAY_HEADER_LEN};
+
+    let payload = b"payload";
+
+    // Disabled: `version || payload`, no header, no tag.
+    let disabled = Authenticator::new(None, false).seal(Seq::new(1), Stamp::new(1), payload);
+    let mut expected_disabled = vec![gossip::auth::WIRE_VERSION];
+    expected_disabled.extend_from_slice(payload);
+    assert_eq!(
+        disabled, expected_disabled,
+        "unauthenticated envelope's wire-version placement changed — this is a protocol break"
+    );
+
+    // Enabled (MAC): `tag(32) || seq(8 LE) || stamp(8 LE) || version(1) || payload`. The tag
+    // itself is keyed and non-deterministic across implementations only in the sense that this
+    // vector pins BLAKE3 (the default backend) specifically — a `mac-hmac` build produces a
+    // different tag over the identical protected region, which is exactly what this vector does
+    // NOT need to pin: only the plaintext framing (position of seq/stamp/version/payload) is the
+    // wire contract; the tag is opaque by design.
+    let sealed = Authenticator::new(Some([0x42; KEY_LEN]), false).seal(
+        Seq::new(0x0102030405060708),
+        Stamp::new(0x1112131415161718),
+        payload,
+    );
+    assert_eq!(
+        sealed.len(),
+        TAG_LEN + REPLAY_HEADER_LEN + 1 + payload.len()
+    );
+    let (tag, protected) = sealed.split_at(TAG_LEN);
+    assert_ne!(tag, [0u8; TAG_LEN], "sanity: a real tag was written");
+    assert_eq!(
+        &protected[..8],
+        &0x0102030405060708u64.to_le_bytes(),
+        "seq must be the first 8 bytes of the protected region, little-endian"
+    );
+    assert_eq!(
+        &protected[8..16],
+        &0x1112131415161718u64.to_le_bytes(),
+        "stamp must be the next 8 bytes of the protected region, little-endian"
+    );
+    assert_eq!(
+        protected[16],
+        gossip::auth::WIRE_VERSION,
+        "the wire-version byte must sit immediately after the replay header"
+    );
+    assert_eq!(
+        &protected[17..],
+        payload,
+        "the payload must immediately follow the wire-version byte"
+    );
+}

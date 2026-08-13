@@ -149,6 +149,19 @@ protocol over a trusted/encrypted underlay.
 
 [XChaCha20-Poly1305]: https://docs.rs/chacha20poly1305
 
+### Wire versioning
+
+Every datagram carries a 1-byte wire-protocol version, inside the authenticated/encrypted region
+in keyed modes — so a forged version claim is rejected the same way a forged payload is — and
+present even when unauthenticated, since that is the default. There is currently **no accepted
+version window**: a peer running a different `reconcile` wire version is rejected outright, with a
+distinguishable, countable reason (`reconcile_datagrams_dropped_total{reason="version"}`, with the
+`metrics` feature) rather than being silently misread or indistinguishable from a malformed or
+forged datagram. A mixed-version cluster (a rolling upgrade, for instance) does not converge for
+the pairs that disagree until every node is rebuilt against the same wire version — plan upgrades
+as a coordinated rollout, not a rolling one, until a version window is introduced (tracked by
+issue #309, which also gates whether one ever is).
+
 ## Persistence
 
 By default a `ReplicatedMap` is held purely in memory: a process restart loses the entire dataset,
