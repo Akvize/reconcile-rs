@@ -342,8 +342,15 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// The source must be [`Authoritative`](crate::DiscoveryKind::Authoritative): absence here
     /// drives decommissioning.
+    ///
+    /// # Panics
+    ///
+    /// Panics — in release builds too, not only under `debug_assertions` — if `discovery.kind()`
+    /// is [`Speculative`](crate::DiscoveryKind::Speculative). A speculative source's absences must
+    /// never decommission a live member: that would release the causal-stability GC gate
+    /// (`ARCHITECTURE.md` §5 invariant 6) on a member that never actually left.
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
-        debug_assert!(
+        assert!(
             matches!(discovery.kind(), DiscoveryKind::Authoritative),
             "with_discovery expects an authoritative source; a speculative prober would be seeded \
              as permanent known peers and its absences would wrongly decommission members"
@@ -1770,7 +1777,7 @@ mod replicated_map_tests {
 
     use std::sync::Mutex;
 
-    use crate::discovery::{DiscoverFuture, Discovery};
+    use crate::discovery::{DiscoverFuture, Discovery, DiscoveryKind};
 
     /// A scriptable discovery source for the grace/decommission tests. The test thread swaps the
     /// response while the discovery loop runs.
@@ -1808,6 +1815,36 @@ mod replicated_map_tests {
                 }
             })
         }
+
+        fn kind(&self) -> DiscoveryKind {
+            DiscoveryKind::Authoritative
+        }
+    }
+
+    /// A discovery source that never lies about its kind — used to prove `with_discovery` rejects
+    /// a speculative source unconditionally, not only under `debug_assertions`.
+    struct SpeculativeDiscovery;
+
+    impl Discovery for SpeculativeDiscovery {
+        fn discover(&self) -> DiscoverFuture<'_> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn kind(&self) -> DiscoveryKind {
+            DiscoveryKind::Speculative
+        }
+    }
+
+    /// #283: the guard must be `assert!`, not `debug_assert!` — a no-op in `--release` would let a
+    /// speculative source through, whose absences then wrongly decommission live members and
+    /// release the causal-stability GC gate.
+    #[tokio::test]
+    #[should_panic(expected = "with_discovery expects an authoritative source")]
+    async fn with_discovery_rejects_a_speculative_source() {
+        let store = ReplicatedMap::<i32, i32>::new(discovery_config())
+            .await
+            .expect("bind failed");
+        let _ = store.with_discovery(Arc::new(SpeculativeDiscovery));
     }
 
     fn discovery_config() -> Config {

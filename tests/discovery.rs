@@ -14,7 +14,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use reconcile::discovery::{DiscoverFuture, Discovery};
+use reconcile::discovery::{DiscoverFuture, Discovery, DiscoveryKind};
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
@@ -54,6 +54,10 @@ impl Discovery for ScriptedDiscovery {
     fn discover(&self) -> DiscoverFuture<'_> {
         let addrs = self.addrs.lock().unwrap().clone();
         Box::pin(async move { Ok(addrs) })
+    }
+
+    fn kind(&self) -> DiscoveryKind {
+        DiscoveryKind::Authoritative
     }
 }
 
