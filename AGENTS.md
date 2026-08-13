@@ -146,8 +146,10 @@ a code block, or a link. State the rule, the shape or the evidence — never nar
 doc **about** this repo, in it or not — issues, PRs, review comments — not only committed files;
 `.github/ISSUE_TEMPLATE/`/`pull_request_template.md` carry the shape so it isn't re-derived per post.
 The failure mode that recurs in agent-written threads: narrating the process that produced a finding
-instead of stating the finding and what it supersedes. An agent does not post comments at all — it
-may update an issue/PR **body or title**, and only when explicitly asked; threads stay empty.
+instead of stating the finding and what it supersedes. Comments belong to humans: an agent never
+posts one, but reads what a human wrote there, challenges it when the code says otherwise, and — with
+that human in session — folds the outcome into the body, the title or the code. The change is the
+reply.
 
 ## 10. Commit, PR, and gating conventions
 
