@@ -16,12 +16,15 @@
 # carries it, and that is not recoverable from this file. Run the dry run first, read the
 # DELETE lines, then decide.
 #
-# Renaming beats deleting: `gh label edit OLD --name NEW` keeps the label on every issue it
-# is already applied to. The three GitHub defaults this repository has used map straight
-# across, so run these *before* the first sync and migration keeps its history:
-#   gh label edit bug           --name C-bug
-#   gh label edit documentation --name C-docs
-#   gh label edit enhancement   --name C-feature
+# Renaming beats deleting: `gh label edit OLD --name NEW` keeps the label on every issue it is
+# already applied to, where delete-then-create silently strips it from all of them. The three
+# GitHub defaults this repository has used map straight across, so the rename is done here, as
+# a migration step, rather than left as a prerequisite someone has to remember to run first —
+# and it has to run *before* the create/update pass below, because once `C-bug` exists as a new
+# label the rename of `bug` can no longer land on it.
+#
+# The table is idempotent and self-retiring: a row whose old name is already gone is a no-op,
+# so it costs one API call per run and can be deleted once every clone has synced.
 #
 # Requires: gh (authenticated, or GH_TOKEN in the environment with `issues: write`).
 set -Eeuo pipefail
@@ -59,6 +62,33 @@ fi
 # Existing labels, one name per line. `gh label list` paginates at 30 by default, which is
 # under the size of the taxonomy itself — the explicit limit is load-bearing, not cosmetic.
 existing=$(gh label list --repo "$REPO" --limit 200 --json name --jq '.[].name')
+
+# old name -> new name. See the migration note in the header.
+MIGRATIONS=(
+    "bug=C-bug"
+    "documentation=C-docs"
+    "enhancement=C-feature"
+)
+
+renamed=0
+for row in "${MIGRATIONS[@]}"; do
+    old=${row%%=*}
+    new=${row#*=}
+    grep -Fxq "$old" <<<"$existing" || continue
+    if grep -Fxq "$new" <<<"$existing"; then
+        printf '  SKIP    %-28s -> %s already exists\n' "$old" "$new"
+        continue
+    fi
+    renamed=$((renamed + 1))
+    printf '  RENAME  %-28s -> %s\n' "$old" "$new"
+    if $apply; then
+        gh label edit "$old" --repo "$REPO" --name "$new" >/dev/null
+    fi
+    # Applied to the in-memory view in both modes: with it, the pass below sees the new name as
+    # existing and updates its colour instead of trying to create a duplicate -- and the dry run
+    # prints the same plan `--apply` would execute, which is the only thing a dry run is for.
+    existing=$(printf '%s\n' "$existing" | sed "s|^${old}$|${new}|")
+done
 
 declare -A wanted=()
 status=0
@@ -117,7 +147,8 @@ while IFS= read -r name; do
 done <<<"$existing"
 
 echo
-printf '  %d to create, %d to update, %d not in the file\n' "$created" "$updated" "$deleted"
+printf '  %d to rename, %d to create, %d to update, %d not in the file\n' \
+    "$renamed" "$created" "$updated" "$deleted"
 if ! $apply; then
     echo "  dry run — re-run with --apply (and --prune to act on the DELETE lines)"
 elif [ "$deleted" -gt 0 ] && ! $prune; then
