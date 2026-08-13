@@ -256,6 +256,32 @@ tombstone indexes, `TimeoutWheel`, the snapshot codec).
 
 ---
 
+### 4.1 State typing
+
+A finite, named set of states carried by a **type** rather than by an `Option`, a `bool` or a bare
+primitive, so the state is a compile-time fact instead of call-site discipline. AGENTS.md §4 states
+the rule; these are its worked instances, and the reference examples to copy:
+
+| Type | What its existence proves | Obtained by |
+|---|---|---|
+| `Entry` / `State<V>` (`lww-register`) | a dated cell vs its timestamp-less projection (§5 inv. 8) | `Entry::project` |
+| `StartBound` / `EndBound` (`rbsr`) | the two bound shapes the protocol emits — the other two `Bound` variants fail to deserialize rather than reaching the driver | wire decode |
+| `Payload<Authenticated>` / `Payload<Verified>` (`gossip`) | MAC-checked, then replay-checked; message handling takes `Verified`, so an unchecked datagram cannot reach it | `Payload::verify_replay` |
+| `AdmittedTime` (`lww-register`) | a peer's physical time was clamped to the drift budget before touching local clock state | `AdmittedTime::clamped_to_drift` |
+
+**Newtype or phantom parameter?** Decide by whether the *pre*-state travels. `Payload` earns its
+parameter: both states are held, passed, and demanded in a signature. `AdmittedTime` does not — its
+raw form is consumed where it is produced, so a phantom would add a type parameter to every
+signature to distinguish a state nothing carries. Prefer the newtype until a second state is
+genuinely held across a boundary.
+
+The 2026-08 sweep for this pattern is closed. Both items it left open have since been resolved in
+the direction it recommended: `Authenticator`'s `is_enabled`/`is_encrypted` booleans are gone (call
+sites `match` the enum, which was already a well-typed state), and `Discovery::is_authoritative() ->
+bool` became `kind() -> DiscoveryKind`.
+
+---
+
 ## 5. Invariants
 
 Load-bearing properties preserved across any change; they encode the correctness and security
