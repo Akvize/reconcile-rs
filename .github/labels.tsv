@@ -1,0 +1,94 @@
+# Label taxonomy — the single source of truth for this repository's issue labels.
+#
+# Format: name <TAB> color (6 hex digits, no #) <TAB> description.
+# Blank lines and `#` comments are ignored. `scripts/sync-labels.sh` applies this file to
+# GitHub; `scripts/check-issue-triage.sh` gates that every open issue carries a valid
+# combination. AGENTS.md §10: the rule lives in a failing command, not in prose someone
+# has to remember.
+#
+# Four namespaces, four different questions, answered independently:
+#
+#   kind/    what the issue IS          exactly one   mandatory
+#   area/    where it lands             one or more   mandatory
+#   status/  what it is waiting on      exactly one   mandatory
+#   gate/    what shipping without it costs (#206)    at most one, optional
+#
+# The multi-dimensional, prefixed shape is the practice of every tracker that outgrew a flat
+# label list — kubernetes/test-infra `label_sync` (kind/, area/, sig/, priority/, triage/,
+# lifecycle/), rust-lang/rust (C-, A-, T-, S-, P-), bevyengine/bevy (C-, A-, S-, D-, X-). One
+# colour per namespace so the label bar reads as columns rather than as confetti.
+#
+# Deliberately absent — each of these would be a second, drifting ordering:
+#   priority/*   `gate/*` already answers "does the release wait on it", and the milestone
+#                answers "which release". A third axis maintained by hand would contradict
+#                the other two within a month.
+#   lifecycle/*  the k8s stale->rotten->closed bot is a defence against a backlog nobody
+#                reads. Here the equivalent is `status/parked` with a wake-up trigger
+#                written in the body: an issue is parked *by decision*, never by neglect.
+#   status/in-progress   assignees and the linked PR already carry it, mechanically.
+
+# ---------------------------------------------------------------------------------------
+# kind/ — what the issue IS. Exactly one. The question it answers: what kind of work, if
+# any, closes this? `investigation`/`design`/`decision` are the three shapes of "not code
+# yet", kept apart because they are unblocked by different things: a measurement, a written
+# design, a maintainer call. The same three-step ladder golang/go runs as NeedsInvestigation
+# -> NeedsDecision -> NeedsFix.
+# ---------------------------------------------------------------------------------------
+kind/bug	1d76db	Behaviour, or an API, contradicts its documented or advertised contract
+kind/feature	1d76db	A new capability, behind new API or new machinery
+kind/enhancement	1d76db	Improves existing behaviour — performance, ergonomics — with no new capability
+kind/cleanup	1d76db	Internal quality, hygiene or metadata; no observable behaviour change
+kind/docs	1d76db	Documentation only — no code change closes it
+kind/investigation	1d76db	The answer is not known yet: measure, reproduce, instrument. Closes with evidence
+kind/design	1d76db	The solution space is open. Closes with a written design or RFC, not with code
+kind/decision	1d76db	Options are framed; a maintainer call is what is missing. Lands in ARCHITECTURE.md §7
+kind/epic	1d76db	Umbrella over sub-issues. Carries no work of its own
+
+# ---------------------------------------------------------------------------------------
+# area/ — where it lands. One or more. The five crate values mirror ARCHITECTURE.md §2's
+# map exactly, so the label set cannot drift from the workspace; the seven cross-cutting
+# values name the concerns that span crates. Widening this list means updating
+# ARCHITECTURE.md §2 in the same change, exactly as scripts/check-domain-purity.sh requires.
+# ---------------------------------------------------------------------------------------
+area/rsos	c5def5	The ordered map, fingerprint and canonical encoding
+area/rbsr	c5def5	The range-based set-reconciliation algorithm and its refinement policy
+area/lww-register	c5def5	Domain types — Entry/State, Timestamp/HLC, the Clock and Persistence ports
+area/gossip	c5def5	Transport, authentication, replay protection, discovery
+area/reconcile	c5def5	The facade — ReplicatedMap, ReadReplicaMap, Config, wiring
+area/wire	c5def5	The on-the-wire and on-disk formats — compatibility is at stake
+area/security	c5def5	Threat model, cryptography, key handling
+area/persistence	c5def5	Snapshots, durability, recovery
+area/observability	c5def5	Metrics, tracing, operational signals
+area/perf	c5def5	Throughput, latency, memory, and the benchmarks that measure them
+area/release	c5def5	Packaging, semver, CI, publication mechanics
+area/meta	c5def5	The repository itself — its docs, its tracker, its agent instructions
+
+# ---------------------------------------------------------------------------------------
+# status/ — what it is waiting on. Exactly one. This is the field that decides whether an
+# issue is pickable *right now*, so it is the one worth keeping honest.
+# ---------------------------------------------------------------------------------------
+status/needs-triage	fbca04	Not yet classified. The default on anything new; no other status may accompany it
+status/needs-investigation	fbca04	Blocked on evidence — a measurement or a reproduction, not a decision
+status/needs-decision	fbca04	Understood and framed; blocked on a maintainer call
+status/ready	fbca04	Understood, unblocked, and actionable as written
+status/blocked	fbca04	Blocked by another issue, named in the body
+status/parked	fbca04	Deliberately not now. The body MUST state what would wake it up
+
+# ---------------------------------------------------------------------------------------
+# gate/ — what shipping 1.0.0 without it costs. At most one; absence means "not a gate".
+# Repo-specific, and the reason this namespace exists at all: #206 §2 already defines these
+# three classes and maintains them as hand-written tables in two files. Tables drift — on
+# 2026-08-13 five rows were stale within a day. A label is queryable and cannot fall out of
+# sync with itself.
+# ---------------------------------------------------------------------------------------
+gate/a-breaking	b60205	Non-additive: deferring past the tag costs a 2.0.0 (#206 §3)
+gate/b-claim	b60205	A claim the 1.0.0 release makes would be false on day one (#206 §4)
+gate/c-mechanics	b60205	Cannot ship, be found, or be verified without it (#206 §5)
+
+# ---------------------------------------------------------------------------------------
+# Meta — GitHub gives these two exact names special treatment (repository "good first
+# issues" surfacing, the contribute API), so they keep their canonical spelling and stay
+# outside the namespaces.
+# ---------------------------------------------------------------------------------------
+good first issue	7057ff	Scoped, self-contained, and reachable without repository context
+help wanted	008672	Maintainers would take a contribution here

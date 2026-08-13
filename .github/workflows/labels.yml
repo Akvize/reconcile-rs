@@ -1,0 +1,75 @@
+name: labels
+
+# Keeps the issue tracker's classification mechanical rather than remembered (AGENTS.md §10).
+#
+# Three jobs, three different failure modes of a label taxonomy:
+#   sync     the label set drifts from `.github/labels.tsv` -> re-apply the file on every change
+#   triage   an issue opens with no labels at all           -> stamp `status/needs-triage`
+#   check    an issue carries an invalid combination        -> fail, weekly and on demand
+#
+# `check` runs on a schedule rather than per-PR because its subject is the tracker, not the
+# tree: a pull request cannot make an issue's labels wrong, and a per-PR run would fail on
+# somebody else's untriaged issue.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/labels.tsv'
+      - 'scripts/sync-labels.sh'
+      - '.github/workflows/labels.yml'
+  issues:
+    types: [ opened ]
+  schedule:
+    # Monday 06:00 UTC — a triage alarm wants to land at the start of a week, not during one.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      # No `--prune`: deleting a label strips it from every issue carrying it, which is not
+      # recoverable from the file. Removing a label is therefore a deliberate local run
+      # (`./scripts/sync-labels.sh --apply --prune`), never a side effect of a merge.
+      - name: Apply .github/labels.tsv
+        run: ./scripts/sync-labels.sh --apply
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  triage:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      # The default state has to be applied by something, or "exactly one status/" is false
+      # for every issue the moment it is opened, and the weekly check becomes noise.
+      - name: Stamp status/needs-triage
+        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label status/needs-triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
+
+  check:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Label invariants over every open issue
+        run: ./scripts/check-issue-triage.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unset for now: the backlog predates the taxonomy, so a deadline would fail the
+          # first run for reasons nobody chose. Set it once the backlog is labelled.
+          TRIAGE_SLA_DAYS: ''
