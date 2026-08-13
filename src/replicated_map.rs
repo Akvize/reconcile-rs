@@ -44,12 +44,18 @@ const TOMBSTONE_STAMP_DRIFT_BUDGET: ClockDrift = MAX_CLOCK_DRIFT;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Attempts [`with_persistence`](ReplicatedMap::with_persistence) makes to load persisted state
-/// before giving up (see [`load_persisted_state_with_retry`]).
+/// before giving up.
 const LOAD_RETRY_ATTEMPTS: u32 = 5;
 
-/// Base delay between load retries, doubled each attempt (100 ms, 200 ms, 400 ms, 800 ms — under
-/// 2 s of total backoff across [`LOAD_RETRY_ATTEMPTS`]).
+/// Base delay before the first load retry; each subsequent attempt doubles it (see
+/// [`backoff_delay`]) — 100 ms, 200 ms, 400 ms, 800 ms, under 2 s of total backoff across
+/// [`LOAD_RETRY_ATTEMPTS`].
 const LOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
+
+/// Delay before retry `attempt` (1-indexed): `LOAD_RETRY_BASE_DELAY` doubled `attempt - 1` times.
+fn backoff_delay(attempt: u32) -> Duration {
+    LOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1)
+}
 
 /// Entries cloned per map read-lock acquisition while building a snapshot (`Self::snapshot`).
 ///
@@ -304,7 +310,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
                     }
                     Err(err) if attempt + 1 < LOAD_RETRY_ATTEMPTS => {
                         attempt += 1;
-                        let delay = LOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+                        let delay = backoff_delay(attempt);
                         warn!(
                             "transient failure loading persisted state (attempt {attempt}/{LOAD_RETRY_ATTEMPTS}): \
                              {err}; retrying in {delay:?}"
@@ -1774,6 +1780,16 @@ mod replicated_map_tests {
         fn save(&self, _state: &PersistedState<K, V>) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// Doubles from `LOAD_RETRY_BASE_DELAY` each attempt, 1-indexed: attempt 1 is the base delay
+    /// itself, not one doubling of it.
+    #[test]
+    fn backoff_delay_doubles_from_the_base() {
+        assert_eq!(super::backoff_delay(1), super::LOAD_RETRY_BASE_DELAY);
+        assert_eq!(super::backoff_delay(2), super::LOAD_RETRY_BASE_DELAY * 2);
+        assert_eq!(super::backoff_delay(3), super::LOAD_RETRY_BASE_DELAY * 4);
+        assert_eq!(super::backoff_delay(4), super::LOAD_RETRY_BASE_DELAY * 8);
     }
 
     /// A transient load failure (anything but `InvalidData`) must be retried, not turned
