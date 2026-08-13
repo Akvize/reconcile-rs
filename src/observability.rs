@@ -21,6 +21,7 @@
 //! | `reconcile_messages_received_total` | counter | datagrams accepted |
 //! | `reconcile_bytes_received_total` | counter | wire bytes received |
 //! | `reconcile_send_failures_total` | counter | sends that exhausted all retries |
+//! | `reconcile_values_oversized_total` | counter | single encoded messages exceeding the datagram budget, dropped on the send path — the key never converges |
 //! | `reconcile_datagrams_dropped_total` | counter (`reason` label) | dropped datagrams |
 //! | `reconcile_rounds_total` | counter | reconciliation rounds initiated |
 //! | `reconcile_tombstone_acks_resent_total` | counter | tombstone acks resent on reconciliation rounds |
@@ -42,6 +43,7 @@ mod imp {
     pub(crate) const MESSAGES_RECEIVED_TOTAL: &str = "reconcile_messages_received_total";
     pub(crate) const BYTES_RECEIVED_TOTAL: &str = "reconcile_bytes_received_total";
     pub(crate) const SEND_FAILURES_TOTAL: &str = "reconcile_send_failures_total";
+    pub(crate) const VALUES_OVERSIZED_TOTAL: &str = "reconcile_values_oversized_total";
     pub(crate) const DATAGRAMS_DROPPED_TOTAL: &str = "reconcile_datagrams_dropped_total";
     pub(crate) const ROUNDS_TOTAL: &str = "reconcile_rounds_total";
     pub(crate) const TOMBSTONE_ACKS_RESENT_TOTAL: &str = "reconcile_tombstone_acks_resent_total";
@@ -86,6 +88,14 @@ mod imp {
     #[inline]
     pub(crate) fn record_send_failure() {
         counter!(SEND_FAILURES_TOTAL).increment(1);
+    }
+
+    /// A single message's encoded size exceeds the datagram budget on its own — dropped, never
+    /// sent. Distinct from [`record_send_failure`] (a transport-level failure to send a
+    /// well-formed datagram): this is a structurally undeliverable message, alertable on its own.
+    #[inline]
+    pub(crate) fn record_value_oversized() {
+        counter!(VALUES_OVERSIZED_TOTAL).increment(1);
     }
 
     #[inline]
@@ -151,6 +161,11 @@ mod imp {
             "Sends that exhausted all retries"
         );
         describe_counter!(
+            VALUES_OVERSIZED_TOTAL,
+            Unit::Count,
+            "Single encoded messages exceeding the datagram budget, dropped on the send path"
+        );
+        describe_counter!(
             DATAGRAMS_DROPPED_TOTAL,
             Unit::Count,
             "Datagrams dropped, by reason"
@@ -205,6 +220,9 @@ mod imp {
 
     #[inline(always)]
     pub(crate) fn record_send_failure() {}
+
+    #[inline(always)]
+    pub(crate) fn record_value_oversized() {}
 
     #[inline(always)]
     pub(crate) fn record_datagram_dropped(_reason: &'static str) {}

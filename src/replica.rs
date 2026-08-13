@@ -1362,39 +1362,63 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
         let last_size = send_buf.len();
         gossip::bincode::encode(message, send_buf)
             .expect("serializing a protocol Message into an in-memory buffer cannot fail");
+        let this_message_len = send_buf.len() - last_size;
         if send_buf.len() > max_payload {
-            trace!("sending {} bytes to {peer}", last_size);
-            if let Err(err) = send_to_retry(
-                ports.transport,
-                ports.authenticator,
-                ports.sender_counter,
-                &send_buf[..last_size],
-                *peer,
-            )
-            .await
-            {
-                warn!("failed to send datagram to {peer}: {err}; continuing");
-            } else {
-                trace!("sent {} bytes to {peer}", last_size);
+            // Flush whatever was accumulated *before* this message, if anything — a real,
+            // correctly-sized datagram, unaffected by whether this message itself fits.
+            if last_size > 0 {
+                trace!("sending {} bytes to {peer}", last_size);
+                if let Err(err) = send_to_retry(
+                    ports.transport,
+                    ports.authenticator,
+                    ports.sender_counter,
+                    &send_buf[..last_size],
+                    *peer,
+                )
+                .await
+                {
+                    warn!("failed to send datagram to {peer}: {err}; continuing");
+                } else {
+                    trace!("sent {} bytes to {peer}", last_size);
+                }
+                sent_bytes += last_size;
+                pace(rate, start, sent_bytes).await;
             }
             send_buf.drain(..last_size);
-            sent_bytes += last_size;
-            pace(rate, start, sent_bytes).await;
+            if this_message_len > max_payload {
+                // This message's own encoding exceeds `max_payload` on its own — no datagram it
+                // could ever be packed into, alone or otherwise. Sending it (as the pre-#230 code
+                // did, either as a bogus empty datagram when it was first in the batch, or as an
+                // oversized one otherwise) never converges the key and only ever fails with
+                // EMSGSIZE. Drop it, counted and logged distinctly from a transport send failure
+                // so it is alertable rather than silently retried forever.
+                error!(
+                    "dropping oversized message to {peer}: encodes to {this_message_len} bytes, \
+                     exceeding the {max_payload}-byte datagram budget; this key will never \
+                     converge on this peer until a smaller value is written"
+                );
+                observability::record_value_oversized();
+                send_buf.clear();
+            }
         }
     }
-    trace!("sending last {} bytes to {peer}", send_buf.len());
-    if let Err(err) = send_to_retry(
-        ports.transport,
-        ports.authenticator,
-        ports.sender_counter,
-        send_buf,
-        *peer,
-    )
-    .await
-    {
-        warn!("failed to send final datagram to {peer}: {err}; continuing");
-    } else {
-        trace!("sent last {} bytes to {peer}", send_buf.len());
+    // Empty exactly when the batch was empty, or ended with an oversized message that was just
+    // dropped above (#230) — either way, an empty datagram is not a real send.
+    if !send_buf.is_empty() {
+        trace!("sending last {} bytes to {peer}", send_buf.len());
+        if let Err(err) = send_to_retry(
+            ports.transport,
+            ports.authenticator,
+            ports.sender_counter,
+            send_buf,
+            *peer,
+        )
+        .await
+        {
+            warn!("failed to send final datagram to {peer}: {err}; continuing");
+        } else {
+            trace!("sent last {} bytes to {peer}", send_buf.len());
+        }
     }
 }
 
@@ -1992,6 +2016,75 @@ mod pacing {
         let messages = bulk_updates(256, 1024);
         assert!(time_send(&messages, None).await < Duration::from_millis(200));
         assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
+    }
+
+    /// #230: a single message whose own encoding exceeds the datagram budget must be dropped —
+    /// never sent as a bogus empty datagram (the pre-fix behaviour when it was first in the
+    /// batch) and never sent as an oversized one (the pre-fix behaviour otherwise, which a real
+    /// UDP socket rejects with `EMSGSIZE`). A normal-sized message in the same batch must still
+    /// go out untouched, whether it comes before or after the oversized one.
+    #[tokio::test]
+    async fn oversized_message_is_dropped_not_sent_empty_or_oversized() {
+        use crate::transport::{InMemoryNetwork, Transport};
+
+        async fn observe_sends(messages: &[Msg]) -> Vec<usize> {
+            let net = InMemoryNetwork::new();
+            let sender_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+            let receiver_addr: SocketAddr = "127.0.0.1:2".parse().unwrap();
+            let sender_transport = net.bind(sender_addr);
+            let receiver_transport = net.bind(receiver_addr);
+
+            let authenticator = Authenticator::new(None, false);
+            let sender_counter = gossip::replay::SenderCounter::new();
+            let ports = SendPorts {
+                transport: &sender_transport,
+                authenticator: &authenticator,
+                sender_counter: &sender_counter,
+            };
+            let mut send_buf = Vec::new();
+            send_messages_paced(messages, &ports, &receiver_addr, &mut send_buf, None).await;
+
+            let mut sizes = Vec::new();
+            let mut buf = [0u8; 1 << 17];
+            while let Ok(Ok((n, _))) = tokio::time::timeout(
+                Duration::from_millis(50),
+                receiver_transport.recv_from(&mut buf),
+            )
+            .await
+            {
+                sizes.push(n);
+            }
+            sizes
+        }
+
+        // One message far bigger than a single 64 KiB datagram, flanked by two ordinary ones.
+        let oversized = vec![Message::Update((999u64, vec![0u8; super::BUFFER_SIZE * 2]))];
+        let small_before = bulk_updates(1, 16);
+        let small_after = bulk_updates(1, 16);
+
+        // Oversized first in the batch (the `last_size == 0` case pre-fix produced an empty
+        // datagram).
+        let mut messages = oversized.clone();
+        messages.extend(small_after.clone());
+        let sizes = observe_sends(&messages).await;
+        assert_eq!(
+            sizes.len(),
+            1,
+            "expected exactly the one normal-sized datagram, got {sizes:?}"
+        );
+        assert!(sizes[0] < super::BUFFER_SIZE, "unexpected datagram size {sizes:?}");
+
+        // Oversized in the middle of the batch (pre-fix, this queued the oversized bytes for a
+        // doomed EMSGSIZE send attempt).
+        let mut messages = small_before;
+        messages.extend(oversized);
+        let sizes = observe_sends(&messages).await;
+        assert_eq!(
+            sizes.len(),
+            1,
+            "expected exactly the one normal-sized datagram, got {sizes:?}"
+        );
+        assert!(sizes[0] < super::BUFFER_SIZE, "unexpected datagram size {sizes:?}");
     }
 }
 
