@@ -438,6 +438,10 @@ mod tests {
         let far = phys_now().millis() + 10_000 * 365 * 24 * 3_600_000; // ~10 000 years ahead
         let b = BoundedInstant::from_stored_stamp(PhysicalTime::from_millis(far), budget);
         assert_eq!(b.bound(), StampBound::Capped);
+        // Sampled *after* the construction it bounds, and never reused across constructions: the
+        // cap is `now + budget` as of the call, so a sample taken before a later call races the
+        // wall clock against it. Reusing one sample for regime (3) below is what made this test
+        // flake on a loaded runner.
         let cap_upper = phys_now().saturating_add(budget).millis() as i64;
         assert!(
             b.instant().timestamp_millis() <= cap_upper,
@@ -452,12 +456,17 @@ mod tests {
         // (3) Above `i64::MAX`: the same cap as (2), never a pre-epoch date.
         let b = BoundedInstant::from_stored_stamp(PhysicalTime::from_millis(u64::MAX), budget);
         assert_eq!(b.bound(), StampBound::Capped);
+        let cap_upper = phys_now().saturating_add(budget).millis() as i64;
         assert!(
             b.instant().timestamp_millis() > 0,
             "wrapped to a pre-epoch instant: {}",
             b.instant()
         );
-        assert!(b.instant().timestamp_millis() <= cap_upper);
+        assert!(
+            b.instant().timestamp_millis() <= cap_upper,
+            "instant {} escaped the cap {cap_upper}",
+            b.instant()
+        );
 
         // (4) Residual: `now + budget` past chrono's ceiling falls back to local now.
         let b = BoundedInstant::from_stored_stamp(

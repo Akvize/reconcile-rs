@@ -38,6 +38,10 @@
 //! name Rust already owns ([`len`](FingerprintTreeMap::len), `remove`,
 //! [`range`](std::collections::BTreeMap::range) vs [`Iterator::enumerate`]), Rust wins on the
 //! inherent surface.
+//!
+//! `U = K`: the paper's replica state `X ⊆ U` is this crate's key set, and the lift is total on it
+//! because a map assigns exactly one value per key — `V` is the payload the lift consults, not a
+//! second element dimension. A set-only RSOS is the degenerate case `V = ()`.
 
 #![forbid(unsafe_code)]
 

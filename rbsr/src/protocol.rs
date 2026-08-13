@@ -127,32 +127,109 @@ pub type EnumerationRange<K> = (Bound<K>, Bound<K>);
 struct BoundedRange<K> {
     start: StartBound<K>,
     end: EndBound<K>,
-    start_index: usize,
-    end_index: usize,
+    start_index: AdmittedRank,
+    end_index: AdmittedRank,
 }
 
-/// The one way [`BoundedRange::parse`] can fail: the segment's start position is after its end
-/// position in the set it was checked against.
-struct InvertedRange;
+/// A rank a backend returned that has been **admitted** into that backend's own store.
+///
+/// Its existence is the proof that [`RsosView`]'s **rank-within-store** law (`rank(z) <= size()`)
+/// was applied: the only way to obtain one is [`StoreSize::admit`], which performs the clamp, so a
+/// raw answer cannot reach [`RsosView::select`] by accident. A backend that breaks the law therefore
+/// cannot be walked off the end of its own store by a key the remote peer chose.
+///
+/// **State typing**, the shape this workspace already uses wherever untrusted input crosses into
+/// trusted arithmetic: `lww_register::clock`'s `AdmittedTime` (a peer's time, admitted through
+/// `clamped_to_drift`) and `gossip`'s `Payload<Authenticated>`/`Payload<Verified>` (a datagram,
+/// verified before it can be handled). Named rather than linked — `rbsr` depends on `rsos` alone,
+/// so neither crate is in scope here.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct AdmittedRank(usize);
+
+/// The size of the store a rank was answered against, read once.
+///
+/// It carries two properties this driver relies on. It is the **authority that admits** a rank —
+/// `size.admit(raw)`, never `admit(raw, size)` — so the bound and the value it bounds are different
+/// types and cannot be swapped at a call site, which two bare `usize` parameters silently allow
+/// (AGENTS.md §4). And reading it once rather than per use keeps a round's arithmetic
+/// self-consistent even against a backend that breaks **one-snapshot-per-round**.
+#[derive(Clone, Copy, Debug)]
+struct StoreSize(usize);
+
+impl StoreSize {
+    fn get(self) -> usize {
+        self.0
+    }
+
+    /// Admit a rank this store answered, clamping it to this size.
+    fn admit(self, raw: usize) -> AdmittedRank {
+        AdmittedRank(raw.min(self.0))
+    }
+}
+
+impl AdmittedRank {
+    fn get(self) -> usize {
+        self.0
+    }
+
+    /// The next cut, `stride` further on, or `None` once that would reach `end`.
+    ///
+    /// The result is `< end <= size()`, hence a valid [`RsosView::select`] argument by construction
+    /// — the reason the fan-out walks through this rather than through bare `usize` arithmetic.
+    /// Saturating, since `overflow-checks` is off in release (#205).
+    fn cut_before(self, end: AdmittedRank, stride: usize) -> Option<AdmittedRank> {
+        let next = AdmittedRank(self.0.saturating_add(stride));
+        (next < end).then_some(next)
+    }
+}
+
+/// The one way [`BoundedRange::parse`] can fail: the segment's start ranks *after* its end in the
+/// store it was checked against.
+///
+/// Carries both ranks as the backend returned them — unbounded — so the drop can name the numbers
+/// that made the segment malformed instead of only its category.
+struct InvertedRange {
+    raw_start: usize,
+    raw_end: usize,
+}
 
 impl<K> BoundedRange<K> {
     /// Absolute positions from [`RsosView::rank`], which the fan-out steps through with
-    /// [`RsosView::select`] — an aggregate gives the count, not the positions.
+    /// [`RsosView::select`] — an aggregate gives the count, not the positions. Admitted here, see
+    /// [`AdmittedRank`], where a backend's answer stops being trusted.
     fn parse<B: RsosView<K>>(
         start: StartBound<K>,
         end: EndBound<K>,
         local: &B,
     ) -> Result<Self, InvertedRange> {
-        let start_index = match &start {
+        let size = StoreSize(local.size());
+        let raw_start = match &start {
             StartBound::Unbounded => 0,
             StartBound::Included(key) => local.rank(key),
         };
-        let end_index = match &end {
-            EndBound::Unbounded => local.size(),
+        let raw_end = match &end {
+            EndBound::Unbounded => size.get(),
             EndBound::Excluded(key) => local.rank(key),
         };
-        if end_index < start_index {
-            return Err(InvertedRange);
+        // Judged on the raw answers, before bounding: an inverted range is a malformed *wire*
+        // segment and must stay distinguishable from a backend that merely over-reports rank.
+        if raw_end < raw_start {
+            return Err(InvertedRange { raw_start, raw_end });
+        }
+        let start_index = size.admit(raw_start);
+        let end_index = size.admit(raw_end);
+        // The clamp bit exactly when admitting changed the value — no flag to carry alongside.
+        if start_index.get() != raw_start || end_index.get() != raw_end {
+            let offender = if start_index.get() != raw_start {
+                raw_start
+            } else {
+                raw_end
+            };
+            let size = size.get();
+            debug!(
+                "RsosView backend broke rank-within-store: returned rank {offender} for a store of \
+                 size {size}; bounding it so `select` stays inside that store"
+            );
         }
         Ok(BoundedRange {
             start,
@@ -285,8 +362,11 @@ where
         // Dropping an inverted range here avoids an underflow and an out-of-bounds `select`.
         let bounded = match BoundedRange::parse(start, end, local) {
             Ok(bounded) => bounded,
-            Err(InvertedRange) => {
-                debug!("dropping segment with inverted range");
+            Err(InvertedRange { raw_start, raw_end }) => {
+                debug!(
+                    "dropping malformed segment: its start ranks after its end in this store \
+                     ({raw_start} > {raw_end}), so it covers no keys and cannot be refined"
+                );
                 outcome.dropped_malformed += 1;
                 continue;
             }
@@ -298,7 +378,9 @@ where
             end: end_bound,
             ..
         } = bounded;
-        // The policy never sees the bounds, so it cannot decide key-dependently.
+        // The policy never sees the bounds, so it cannot decide key-dependently. `Comparison::span`
+        // is read from the bundled aggregate, not from `end_index - start_index` — see
+        // `RsosView`'s count-agreement law for why those two agree only for a defended backend.
         let comparison = Comparison::new(local_aggregate, remote, outcome.children);
         match policy.decide(comparison) {
             Decision::Skip => {
@@ -323,8 +405,9 @@ where
                 let mut cur_bound = start_bound;
                 let mut cur_index = start_index;
                 loop {
-                    let next_index = cur_index + stride;
-                    if next_index >= end_index {
+                    // `None` means the next cut would reach `end_index`: this child is the last.
+                    // `Some` is in bounds for any backend by construction — see `AdmittedRank`.
+                    let Some(next_index) = cur_index.cut_before(end_index, stride) else {
                         let range = KeyRange::new(cur_bound, end_bound);
                         // An uncut child *is* the parent, whose aggregate is already in hand.
                         let aggregate = if cur_index == start_index {
@@ -335,15 +418,14 @@ where
                         child_ranges.push(RangeAggregate { range, aggregate });
                         outcome.children += 1;
                         break;
-                    } else {
-                        let next_key = local.select(next_index).clone();
-                        let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
-                        let aggregate = local.aggregate(range.clone());
-                        child_ranges.push(RangeAggregate { range, aggregate });
-                        outcome.children += 1;
-                        cur_bound = StartBound::Included(next_key);
-                        cur_index = next_index;
-                    }
+                    };
+                    let next_key = local.select(next_index.get()).clone();
+                    let range = KeyRange::new(cur_bound, EndBound::Excluded(next_key.clone()));
+                    let aggregate = local.aggregate(range.clone());
+                    child_ranges.push(RangeAggregate { range, aggregate });
+                    outcome.children += 1;
+                    cur_bound = StartBound::Included(next_key);
+                    cur_index = next_index;
                 }
             }
         }
@@ -397,7 +479,56 @@ mod tests {
         assert!(enumeration_ranges.is_empty());
     }
 
-    /// The guard must not reject well-formed segments.
+    // ----- Contract-violating backends -----
+
+    /// Breaks [`RsosView`]'s rank-within-store law: `rank` is the key's own magnitude, unbounded
+    /// by `size()`.
+    ///
+    /// Hand-written rather than blanket-derived — the third-party shape the crate root advertises
+    /// (remote, lazy, cached), and the one the blanket impl does not cover. `select` indexes a
+    /// `Vec`, so it panics out of bounds; that is the trap the driver must not spring.
+    struct UnclampedRank {
+        keys: Vec<i32>,
+    }
+
+    impl RsosView<i32> for UnclampedRank {
+        fn size(&self) -> usize {
+            self.keys.len()
+        }
+
+        fn aggregate<R: RangeBounds<i32>>(&self, _range: R) -> Aggregate {
+            // Never equal to what the peer advertises below, so the driver reaches SPLIT.
+            Aggregate::new(self.keys.len(), Fingerprint([7, 0, 0, 0]))
+        }
+
+        fn rank(&self, z: &i32) -> usize {
+            *z as usize
+        }
+
+        fn select(&self, r: usize) -> &i32 {
+            &self.keys[r]
+        }
+    }
+
+    /// Worked example behind `no_backend_answer_can_drive_the_protocol_out_of_bounds` (the property
+    /// oracle). Returning at all is the assertion; `!is_empty()` keeps it failing if the bound is
+    /// ever "fixed" by dropping such segments instead, which is a different bug, not a milder one.
+    #[test]
+    fn backend_with_unclamped_rank_is_defended_against_not_trusted() {
+        let store = UnclampedRank {
+            keys: vec![10, 20, 30],
+        };
+        let segment = RangeAggregate {
+            // rank(1000) = 1000 against size() = 3. Unclamped, the fan-out reaches `select(3)`.
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Excluded(1000)),
+            aggregate: Aggregate::new(1, Fingerprint([1, 0, 0, 0])),
+        };
+        let (child_ranges, _) = round(&store, segment);
+        assert!(!child_ranges.is_empty());
+    }
+
+    /// The guard must not reject legitimate segments: a well-formed range still produces the
+    /// normal output (here: an empty peer range, so our whole tree is reported as a difference).
     #[test]
     fn wellformed_segment_still_processed() {
         let store = tree(&[10, 20, 30]);
