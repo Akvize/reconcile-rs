@@ -132,7 +132,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 in use, and the tombstone wheel and wire format are already coupled to its shape. `Transport` is
 `#[async_trait]` and object-safe (`Arc<dyn Transport<...>>`); `InMemoryTransport`/`InMemoryNetwork`
 are public (not test-gated) so downstream crates can drive a deterministic in-process cluster in
-their own tests. `Discovery::is_authoritative` distinguishes a speculative probe result (steers only
+their own tests. `Discovery::kind` distinguishes a speculative probe result (steers only
 the current round's targets) from an authoritative one (seeded into the known-peer set, an absence
 decommissions after a grace period) — either way discovery never grants causal-stability membership
 (§5 invariant 6), which a peer must earn via an authenticated dated datagram.
@@ -253,6 +253,32 @@ when the remote stamp is strictly greater, so `Timestamp: Ord` answers it withou
 or cloning — the value). The remaining `Hash` bounds in the facade are genuine `HashMap`-key
 requirements, spelled out locally where the `HashMap` is (`ReplicatedMap`/`Replica`'s peer and
 tombstone indexes, `TimeoutWheel`, the snapshot codec).
+
+---
+
+### 4.2 State typing
+
+A finite, named set of states carried by a **type** rather than by an `Option`, a `bool` or a bare
+primitive, so the state is a compile-time fact instead of call-site discipline. AGENTS.md §4 states
+the rule; these are its worked instances, and the reference examples to copy:
+
+| Type | What its existence proves | Obtained by |
+|---|---|---|
+| `Entry` / `State<V>` (`lww-register`) | a dated cell vs its timestamp-less projection (§5 inv. 8) | `Entry::project` |
+| `StartBound` / `EndBound` (`rbsr`) | the two bound shapes the protocol emits — the other two `Bound` variants fail to deserialize rather than reaching the driver | wire decode |
+| `Payload<Authenticated>` / `Payload<Verified>` (`gossip`) | MAC-checked, then replay-checked; message handling takes `Verified`, so an unchecked datagram cannot reach it | `Payload::verify_replay` |
+| `AdmittedTime` (`lww-register`) | a peer's physical time was clamped to the drift budget before touching local clock state | `AdmittedTime::clamped_to_drift` |
+
+**Newtype or phantom parameter?** Decide by whether the *pre*-state travels. `Payload` earns its
+parameter: both states are held, passed, and demanded in a signature. `AdmittedTime` does not — its
+raw form is consumed where it is produced, so a phantom would add a type parameter to every
+signature to distinguish a state nothing carries. Prefer the newtype until a second state is
+genuinely held across a boundary.
+
+The 2026-08 sweep for this pattern is closed. Both items it left open have since been resolved in
+the direction it recommended: `Authenticator`'s `is_enabled`/`is_encrypted` booleans are gone (call
+sites `match` the enum, which was already a well-typed state), and `Discovery::is_authoritative() ->
+bool` became `kind() -> DiscoveryKind`.
 
 ---
 
