@@ -93,16 +93,24 @@ jobs:
     - name: Run tests (mac-hmac)
       run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
 
-  # #203: build only, on a non-Linux platform — the DNS resolver path, socket-buffer clamping, and
+  # #203: exercises a non-Linux platform — the DNS resolver path, socket-buffer clamping, and
   # endianness-sensitive code otherwise never even compile anywhere but ubuntu-latest.
   #
-  # Not `cargo test`: the suite binds hundreds of distinct 127.x.x.x loopback addresses (one per
-  # test, to dodge port collisions across parallel tests) and relies on Linux's loopback special
-  # case, where any address in 127.0.0.0/8 is bindable with no interface configuration. BSD/macOS
-  # has no such leniency — only addresses explicitly `ifconfig lo0 alias`'d are bindable, and the
-  # addresses in use are numerous, span multiple /8-internal "networks" (127.0.x, 127.1.x, 127.3.x)
-  # and are partly generated at runtime (`benches/system.rs`, `tests/service.rs`), so pre-aliasing
-  # them is impractical and would silently break again on the next test that picks a new address.
+  # Linux treats every address in 127.0.0.0/8 as bindable with no interface configuration; BSD/macOS
+  # only binds addresses explicitly `ifconfig lo0 alias`'d, and the suite binds ~100 distinct
+  # 127.x.x.x addresses (one per test, to dodge port collisions across parallel tests). A prior
+  # version of this job dropped straight to build-only over that gap. Instead: alias every literal
+  # 127.x.x.x address the tree currently binds to, extracted live by grep rather than hardcoded — a
+  # new test picking a new address is covered on its next CI run with no workflow edit, which is what
+  # the earlier hardcoded-list approach could not offer. (`add_net`'s CIDRs, e.g.
+  # `tests/service.rs`'s `format!("127.1.{i}.0/30")` loop, register routes and never `bind()`, so
+  # they don't need an alias; excluding `benches/` avoids aliasing `benches/system.rs`'s
+  # runtime-generated mesh addresses, which this job never runs — `cargo test --workspace` does not
+  # execute bench targets.)
+  #
+  # No `--all-features`/`mac-hmac` cross here: a macOS runner already costs ~10x a Linux one in
+  # billed minutes: additionally the feature-interaction matrix is already covered by `lint-and-test`
+  # and `mac-hmac` on Linux, so it would be paying that multiplier for coverage this job doesn't add.
   macos:
     runs-on: macos-latest
     steps:
@@ -114,8 +122,19 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Alias loopback addresses the test suite binds (macOS requires each explicitly)
+      run: |
+        set -euo pipefail
+        grep -rhoE '127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' \
+            --include='*.rs' tests rsos rbsr lww-register gossip/src src \
+          | sort -u \
+          | while read -r addr; do
+              sudo ifconfig lo0 alias "$addr" up || true
+            done
     - name: Build
       run: cargo build --workspace --features internal-testing --verbose
+    - name: Run tests
+      run: cargo test --workspace --features internal-testing --verbose
 
   # #312: advisories (RustSec), license compliance, and a dependency-source allowlist. Config in
   # `deny.toml`. `checks: advisories` alone would silently skip a license/bans/sources regression;
