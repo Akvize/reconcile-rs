@@ -6,29 +6,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Dynamic peer discovery, behind a single port.
+//! Dynamic peer discovery behind the [`Discovery`] port (`ARCHITECTURE.md` §3.2).
 //!
-//! Every way a `ReplicatedMap` learns about peers goes through the
-//! [`Discovery`] port. Two built-in adapters implement it:
+//! - [`RandomProbe`] — default, **speculative**: one random address per declared network per
+//!   round, steering only that round's targets.
+//! - [`DnsDiscovery`] — **authoritative**, for a Kubernetes headless Service: one address record
+//!   per ready pod, seeded into the known-peer set, with absence decommissioning after a grace
+//!   period.
 //!
-//! - [`RandomProbe`] — the **default, speculative** source: one random address per declared network
-//!   each round (`Config::with_net`). The probed address
-//!   might not be a live peer, so it is only used as a one-shot reconciliation target and is **not**
-//!   added to the known-peer set. This is what auto-discovers peers on a flat or geographically
-//!   partitioned CIDR. Its [`kind`](Discovery::kind) is [`Speculative`](DiscoveryKind::Speculative).
-//! - [`DnsDiscovery`] — an **authoritative** source for Kubernetes: it resolves a **headless
-//!   Service** DNS name (one address record per ready pod), so a single lookup yields the real,
-//!   current peer set, with no API client and no RBAC. Random probing does not fit Kubernetes, where
-//!   pod IPs are ephemeral and drawn from a large cluster CIDR — a random probe almost never hits a
-//!   live pod.
-//!
-//! An **authoritative** result is treated as the current truth: each returned address is seeded into
-//! the known-peer set (via `ReplicatedMap::seed_peer`), and a
-//! previously-seen member now absent is decommissioned after a grace period (see
-//! `ReplicatedMap::with_dns_discovery`). A
-//! non-authoritative result is speculative and only steers the current round's targets. In **all**
-//! cases discovery feeds the gossip-target set only; it never grants causal-stability *membership*,
-//! which a peer must still earn through a genuine authenticated, dated datagram.
+//! Either way discovery feeds the gossip-target set only, never causal-stability membership
+//! (`ARCHITECTURE.md` §5 invariant 6).
 
 use std::future::Future;
 use std::net::IpAddr;
@@ -41,60 +28,41 @@ use rand::rngs::StdRng;
 
 use crate::gen_ip::probe_targets;
 
-/// The future returned by [`Discovery::discover`].
-///
-/// A boxed future is used (rather than the `async_trait` crate) so the port stays object-safe —
-/// it is always consumed behind `Arc<dyn Discovery>` — without pulling in an extra dependency.
+/// The future returned by [`Discovery::discover`]. Boxed rather than `async_trait`, so the port
+/// stays object-safe with no extra dependency.
 pub type DiscoverFuture<'a> =
     Pin<Box<dyn Future<Output = std::io::Result<Vec<IpAddr>>> + Send + 'a>>;
 
 /// Whether a [`Discovery`] source's result is the current truth or merely a hint.
-///
-/// See [`Discovery::kind`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiscoveryKind {
-    /// `discover`'s result is a snapshot of the peers that should exist right now: each address
-    /// refreshes the corresponding known peer, and a previously-seen member that is *absent* is
-    /// counted toward grace-period decommissioning.
+    /// A snapshot of the peers that should exist now: an absent member counts toward
+    /// grace-period decommissioning.
     Authoritative,
     /// `discover`'s result is speculative — only the current round's targets, never seeded as
     /// known peers.
     Speculative,
 }
 
-/// A source of candidate peer addresses for the reconciliation engine.
+/// A source of candidate peer addresses, called once per discovery round and read according to
+/// [`kind`](Self::kind).
 ///
-/// [`discover`](Self::discover) is called once per discovery round. The result is interpreted
-/// according to [`kind`](Self::kind):
-///
-/// - `Ok(addrs)` from an [`Authoritative`](DiscoveryKind::Authoritative) source is a snapshot of the
-///   peers that should exist right now: each address refreshes the corresponding known peer, and a
-///   previously-seen member that is *absent* is counted toward grace-period decommissioning. From a
-///   [`Speculative`](DiscoveryKind::Speculative) source it is only the current round's targets,
-///   never seeded as known peers.
-/// - `Err(_)` is a **transient failure** (e.g. a DNS blip). It MUST NOT be read as "no peers": the
-///   store skips the round entirely, so a momentary resolver hiccup never decommissions anyone.
+/// `Err(_)` is a **transient failure**, never "no peers": the store skips the round, so a resolver
+/// hiccup decommissions nobody.
 pub trait Discovery: Send + Sync + 'static {
     /// Resolve the current candidate peer set.
     fn discover(&self) -> DiscoverFuture<'_>;
 
-    /// Whether [`discover`](Self::discover) returns the current peer set or merely speculative
-    /// probe targets.
-    ///
-    /// Defaults to [`Authoritative`](DiscoveryKind::Authoritative); the speculative [`RandomProbe`]
-    /// overrides it to [`Speculative`](DiscoveryKind::Speculative).
+    /// How [`discover`](Self::discover)'s result is read. Defaults to
+    /// [`Authoritative`](DiscoveryKind::Authoritative).
     fn kind(&self) -> DiscoveryKind {
         DiscoveryKind::Authoritative
     }
 }
 
-/// The default, **speculative** discovery: one random address per declared network each round.
-///
-/// This is the historical auto-discovery for flat or geographically partitioned CIDRs.
-/// The probed addresses might not be live peers, so they are used only as one-shot reconciliation
-/// targets and never seeded as known peers — if a peer exists there, it replies and is registered
-/// then. It shares the engine's live `nets` and `rng`, so retuning the topology at runtime
-/// immediately changes what is probed.
+/// The default, **speculative** discovery: one random address per declared network each round,
+/// never seeded as a known peer. Shares the engine's live `nets`/`rng`, so retuning the topology
+/// changes what is probed.
 pub struct RandomProbe {
     nets: Arc<RwLock<Vec<IpNet>>>,
     rng: Arc<RwLock<StdRng>>,
@@ -108,7 +76,6 @@ impl RandomProbe {
 
 impl Discovery for RandomProbe {
     fn discover(&self) -> DiscoverFuture<'_> {
-        // Sample synchronously (no lock is held across the returned, already-ready future).
         let nets = self.nets.read().clone();
         let targets = probe_targets(&mut *self.rng.write(), &nets);
         Box::pin(async move { Ok(targets) })
@@ -119,22 +86,17 @@ impl Discovery for RandomProbe {
     }
 }
 
-/// Discovers peers by resolving a DNS name to its set of address records.
+/// Discovers peers by resolving a DNS name to its address records, through the system resolver.
 ///
-/// Point this at a Kubernetes **headless** `Service` (`clusterIP: None`): its DNS name resolves to
-/// one A/AAAA record per ready pod, so a single lookup yields every peer. Resolution uses
-/// [`tokio::net::lookup_host`], i.e. the system resolver (`getaddrinfo`) — no extra dependency, and
-/// it honours the in-cluster DNS configuration.
+/// Point it at a Kubernetes **headless** `Service` (`clusterIP: None`): one record per ready pod.
 pub struct DnsDiscovery {
     name: String,
     port: u16,
 }
 
 impl DnsDiscovery {
-    /// Create a DNS-based discovery source for `name` (a resolvable host, typically a headless
-    /// Service FQDN such as `reconcile-headless.default.svc.cluster.local`). `port` is the
-    /// reconciliation UDP port; it is only used to form the `host:port` string `lookup_host`
-    /// expects and is discarded from the returned addresses.
+    /// A DNS discovery source for `name`, typically a headless Service FQDN. `port` only forms
+    /// the `host:port` string `lookup_host` expects and is discarded from the results.
     pub fn new(name: impl Into<String>, port: u16) -> Self {
         DnsDiscovery {
             name: name.into(),
@@ -159,8 +121,6 @@ mod tests {
 
     #[tokio::test]
     async fn dns_discovery_resolves_loopback() {
-        // `localhost` resolves to a loopback address through the system resolver; this is a smoke
-        // test that the adapter wires `lookup_host` up correctly and strips the port.
         let discovery = DnsDiscovery::new("localhost", 0);
         let addrs = discovery
             .discover()
@@ -174,8 +134,6 @@ mod tests {
 
     #[tokio::test]
     async fn dns_discovery_errors_on_unresolvable_name() {
-        // A syntactically valid but unresolvable name yields an `Err`, which the store treats as a
-        // transient blip rather than an empty peer set.
         let discovery = DnsDiscovery::new("this-name-should-not-resolve.invalid", 0);
         assert!(discovery.discover().await.is_err());
     }
@@ -196,9 +154,7 @@ mod tests {
             Arc::new(RwLock::new(vec![net])),
             Arc::new(RwLock::new(StdRng::seed_from_u64(42))),
         );
-        // Speculative: an absence must never decommission a peer.
         assert_eq!(probe.kind(), DiscoveryKind::Speculative);
-        // One probe per declared network, each within that network.
         let addrs = probe.discover().await.unwrap();
         assert_eq!(addrs.len(), 1);
         assert!(net.contains(&addrs[0]), "{net} should contain {}", addrs[0]);

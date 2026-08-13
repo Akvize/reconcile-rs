@@ -6,15 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The [`Transport`] port — the domain's datagram-I/O boundary — and its default [`UdpTransport`]
-//! adapter (`ARCHITECTURE.md` §3.4).
-//!
-//! The reconciliation engine drives itself over this port instead of calling `tokio::net` directly,
-//! so the socket is a substitutable adapter. [`InMemoryTransport`] delivers datagrams between
-//! engines in-process (no real sockets), which is what makes convergence tests deterministic — and
-//! is exposed (not test-gated) so downstream crates can drive a deterministic in-process cluster in
-//! their own tests too, through
-//! `ReplicatedMap::new_with_transport`.
+//! The [`Transport`] port and its [`UdpTransport`]/[`InMemoryTransport`] adapters
+//! (`ARCHITECTURE.md` §3.2).
 
 use std::hash::Hash;
 use std::io;
@@ -26,12 +19,8 @@ use socket2::SockRef;
 use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
-/// Abstracts connectionless datagram I/O (send / receive / local address).
-///
-/// The associated `Addr` is the peer-address type; the default [`UdpTransport`] uses
-/// [`SocketAddr`], and the reconciliation engine is written against `Addr = SocketAddr` (its peer,
-/// membership and geography bookkeeping are all keyed on IP). A different adapter (e.g.
-/// [`InMemoryTransport`]) reuses the same address type so none of that logic changes.
+/// Connectionless datagram I/O. The engine is written against `Addr = SocketAddr`, so every
+/// adapter reuses that address type.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
     /// The peer-address type carried by [`recv_from`](Transport::recv_from) /
@@ -81,18 +70,11 @@ impl UdpTransport {
     }
 }
 
-/// Apply the requested `SO_RCVBUF` / `SO_SNDBUF` sizes to a gossip socket.
+/// Apply the requested `SO_RCVBUF` / `SO_SNDBUF` sizes; `None` leaves the OS default.
 ///
-/// `setsockopt` never errors for asking too much: the kernel clamps each request to the OS maximum
-/// (`net.core.rmem_max` / `wmem_max` on Linux), so a generous default only ever helps. Clamping is
-/// therefore expected on an untuned host — **not** a warning condition — so the achieved size is
-/// reported at `debug`; an operator who needs the full buffer raises the sysctl (see the README)
-/// and can confirm via `/proc/net/snmp` `RcvbufErrors`. Only an actual `setsockopt` failure (which
-/// does not happen for a buffer request on a valid socket) is surfaced as a `warn`. A `None` size
-/// leaves the inherited OS default untouched.
-///
-/// Note: on Linux `getsockopt` reports the *doubled* value (bookkeeping overhead), so a fully
-/// honoured request reads back larger than asked.
+/// The kernel clamps an over-large request rather than failing, so clamping is a `debug`, not a
+/// warning. Linux `getsockopt` reports the doubled value, so a honoured request reads back larger
+/// than asked.
 fn set_socket_buffers(
     socket: &UdpSocket,
     recv_buffer_size: Option<usize>,
@@ -142,15 +124,11 @@ impl Transport for UdpTransport {
     }
 }
 
-/// An in-process [`Transport`]: datagrams are routed between transports sharing an
-/// [`InMemoryNetwork`], with no real sockets. Delivery is reliable and FIFO per (sender→receiver)
-/// pair, which — under a single-threaded runtime — makes convergence deterministic. A datagram to
-/// an unknown/closed address is dropped, exactly like UDP.
+/// An in-process [`Transport`] over a shared [`InMemoryNetwork`]: reliable and FIFO per
+/// sender→receiver pair, so convergence is deterministic on a single-threaded runtime. A datagram
+/// to an unbound address is dropped, as with UDP.
 ///
-/// Exposed (not test-gated) so downstream crates can test *their own* application against a
-/// deterministic cluster, which is the second of the two uses (alongside a future non-UDP
-/// datagram transport, e.g. QUIC unreliable datagrams) that earn `Transport` a public injection
-/// point — see `ReplicatedMap::new_with_transport`.
+/// Public, not test-gated, so downstream crates can drive a deterministic cluster of their own.
 pub use in_memory::{InMemoryNetwork, InMemoryTransport};
 
 mod in_memory {
@@ -171,7 +149,6 @@ mod in_memory {
     }
 
     impl InMemoryNetwork {
-        /// Create an empty network.
         pub fn new() -> Self {
             InMemoryNetwork::default()
         }
@@ -210,7 +187,6 @@ mod in_memory {
         }
 
         async fn send_to(&self, buf: &[u8], dst: &SocketAddr) -> io::Result<usize> {
-            // Deliver if the destination is bound; otherwise drop silently, like UDP to nowhere.
             if let Some(tx) = self.network.routes.lock().get(dst) {
                 let _ = tx.send((self.addr, buf.to_vec()));
             }
@@ -249,7 +225,6 @@ mod tests {
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let ta = net.bind(a);
         let unknown: SocketAddr = "127.0.0.1:9".parse().unwrap();
-        // No panic, no delivery: reports the bytes as "sent" then dropped.
         let n = ta.send_to(b"lost", &unknown).await.unwrap();
         assert_eq!(n, 4);
     }

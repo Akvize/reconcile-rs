@@ -8,13 +8,8 @@
 
 //! Optional Prometheus integration, enabled by the `metrics-prometheus` feature.
 //!
-//! The library emits metrics through the [`metrics`] facade but, just like a `tracing`
-//! subscriber, it never installs a recorder on its own — that is the application's choice.
-//! These helpers let an application wire up a Prometheus recorder and either serve a
-//! `/metrics` HTTP endpoint or render the exposition text itself.
-//!
-//! The metrics themselves are only emitted when the `metrics` feature is enabled;
-//! `metrics-prometheus` implies it.
+//! The library emits through the [`metrics`] facade and never installs a recorder itself. These
+//! helpers install one and either serve `/metrics` or hand back the exposition text.
 //!
 //! # Serving a `/metrics` endpoint
 //!
@@ -43,25 +38,21 @@ use std::net::SocketAddr;
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder, PrometheusHandle};
 
-/// Install a global Prometheus recorder **without** any HTTP server and return a handle.
+/// Install a global Prometheus recorder with no HTTP server; [`PrometheusHandle::render`] gives
+/// the `/metrics` body.
 ///
-/// Call [`PrometheusHandle::render`] on the returned handle to obtain the text-format
-/// `/metrics` body — the "configurable hook" integration path, for applications that
-/// already run their own HTTP server.
+/// # Errors
 ///
-/// Call this exactly once, early in `main`. Returns an error if a recorder is already
-/// installed.
+/// If a recorder is already installed — call this exactly once, early in `main`.
 pub fn install_recorder() -> Result<PrometheusHandle, BuildError> {
     let handle = PrometheusBuilder::new().install_recorder()?;
     crate::observability::describe();
     Ok(handle)
 }
 
-/// Install the recorder **and** spawn a background HTTP server exposing `/metrics` at `addr`.
+/// Install the recorder and spawn a background HTTP server exposing `/metrics` at `addr`.
 ///
-/// Requires a Tokio runtime (the listener is spawned onto the current runtime). Returns once
-/// the listener is set up; the server then runs in the background. Call this exactly once,
-/// early in `main`, before starting the reconciliation loop.
+/// Requires a Tokio runtime, and returns once the listener is up. Call exactly once.
 pub async fn serve(addr: SocketAddr) -> Result<(), BuildError> {
     PrometheusBuilder::new()
         .with_http_listener(addr)

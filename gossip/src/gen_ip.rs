@@ -13,10 +13,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use rand::Rng;
 
-/// Select a random IP address from the given network
+/// Select a random IP address from the given network.
 ///
-/// Illustrative only, not compiled as a doctest: the exact output pins one `StdRng` seed, which is
-/// not a documented guarantee of `rand` and could shift on a `rand` upgrade.
+/// Not a doctest: the output pins an `StdRng` seed, which `rand` does not guarantee.
 /// ```ignore
 /// # use rand::SeedableRng;
 /// # use gossip::gen_ip::gen_ip;
@@ -32,9 +31,7 @@ pub fn gen_ip<R: Rng>(rng: &mut R, network: IpNet) -> IpAddr {
     }
 }
 
-/// Select a random IPv4 address from the given network
-///
-/// Illustrative only, not compiled as a doctest (see [`gen_ip`]'s doc comment for why).
+/// Select a random IPv4 address from the given network.
 /// ```ignore
 /// # use rand::SeedableRng;
 /// # use gossip::gen_ip::gen_ipv4;
@@ -48,9 +45,7 @@ pub fn gen_ipv4<R: Rng>(rng: &mut R, network: Ipv4Net) -> Ipv4Addr {
     network.network().bitor(random.bitand(network.hostmask()))
 }
 
-/// Select a random IPv6 address from the given network
-///
-/// Illustrative only, not compiled as a doctest (see [`gen_ip`]'s doc comment for why).
+/// Select a random IPv6 address from the given network.
 /// ```ignore
 /// # use rand::SeedableRng;
 /// # use gossip::gen_ip::gen_ipv6;
@@ -64,27 +59,19 @@ pub fn gen_ipv6<R: Rng>(rng: &mut R, network: Ipv6Net) -> Ipv6Addr {
     network.network().bitor(random.bitand(network.hostmask()))
 }
 
-/// One random probe address per network CIDR.
-///
-/// Used for multi-network peer auto-discovery: a node probes one random address inside
-/// each configured geographical network every reconciliation round, so discovery spans every
-/// network rather than a single flat CIDR.
+/// One random probe address per network CIDR, so discovery spans every configured network.
 pub fn probe_targets<R: Rng>(rng: &mut R, nets: &[IpNet]) -> Vec<IpAddr> {
     nets.iter().map(|&net| gen_ip(rng, net)).collect()
 }
 
-/// Return the first network in `nets` whose CIDR contains `addr`, if any.
-///
-/// A peer's geographical network is derived purely from its IP address, so the wire format carries
-/// no network tag.
+/// The first network in `nets` whose CIDR contains `addr`. A peer's network is derived from its
+/// address alone, so the wire format carries no network tag.
 pub fn net_of(nets: &[IpNet], addr: IpAddr) -> Option<IpNet> {
     nets.iter().copied().find(|net| net.contains(&addr))
 }
 
-/// The host route (`/32` for IPv4, `/128` for IPv6) of a single address.
-///
-/// Used as the local network of last resort: when no configured network contains a node's listen
-/// address (a misconfiguration), the node treats only itself as local.
+/// The host route (`/32`, `/128`) of a single address: the local network of last resort when no
+/// configured network contains the listen address.
 pub fn host_net(addr: IpAddr) -> IpNet {
     let prefix_len = match addr {
         IpAddr::V4(_) => 32,
@@ -148,13 +135,10 @@ mod tests {
             .iter()
             .map(|s| s.parse().unwrap())
             .collect();
-        // A peer is qualified by the first network whose CIDR contains it.
         assert_eq!(net_of(&nets, "127.0.0.1".parse().unwrap()), Some(nets[0]));
         assert_eq!(net_of(&nets, "127.0.1.1".parse().unwrap()), Some(nets[1]));
-        // An address in no declared network is unqualified.
         assert_eq!(net_of(&nets, "10.0.0.1".parse().unwrap()), None);
 
-        // The local-net-of-last-resort is the address' own host route.
         assert_eq!(
             host_net("10.0.0.1".parse().unwrap()),
             "10.0.0.1/32".parse().unwrap()

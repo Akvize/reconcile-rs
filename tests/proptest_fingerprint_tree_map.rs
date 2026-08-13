@@ -37,10 +37,8 @@ use rbsr::{
 };
 use rsos::{lift, Fingerprint, FingerprintTreeMap};
 
-// ---------------------------------------------------------------------------
-// Property 1: FingerprintTreeMap is observationally equivalent to a BTreeMap oracle, and
-// every internal invariant holds after every single mutation.
-// ---------------------------------------------------------------------------
+// Property 1: equivalence to a BTreeMap oracle, with every invariant holding after every
+// mutation.
 
 #[derive(Clone, Debug)]
 enum Op {
@@ -54,21 +52,14 @@ enum Op {
     Clear,
     /// Mutate the value at a key in place through `with_mut`, the hash-safe mutation path.
     WithMut(u8, u16),
-    /// The same, with a callback that mutates and *then* panics. The panic is caught; the tree
-    /// must survive it with every cached aggregate still describing what is actually stored.
-    ///
-    /// This is the interesting one. `with_mut` re-lifts the element and propagates the fingerprint
-    /// delta from a `Drop` guard precisely so that unwinding cannot skip it; before that, a
-    /// panicking callback left the map live and silently wrong. Interleaving these with the splits
-    /// and merges the other operations drive is what a narrow example cannot reach.
+    /// The same, with a callback that mutates and then panics: the caught panic must leave every
+    /// cached aggregate describing what is actually stored, interleaved with splits and merges.
     WithMutPanicking(u8, u16),
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
-    // Small key space (u8) so that `remove`/`get` actually hit existing keys often, and node
-    // splits/merges are exercised with modest sequence lengths. `Clear`/`Retain` are weighted
-    // low: frequent enough to interleave with splits/merges, rare enough that the sequence
-    // still builds up a non-trivial tree between them.
+    // Small key space so `remove`/`get` hit often; `Clear`/`Retain` weighted low so a non-trivial
+    // tree still builds between them.
     prop_oneof![
         6 => (any::<u8>(), any::<u16>()).prop_map(|(k, v)| Op::Insert(k, v)),
         6 => any::<u8>().prop_map(Op::Remove),
@@ -194,14 +185,8 @@ proptest! {
         prop_assert_eq!(tree.aggregate(range).fingerprint(), expected);
     }
 
-    /// `==` compares *content*, never tree shape, and both halves of the bundled aggregate take
-    /// part in it.
-    ///
-    /// Note on what this does and does not guard. It gives `PartialEq` the generative coverage it
-    /// had none of, but it cannot fail against the previous fingerprint-only comparison: that would
-    /// need two maps of differing size whose fingerprints coincide, which is not constructible
-    /// against real BLAKE3. The size half is asserted where it is reachable, on `Aggregate` itself,
-    /// in `rsos`'s own unit tests.
+    /// `==` compares content, never tree shape. The size half of the aggregate is only reachable
+    /// on `Aggregate` itself, asserted in `rsos`'s unit tests.
     #[test]
     fn fingerprint_tree_map_equality_is_content_not_shape(
         entries in prop::collection::vec((any::<u8>(), any::<u16>()), 0..200),
@@ -237,23 +222,14 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property 2: convergence of the diff protocol.
-//
-// We model a universe of (key, value) pairs and give each store an arbitrary
-// subset. Shared keys carry identical values (the diff algorithm reconciles the
-// *set* of keys; per-key conflict resolution is the job of `ReplicatedMap`'s
-// last-write-wins layer, not of the raw `FingerprintTreeMap`). The true symmetric
-// difference of the key sets is therefore well defined and we assert the
-// protocol discovers exactly it.
-// ---------------------------------------------------------------------------
+// Property 2: convergence of the diff protocol. Each store gets an arbitrary subset of one
+// universe, with shared keys carrying identical values — conflict resolution is `ReplicatedMap`'s
+// job — so the symmetric difference is well defined and must be discovered exactly.
 
 type Tree = FingerprintTreeMap<u64, u64>;
 
-/// One full diff exchange, optionally perturbing the in-flight message vectors
-/// each round with `perturb` to model an adversarial transport (reordering and
-/// duplication). Returns `(a_owes, b_owes)`: the ranges `a` must send to `b` and
-/// vice-versa.
+/// One full diff exchange, `perturb` modelling an adversarial transport. Returns the ranges each
+/// peer owes the other.
 fn run_diff(
     a: &Tree,
     b: &Tree,
@@ -279,11 +255,8 @@ fn run_diff(
     (a_diffs, b_diffs)
 }
 
-/// The same exchange with each peer running its **own** [`RefinementPolicy`].
-///
-/// Separate policies per side on purpose: the refinement rule is a local decision that never
-/// crosses the wire, so a mixed pair must converge just as a matched one does. The responder of
-/// each half-round is the peer whose policy applies.
+/// The same exchange with each peer running its **own** [`RefinementPolicy`]; the responder's
+/// policy applies to each half-round.
 fn run_diff_with_policies(
     a: &Tree,
     b: &Tree,
@@ -474,11 +447,8 @@ proptest! {
         prop_assert!(a == b);
     }
 
-    /// Dropped messages: each lossy cycle delivers updates in only one direction
-    /// (the other direction's updates are dropped), modelling lost UDP
-    /// datagrams. The protocol must never corrupt state (invariants hold
-    /// throughout) and must converge once a complete exchange finally gets
-    /// through — exactly the real transport's retransmission guarantee.
+    /// Lossy cycles deliver in one direction only: invariants must hold throughout, and
+    /// convergence must follow the first complete exchange.
     #[test]
     fn convergence_is_eventual_despite_dropped_messages(
         universe in universe_strategy(),
@@ -512,17 +482,12 @@ proptest! {
         prop_assert!(a == b);
     }
 
-    /// Any refinement policy converges, and so does any *mixed pair* of them.
+    /// Any refinement policy converges, and so does any mixed pair — the claim that makes the
+    /// seam free.
     ///
-    /// The three properties above pin the default policy. This one pins what must hold for every
-    /// rule the seam admits, which is the claim that makes the seam free: a policy is a local
-    /// decision, the wire type carries none, so two peers need not agree on one.
-    ///
-    /// The assertion is deliberately weaker than `two_trees_converge_and_diff_is_symmetric_difference`
-    /// above. A policy with an enumeration threshold ships whole ranges once they are small enough,
-    /// so its diff ranges *cover* the symmetric difference rather than equalling it — that overshoot
-    /// is the threshold's cost, not a bug. What may never weaken is the outcome: both trees hold the
-    /// union and agree.
+    /// Weaker than `two_trees_converge_and_diff_is_symmetric_difference`: an enumeration threshold
+    /// makes the diff ranges *cover* the symmetric difference rather than equal it. The outcome may
+    /// not weaken — both trees hold the union and agree.
     #[test]
     fn convergence_holds_under_any_policy_and_any_mixed_pair(
         universe in universe_strategy(),
@@ -552,16 +517,8 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property 3: the canonical encoding behind `lift`.
-//
-// `lift` no longer derives its bytes from `std::hash::Hash` but from `rsos`'s own canonical serde
-// encoding (`rsos::encoding`), so the two properties above now exercise that path on every run.
-// These pin what the encoding itself owes the protocol, over a *rich* generatively explored value
-// type rather than the `u8`/`u16` pairs above: distinct elements never collide (injectivity — what
-// a range fingerprint's soundness rests on), and unordered containers summarize independently of
-// their iteration order.
-// ---------------------------------------------------------------------------
+// Property 3: what `rsos::encoding` owes the protocol, over a rich generated value type —
+// injectivity, and iteration-order independence for unordered containers.
 
 /// A value shape reaching most arms of the encoding at once: an enum with several variant kinds, a
 /// length-prefixed string, an optional, and a nested sequence.

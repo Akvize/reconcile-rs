@@ -6,42 +6,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Provides the [`ReadReplicaMap`], a lightweight, **dateless, read-only replica** of a dated
-//! [`ReplicatedMap`](crate::ReplicatedMap).
+//! [`ReadReplicaMap`]: a lightweight, **dateless, read-only replica** of a dated
+//! [`ReplicatedMap`](crate::ReplicatedMap), storing [`State<V>`] alone and saving the ~12–16
+//! bytes per entry a passive consumer never needs.
 //!
-//! # What it is for
+//! It converges over the existing range-diff protocol on the same port, speaking only the
+//! **value-only channel** — which a dated peer answers from its timestamp-less projection tree, so
+//! the dated↔dated path is untouched. It never acknowledges tombstones and is never added to a
+//! dated peer's membership set, so it cannot block tombstone GC.
 //!
-//! A dated store keeps a [`Timestamp`] next to every value so it can resolve conflicts
-//! (last-write-wins) and run the tombstone causal-stability machinery. For a fleet with many
-//! *passive read replicas* that only ever consume values, that timestamp is pure overhead: ~12–16
-//! bytes per entry that the replica never needs. A `ReadReplicaMap` stores only
-//! [`State<V>`] — the value or a tombstone, no timestamp — and still converges with a dated peer
-//! over the **existing range-based diff protocol**, on the same UDP port.
+//! A sink, not a source: it always integrates inbound updates by plain overwrite, holding no
+//! timestamp to compare, and never pushes a value back.
 //!
-//! # How it stays causal-stability-safe
-//!
-//! A read replica speaks only the **value-only channel** of the protocol (the `ValueComparisonItem`
-//! / `ValueUpdate` messages). A dated peer answers those by diffing against its value-only
-//! *projection* tree, so the read replica never sees a timestamp and the dated↔dated path is
-//! untouched. Crucially, a read replica **never acknowledges tombstones and is never added to a
-//! dated peer's causal-stability membership set**, so it cannot block tombstone garbage collection —
-//! the regression the naive "single value-only hash" design would have caused.
-//!
-//! # Read-only
-//!
-//! A read replica **always integrates** inbound updates (plain overwrite — it holds no timestamp to
-//! compare) and **never sends authoritative values**: it drives the diff by exchanging comparison
-//! items but ignores any difference it is asked to push back. It is a sink, not a source.
-//!
-//! # Limitations
-//!
-//! - A read replica reflects a deletion as a tombstone only if it observes the tombstone before the
-//!   dated store **garbage-collects** it. With the default tombstone timeout (60 s) a read replica
-//!   polling on the order of a second has ample time; but if GC is configured to outrun read-replica
-//!   propagation, the read replica may retain the pre-deletion value. Likewise, once a dated store
-//!   GC's a tombstone the read replica keeps its own value-only entry for that key (it never pushes
-//!   data back), so `get` may still return the stale value. Both are consequences of the read
-//!   replica being a passive, read-only replica with no causal-stability bookkeeping of its own.
+//! **Limitation.** It reflects a deletion only if it sees the tombstone before the dated store
+//! collects it, and it keeps its own entry for a key after that — so a GC configured to outrun
+//! replica propagation leaves `get` returning a stale value.
 
 use std::collections::HashMap;
 use std::io;
@@ -77,23 +56,15 @@ const PEER_EXPIRATION: Duration = Duration::from_secs(60);
 
 type OnUpdateCallback<K, V> = Box<dyn Send + Sync + Fn(&K, &State<V>)>;
 
-/// The wire value type a read replica names for (de)serialization. A read replica never stores a
-/// dated value; it only needs the type so the shared [`Message`] enum has a concrete `Update`
-/// payload (which it ignores) and so the value-only projection type resolves to [`State<V>`].
+/// The wire value type, named only so the shared [`Message`] enum has a concrete `Update` payload
+/// — which a read replica ignores, storing no dated value.
 type WireDated<V> = Entry<Timestamp, V>;
 
-/// A lightweight, dateless, read-only replica of a dated [`ReplicatedMap`](crate::ReplicatedMap).
+/// A lightweight, dateless, read-only replica of a dated [`ReplicatedMap`](crate::ReplicatedMap);
+/// see the [module documentation](crate::read_replica_map).
 ///
-/// See the [module documentation](crate::read_replica_map) for the design and the
-/// causal-stability-safety guarantees.
-///
-/// # Correct only under last-write-wins
-///
-/// A read replica stores no timestamps, so it cannot resolve a conflict: inbound updates are applied
-/// by plain overwrite (its internal `integrate` step). That is correct *only* because the
-/// authoritative dated peer already resolved the conflict under last-write-wins before sending the
-/// projection. Under any other conflict-resolution policy, last-writer-by-arrival would be wrong
-/// and `ReadReplicaMap` would need redesigning.
+/// **Correct only under last-write-wins**: overwrite-on-arrival is right only because the dated
+/// peer already resolved the conflict before sending the projection.
 pub struct ReadReplicaMap<K, V> {
     /// The value-only tree mirroring the dated store. Its range fingerprints are timestamp-less by
     /// construction (see [`State`]), matching a dated peer's value-only projection.
@@ -103,10 +74,8 @@ pub struct ReadReplicaMap<K, V> {
     /// replica sends and receives exclusively through it, exactly like
     /// [`Replica`](crate::Replica) — no `tokio::net` call sites of its own.
     transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    /// The single network this read-only replica probes for discovery. A read replica is a
-    /// dateless sink, usually seeded onto a dated cluster, so it tracks just one network: the one
-    /// containing its listen address, else the first declared network, else the loopback default.
-    /// Shared so it can be retuned at runtime (see [`set_net`](Self::set_net)).
+    /// The single network this replica probes: the one containing its listen address, else the
+    /// first declared, else loopback. Retunable via [`set_net`](Self::set_net).
     net: Arc<RwLock<IpNet>>,
     rng: Arc<RwLock<StdRng>>,
     peers: Arc<RwLock<HashMap<IpAddr, Instant>>>,
@@ -140,18 +109,15 @@ impl<K, V> Clone for ReadReplicaMap<K, V> {
 }
 
 impl<K: Key, V: Value> ReadReplicaMap<K, V> {
-    /// Create a new read replica bound to the configured UDP socket.
+    /// Create a read replica bound to the configured UDP socket.
     ///
-    /// A read replica honours the same [`Config`] as a dated store, including
-    /// [`with_cluster_key`](Config::with_cluster_key): to replicate an authenticated cluster it must
-    /// share the cluster key. The Hybrid-Logical-Clock `node_id` is ignored (a read replica mints no
-    /// timestamps).
+    /// Honours the same [`Config`] as a dated store — including
+    /// [`with_cluster_key`](Config::with_cluster_key), which an authenticated cluster requires.
+    /// `node_id` is ignored: a read replica mints no timestamps.
     ///
     /// # Errors
     ///
-    /// Returns an `io::Error` if the UDP socket cannot be bound to
-    /// `(config.listen_addr, config.port)` — for example, because the port is already in use or
-    /// the address is not available on this host.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
     pub async fn new(config: Config) -> io::Result<Self> {
         // The read replica keeps the OS default socket buffer sizes (`None`/`None`) rather than
         // reading `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and
@@ -163,13 +129,11 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         Ok(Self::build(config, Arc::new(transport)))
     }
 
-    /// Create a read replica over a caller-supplied [`Transport`] adapter instead of the default UDP
-    /// one, mirroring [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport).
+    /// Create a read replica over a caller-supplied [`Transport`], mirroring
+    /// [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport) — which is
+    /// what lets one be driven against a dated peer with no real sockets.
     ///
-    /// Infallible, because the only fallible step in [`new`](Self::new) is binding the socket —
-    /// which the caller has already done, or does not need to do at all. This is what lets a
-    /// read replica be driven against a dated peer over an
-    /// [`InMemoryNetwork`](crate::InMemoryNetwork), with no real sockets anywhere.
+    /// Infallible: the caller has already done the one fallible step, binding.
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
@@ -237,10 +201,8 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         *self.net.read()
     }
 
-    /// Register a hook invoked (outside the map lock) just before each inbound value is integrated.
-    ///
-    /// Useful to be notified of changes replicated from the dated cluster. The tombstone case is
-    /// `State::Tombstone`.
+    /// Register a hook invoked outside the map lock, before each inbound value is integrated. A
+    /// deletion arrives as `State::Tombstone`.
     pub fn add_on_update<F: Send + Sync + Fn(&K, &State<V>) + 'static>(&self, on_update: F) {
         *self.on_update.write() = Box::new(on_update);
     }
@@ -312,11 +274,8 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         None
     }
 
-    /// Call `f` for every live entry, in key order.
-    ///
-    /// The tree read lock is held only for the duration of the call, and the borrows handed to `f`
-    /// cannot escape it — so a long-running scan cannot leak the guard and stall the reconciliation
-    /// loop. Do not perform blocking work or call back into the read replica from `f`.
+    /// Call `f` for every live entry, in key order, under the tree read lock. Do not block or call
+    /// back into the replica from `f`.
     pub fn for_each<F: FnMut(&K, &V)>(&self, mut f: F) {
         let guard = self.tree.read();
         for (k, state) in guard.iter() {
@@ -460,10 +419,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         trace!("read replica received {} bytes from {peer}", payload.len());
         let mut value_in_comparison = Vec::new();
         let mut value_updates: Vec<(K, State<V>)> = Vec::new();
-        // Decode the whole datagram through `gossip::bincode`, like the dated engine.
-        // `MAX_MESSAGES_PER_DATAGRAM` bounds the message count so a crafted datagram cannot be
-        // expanded without limit, and a malformed datagram is dropped whole rather than panicking
-        // the receive loop (remote-DoS hardening).
+        // `MAX_MESSAGES_PER_DATAGRAM` bounds the expansion; a malformed datagram is dropped whole.
         let messages: Vec<Message<K, WireDated<V>, State<V>>> =
             match gossip::bincode::decode_stream(payload, MAX_MESSAGES_PER_DATAGRAM) {
                 Ok(messages) => messages,

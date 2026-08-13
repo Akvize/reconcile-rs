@@ -6,49 +6,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The [`Entry`] / [`State`] domain types (see `ARCHITECTURE.md` §4).
+//! The [`Entry`] / [`State`] domain types: `ARCHITECTURE.md` §4.
 //!
-//! A stored cell used to be represented as an untyped `(Timestamp, Option<V>)` tuple, with three
-//! value-shape helper traits (`Reconcilable`, `MaybeTombstone`, `Projectable`) each carrying a
-//! single implementation over that tuple. [`Entry`] replaces the tuple with a named domain type,
-//! and its inherent methods absorb what those traits used to provide:
+//! [`Entry`] is the stored cell and [`Entry::merge`] the LWW policy; [`State<V>`] is its
+//! timestamp-less projection, which a dateless `ReadReplicaMap` stores directly.
 //!
-//! - [`Entry::merge`] is the last-write-wins conflict-resolution policy (formerly `Reconcilable`).
-//! - [`Entry::is_tombstone`] / [`Entry::value`] read the tombstone/live state (formerly
-//!   `MaybeTombstone`).
-//! - [`Entry::project`] produces the timestamp-less [`State<V>`] projection consumed by a dateless
-//!   `ReadReplicaMap` (formerly `Projectable` / `ValueOnly<V>`).
-//!
-//! [`State<V>`] is isomorphic to the old `ValueOnly<V>(Option<V>)`: `Present(v) ↔ Some(v)`,
-//! `Tombstone ↔ None`. It is *itself* the value-only wire/projection type — a dated store's
-//! projection tree is `FingerprintTreeMap<K, State<V>>` and a read replica stores
-//! `FingerprintTreeMap<K, State<V>>` directly.
-//!
-//! # Invariant 8 — the two summaries must stay distinct
-//!
-//! The distinction is **structural**, so every content summary derived field-by-field inherits it:
-//! [`Entry`] has a `stamp` field, [`State`] has no [`Timestamp`](crate::clock::Timestamp) field at
-//! all. That covers the canonical serde encoding `rsos` fingerprints elements through (and which
-//! also feeds `version_hash`, the causal-stability tombstone acknowledgment token in
-//! `replica.rs`), and equally the derived [`Hash`]. This is what lets a dated store and a dateless `ReadReplicaMap` compute
-//! *identical* per-element fingerprints for the same logical value regardless of when (or on which
-//! node) it was last written — guarded by
-//! `read_replica_map.rs::value_fingerprint_is_timestamp_independent` and by the test below.
+//! The two summaries stay distinct **structurally** — [`Entry`] has a `stamp` field, [`State`] has
+//! none — so every field-by-field content summary inherits it (`ARCHITECTURE.md` §5 invariant 8).
 
 use serde::{Deserialize, Serialize};
 
-/// A timestamp-less projection of a value: either a live value or a tombstone (deletion marker).
+/// A timestamp-less projection of a value: a live value or a tombstone.
 ///
-/// Isomorphic to `Option<V>` (`Present(v) ↔ Some(v)`, `Tombstone ↔ None`), but a named type reads
-/// better at the call sites that matter here (an [`Entry`]'s projection, and the value a
-/// `ReadReplicaMap` stores) and its content summary is value-only *by construction* — no
-/// [`Timestamp`](crate::clock::Timestamp) field exists to accidentally include, in the serde
-/// encoding fingerprints are computed from or in the derived [`Hash`].
+/// Isomorphic to `Option<V>`, but carrying no [`Timestamp`](crate::clock::Timestamp) field there
+/// is none to include in a content summary.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum State<V> {
-    /// A live value.
     Present(V),
-    /// A deletion marker.
     Tombstone,
 }
 
@@ -61,7 +35,6 @@ impl<V> State<V> {
         }
     }
 
-    /// Returns `true` if this is a deletion marker (tombstone).
     pub fn is_tombstone(&self) -> bool {
         matches!(self, State::Tombstone)
     }
@@ -93,22 +66,17 @@ impl<V> From<State<V>> for Option<V> {
     }
 }
 
-/// A stored cell: a value (or tombstone) stamped with a causality/conflict-resolution token `T`
-/// (in practice, always [`Timestamp`](crate::clock::Timestamp)).
-///
-/// Replaces the untyped `(Timestamp, Option<V>)` tuple that used to be threaded through the whole
-/// crate. See the [module documentation](self) for how it absorbs the three dissolved
-/// value-shape traits.
+/// A stored cell: a value (or tombstone) stamped with a conflict-resolution token `T`, in practice
+/// always [`Timestamp`](crate::clock::Timestamp).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entry<T, V> {
-    /// The causality/conflict-resolution stamp (a Hybrid Logical Clock [`Timestamp`](crate::clock::Timestamp)).
+    /// The conflict-resolution stamp.
     pub stamp: T,
     /// The live value, or a tombstone.
     pub state: State<V>,
 }
 
 impl<T, V> Entry<T, V> {
-    /// Build a live entry.
     pub fn present(stamp: T, value: V) -> Self {
         Entry {
             stamp,
@@ -116,7 +84,6 @@ impl<T, V> Entry<T, V> {
         }
     }
 
-    /// Build a tombstone entry.
     pub fn tombstone(stamp: T) -> Self {
         Entry {
             stamp,
@@ -132,7 +99,6 @@ impl<T, V> Entry<T, V> {
         }
     }
 
-    /// Returns `true` if this entry is a deletion marker (tombstone).
     pub fn is_tombstone(&self) -> bool {
         self.state.is_tombstone()
     }
@@ -149,21 +115,15 @@ impl<T, V> Entry<T, V> {
 }
 
 impl<T: Ord + Copy, V: Clone> Entry<T, V> {
-    /// Project this dated entry to its timestamp-less [`State<V>`] form.
-    ///
-    /// This is what a dated store's value-only *projection* tree stores, and what a dateless
-    /// `ReadReplicaMap` converges on. See invariant 8 in `ARCHITECTURE.md` §5: the projection
-    /// deliberately has no `stamp` field, so no content summary of it can include one.
+    /// Project to the timestamp-less [`State<V>`] a `ReadReplicaMap` converges on
+    /// (`ARCHITECTURE.md` §5 invariant 8).
     pub fn project(&self) -> State<V> {
         self.state.clone()
     }
 
-    /// Last-write-wins conflict resolution: the entry with the strictly greater `stamp` wins.
+    /// Last-write-wins: the entry with the strictly greater `stamp` wins.
     ///
-    /// Because `T` (in practice [`Timestamp`](crate::clock::Timestamp)) is a **total order**,
-    /// `merge` is `max` over that order: commutative, associative and idempotent, so every
-    /// replica converges to the same entry (Strong Eventual Consistency). See `clock.rs` for why
-    /// the equal-stamp branch never actually has to arbitrate between *distinct* values.
+    /// `max` over a total order, hence commutative, associative and idempotent.
     pub fn merge(&self, other: &Self) -> Self {
         if other.stamp > self.stamp {
             other.clone()
@@ -274,14 +234,8 @@ mod tests {
         assert_eq!(dead.project(), State::Tombstone);
     }
 
-    /// Invariant 8 (`ARCHITECTURE.md` §5): the dated `Entry` summarizes **with** its `stamp`, its
-    /// projected `State<V>` summarizes the value **alone** — so two entries that differ only by
-    /// timestamp project to fingerprints that agree, while the dated entries themselves do not.
-    ///
-    /// Checked here through the derived `Hash`, which is a stand-in for the field-by-field walk the
-    /// real range fingerprint does: this crate is infrastructure-free and knows nothing of `rsos`.
-    /// The same invariant is asserted on the actual fingerprint in
-    /// `read_replica_map.rs::value_fingerprint_is_timestamp_independent`.
+    /// `ARCHITECTURE.md` §5 invariant 8, through the derived `Hash` as a stand-in for the real
+    /// fingerprint walk — this crate knows nothing of `rsos`.
     #[test]
     fn projection_hash_is_timestamp_independent_but_entry_hash_is_not() {
         let early = Entry::present(
@@ -299,8 +253,6 @@ mod tests {
             "same-value",
         );
 
-        // The dated entries differ (different stamp) and, overwhelmingly likely, hash
-        // differently.
         assert_ne!(early, late);
         assert_ne!(
             hash_of(&early),
@@ -308,12 +260,9 @@ mod tests {
             "dated Entry hashes should differ when only the stamp differs"
         );
 
-        // Their projections are the identical `State::Present("same-value")` and therefore hash
-        // identically, regardless of which node/timestamp produced them.
         assert_eq!(early.project(), late.project());
         assert_eq!(hash_of(&early.project()), hash_of(&late.project()));
 
-        // Same check for tombstones.
         let early_tomb: Entry<Timestamp, &str> = Entry::tombstone(Timestamp::new(
             Hlc::new(PhysicalTime::from_millis(1), LogicalCounter::new(0)),
             NodeId::new(0),

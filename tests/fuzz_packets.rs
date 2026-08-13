@@ -22,10 +22,8 @@ use tokio::net::UdpSocket;
 
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
-/// Generate a batch of adversarial payloads: pure random noise of varied
-/// lengths (including empty and larger-than-buffer), plus a few structured
-/// "almost valid" shapes (truncated length prefixes, huge declared lengths)
-/// that tend to trip naive bincode decoders.
+/// Adversarial payloads: random noise of varied lengths, plus "almost valid" shapes — truncated
+/// length prefixes, huge declared lengths.
 fn malformed_payloads(seed: u64) -> Vec<Vec<u8>> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut payloads = Vec::new();

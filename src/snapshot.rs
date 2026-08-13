@@ -30,15 +30,11 @@ use serde::Serialize;
 
 use lww_register::persistence::{PersistedState, Persistence};
 
-/// On-disk snapshot header: a 4-byte magic followed by a little-endian `u32` format version.
+/// On-disk snapshot header: a 4-byte magic then a little-endian `u32` format version.
 ///
-/// The body is bincode (not self-describing), so a format change — e.g. the `Entry` / `State`
-/// domain-type migration, which changed how each cell encodes — would otherwise be **silently
-/// misinterpreted** on load rather than detected. The header lets [`FileSnapshot::load`] reject any
-/// snapshot whose magic or version does not match this build with a descriptive error instead of
-/// decoding stale bytes into a plausible but wrong state (which would drop or corrupt tombstones and
-/// re-enable resurrection, F4). A pre-header (0.2.x) snapshot has no such prefix and is rejected the
-/// same way.
+/// The body is bincode, not self-describing, so without this a format change would be silently
+/// misread into a plausible-but-wrong state — dropping tombstones and re-enabling resurrection.
+/// A pre-header snapshot is rejected the same way.
 const SNAPSHOT_MAGIC: [u8; 4] = *b"RCNL";
 /// Current on-disk snapshot format version. Bump whenever the serialized shape of
 /// [`PersistedState`] changes. Version 1 is the `Entry<Timestamp, V>` / `State<V>` layout.
@@ -60,10 +56,8 @@ where
     Ok(out)
 }
 
-/// Validate the snapshot header, then bincode-decode the body. Every failure — too short, wrong
-/// magic, unsupported version, or a body that does not decode — maps to an `io::Error` of kind
-/// `InvalidData` with a descriptive message, so a stale-format snapshot (e.g. a pre-`Entry`/`State`
-/// file) is rejected cleanly rather than silently misread into a plausible-but-wrong state.
+/// Validate the header, then decode the body. Every failure — short, wrong magic, unsupported
+/// version, undecodable body — becomes an `InvalidData` error rather than a silent misread.
 fn decode_snapshot<K, V>(bytes: &[u8]) -> io::Result<PersistedState<K, V>>
 where
     K: DeserializeOwned + Eq + std::hash::Hash,
@@ -105,10 +99,9 @@ where
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-/// A durable, file-based [`Persistence`] backend storing a single bincode-encoded snapshot.
+/// A durable, file-based [`Persistence`] backend holding one bincode-encoded snapshot.
 ///
-/// Saves are **atomic**: the snapshot is written to a sibling `*.tmp` file, flushed, then renamed
-/// over the target path, so a crash mid-write never corrupts a previously good snapshot.
+/// Saves are **atomic**: written to a sibling `*.tmp`, flushed, then renamed over the target.
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,
@@ -275,10 +268,8 @@ mod tests {
         assert_eq!(loaded.entries[0].1.value(), Some(&"second".to_string()));
     }
 
-    /// A **pre-header** snapshot — valid bincode of a `PersistedState`, but written without the
-    /// magic/version prefix, exactly as a pre-`Entry`/`State` node would have produced — must be
-    /// rejected as an `InvalidData` error, never silently misread. This is the resurrection-safety
-    /// guard for the `Entry`/`State` format break.
+    /// A pre-header snapshot — valid bincode, no magic/version prefix — must be rejected as
+    /// `InvalidData`, never silently misread.
     #[test]
     fn headerless_legacy_snapshot_is_rejected() {
         let dir = tempfile::tempdir().unwrap();

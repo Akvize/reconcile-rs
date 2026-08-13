@@ -151,8 +151,7 @@ fn fresh_pair() -> (IpAddr, IpAddr) {
 
 /// Cold-sync: how long an empty node takes to converge with a full one purely via anti-entropy.
 ///
-/// Peer A is pre-loaded **before it has any peer**, so nothing is broadcast eagerly; peer B (empty)
-/// seeds A and pulls the whole dataset through the range-diff protocol. We time from spawning the
+/// A is loaded before it has any peer, so nothing is broadcast eagerly; timed from spawning the
 /// run loops until B's fingerprint matches A's.
 fn cold_sync(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -204,10 +203,8 @@ fn cold_sync(c: &mut Criterion) {
     group.finish();
 }
 
-/// A [`Transport`] wrapping [`InMemoryTransport`] that tallies every datagram this node *sends*.
-/// Broadcast fan-out is a send-side cost (`Replica::broadcast` in `src/replica.rs` iterates every
-/// known peer with no bound), so only sends are counted — receipts aren't needed by either
-/// benchmark below.
+/// An [`InMemoryTransport`] wrapper tallying every datagram this node *sends* — fan-out is a
+/// send-side cost, so receipts are not counted.
 struct CountingTransport {
     inner: InMemoryTransport,
     datagrams_sent: Arc<AtomicU64>,
@@ -252,11 +249,8 @@ fn mesh_addrs(n: usize) -> Vec<IpAddr> {
         .collect()
 }
 
-/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded**: every node is handed
-/// every other node's address via `seed_peer` up front, rather than left to learn peers through
-/// gossip. That isolates the fan-out/propagation cost under test from peer-discovery convergence
-/// time, which is a separate concern already covered by `cold_sync`. Each node's send traffic is
-/// counted; the returned `Vec<TrafficCounters>` shares index with the stores.
+/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded** so the measurement
+/// excludes peer-discovery time. The returned counters share index with the stores.
 fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
     let network = InMemoryNetwork::new();
     let addrs = mesh_addrs(n);
@@ -305,21 +299,14 @@ async fn wait_for(counter: &AtomicU64, target: u64) {
 /// out to a few hundred simulated peers.
 const FANOUT_NODE_COUNTS: &[usize] = &[2, 4, 8, 16, 32, 64, 128];
 
-/// Node counts for `gossip_propagation`: every node runs a live receive/reconcile loop on the same
-/// Tokio runtime, so this is kept deliberately smaller than `FANOUT_NODE_COUNTS` — past a few dozen
-/// simulated peers sharing one process, the benchmark increasingly measures its own scheduler and
-/// lock contention (`peers`/`map` `RwLock`s) rather than the protocol's real scaling behavior. See
-/// `benches/README.md` for this and the other caveats specific to these two benchmarks.
+/// Node counts for `gossip_propagation`, smaller than `FANOUT_NODE_COUNTS`: every node runs a live
+/// loop on one runtime, so past a few dozen this measures scheduler and lock contention. Caveats:
+/// `benches/README.md`.
 const PROPAGATION_NODE_COUNTS: &[usize] = &[2, 4, 8, 16, 32];
 
-/// Gossip fan-out: bytes/datagrams *one node* sends for a single write, as peer count `N` grows.
-///
-/// `Replica::broadcast` (`src/replica.rs`) sends every local write to **all** known peers with no
-/// bound — only the separate, periodic WAN anti-entropy round is capped by `remote_fanout`. This
-/// benchmark quantifies that O(N) per-node cost directly instead of leaving it as a documented but
-/// unmeasured claim (`SOTA.md` §1.2, issue #174): both the deterministic traffic count (printed,
-/// like `memory_footprint` — it's a fixed message size × (N-1) peers, not a noisy statistic) and
-/// the timed wall-clock cost of one node's send loop as N grows.
+/// Gossip fan-out: what one node sends for a single write as `N` grows. `Replica::broadcast` is
+/// unbounded — only the periodic WAN round is capped by `remote_fanout` — so this quantifies that
+/// `O(N)` cost (`SOTA.md` §1.2). Traffic is printed, not timed: it is exact, not a statistic.
 fn gossip_fanout(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = log_group(c, "gossip_fanout");
@@ -365,12 +352,8 @@ fn gossip_fanout(c: &mut Criterion) {
     group.finish();
 }
 
-/// Write→read propagation latency: wall time from a write on one node to **every** other node
-/// observing it, as peer count `N` grows.
-///
-/// Unlike `gossip_fanout`, every node here runs its real receive/reconcile loop throughout, so this
-/// exercises the full send + receive + apply path the way a reader actually experiences it — the
-/// steady-state counterpart to `cold_sync`'s from-scratch convergence.
+/// Write→read propagation latency as `N` grows, with every node running its real loop — the full
+/// send/receive/apply path, and the steady-state counterpart to `cold_sync`.
 fn gossip_propagation(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = log_group(c, "gossip_propagation");

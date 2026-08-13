@@ -138,9 +138,8 @@ async fn main() {
         .with_discovery_miss_threshold(miss_threshold);
 
     // --- demo (remove for a bare production node) -------------------------------------------
-    // Log each key the first time it lands in the local store. The pre-insert hook fires for local
-    // writes AND for updates merged from peers, so this is exactly where reconciliation becomes
-    // visible: the lines for OTHER pods' heartbeats only appear once gossip has delivered them.
+    // The pre-insert hook fires for local writes and for peer updates alike, so other pods'
+    // heartbeats appear here only once gossip has delivered them.
     let seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     {
         let seen = seen.clone();

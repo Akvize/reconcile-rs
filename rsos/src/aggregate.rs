@@ -6,15 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The bundled range aggregate [`Aggregate`]: Def. 3.5's `A(S) = (|S|, Σ(S))`.
-//!
-//! E. G. Amparore, *Range-Based Set Reconciliation via Range-Summarizable Order-Statistics
-//! Stores* (arXiv:2603.19820), Def. 3.5, defines the aggregate not as an arbitrary pair but as a
-//! **monoid** `A := (ℕ × M, ⊗, (0, 0_M))`, where `M` is Def. 3.4's element-summary monoid — here
-//! [`Fingerprint`] — and `ℕ` is the element count. `⊗` composes componentwise, and `(0, 0_M)` is
-//! [`Aggregate::ZERO`]. Because the aggregate of a range is exactly the composition of the
-//! aggregates of any partition of that range, a single `O(log n)` tree walk answers both "how many
-//! elements" and "what is their combined summary" at once.
+//! The bundled range aggregate [`Aggregate`]: the monoid `A := (ℕ × M, ⊗, (0, 0_M))` of
+//! arXiv:2603.19820 Def. 3.5, with `M` = [`Fingerprint`].
 
 use std::ops::{Add, AddAssign};
 
@@ -22,38 +15,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::fingerprint::Fingerprint;
 
-/// The bundled aggregate `A(S) = (|S|, Σ(S))` over a set (in practice, a range) of elements:
-/// Def. 3.5 of arXiv:2603.19820. See the [module docs](self) for the citation.
+/// The bundled aggregate `A(S) = (|S|, Σ(S))` over a range of elements (arXiv:2603.19820
+/// Def. 3.5).
 ///
-/// This is a **monoid**, not a group: composition is [`Add`] (`⊗`, componentwise), and the
-/// identity is [`ZERO`](Aggregate::ZERO) (`(0, 0_M)`).
+/// A **monoid**, not a group: composition is [`Add`], identity is [`ZERO`](Aggregate::ZERO). No
+/// `Sub`/`Neg` — `ℕ` under addition is not a group; subtract on [`Fingerprint`] instead.
 ///
-/// # Why there is no `Sub`/`Neg`
-///
-/// [`Fingerprint`] alone happens to form an abelian *group* — it has `Sub` and `Neg`, since
-/// 256-bit addition is invertible. `Aggregate` deliberately does **not** inherit that: `ℕ` under
-/// addition is only a monoid, so subtracting a larger count from a smaller one has no meaningful
-/// answer, and a `usize` subtraction would silently wrap in release builds while panicking in
-/// debug. Def. 3.5 asks for a monoid and this type provides exactly a monoid. Call sites that
-/// genuinely need to subtract summaries operate on [`Fingerprint`] directly (reachable through
-/// [`fingerprint()`](Aggregate::fingerprint)), which still supports `-` and unary `-`.
-/// # Field declaration order is load-bearing — do not "tidy" it
-///
-/// `fingerprint` is declared **before** `size`, even though Def. 3.5 writes the pair the other way
-/// round as `(|S|, Σ(S))`. That is deliberate and must stay: `Aggregate` is embedded in the
-/// serialized wire type `RangeAggregate` (the `rbsr` crate's `protocol.rs`), and bincode encodes
-/// struct fields sequentially with no framing or field names, so a nested struct is simply
-/// inlined. Declaring `fingerprint` first is exactly what makes `{range, aggregate: {fingerprint,
-/// size}}` produce byte-for-byte the same datagram as the pre-`Aggregate` `{range, hash, size}`
-/// layout — swapping these two lines is a silent wire break between old and new nodes, caught only
-/// by `reconcile`'s `tests/wire_format.rs` golden-vector test.
-///
-/// Field order here is *representation*, not semantics: the paper's `(|S|, Σ(S))` ordering lives
-/// in [`new`](Aggregate::new)'s argument order, in the accessors, and in the [`Add`] impl, none of
-/// which depend on how the two are laid out in memory or on the wire.
+/// Field declaration order is the wire order: `fingerprint` before `size`, inverse of Def. 3.5's
+/// written pair. Reordering is a silent wire break, caught only by `tests/wire_format.rs`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Aggregate {
-    // Wire order — see the note above. Do not reorder.
     fingerprint: Fingerprint,
     size: usize,
 }
@@ -65,34 +36,25 @@ impl Aggregate {
         size: 0,
     };
 
-    /// Build an aggregate from its two components: the element count `|S|` and the combined
-    /// element summary `Σ(S)`.
-    ///
-    /// Argument order follows Def. 3.5's `(|S|, Σ(S))`; that is the *semantic* order and is
-    /// independent of the field declaration order, which is fixed by the wire format (see the
-    /// type-level note).
+    /// Build an aggregate from `(|S|, Σ(S))` — Def. 3.5's argument order, not the field order.
     pub const fn new(size: usize, fingerprint: Fingerprint) -> Aggregate {
         Aggregate { fingerprint, size }
     }
 
-    /// `|S|`: the number of elements covered by this aggregate (Def. 3.9's `size` operation when
-    /// taken over the whole store).
+    /// `|S|`: the number of elements covered.
     pub const fn size(&self) -> usize {
         self.size
     }
 
-    /// `Σ(S)`: the combined element summary (Def. 3.4's monoid `M`).
+    /// `Σ(S)`: the combined element summary.
     ///
-    /// NOTE: a *non-empty* range can legitimately summarize to [`Fingerprint::ZERO`]; emptiness is
-    /// decided on [`size`](Aggregate::size) — see [`is_empty`](Aggregate::is_empty).
+    /// A non-empty range can summarize to [`Fingerprint::ZERO`]; emptiness is decided on
+    /// [`size`](Aggregate::size).
     pub const fn fingerprint(&self) -> Fingerprint {
         self.fingerprint
     }
 
-    /// Whether the aggregate covers no elements at all, i.e. `|S| == 0`.
-    ///
-    /// Decided on the count, never on the fingerprint: see [`Fingerprint`]'s own note on why a
-    /// zero fingerprint does not imply an empty range.
+    /// `|S| == 0`. Decided on the count, never on the fingerprint.
     pub const fn is_empty(&self) -> bool {
         self.size == 0
     }
@@ -101,7 +63,7 @@ impl Aggregate {
 impl Add for Aggregate {
     type Output = Aggregate;
 
-    /// `⊗`: componentwise composition of two aggregates over disjoint sets.
+    /// `⊗`: componentwise, over disjoint sets.
     fn add(self, rhs: Aggregate) -> Aggregate {
         Aggregate {
             fingerprint: self.fingerprint + rhs.fingerprint,

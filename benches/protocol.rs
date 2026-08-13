@@ -57,22 +57,16 @@ use rsos::{Aggregate, FingerprintTreeMap, Rsos};
 /// setup rather than measurement.
 const SIZES: &[usize] = &[1_000, 10_000, 100_000, 1_000_000];
 
-/// The payload one datagram can carry: the IPv4 datagram ceiling `Replica` targets. A keyed
-/// deployment subtracts the authenticator's per-datagram overhead
-/// (`send_messages_paced` splits at `BUFFER_SIZE - authenticator.overhead()`), so this is the
-/// most optimistic split point.
+/// The payload one datagram can carry: the IPv4 ceiling, the most optimistic split point — a
+/// keyed deployment subtracts the authenticator's overhead.
 const MAX_DATAGRAM_PAYLOAD: usize = 65_507;
 
-/// The payload one *IP fragment* can carry on a 1500-byte-MTU path: 1500 less the 20-byte IPv4 and
-/// 8-byte UDP headers. Approximate — only the first fragment pays the UDP header — and deliberately
-/// so: what matters is the order of magnitude, because losing any one fragment loses the whole
-/// datagram.
+/// The payload one IP fragment carries on a 1500-byte-MTU path. Approximate on purpose: losing
+/// any fragment loses the datagram, so only the order of magnitude matters.
 const MTU_FRAGMENT_PAYLOAD: usize = 1_472;
 
-/// How the `d` differing keys are laid out across the key space — the axis a benchmark that varies
-/// only `n` and `d` never sees, and the one where a `√m` fan-out and a fixed `b` behave most
-/// differently: a scattered difference forces every subtree to be refined, a clustered one is
-/// confined to a single descent.
+/// How the `d` differing keys are laid out: scattered forces every subtree to refine, clustered
+/// confines the work to one descent — the axis where `√m` and a fixed `b` differ most.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Clustering {
     /// Spread evenly, so the differences land in distinct subranges.
@@ -90,11 +84,8 @@ impl Clustering {
     }
 }
 
-/// The `(difference size, layout)` pairs swept against every store size.
-///
-/// `d = 1` is the case the published bounds are usually quoted for, and the one a single dropped
-/// datagram produces; it appears only as `Scattered` because a single key has no layout. The two
-/// larger sizes appear both ways, which is what makes the clustering axis visible.
+/// The `(difference size, layout)` pairs swept against every store size. `d = 1` — the published
+/// bounds' usual case — has no layout, so it appears only as `Scattered`.
 const DIFFERENCES: &[(usize, Clustering)] = &[
     (1, Clustering::Scattered),
     (10, Clustering::Scattered),
@@ -103,22 +94,13 @@ const DIFFERENCES: &[(usize, Clustering)] = &[
     (100, Clustering::Clustered),
 ];
 
-/// Branching factors swept by `fan_out_sweep`, doubling from the smallest that refines to well past
-/// anything a datagram can hold.
-///
-/// The interesting range is bounded on both ends by a real constraint rather than by taste. Below,
-/// `b = 2` is the minimum (a 1-partition is the identity). Above, the total ranges a `d = 1` descent
-/// advertises grow as `b / ln b` while the rounds shrink as `log_b n`, so bytes never explode with
-/// `b` — what does grow, linearly, is the *widest single round*, and that is what has to fit a
-/// datagram. The sweep runs to 256 so the ceiling is visible in the table rather than argued about.
+/// Branching factors swept by `fan_out_sweep`. `b = 2` is the floor (a 1-partition is the
+/// identity); the ceiling is the widest single round, which grows linearly in `b` and must fit a
+/// datagram — hence sweeping to 256, so it is visible rather than argued.
 const FAN_OUTS: &[usize] = &[2, 4, 8, 16, 32, 64, 128, 256];
 
-/// `(store size, difference sizes)` the branching-factor sweep runs at, grouped by store size so the
-/// complete store is built once per group.
-///
-/// Small `n` only needs `d = 1`: the trade `b` governs is between rounds and ranges-per-round, and
-/// at 10³ there are too few levels for it to show. The two large sizes carry the `d` axis, because
-/// the whole point of choosing `b` is the regime this crate actually runs in.
+/// `(store size, difference sizes)` for the branching-factor sweep, grouped so each store is built
+/// once. Small `n` carries only `d = 1`: too few levels for the rounds-vs-ranges trade to show.
 const SWEEP_CASES: &[(usize, &[usize])] = &[
     (1_000, &[1]),
     (10_000, &[1]),
@@ -142,11 +124,8 @@ fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
     ]
 }
 
-/// Build a store of `n` sequential entries, omitting `missing`.
-///
-/// Sequential `u64` keys rather than random ones: the measured quantity is the *shape* of the
-/// refinement (how many ranges each round advertises), which depends on rank positions, not on key
-/// distribution — and sequential keys keep the corpus reproducible without carrying a PRNG.
+/// Build a store of `n` sequential entries, omitting `missing`. Sequential keys: the measured
+/// quantity depends on rank positions, not key distribution, and stays reproducible without a PRNG.
 fn store(n: usize, missing: &[u64]) -> FingerprintTreeMap<u64, u64> {
     let mut map = FingerprintTreeMap::new();
     for key in 0..n as u64 {
@@ -193,12 +172,10 @@ impl Add for Queries {
     }
 }
 
-/// A read-only RSOS that tallies the three query kinds the protocol driver performs.
+/// A read-only RSOS tallying the three query kinds the driver performs.
 ///
-/// It implements `rsos::Rsos` rather than `rbsr::RsosView` directly, which is not a stylistic
-/// choice: `rbsr` blanket-implements `RsosView` for every `Rsos`, so a second, more specific
-/// `RsosView` impl in this crate would be a coherence conflict. Wrapping at the `Rsos` level gets
-/// the `RsosView` impl for free.
+/// Implements `rsos::Rsos`, not `rbsr::RsosView`: the blanket impl makes a second `RsosView` impl
+/// a coherence conflict.
 struct Counting<'a, S> {
     inner: &'a S,
     aggregate: Cell<usize>,
@@ -300,16 +277,11 @@ struct Cost {
     queries: Queries,
 }
 
-/// Drive both peers to convergence under `policy`, counting what crosses the wire.
+/// Drive both peers to convergence under `policy`, counting what crosses the wire. Every
+/// mismatching range is resolved or strictly refined, so the loop terminates; the guard is a bug
+/// net.
 ///
-/// The loop is the protocol's own termination argument: a batch of active ranges is answered by one
-/// peer, whose SPLIT children become the next batch for the other peer, until no range is left
-/// active. Every mismatching range is either resolved or strictly refined, so this terminates; the
-/// guard is a bug net, not a bound.
-///
-/// Both peers run the *same* policy. They need not — the rule is local and never crosses the wire
-/// (`rbsr`'s `peers_running_different_policies_still_converge` pins that) — but a mixed pair would
-/// measure neither of the two.
+/// Both peers run the same policy — they need not, but a mixed pair would measure neither.
 fn reconcile<S>(a: &S, b: &S, policy: &dyn RefinementPolicy) -> Cost
 where
     S: Rsos<u64, Value = u64>,
@@ -357,13 +329,8 @@ where
     cost
 }
 
-/// Deterministic report of exchanged volume per policy, plus the timed local cost of driving the
-/// run.
-///
-/// The counts are printed rather than timed (like `system`'s `memory_footprint` and the traffic half
-/// of its `gossip_fanout`): for a given `(policy, n, d, clustering)` they are exact and reproducible,
-/// not a statistic. What *is* worth timing sits alongside them — the responder-side local work the
-/// paper models as `T_loc`, here the whole drive loop for both peers.
+/// Exchanged volume per policy, printed rather than timed — exact and reproducible for a given
+/// `(policy, n, d, clustering)` — alongside the timed drive loop, the paper's `T_loc`.
 fn reconciliation_cost(c: &mut Criterion) {
     println!(
         "[protocol] full reconciliation, u64 keys. Refinement policy is a local decision (#257): \
@@ -419,20 +386,13 @@ fn reconciliation_cost(c: &mut Criterion) {
     group.finish();
 }
 
-/// Sweep the branching factor `b` on its own, so it can be chosen on evidence rather than inherited
-/// from Negentropy.
+/// Sweep the branching factor `b` alone, [`FixedFanOut`] only, so a default can be chosen on
+/// evidence.
 ///
-/// Only [`FixedFanOut`] varies here — same enumeration cutoffs as the shipped default, one knob
-/// moving — because the question this answers is "if the default becomes a fixed `b`, which one".
-///
-/// **What to read.** Bytes and rounds pull in opposite directions and neither one alone picks a `b`:
-/// a `d = 1` descent visits `~log_b n` levels advertising `~b` ranges each, so ranges grow as
-/// `b / ln b` (flat-ish, minimized near `b = 3`) while one-way messages fall as `log_b n`. Since
-/// this workspace has no RTT lane ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), the
-/// message column cannot be converted into seconds here — weigh it by your own round-trip time.
-/// The column that *is* a hard limit is the widest single round: it grows linearly in `b`, and it is
-/// what must fit a datagram (65 507 B) and survive fragmentation (~1 472 B per IP fragment, any one
-/// of which loses the whole round).
+/// **What to read.** Ranges grow as `b / ln b` (minimized near `b = 3`) while one-way messages
+/// fall as `log_b n`; with no RTT lane here ([#280](https://github.com/Akvize/reconcile-rs/issues/280))
+/// the message column has to be weighed by your own round-trip time. The hard limit is the widest
+/// single round, linear in `b`, which must fit a datagram and survive fragmentation.
 fn fan_out_sweep(c: &mut Criterion) {
     println!(
         "[sweep] FixedFanOut, branching factor only, u64 keys, differences scattered.\n\

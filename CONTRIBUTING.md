@@ -114,6 +114,13 @@ Measured on this workspace, four cores, warm `target/`.
   covered for the common case. Doc tests are *not* in that list — plain `cargo test` already runs
   them, which is why §3's separate `cargo test --doc` line is belt-and-braces, not extra coverage.
 
+## The one gate no script runs
+
+Anything touching the load-bearing invariants ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §5), the
+wire/on-disk format, the protocol, crypto, or GC gets an **adversarial review before merge** — no
+exceptions. AGENTS.md §10 sends a by-eye rule to CI instead; this one stays by eye because it judges
+whether a change is *correct*, which no command decides.
+
 ## Code coverage
 
 See [`README.md`](./README.md) "Testing and coverage" for the `cargo-llvm-cov` commands. Two extras

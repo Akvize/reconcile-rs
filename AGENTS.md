@@ -139,11 +139,17 @@ Docs that change with code, same PR: `README.md`, `ARCHITECTURE.md` §1–§3, t
 [`PROGRESS.md`](./PROGRESS.md): living status, update as findings/phases change. `SOTA.md`: durable
 reference, not updated for routine changes.
 
-**Prose is the last resort**, in docs and in code comments alike: prefer a mermaid diagram
-(`ARCHITECTURE.md` §2/§3 is the model), a table, a code block, or a link. State the rule, the shape
-or the evidence — never narrate it. Scope is every doc **about** this repo, in it or not — issues,
-PRs, review comments — not only committed files; `.github/ISSUE_TEMPLATE/`/`pull_request_template.md`
-carry the shape so it isn't re-derived per post.
+**Every fact lives in exactly one place; everywhere else links to it.** A restatement is a second
+copy that drifts, and the drifted copy is read as true. Hence **prose is the last resort**, in docs
+and in code comments alike: prefer a mermaid diagram (`ARCHITECTURE.md` §2/§3 is the model), a table,
+a code block, or a link. State the rule, the shape or the evidence — never narrate it. Scope is every
+doc **about** this repo, in it or not — issues, PRs, review comments — not only committed files;
+`.github/ISSUE_TEMPLATE/`/`pull_request_template.md` carry the shape so it isn't re-derived per post.
+The failure mode that recurs in agent-written threads: narrating the process that produced a finding
+instead of stating the finding and what it supersedes. Comments belong to humans: an agent never
+posts one, but reads what a human wrote there, challenges it when the code says otherwise, and — with
+that human in session — folds the outcome into the body, the title or the code. The change is the
+reply.
 
 ## 10. Commit, PR, and gating conventions
 

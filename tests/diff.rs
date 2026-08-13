@@ -109,9 +109,5 @@ fn test_compare() {
     )
 }
 
-// The size-not-hash regression tests — a *non-empty* range that
-// fingerprints to `ZERO`, and equal fingerprints over different-sized ranges — require feeding
-// crafted `RangeAggregate`s (whose bundled `Aggregate` is deliberately set to collide) straight
-// into `protocol_round`. Because `RangeAggregate`'s fields are private, those tests live as unit
-// tests in `rbsr/src/protocol.rs` (`nonempty_zero_fingerprint_vs_empty_is_not_in_sync` and friends),
-// next to the algorithm they guard, rather than here.
+// The size-not-hash tests need crafted `RangeAggregate`s, whose fields are private: they live in
+// `rbsr/src/protocol.rs`.
