@@ -245,8 +245,26 @@ it reaches 160 908 B over 3 300 ranges, i.e. three datagrams and ~189 fragments 
 `send_messages_paced` chunks past the ceiling rather than failing.
 
 `fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256). Bytes and local
-work follow `b / ln b` (minimum near `b` = 3: 1 960 B at `b` = 4 against 3 834 B at 16, n = 10⁶,
-d = 1); one-way messages fall as `log_b n` until they hit a floor — 6 at `n = 10⁶`, reached at
+work follow `b / ln b`, which is derived rather than fitted: refinement advertises `b` aggregates per
+level over `log_b n = ln n / ln b` levels, so `refinement ≈ aggregate_size · ln n · (b / ln b)`, whose
+derivative `(ln b − 1)/(ln b)²` vanishes at `b = e ≈ 2.718` — `b` = 3 over the integers, with `b` = 2
+and `b` = 4 tied above it (2.885 each). Earlier sweeps ran powers of two and stepped over it;
+`FAN_OUTS` now carries `b` = 3. At `n = 10⁶`, `d = 1` scattered:
+
+| `b` | 2 | **3** | 4 | 8 | 16 | 32 | 64 | 128 | 256 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| refinement B | 2 061 | **1 868** | 1 960 | 2 613 | 3 834 | 5 021 | 9 668 | 15 856 | 25 880 |
+| ranges, measured | 42 | **38** | 40 | 53 | 78 | 101 | 196 | 320 | 520 |
+| `b · ln n / ln b`, predicted | 39.9 | **37.7** | 39.9 | 53.2 | 79.7 | 127.6 | 212.6 | 364.5 | 637.8 |
+| one-way messages | 22 | 14 | 12 | 10 | 8 | 6 | 6 | 6 | 6 |
+
+`b` = 3 is the minimum, 4.7 % under `b` = 4 and 9.4 % under `b` = 2. The range row is the sharper
+test — the model predicts an absolute count with **no fitted constant** — and it holds to ~2 ranges
+through `b` = 16. Past that it over-predicts, because the descent bottoms out before the last level
+can use its full fan-out; that truncation is also why the implied byte constant drifts (≈ 680 at
+`b` = 3…8, ≈ 560 at 256) while the small-`b` end does not.
+
+One-way messages fall as `log_b n` until they hit a floor — 6 at `n = 10⁶`, reached at
 `b = 32` — past which extra `b` is paid for and buys nothing. The widest single round grows linearly
 in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one datagram at `b = 16`.
 Across every measured `(n, d, clustering)`, `b = 16` is the only swept value never worse than `√m` on

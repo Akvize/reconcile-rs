@@ -137,7 +137,21 @@ const DIFFERENCES: &[(usize, Clustering)] = &[
 /// Branching factors swept by `fan_out_sweep`. `b = 2` is the floor (a 1-partition is the
 /// identity); the ceiling is the widest single round, which grows linearly in `b` and must fit a
 /// datagram — hence sweeping to 256, so it is visible rather than argued.
-const FAN_OUTS: &[usize] = &[2, 4, 8, 16, 32, 64, 128, 256];
+///
+/// `b = 3` is the one value here that is not a power of two, and it is the point of the sweep
+/// rather than an afterthought: it is where the cost model puts the optimum, and every earlier
+/// sweep stepped straight over it. Refinement advertises `b` aggregates per level over
+/// `log_b n = ln n / ln b` levels, so
+///
+/// ```text
+/// refinement bytes ≈ aggregate_size · ln n · (b / ln b)
+/// ```
+///
+/// and `d/db (b / ln b) = (ln b − 1)/(ln b)²` vanishes at `ln b = 1`, i.e. **`b = e ≈ 2.718`**.
+/// Over the integers that is `b = 3` (2.731), with `b = 2` and `b = 4` **tied** above it (2.885
+/// each) — which is the model's sharpest claim, because it predicts an equality rather than an
+/// ordering, and the sweep can refute it in one row.
+const FAN_OUTS: &[usize] = &[2, 3, 4, 8, 16, 32, 64, 128, 256];
 
 /// Enumeration thresholds swept by `threshold_sweep`, `b` held at the default 16. `t = 1` is the
 /// floor (`t = 0` is unrepresentable, and would split a range into itself forever); 256 is eight

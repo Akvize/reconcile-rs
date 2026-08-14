@@ -308,9 +308,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   from one UDP datagram's worth of IP fragments to several as *d* grows — a bandwidth/fragmentation
   cost, not a bug, but the reason #257 is a communication-complexity regression rather than a tuning
   gap.
-- **Sweeping *b* itself lands on 16.** `fan_out_sweep` runs *b* = 2…256: bytes and local work follow
-  *b*/ln *b* (minimum near *b* = 3), one-way messages fall as log_*b* n to a floor, reached once *b*
-  is in the low tens. *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
+- ***b*/ln *b* is derived, not fitted, and its minimum is `e`.** Refinement advertises *b* aggregates
+  per level over `log_b n = ln n / ln b` levels, so `refinement ≈ aggregate_size · ln n · (b / ln b)`;
+  `d/db (b/ln b) = (ln b − 1)/(ln b)²` vanishes at `ln b = 1`. Over the integers the optimum is
+  **`b` = 3**, with `b` = 2 and `b` = 4 tied above it. Every earlier sweep stepped over it — they ran
+  powers of two — so `fan_out_sweep` now carries `b` = 3. The verdict: `b` = 3 is the measured
+  minimum, and the model predicts the advertised-range count **with no fitted constant**, holding
+  through `b` = 16 before over-predicting where the descent bottoms out and the last level cannot
+  use its full fan-out. Numbers: `benches/README.md`.
+- **Sweeping *b* against the other columns still lands on 16.** One-way messages fall as log_*b* n to
+  a floor, reached once *b* is in the low tens. *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
   measured (n, d, clustering), while spending an order of magnitude fewer bytes and far less
   `T_loc`. *b* = 4 wins on bytes and CPU but costs two round-trips — break-even only when the
   "network" is in-process, at microsecond RTTs. Because the policy never crosses the wire and mixed
@@ -324,7 +331,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
   | | Result | Bears on |
   |---|---|---|
-  | Mathys & Flajolet 1985 | `Q` ∈ {2, 3} preferred; throughput for `Q` > 3 "quickly degrades" | the measured `b`/ln `b` minimum at `b` = 3–4 lands in the same place |
+  | Mathys & Flajolet 1985 | `Q` ∈ {2, 3} preferred; throughput for `Q` > 3 "quickly degrades" | lands on the same arity as the derivation above — and, now that the derivation exists, for a visible reason rather than a mysterious one: any scheme paying `q` per level while gaining `ln q` per level minimises `q`/ln `q` at `e`. Common algebra, not a hidden correspondence. Weaker evidence than it first looked, and clearer |
   | Vogel et al. 2024 | **disproves** binary-optimality: maximal throughput is reachable at *any* `d` ≥ 2 **given suitable splitting probabilities** | the binding axis may be the split *distribution*, not the arity |
 
   Two cautions before either is quoted as support. The objectives differ — channel throughput
@@ -692,7 +699,7 @@ pass had already ruled out. Record negative results too.
 | 2026-05-30 | "range-based set reconciliation" | `cs.DC` / `cs.CR` | Baseline survey. Held the Allerton-2002 root but **never searched the PSR dialect** |
 | 2026-08-10 | arXiv:2603.19820 + its four repositories | targeted | §1.3/§2.1/§2.2/§2.3 revised, 8 references added |
 | 2026-08-14 | "partitioned set reconciliation"; reference lists of arXiv:2509.02373 (25) and arXiv:2603.19820 (27), walked one level | `cs.IT` / `cs.NI` | **§4.4's `cs.IT` group** — EPSR, GenSync, the tree-algorithm arity lineage, multi-party, MET-IBLT. §2.2 revised |
-| 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not established.** The measured `b`/ln `b` law has no confirmed analytical counterpart — open |
+| 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not found, and not needed.** The search assumed the law had to be borrowed; it derives in four lines from the protocol itself (§2.2), so this row is closed by derivation rather than by citation |
 
 ### 4.4 Bibliography
 
