@@ -25,10 +25,11 @@
 //! reaches its IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire
 //! — almost all of them elements the peer already holds. Reporting advertised ranges without
 //! enumerated elements would make a large enumeration threshold look free. The third column, one-way
-//! messages, is the round-trip count, and every benchmark in this repository runs at RTT ≈ 0 —
-//! so this target prices bytes correctly and round-trips at zero, which is exactly the axis that
-//! separates `√m` from a fixed
-//! `b`. Weigh the message column by your own RTT before drawing a conclusion from the byte column.
+//! messages, is the round-trip count, and this target runs at RTT ≈ 0 — so it prices bytes
+//! correctly and round-trips at zero, which is exactly the axis that separates `√m` from a fixed
+//! `b`. Weigh the message column by your own RTT before drawing a conclusion from the byte column;
+//! `benches/system.rs`'s injected-RTT lane measures the conversion rate as one RTT per round trip,
+//! with no hidden multiplier (issue #280, `benches/README.md`).
 //!
 //! Unlike `bench` (structure micro-benchmarks) and `system` (end-to-end over `ReplicatedMap`), this
 //! target drives the protocol driver directly, through the same two crates a downstream consumer
@@ -390,9 +391,9 @@ fn reconciliation_cost(c: &mut Criterion) {
 /// evidence.
 ///
 /// **What to read.** Ranges grow as `b / ln b` (minimized near `b = 3`) while one-way messages
-/// fall as `log_b n`; with no RTT lane here the message column has to be weighed by your own
-/// round-trip time. The hard limit is the widest
-/// single round, linear in `b`, which must fit a datagram and survive fragmentation.
+/// fall as `log_b n`; this target runs at RTT ≈ 0, so the message column has to be weighed by your
+/// own round-trip time — one RTT per round trip, per `system`'s injected-RTT lane. The hard limit is
+/// the widest single round, linear in `b`, which must fit a datagram and survive fragmentation.
 fn fan_out_sweep(c: &mut Criterion) {
     println!(
         "[sweep] FixedFanOut, branching factor only, u64 keys, differences scattered.\n\

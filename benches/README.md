@@ -5,7 +5,7 @@ Three Criterion targets, all `harness = false`, none feature-gated:
 | Target | What it measures |
 |---|---|
 | `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
-| `system` | End-to-end, **public-API** system benchmarks (below). |
+| `system` | End-to-end, **public-API** system benchmarks (below), including the injected-RTT/loss lane. |
 | `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — messages, advertised ranges, bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 
 No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
@@ -13,7 +13,8 @@ No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --
 ## Running the system benchmarks
 
 ```sh
-# Everything (point-read, memory, bulk-load, cold-sync, gossip fan-out/propagation, durable-rejoin):
+# Everything (point-read, memory, bulk-load, cold-sync, gossip fan-out/propagation, the
+# injected-RTT/loss lane, durable-rejoin):
 cargo bench --bench system
 
 # A single benchmark or size (Criterion treats the argument as a regex over the benchmark id):
@@ -32,9 +33,10 @@ Criterion writes HTML reports and raw CSV under `target/criterion/`; open `targe
 - **`point_read`** — `ReplicatedMap::get` latency vs `HashMap` and `BTreeMap` across dataset sizes. The store walks the B-tree (`O(log n)`), so this quantifies the read-path cost against the flat-map baselines (drives #171).
 - **`memory_footprint`** — prints the fixed per-entry footprint of the dated cell `Entry<Timestamp, V>` vs the value-only mirror projection `State<V>` across value payload sizes; the delta is the mirror's per-entry saving (drives #170). Printed, not timed.
 - **`bulk_load`** — `insert_bulk` throughput (entries/s) filling an empty store, across sizes (drives #173).
-- **`cold_sync`** — wall time for an **empty** node to converge with a **full** one purely via anti-entropy: the full node is pre-loaded before it has any peer (nothing is broadcast eagerly), then the empty node seeds it and pulls the whole dataset through the range-diff protocol; timed until fingerprints match (drives #168). This is a loopback measurement — real-network transmission delays make it larger.
+- **`cold_sync`** — wall time for an **empty** node to converge with a **full** one purely via anti-entropy: the full node is pre-loaded before it has any peer (nothing is broadcast eagerly), then the empty node seeds it and pulls the whole dataset through the range-diff protocol; timed until fingerprints match (drives #168). Loopback, i.e. RTT ≈ 0; `cold_sync_rtt` below prices the difference (**+1.0 × RTT**, flat in `N`).
 - **`gossip_fanout`** — bytes/datagrams *one node* sends for a single write, as peer count `N` grows (`2..128`, full-mesh-seeded, on an in-process `InMemoryNetwork` — no real sockets). `Replica::broadcast` (`src/replica.rs`) sends every local write to **all** known peers with no bound (only the separate, periodic WAN anti-entropy round is capped by `remote_fanout`), so this is expected, and confirmed, to be O(N) per node. Prints the exact datagram/byte count per write (deterministic, like `memory_footprint`) alongside the timed send-loop cost (drives #174's scaling gap).
-- **`gossip_propagation`** — wall time from a write on one node to **every** other node observing it, as `N` grows (`2..32`, smaller range than `gossip_fanout` — see the caveat below). Unlike `gossip_fanout`, every node runs its real receive/reconcile loop throughout: the steady-state counterpart to `cold_sync`'s from-scratch convergence (drives #174's scaling gap).
+- **`gossip_propagation`** — wall time from a write on one node to **every** other node observing it, as `N` grows (`2..32`, smaller range than `gossip_fanout` — see the caveat below). Unlike `gossip_fanout`, every node runs its real receive/reconcile loop throughout: the steady-state counterpart to `cold_sync`'s from-scratch convergence (drives #174's scaling gap). Also RTT ≈ 0; `gossip_propagation_rtt` prices that (**+0.5 × RTT** — one hop, not a chain).
+- **`netem_calibration`**, **`cold_sync_rtt`**, **`gossip_propagation_rtt`** — the injected-RTT/loss lane. Its own section below.
 - **`durable_rejoin`** — time to reload an `N`-entry `FileSnapshot` from disk, i.e. the cost a restarting node pays before rejoining (drives #172).
 
 ## Gossip-scaling benchmark caveats
@@ -49,11 +51,112 @@ genuine network behavior — `gossip_propagation`'s `N` range is kept smaller th
 exactly this reason (every node runs a live loop; `gossip_fanout` only exercises the send path).
 Nodes are full-mesh-seeded via `seed_peer` up front rather than left to discover peers through gossip,
 so both benchmarks isolate fan-out/propagation cost from peer-discovery convergence time (already
-covered separately by `cold_sync`). No comparable open-source gossip/SWIM library surveyed for this
+covered separately by `cold_sync`).
+
+`gossip_propagation`'s write key is a counter that must live **outside** the routine Criterion calls
+per sample. Declared inside it, it restarts at zero every sample, so every sample after the first
+re-writes a key the cluster already holds, completes immediately, and reports the poll loop — which
+is what it did until the RTT lane made the discrepancy visible (a 25 ms one-way link that measured
+4 µs). Numbers from before that fix are not comparable.
+
+No comparable open-source gossip/SWIM library surveyed for this
 (chitchat, foca, memberlist) ships an automated, reproducible N-node scaling benchmark in-repo — the
 closest real precedent is HashiCorp's one-off [Consul 66k-node scale test](https://www.hashicorp.com/en/blog/consul-scale-test-report-to-observe-gossip-stability),
 a real-hardware exercise, not a runnable harness. These two benchmarks are closer to establishing a
 methodology than following one.
+
+## The injected-RTT / loss lane
+
+```sh
+cargo bench --bench system -- netem                    # calibration report only
+cargo bench --bench system -- cold_sync_rtt
+cargo bench --bench system -- gossip_propagation_rtt
+```
+
+Every other benchmark in this repository runs at RTT ≈ 0 and loss = 0, which prices the axis RBSR is
+good at (bytes) and zeroes the one it is worst at (`SOTA.md` §1.3: sequential round-trips). These
+three lanes are the instrument that answer [#280](https://github.com/Akvize/reconcile-rs/issues/280).
+
+`benches/netem/mod.rs` is a seeded `Transport` decorator — one-way delay, jitter, loss, reordering,
+configurable per **directed** link — over the same `InMemoryNetwork` `gossip_propagation` uses. Its
+module docs carry the model, the determinism guarantee and why it is bespoke rather than
+[`turmoil`](https://github.com/tokio-rs/turmoil) (short version: turmoil's clock is simulated and
+tick-quantized, so a Criterion sample inside it would report the simulator's arithmetic, and its
+`turmoil::net` shim would still need a `Transport` impl on top). No new dependency; `tests/netem.rs`
+tests it, including convergence over a 40 %-loss link.
+
+**Both `rtt=0ms` columns below are the same harness with a perfect link, not the loopback
+benchmarks** — the decorator, the pump and the in-memory fabric are in every lane, so a delta is the
+injected network and nothing else. Cross-harness it is not comparable: `cold_sync/1000` on real
+loopback UDP is 2.18 ms against `cold_sync_rtt/n=1000/rtt=0ms`'s 0.98 ms.
+
+### Calibration
+
+`netem_calibration` prints this before every run; read it first, because a delay lane that silently
+quantized to tokio's 1 ms timer resolution would look like a protocol result. Measured on a 4-core
+Xeon @ 2.10 GHz, seed `0x5eed0280`:
+
+| lane | injected one-way | observed mean | lane | configured | realized |
+|---|---:|---:|---|---:|---:|
+| `rtt=0ms` | 0 | 39 µs | `loss=0.1%` | 0.100 % | 0.110 % |
+| `rtt=0.1ms` | 50 µs | 70 µs | `loss=1%` | 1.000 % | 0.940 % |
+| `rtt=1ms` | 500 µs | 536 µs | | | |
+| `rtt=10ms` | 5 ms | 5.22 ms | | | |
+| `rtt=50ms` | 25 ms | 25.30 ms | | | |
+
+So the harness floor is ≈ 39 µs per one-way delivery and the injected delay is faithful from 50 µs
+up. That floor is the resolution of every number below.
+
+### Results: what RTT ≈ 0 was hiding
+
+| benchmark | rtt=0ms | 0.1 ms | 1 ms | 10 ms | 50 ms | delta vs rtt=0 |
+|---|---:|---:|---:|---:|---:|---|
+| `cold_sync_rtt/n=1000` | 984 µs | 1.07 ms | 2.05 ms | 11.50 ms | 51.50 ms | **+1.01 × RTT** (52× at 50 ms) |
+| `cold_sync_rtt/n=10000` | 11.53 ms | 11.48 ms | 12.48 ms | 22.38 ms | 62.48 ms | **+1.02 × RTT** (5.4× at 50 ms) |
+| `gossip_propagation_rtt/N=8` | 103 µs | 140 µs | 595 µs | 5.33 ms | 25.69 ms | **+0.50 × RTT** (250× at 50 ms) |
+
+Both deltas are constants in RTT, and both are integer numbers of one-way hops:
+
+- **A write propagates in one hop, not a chain.** `Replica::broadcast` sends every local write to
+  every known peer directly, so `gossip_propagation` costs exactly RTT/2 — flat in `N`, and
+  unaffected by `SOTA.md`'s O(log n)-rounds argument, which is about *reconciliation*, not gossip.
+- **Cold sync costs exactly one round trip, whatever the dataset size.** Not O(log n): an empty peer
+  has nothing to refine. Its outer range differs, the answer is the whole dataset, and the exchange
+  is two one-way hops — the empty node's initial ranges out, the values back. The `n=1000` and
+  `n=10000` rows add the same 1 × RTT to very different baselines.
+- **So `cold_sync` never exercised the O(log n) refinement chain**, at any RTT. That chain runs when
+  the difference is *small relative to the store* — the regime RBSR exists for. `benches/protocol.rs`
+  counts its rounds (6–8 one-way messages, i.e. 3–4 round trips, across n = 10³…10⁶ at `b` = 16), and
+  the rows above are what converts that count into seconds: **one protocol round trip costs one RTT,
+  measured, with no hidden multiplier**. A single missing element in a 10⁶-entry store is therefore
+  ~4 × RTT — ~200 ms at 50 ms RTT — against 3.8 kB of traffic.
+- Pricing that end-to-end rather than by composition needs a difference the two peers disagree on
+  *without* disagreeing on timestamps, which only `just_insert`/`just_remove` can build. Those are
+  `internal-testing` seams, and `system.rs` is deliberately feature-gate-free — so that lane belongs
+  next to `service_reconcile` in the `bench` target, not here.
+
+### Results: loss, at `rtt=1ms`
+
+| benchmark | no loss | loss=0.1% | loss=1% |
+|---|---:|---:|---:|
+| `cold_sync_rtt/n=1000` | 2.05 ms | 1.97 ms | 20.5 ms |
+| `cold_sync_rtt/n=10000` | 12.48 ms | 16.2 ms | 112 ms |
+| `gossip_propagation_rtt/N=8` | 595 µs | 6.55 ms | 100 ms |
+
+**A lost datagram costs a full `reconcile_interval`, not a retransmit.** There is no retransmission:
+the exchange is only repaired by the next anti-entropy round, so the penalty is the cadence —
+`Config::reconcile_interval`, 1 s by default. Every cell above is that mechanism and nothing else:
+the mean is `P(any datagram of the exchange lost) × ~1 s`, which for `gossip_propagation_rtt`'s 7
+receivers is `1 − 0.99⁷ ≈ 6.8 %` → ~100 ms (measured 100 ms), and at 0.1 % is `≈ 0.7 %` → ~7 ms
+(measured 6.55 ms). Hence the wide confidence intervals: the distribution is bimodal, not noisy.
+
+Operationally: **on a lossy path, `reconcile_interval` is the latency knob, not RTT.** 1 s of it
+dwarfs the 50 ms top of the RTT sweep by 20×.
+
+Every lane is seeded (`Seed::DEFAULT`, printed with the results) and the impairment stream per
+directed link replays exactly; what does not replay bit-for-bit is task interleaving on a
+multi-threaded runtime, so read these as reproducible to within the usual benchmark noise. Like
+every target here, the lane stays out of CI — compile-checked only.
 
 ## The `protocol` benchmark
 
@@ -77,9 +180,9 @@ of driving a whole run per policy, the quantity arXiv:2603.19820 models as `T_lo
 IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire — nearly all of
 them elements the peer already holds. At n = 10⁵, d = 100 scattered, the paper's `t`=32 policy saves
 40 % of the refinement bytes and ships **5 036 elements instead of 100**. Reporting ranges without
-elements would pick the wrong default. The message column is the round-trip count, and every
-benchmark here runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)): weigh it
-by your own RTT before concluding.
+elements would pick the wrong default. The message column is the round-trip count, and *this* target
+runs at RTT ≈ 0: weigh it by your own RTT, at the measured rate of **1.00 × RTT per round trip**
+([#280](https://github.com/Akvize/reconcile-rs/issues/280) — the injected-RTT lane above).
 
 **Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
 rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out

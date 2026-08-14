@@ -262,8 +262,21 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
 - Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
-  difference. On a 1 ms-RTT LAN that's several ms; on WAN far more — a cost the README's loopback
-  benchmarks hide (cf. F16).
+  difference. That is now priced rather than estimated (F16, [#280](https://github.com/Akvize/reconcile-rs/issues/280)):
+  `benches/system.rs`'s injected-RTT lane measures **one protocol round trip = 1.00 × RTT**
+  end-to-end, no hidden multiplier, so `benches/protocol.rs`'s message column converts directly.
+  Stating the unit, per [#232](https://github.com/Akvize/reconcile-rs/issues/232) — the formula and
+  the benchmark do not count the same thing:
+
+  | quantity | n = 10³ / 10⁴ / 10⁵ / 10⁶ |
+  |---|---|
+  | `⌈log₁₆ n⌉` — refinement depth, the model | 3 / 4 / 5 / 5 |
+  | one-way messages, measured (`benches/protocol.rs`, d = 1, `b` = 16) — incl. the opening exchange and the closing item transfer | 6 / 6 / 6 / 8 |
+  | **round trips** = half the row above | 3 / 3 / 3 / **4** |
+  | **wall clock at 50 ms RTT** | 150 ms / 150 ms / 150 ms / **200 ms** |
+
+  The last row is the cost this family pays that a single-shot sketch does not, in the unit an
+  operator budgets in. Against 3.8 kB of traffic at n = 10⁶.
 - **A size-derived fan-out sits off that point of the curve, and `rbsr` ships one.** `SqrtFanOut`
   cuts at `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m elements
   each. Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but the first
@@ -294,17 +307,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
   **The compensation is not observable in the reachable range.** Θ(log log n) beats Θ(log_16 n)
   asymptotically, but at n = 10⁶ the iterated square root bottoms out in ~4 levels and log₁₆ 10⁶ ≈ 5;
-  the measured message counts are *identical* (8 and 8). The separation only reaches a factor of two
-  around n ≈ 10¹², far past what a fully-replicated in-memory store holds. So the `√m` rule pays the
-  Θ(√n) bytes and buys nothing back at any size this crate targets.
+  the measured message counts are *identical* (8 and 8) — and since a round trip now costs a
+  measured 1.00 × RTT (F16 above), equal counts mean equal seconds, not merely equal counts. The
+  separation only reaches a factor of two around n ≈ 10¹², far past what a fully-replicated
+  in-memory store holds. So the `√m` rule pays the Θ(√n) bytes and buys nothing back at any size
+  this crate targets.
 
-  Two qualifications keep it from being a one-line verdict. First, every benchmark here runs at
-  RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), so the message column is a
-  *count*: equal counts do mean equal round-trips, but a policy losing on that column could not be
-  priced in seconds. Second, the gap closes as *d* grows and scatters — at d = 100 over 10⁶ elements
-  the two are within 7 % (270 940 B against 253 153 B), because ~√n ranges stop being overhead once
-  the difference genuinely needs that many. `√m` is worst exactly in the small-*d* regime RBSR
-  exists for.
+  One qualification keeps it from being a one-line verdict: the gap closes as *d* grows and
+  scatters — at d = 100 over 10⁶ elements the two are within 7 % (270 940 B against 253 153 B),
+  because ~√n ranges stop being overhead once the difference genuinely needs that many. `√m` is
+  worst exactly in the small-*d* regime RBSR exists for.
 
   The widest single round at d = 1 is 50 781 B — inside the 65 507-byte datagram ceiling, but ~35 IP
   fragments at a 1500-byte MTU, any one of which loses the whole round. At d = 100 over 10⁶ elements
@@ -355,8 +367,13 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   lane injecting latency, bandwidth, loss and CPU budget, and reports **no universally dominant
   protocol** with the winner sensitive to network parameters. Two consequences: any harness claim
   here scopes to refinement policies *inside* RBSR, which GenSync does not carry; and its injection
-  lane is prior art for [#280](https://github.com/Akvize/reconcile-rs/issues/280) — evaluate before
-  building.
+  lane was the prior art [#280](https://github.com/Akvize/reconcile-rs/issues/280) weighed. **The
+  method transferred, the testbed did not**: GenSync injects at the OS through cgroups, where #280
+  needed impairment a Criterion sample could drive in-process, so it built a seeded `Transport`
+  decorator instead (`benches/netem/mod.rs`, which also records why `turmoil` was declined).
+  GenSync's headline reappears at this smaller scale — inside this one implementation the binding
+  cost moves from local CPU at RTT ≈ 0, to round trips at 50 ms, to `reconcile_interval` under loss,
+  so a ranking taken at one network point does not transfer to another.
 - **Every cost model on this page is two-party; the system is N-party.** RBSR, PSR, CPI and RIBLT
   all state their bounds for one pair of peers, while `ReplicatedMap` runs a gossip cluster whose
   per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
@@ -733,8 +750,8 @@ sourced from abstracts and search summaries — read before quoting a number fro
   https://github.com/nislab/gensync
   **Bears on:** an open-source testbed for set-reconciliation *families* with a cgroup-based
   latency/bandwidth/loss lane, reporting no universally dominant protocol; **carries no RBSR**, so a
-  harness claim here scopes to refinement policies inside RBSR, and its injection lane is prior art
-  to evaluate before building one. → [#280](https://github.com/Akvize/reconcile-rs/issues/280), [#174](https://github.com/Akvize/reconcile-rs/issues/174), §2.2
+  harness claim here scopes to refinement policies inside RBSR, and its injection lane is the prior
+  art #280 weighed before building its own (§2.2). → [#280](https://github.com/Akvize/reconcile-rs/issues/280), [#174](https://github.com/Akvize/reconcile-rs/issues/174), §2.2
 - **J. Capetanakis**, *Tree algorithms for packet broadcast channels*, `doi:10.1109/TCOM.1979.1094661`
   (IEEE Trans. Commun. 25(5), 1979) · **P. Mathys, P. Flajolet**, *Q-ary collision resolution
   algorithms in random-access systems with free or blocked channel access*,

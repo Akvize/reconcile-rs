@@ -465,7 +465,11 @@ node in a cluster must use a distinct id. `Timestamp`'s type design (why `Hlc`/`
 | Send 1 insertion, then 1 removal, between two same-size instances | ![](img/perf-send.png) | ~122 µs, flat across N — bounded by local network transmission, not lookup cost. |
 | Reconcile 1 insertion, then 1 removal, between two same-size instances | ![](img/perf-reconcile.png) | 240 µs → 640 µs as N goes from 10 to 1,000,000 — the full diff protocol must run to locate the difference. |
 
-**Note:** benchmarked on loopback; a real network adds transmission delay on top.
+**Note:** benchmarked on loopback. A real network adds one round trip on top of the reconcile row and
+half of one on top of the send row — measured, not estimated, by `benches/system.rs`'s injected-RTT
+lane (`benches/README.md`). At 50 ms RTT that dominates: an anti-entropy convergence goes from 1 ms
+to 51 ms. On a *lossy* path the binding cost is neither: there is no retransmission, so a dropped
+datagram waits for the next anti-entropy round — `Config::reconcile_interval`, 1 s by default.
 
 ## Testing and coverage
 

@@ -81,12 +81,12 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F13 | Medium | panic-only API (no `Result`) | ✅ | #148 — fallible `new` constructors; no network send can panic the run loops |
 | F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | #149 — hook runs outside the write lock on both paths, regression-tested |
 | F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
-| F16 | Medium | loopback benches + README inconsistency | ◐ | README updated; benches still loopback-only |
+| F16 | Medium | loopback benches + README inconsistency | ✅ | [#280](https://github.com/Akvize/reconcile-rs/issues/280) — seeded delay/loss/reordering `Transport` decorator (`benches/netem/mod.rs`, tested by `tests/netem.rs`) plus an RTT sweep (0/0.1/1/10/50 ms) and a loss lane. **Measured, not asserted:** cold sync costs **+1.0 × RTT** and gossip propagation **+0.5 × RTT**, both flat in dataset size and `N`; a lost datagram costs a whole `reconcile_interval` (1 s default), 20× the top of the RTT sweep. Numbers and reading: `benches/README.md` |
 | F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps landed (#151); the `peers` map is bounded by `Config::max_peers` (default 1024, `src/replicated_map.rs:84`) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) closed by PR #245 |
 | F19 | Low | dependency hygiene | ✅ | bincode `with_limit` landed (#151); `overflow-checks = true` and a `cargo deny` CI lane landed 2026-08-13 — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 15 resolved · 4 partial (F9, F10, F16, F17) · 0 open. All Critical resolved; all
+**Score:** 16 resolved · 3 partial (F9, F10, F17) · 0 open. All Critical resolved; all
 but one High resolved or mitigated.
 
 ---
@@ -274,10 +274,11 @@ superseded by this list; the three children below stand on their own.
   flat at 6–8 … where fixed-`b` pays `O(log n)`". Measured head to head at n = 10⁶, *both* take 8
   one-way messages (log₁₆ 10⁶ ≈ 5 ≈ the iterated-square-root depth); the separation only reaches 2×
   near n ≈ 10¹². So `√m` paid ~14× the bytes, ~13× the local RSOS queries and 47× the local CPU and
-  bought nothing observable back. Corrected in `SOTA.md` §1.3/§2.2. Two qualifications: every bench
-  runs at RTT ≈ 0 ([#280](https://github.com/Akvize/reconcile-rs/issues/280)), and the gap closes to
-  ~7 % at d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for, and
-  competitive once `d` approaches `√n`. The earlier ceiling finding also sharpens: at n = 10⁶ with
+  bought nothing observable back. Corrected in `SOTA.md` §1.3/§2.2. One qualification: the gap closes
+  to ~7 % at d = 100 scattered — `√m` is worst exactly in the small-`d` regime RBSR exists for, and
+  competitive once `d` approaches `√n`. (The second qualification, "every bench runs at RTT ≈ 0", is
+  retired: [#280](https://github.com/Akvize/reconcile-rs/issues/280)'s lane prices a round trip at
+  1.00 × RTT, so the equal message counts above are equal *seconds*, not merely equal counts.) The earlier ceiling finding also sharpens: at n = 10⁶ with
   d = 100 the widest round reaches **160 908 B over 3 300 ranges = 3 datagrams / ~189 fragments**, so
   the ceiling is reachable at 10⁶, not only at 10 M — still degrading into extra datagrams rather
   than being dropped, as `send_messages_paced` chunks at `BUFFER_SIZE`.
@@ -322,8 +323,8 @@ superseded by this list; the three children below stand on their own.
 - Comparative benchmark suite — [#174](https://github.com/Akvize/reconcile-rs/issues/174), rescoped
   to in-repo reproducibility (external comparisons optional/non-CI). `benches/system.rs` covers
   point-read, memory footprint, bulk-load, cold anti-entropy convergence, gossip fan-out/propagation
-  scaling, and durable rejoin — see `benches/README.md`. Still open: an external (e.g. Redis)
-  comparison, non-CI and feature-gated.
+  scaling, convergence under injected RTT and loss (#280, F16), and durable rejoin — see
+  `benches/README.md`. Still open: an external (e.g. Redis) comparison, non-CI and feature-gated.
 - Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT) —
   [#185](https://github.com/Akvize/reconcile-rs/issues/185).
 - `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,
