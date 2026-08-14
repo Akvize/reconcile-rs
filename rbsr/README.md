@@ -20,7 +20,9 @@ fingerprints over shrinking key ranges and exchanging only the entries that actu
   `protocol_round` uses the default `FixedFanOut` (the paper's constant `b`, at Negentropy's 16);
   `protocol_round_with_policy` takes any. Each shipped policy is named for the rule it applies:
   `FixedFanOut` (the default), `SqrtFanOut` (fan-out `⌊√m⌋` rather than a constant `b`) and
-  `EnumerateBelowThreshold` (Algorithm 1 as written, `t` *and* `b`).
+  `EnumerateBelowThreshold` (Algorithm 1 as written, `t` *and* `b`). Both parameters were swept and
+  totalled in wire bytes rather than inherited: `b` = 16 is the measured choice, and no `t` pays for
+  the values it ships — see `EnumerateBelowThreshold`'s docs for the break-even that decides it.
 
 The crate-root docs carry a full correspondence table between the protocol vocabulary of
 [arXiv:2603.19820](https://arxiv.org/abs/2603.19820) (Amparore, 2026 — RBSR over any

@@ -292,9 +292,35 @@ impl RefinementPolicy for FixedFanOut {
 /// **IDLIST when `|X ∩ [l, u)| ≤ t`, `SPLITBYRANK(b)` otherwise** — Algorithm 1 of
 /// arXiv:2603.19820 as written, replacing this crate's cutoffs as well as its fan-out.
 ///
-/// `t` trades refinement round-trips for *values*: a range of `t` local elements ships wholesale,
-/// including everything the peer already has, which is why `benches/protocol.rs` reports
-/// enumerated elements alongside advertised ranges.
+/// `t` trades refinement bytes for *values*: a range of `t` local elements ships wholesale,
+/// including everything the peer already has.
+///
+/// # Shipped, but not the default
+///
+/// Both halves of that trade, totalled in one unit against [`FixedFanOut`] at the same `b`, over
+/// `t` = 1…256 and value payloads of 8 B…4 KB (`benches/protocol.rs`'s `threshold_sweep`). At
+/// n = 10⁵, d = 100 scattered:
+///
+/// | | |
+/// |---|---|
+/// | what an element must cost for the paper's `t` = 32 to break even | 15.0 B |
+/// | what one costs, as this workspace's caller puts it on the wire | ≥ 30 B: a varint key, a 19-byte `Timestamp`, two framing bytes, then the payload |
+///
+/// The floor sits above the break-even before the payload contributes a byte, so no `t` recovers
+/// what it spends. Over every measured `(n, d)` the best swept value saves 4 %, all of it at an
+/// 8-byte payload, and beats the default nowhere from 64 B up; `t` = 32 runs 0.98–1.52× the
+/// default's total bytes at 8 B and 5.2–36× at 4 KB.
+///
+/// In bytes, that is. What they buy is round trips — one fewer descent level — and a round trip has
+/// a price too, so on a link fast and far enough a threshold can win the wall clock it loses on
+/// bytes. Both crossovers, and why the default answers the byte question: `PROGRESS.md`.
+///
+/// It ships because the arithmetic, not the conclusion, is what generalizes: a narrower
+/// conflict-resolution stamp, a set-shaped store (`V = ()`) or keys dearer than values move the
+/// floor, and `t` is a caller's parameter to re-measure against it.
+///
+/// `t` is a step function rather than a dial: a span walks the ladder `m / b^k`, so every `t`
+/// between two rungs picks the same rung and costs exactly the same.
 ///
 /// [`Default`] is the paper's experimental configuration. `t = 0` is raised to `1`, which would
 /// otherwise split a range into itself forever.

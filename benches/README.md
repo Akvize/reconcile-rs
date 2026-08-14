@@ -6,7 +6,7 @@ Three Criterion targets, all `harness = false`, none feature-gated:
 |---|---|
 | `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
 | `system` | End-to-end, **public-API** system benchmarks (below), including the injected-RTT/loss lane. |
-| `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — messages, advertised ranges, bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
+| `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — total wire bytes at four value sizes, then messages, advertised ranges, refinement bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 
 No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
 
@@ -161,28 +161,38 @@ every target here, the lane stays out of CI — compile-checked only.
 ## The `protocol` benchmark
 
 ```sh
-cargo bench --bench protocol            # cost table + the timed drive loop
+cargo bench --bench protocol            # cost tables + the timed drive loops
 cargo bench --bench protocol -- --quick
 
-# The printed table only (no timed group): give Criterion a filter that matches no benchmark id.
+# The printed tables only (no timed group): give Criterion a filter that matches no benchmark id.
 cargo bench --bench protocol -- 'no_such_benchmark'
 ```
 
-`reconciliation_cost` prints, for each `(policy, n, d, clustering)`, the exact volume two peers
-exchange to converge: bytes (bincode, the same encoder the real transport uses), advertised
-`RangeAggregate`s, one-way messages, datagrams, IP fragments, the largest single message, the IDLIST
-ranges **and the elements they actually ship**, and the local `Aggregate`/`Rank`/`Select` counts
-summed over both peers. Deterministic, so it is printed rather than timed — like `system`'s
-`memory_footprint`. The timed `reconciliation_drive` group alongside it measures the local CPU cost
-of driving a whole run per policy, the quantity arXiv:2603.19820 models as `T_loc`.
+`reconciliation_cost` prints, for each `(policy, n, d, clustering)`, **total wire bytes** — the
+refinement traffic plus the values the IDLIST outcomes ship — at four value payload sizes
+(8 / 64 / 512 / 4096 B), then the breakdown under it: refinement bytes (bincode, the same encoder
+the real transport uses), advertised `RangeAggregate`s, one-way messages, datagrams, IP fragments,
+the largest single message, the IDLIST ranges and the elements they ship, and the local
+`Aggregate`/`Rank`/`Select` counts summed over both peers. Deterministic, so it is printed rather
+than timed — like `system`'s `memory_footprint`, whose payload-size axis it borrows. The timed
+`reconciliation_drive` group alongside it measures the local CPU cost of driving a whole run per
+policy, the quantity arXiv:2603.19820 models as `T_loc`.
 
-**Read the columns together.** A policy that splits less advertises fewer ranges but reaches its
-IDLIST cutoff on wider ranges, and every enumerated element is a *value* on the wire — nearly all of
-them elements the peer already holds. At n = 10⁵, d = 100 scattered, the paper's `t`=32 policy saves
-40 % of the refinement bytes and ships **5 036 elements instead of 100**. Reporting ranges without
-elements would pick the wrong default. The message column is the round-trip count, and *this* target
-runs at RTT ≈ 0: weigh it by your own RTT, at the measured rate of **1.00 × RTT per round trip**
-([#280](https://github.com/Akvize/reconcile-rs/issues/280) — the injected-RTT lane above).
+**One unit, because the two halves are traded against each other.** A policy that splits less
+advertises fewer ranges but reaches its IDLIST cutoff on wider ranges, and every enumerated element
+is a *value* on the wire — nearly all of them elements the peer already holds. Reported in two
+units, that trade is unreadable: at n = 10⁵, d = 100 scattered the paper's `t`=32 policy saves 46 %
+of the refinement bytes against the default and ships **5 036 elements instead of 100**, which looks
+like a win in the first column and a loss in the second. Summed, it is 1.52× the default's bytes at
+8-byte values and 36× at 4 KB. The message column stays separate on purpose: no byte total prices a
+round trip, and *this* target runs at RTT ≈ 0 — weigh it at the measured rate of **1.00 × RTT per
+round trip** ([#280](https://github.com/Akvize/reconcile-rs/issues/280) — the injected-RTT lane
+above).
+
+One drive prices every value size: the payload is not read by any SKIP/IDLIST/SPLIT decision, so
+only the per-element price moves with it. The harness checks that rather than assuming it —
+`payload_size_does_not_move_the_trace` reconciles the same case over `u64`, 8-byte and 4 KB values
+and compares every decision before a table is printed.
 
 **Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
 rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out
@@ -204,6 +214,16 @@ round grows linearly in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` i
 datagram at `b = 16`. Across every measured `(n, d, clustering)`, `b = 16` is the only swept value
 never worse than `√m` on rounds; `b = 4` is the bytes-and-CPU optimum, two round-trips behind, and
 is the value to reach for when bandwidth rather than latency binds.
+
+`threshold_sweep` does the same for the other Algorithm 1 parameter, the enumeration threshold
+(`EnumerateBelowThreshold`, `t` = 1…256, `b` held at 16), against `FixedFanOut(16)` — today's
+default, and the only baseline the question "should `t` exist at all?" can be answered against. Each
+row carries its total as a ratio to that baseline at every value size, plus its **break-even**: the
+element price at which the refinement it saves would exactly pay for the elements it ships. Read
+that against the element price printed above the tables — the same unit, measured the same way. `t`
+is a step function, not a dial: a range's span walks the ladder `n / b^k`, so every `t` between two
+rungs picks the same rung and costs exactly the same. The outcome, and why the default did not move:
+`PROGRESS.md`.
 
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,
