@@ -823,15 +823,21 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
 - S. Kulkarni et al., *Hybrid Logical Clocks*, 2014 — https://cse.buffalo.edu/tech-reports/2014-04.pdf
 - Shapiro et al., *CRDTs*, INRIA RR-7506 / SSS 2011 — https://inria.hal.science/inria-00555588/en/
 - Preguiça et al., *Dotted Version Vectors*, arXiv:1011.5808 — https://arxiv.org/abs/1011.5808
-- Clarke et al., *Incremental Multiset Hash Functions*, ASIACRYPT 2003 — https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
-  — where keying makes MSet-Add-Hash collision-resistant; the fix for §2.4 P0-1's adversarial gap.
-- M. Bellare, D. Micciancio, *A New Paradigm for Collision-Free Hashing: Incrementality at Reduced
-  Cost* (AdHash/MuHash), EUROCRYPT 1997 — https://cseweb.ucsd.edu/~mihir/papers/incremental.html —
-  the additive/multiplicative homomorphic hashes, and the reduction of XOR-collision to linear algebra
-  over GF(2) that §2.4 P0-1 cites.
-- D. Wagner, *A Generalized Birthday Problem*, CRYPTO 2002 — https://www.iacr.org/archive/crypto2002/24420288/24420288.pdf
-  — the k-tree solving the balance problem over `ℤ/2^w` in subexponential time; why 256-bit modular
-  addition is not adversarially collision-resistant (§2.4 P0-1, `paper/false-convergence.md` §6).
+- **D. Clarke, S. Devadas, M. van Dijk, B. Gassend, G. E. Suh**, *Incremental Multiset Hash
+  Functions and Their Application to Memory Integrity Checking*, `doi:10.1007/978-3-540-40061-5_12`
+  (ASIACRYPT 2003) — https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
+  **Bears on:** MSet-Add-Hash is set-collision-resistant only when *keyed* — the fix for the
+  adversarial gap the additive `Fingerprint` has unkeyed. → [#337](https://github.com/Akvize/reconcile-rs/issues/337), §2.4 P0-1
+- **M. Bellare, D. Micciancio**, *A New Paradigm for Collision-Free Hashing: Incrementality at
+  Reduced Cost* (AdHash/MuHash), `doi:10.1007/3-540-69053-0_13` (EUROCRYPT 1997) —
+  https://cseweb.ucsd.edu/~mihir/papers/incremental.html
+  **Bears on:** the additive homomorphic hash `Fingerprint` belongs to, and the reduction of
+  XOR-collision to linear algebra over GF(2) that makes non-GF(2)-linearity *necessary*. → §2.4 P0-1
+- **D. Wagner**, *A Generalized Birthday Problem*, `doi:10.1007/3-540-45708-9_19` (CRYPTO 2002) —
+  https://www.iacr.org/archive/crypto2002/24420288/24420288.pdf
+  **Bears on:** the k-tree solves the balance problem over `ℤ/2^w` in subexponential time (~2³¹ at
+  `w`=256), so a non-GF(2)-linear combiner is *not sufficient* — why 256-bit modular addition is not
+  adversarially collision-resistant. → [#337](https://github.com/Akvize/reconcile-rs/issues/337), §2.4 P0-1, `paper/false-convergence.md` §6
 - Abadi, *PACELC* — https://en.wikipedia.org/wiki/PACELC_design_principle ; ScyllaDB repair-based tombstone GC — https://www.scylladb.com/2022/06/30/preventing-data-resurrection-with-repair-based-tombstone-garbage-collection/
 
 **Product positioning**
