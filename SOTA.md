@@ -217,6 +217,14 @@ copy-on-write B+-tree addressed by page number.
     the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
     256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
     the injectivity of Σ with no truncation term. The price is 40 B/range against 16 B — see §2.2.
+    What the exact count buys, and what it does not: a range whose peers hold **different
+    cardinalities** can never be SKIPped — probability 1, no assumption on the hash — so a dropped
+    write or an unreplicated tombstone is structurally covered. A **same-key/different-value
+    conflict is not**: both records share a key, so no rank split ever separates them and every
+    range containing that key is count-balanced at every depth. The failure mode `f_p = id` covers
+    outright is the rarer one; the one an LWW register produces continuously falls back on Σ's
+    injectivity alone. Truncating a count-folding hash (Negentropy) trades the probability-1 half
+    away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint.
 - The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
   durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
   RSOS with a secure fingerprint" — persistence is the gap that remains.**
@@ -433,7 +441,9 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
    combiner (hash-then-add mod 2²⁵⁶, MSet-Mu-Hash/LtHash) or *keyed*. XOR = self-inverse + linear →
    craftable collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³². The path
    taken by Negentropy. **This is THE criterion that separates a "toy" structure from a SOTA one.**
-   (cf. F6)
+   (cf. F6) — but width alone settles only the *honest* model: modular addition at 256 bits stays
+   Wagner-breakable, and the keyed-lift fix is
+   [#337](https://github.com/Akvize/reconcile-rs/issues/337).
 2. **Decouple "empty" from "hash==0"** (`size==0`) — otherwise the structure can claim "converged"
    while having lost data. (cf. F1)
 3. **Stable, versioned hash as a wire contract** (pinned SipHash/xxHash/BLAKE3 + golden-vector).
