@@ -9,11 +9,18 @@
 //! System-level, end-to-end benchmarks driving the **public** `ReplicatedMap` API (point-read
 //! latency vs `HashMap`/`BTreeMap`, per-entry memory footprint, bulk-load throughput, cold anti-
 //! entropy convergence between two in-process nodes, gossip fan-out and propagation latency as
-//! node count grows, and durable-snapshot reload). Unlike the `bench` target, these reach no crate
-//! internals, so they need no feature gate.
+//! node count grows, convergence under injected RTT and loss, and durable-snapshot reload). Unlike
+//! the `bench` target, these reach no crate internals, so they need no feature gate.
+//!
+//! The `*_rtt` lanes are the answer to [#280]: every other benchmark here runs at RTT ≈ 0, which
+//! prices bytes and zeroes round-trips — the axis RBSR is worst on. They run over the seeded
+//! delay/loss decorator in `benches/netem/mod.rs`, whose module docs carry the model and the
+//! `turmoil` evaluation.
 //!
 //! Reproduction and interpretation are documented in `benches/README.md`. Not run in CI (only
 //! compile-checked); run locally with `cargo bench --bench system`.
+//!
+//! [#280]: https://github.com/Akvize/reconcile-rs/issues/280
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hint::black_box;
@@ -25,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{
     criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
-    Throughput,
+    SamplingMode, Throughput,
 };
 use tokio::runtime::Runtime;
 
@@ -34,6 +41,14 @@ use reconcile::{
     LogicalCounter, NodeId, PersistedState, Persistence, PhysicalTime, ReplicatedMap, State,
     Timestamp, Transport,
 };
+
+// The netem decorator lives in a subdirectory so cargo's bench auto-discovery (which picks up
+// `benches/*.rs` and `benches/*/main.rs`) does not mistake it for a fourth `harness = false`
+// target. `tests/netem.rs` includes the same file, and is where it is tested.
+#[path = "netem/mod.rs"]
+mod netem;
+
+use netem::{Link, Netem, NetemTransport, Probability, Rtt, Seed};
 
 /// Dataset sizes swept by the size-parameterised benchmarks (log scale).
 const SIZES: &[usize] = &[10, 100, 1_000, 10_000, 100_000];
@@ -138,11 +153,16 @@ fn memory_footprint(c: &mut Criterion) {
 
 /// A fresh, unique loopback address pair for one cold-sync iteration (avoids rebind collisions
 /// across Criterion's repeated samples). Both peers share the port; only the address differs.
+///
+/// 64 pairs per third octet, 256 third octets. The pair occupies host octets `2p+1` and `2p+2`, so
+/// `p` has to stay under 127 for the *second* of them to remain an octet: a wider mask overflows on
+/// the 128th call, which the release profile's `overflow-checks = true` (`Cargo.toml`) turns into a
+/// panic partway through the benchmark rather than a wrong address.
 fn fresh_pair() -> (IpAddr, IpAddr) {
     static N: AtomicU32 = AtomicU32::new(0);
     let i = N.fetch_add(1, Ordering::Relaxed);
-    let hi = ((i >> 7) & 0xff) as u8;
-    let lo = ((i & 0x7f) as u8) * 2 + 1; // odd octet for peer A, +1 (even) for peer B
+    let hi = ((i >> 6) & 0xff) as u8;
+    let lo = ((i & 0x3f) as u8) * 2 + 1; // odd octet for peer A, +1 (even) for peer B
     (
         format!("127.1.{hi}.{lo}").parse().unwrap(),
         format!("127.1.{hi}.{}", lo + 1).parse().unwrap(),
@@ -240,39 +260,45 @@ struct TrafficCounters {
 
 /// `n` distinct loopback addresses for one mesh. Each call uses a fresh third octet, so meshes
 /// built by separate calls never collide even if their `InMemoryNetwork`s somehow did.
+///
+/// The octet cycles rather than growing: the RTT lanes rebuild their cluster once per iteration,
+/// thousands of times per run, and each mesh's own `InMemoryNetwork` already isolates it — whereas
+/// a 256th block would not be an address at all.
 fn mesh_addrs(n: usize) -> Vec<IpAddr> {
     static BLOCK: AtomicU32 = AtomicU32::new(1);
-    let block = BLOCK.fetch_add(1, Ordering::Relaxed);
+    let block = BLOCK.fetch_add(1, Ordering::Relaxed) % 254 + 1;
     assert!(n < 255, "mesh_addrs: {n} nodes don't fit in one /24 octet");
     (0..n as u32)
         .map(|i| format!("127.3.{block}.{}", i + 1).parse().unwrap())
         .collect()
 }
 
-/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded** so the measurement
-/// excludes peer-discovery time. The returned counters share index with the stores.
-fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+/// `n` in-process nodes on a fresh [`InMemoryNetwork`], each endpoint handed to `wrap` before it
+/// reaches the store. **Unseeded**: who knows whom is the caller's decision, and the two families
+/// of benchmark built on this differ on exactly that (see [`full_mesh_seed`]).
+fn mesh_with<T: Transport<Addr = SocketAddr>>(
+    n: usize,
+    port: u16,
+    mut wrap: impl FnMut(InMemoryTransport) -> T,
+) -> (Vec<ReplicatedMap<u32, u32>>, Vec<IpAddr>) {
     let network = InMemoryNetwork::new();
     let addrs = mesh_addrs(n);
-    let mut stores = Vec::with_capacity(n);
-    let mut counters = Vec::with_capacity(n);
-    for &addr in &addrs {
-        let traffic = TrafficCounters::default();
-        let transport = CountingTransport {
-            inner: network.bind(SocketAddr::new(addr, port)),
-            datagrams_sent: Arc::clone(&traffic.datagrams_sent),
-            bytes_sent: Arc::clone(&traffic.bytes_sent),
-        };
-        let config = Config::default()
-            .with_port(port)
-            .with_listen_addr(addr)
-            .with_net("127.0.0.1/8".parse().unwrap());
-        stores.push(ReplicatedMap::<u32, u32>::new_with_transport(
-            config,
-            Arc::new(transport),
-        ));
-        counters.push(traffic);
-    }
+    let stores = addrs
+        .iter()
+        .map(|&addr| {
+            let transport = wrap(network.bind(SocketAddr::new(addr, port)));
+            let config = Config::default()
+                .with_port(port)
+                .with_listen_addr(addr)
+                .with_net("127.0.0.1/8".parse().unwrap());
+            ReplicatedMap::<u32, u32>::new_with_transport(config, Arc::new(transport))
+        })
+        .collect();
+    (stores, addrs)
+}
+
+/// Seed every node with every other, so a measurement excludes peer-discovery time.
+fn full_mesh_seed(stores: &[ReplicatedMap<u32, u32>], addrs: &[IpAddr]) {
     for (i, store) in stores.iter().enumerate() {
         for (j, &addr) in addrs.iter().enumerate() {
             if i != j {
@@ -280,7 +306,37 @@ fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<Traffic
             }
         }
     }
+}
+
+/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded** so the measurement
+/// excludes peer-discovery time. The returned counters share index with the stores.
+fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+    let mut counters = Vec::with_capacity(n);
+    let (stores, addrs) = mesh_with(n, port, |inner| {
+        let traffic = TrafficCounters::default();
+        let transport = CountingTransport {
+            inner,
+            datagrams_sent: Arc::clone(&traffic.datagrams_sent),
+            bytes_sent: Arc::clone(&traffic.bytes_sent),
+        };
+        counters.push(traffic);
+        transport
+    });
+    full_mesh_seed(&stores, &addrs);
     (stores, counters)
+}
+
+/// `n` in-process nodes whose every outbound datagram crosses `link`. **Unseeded**, like
+/// [`mesh_with`]. Call inside a runtime: each node's decorator spawns a delivery pump.
+fn netem_mesh(
+    n: usize,
+    port: u16,
+    link: Link,
+    seed: Seed,
+) -> (Vec<ReplicatedMap<u32, u32>>, Vec<IpAddr>) {
+    mesh_with(n, port, |inner| {
+        NetemTransport::new(Arc::new(inner), Netem::uniform(link, seed))
+    })
 }
 
 /// Cooperatively yields until `counter` reaches `target`, instead of sleeping: in-process delivery
@@ -368,8 +424,12 @@ fn gossip_propagation(c: &mut Criterion) {
         });
 
         group.sample_size(10);
+        // Outside `bench_with_input`, not inside its routine: Criterion calls that routine once per
+        // sample (and again for warm-up), so a counter declared in there restarts at zero every
+        // time and every sample after the first re-writes a key the cluster already holds — which
+        // completes instantly and reports the poll loop instead of the propagation.
+        let mut key = 0u32;
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
-            let mut key = 0u32;
             b.iter_custom(|iters| {
                 rt.block_on(async {
                     let mut total = Duration::ZERO;
@@ -388,6 +448,256 @@ fn gossip_propagation(c: &mut Criterion) {
         });
 
         for task in run_tasks {
+            task.abort();
+        }
+    }
+    group.finish();
+}
+
+/// Round-trip times swept by the `*_rtt` lanes: loopback, a datacentre fabric, a LAN, a
+/// same-continent WAN, an intercontinental one. Stated as RTT because that is what an operator
+/// measures; the decorator injects half of each in either direction.
+fn rtt_sweep() -> Vec<Rtt> {
+    [0.0, 0.1, 1.0, 10.0, 50.0]
+        .into_iter()
+        .map(Rtt::from_millis)
+        .collect()
+}
+
+/// Loss rates swept alongside the RTT sweep — the band a healthy WAN path sits in. Held at
+/// [`LOSS_LANE_RTT`] so the loss lane varies one thing.
+fn loss_sweep() -> Vec<Probability> {
+    [0.1, 1.0].into_iter().map(Probability::percent).collect()
+}
+
+/// The RTT the loss lane runs at.
+const LOSS_LANE_RTT: f64 = 1.0;
+
+/// Datagrams per delay calibration point. Small: at the top of the sweep each one costs a full
+/// one-way delay, and the quantity is a mean, not a tail.
+const CALIBRATION_DATAGRAMS: usize = 50;
+
+/// Datagrams per loss calibration point. Large, and at zero delay so it stays cheap: 0.1 % of
+/// anything smaller rounds to no drops at all.
+const LOSS_CALIBRATION_DATAGRAMS: usize = 20_000;
+
+/// Send `datagrams` one at a time across `link`, returning the observed one-way delivery latency
+/// (mean, worst) and the loss the model actually realized.
+async fn probe_link(link: Link, datagrams: usize, port: u16) -> (Duration, Duration, f64) {
+    let network = InMemoryNetwork::new();
+    let addrs = mesh_addrs(2);
+    let (src, dst) = (
+        SocketAddr::new(addrs[0], port),
+        SocketAddr::new(addrs[1], port),
+    );
+    let sender = NetemTransport::new(
+        Arc::new(network.bind(src)),
+        Netem::uniform(link, Seed::DEFAULT),
+    );
+    let receiver = network.bind(dst);
+    let impairments = sender.impairments();
+
+    let (mut total, mut worst, mut delivered) = (Duration::ZERO, Duration::ZERO, 0u32);
+    let mut buf = [0u8; 64];
+    for i in 0..datagrams {
+        let dropped_before = impairments.dropped();
+        let start = Instant::now();
+        sender
+            .send_to(&(i as u64).to_le_bytes(), &dst)
+            .await
+            .unwrap();
+        // A drop is reported as a successful send, so ask the model rather than waiting forever.
+        if impairments.dropped() != dropped_before {
+            continue;
+        }
+        receiver.recv_from(&mut buf).await.unwrap();
+        let elapsed = start.elapsed();
+        total += elapsed;
+        worst = worst.max(elapsed);
+        delivered += 1;
+    }
+    (total / delivered.max(1), worst, impairments.loss_fraction())
+}
+
+/// Calibrate the instrument before reading anything it produces: configured one-way delay against
+/// observed, configured loss against realized. Printed rather than timed, like `memory_footprint`
+/// — and the reason the sweeps below can be quoted as measurements of the protocol rather than of
+/// tokio's timer, which rounds a sleep up to the next millisecond (`benches/netem/mod.rs`).
+fn netem_calibration(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    println!(
+        "[netem] seed={:#x}; delay is one-way (half the stated RTT), {CALIBRATION_DATAGRAMS} \
+         datagrams per delay point, {LOSS_CALIBRATION_DATAGRAMS} per loss point",
+        Seed::DEFAULT.get()
+    );
+    rt.block_on(async {
+        for rtt in rtt_sweep() {
+            let (mean, worst, _) = probe_link(Link::at(rtt), CALIBRATION_DATAGRAMS, 9_950).await;
+            println!(
+                "[netem] {label:<12} injected one-way {injected:>9.3?} -> observed mean \
+                 {mean:>9.3?}, worst {worst:>9.3?}",
+                label = rtt.label(),
+                injected = rtt.one_way(),
+            );
+        }
+        for loss in loss_sweep() {
+            let link = Link::PERFECT.with_loss(loss);
+            let (_, _, realized) = probe_link(link, LOSS_CALIBRATION_DATAGRAMS, 9_951).await;
+            println!(
+                "[netem] {label:<12} configured {configured:.3} % -> realized {realized:.3} %",
+                label = loss.label(),
+                configured = loss.as_fraction() * 100.0,
+                realized = realized * 100.0,
+            );
+        }
+    });
+
+    // The harness's own per-datagram cost, and therefore the floor under every lane below: what a
+    // send through the decorator costs when the link is perfect and delivery is immediate.
+    let (sender, dst) = rt.block_on(async {
+        let network = InMemoryNetwork::new();
+        let addrs = mesh_addrs(2);
+        let dst = SocketAddr::new(addrs[1], 9_952);
+        network.bind(dst);
+        let sender = NetemTransport::new(
+            Arc::new(network.bind(SocketAddr::new(addrs[0], 9_952))),
+            Netem::uniform(Link::PERFECT, Seed::DEFAULT),
+        );
+        (sender, dst)
+    });
+    c.bench_function("netem_overhead::send_to", |b| {
+        b.iter(|| rt.block_on(async { sender.send_to(black_box(b"probe"), &dst).await.unwrap() }));
+    });
+}
+
+/// Dataset sizes for the cold-sync RTT lane, deliberately below `cold_sync`'s: the quantity of
+/// interest is the *delta* against RTT 0 in the same harness, not the size curve `cold_sync`
+/// already draws, and at 50 ms every sample costs the whole round-trip chain.
+const RTT_SIZES: &[usize] = &[1_000, 10_000];
+
+/// One cold-sync convergence over `link`, `iters` times: an empty node seeded to a full one, timed
+/// from spawning both run loops until the fingerprints match. A fresh two-node network per
+/// iteration, so no state and no impairment carries over.
+async fn cold_sync_over(kvs: &[(u32, u32)], link: Link, iters: u64) -> Duration {
+    let mut total = Duration::ZERO;
+    for _ in 0..iters {
+        let (stores, addrs) = netem_mesh(2, 9_800, link, Seed::DEFAULT);
+        let (full, empty) = (&stores[0], &stores[1]);
+        // Loaded before it has a peer, so nothing is broadcast eagerly — as in `cold_sync`.
+        full.insert_bulk(kvs);
+        let target = full.fingerprint(..);
+        // Only the empty node seeds, also as in `cold_sync`: two peers each initiating over the
+        // same difference would dump the dataset twice and measure that instead.
+        empty.seed_peer(addrs[0]);
+
+        let start = Instant::now();
+        let tasks = [
+            tokio::spawn(full.clone().run()),
+            tokio::spawn(empty.clone().run()),
+        ];
+        // Yield rather than sleep: tokio rounds a sleep up to a millisecond, which is half of what
+        // this whole benchmark costs in the RTT-0 lane the deltas are taken against.
+        while empty.fingerprint(..) != target {
+            tokio::task::yield_now().await;
+        }
+        total += start.elapsed();
+        for task in tasks {
+            task.abort();
+        }
+    }
+    total
+}
+
+/// `cold_sync` across the RTT sweep and a loss lane: what the round-trip chain costs once
+/// round-trips are not free. The RTT-0 column is the same harness with a perfect link, so the
+/// delta is the injected network and nothing else.
+fn cold_sync_rtt(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = log_group(c, "cold_sync_rtt");
+    group.sample_size(10);
+    // Flat sampling: one convergence per sample. Criterion's default linear mode extrapolates from
+    // batches of iterations, which is for benchmarks far shorter than these.
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_millis(500));
+    for &size in RTT_SIZES {
+        let kvs = corpus(size);
+        let id = format!("n={size}");
+        for rtt in rtt_sweep() {
+            group.bench_with_input(BenchmarkId::new(&id, rtt.label()), &rtt, |b, &rtt| {
+                b.iter_custom(|iters| rt.block_on(cold_sync_over(&kvs, Link::at(rtt), iters)));
+            });
+        }
+        for loss in loss_sweep() {
+            let link = Link::at(Rtt::from_millis(LOSS_LANE_RTT)).with_loss(loss);
+            group.bench_with_input(BenchmarkId::new(&id, loss.label()), &loss, |b, _| {
+                b.iter_custom(|iters| rt.block_on(cold_sync_over(&kvs, link, iters)));
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Node count for the propagation RTT lane: fixed and modest. `gossip_propagation` already sweeps
+/// `N` at RTT ≈ 0 and starts measuring its own scheduler past a few dozen, so holding `N` still is
+/// what makes the sweep vary one thing.
+const PROPAGATION_RTT_NODES: usize = 8;
+
+/// `gossip_propagation` across the RTT sweep and a loss lane. A write is broadcast to every peer at
+/// once, so this asks whether propagation is one hop (≈ RTT/2, flat in `N`) or a chain — and, in
+/// the loss lane, what a dropped broadcast costs when only the next anti-entropy round can repair
+/// it.
+fn gossip_propagation_rtt(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = log_group(c, "gossip_propagation_rtt");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_millis(500));
+    let id = format!("N={PROPAGATION_RTT_NODES}");
+
+    let mut lanes: Vec<(String, Link)> = rtt_sweep()
+        .into_iter()
+        .map(|rtt| (rtt.label(), Link::at(rtt)))
+        .collect();
+    lanes.extend(loss_sweep().into_iter().map(|loss| {
+        (
+            loss.label(),
+            Link::at(Rtt::from_millis(LOSS_LANE_RTT)).with_loss(loss),
+        )
+    }));
+
+    for (label, link) in lanes {
+        let (stores, tasks) = rt.block_on(async {
+            let (stores, addrs) = netem_mesh(PROPAGATION_RTT_NODES, 9_900, link, Seed::DEFAULT);
+            full_mesh_seed(&stores, &addrs);
+            let tasks: Vec<_> = stores
+                .iter()
+                .cloned()
+                .map(|store| tokio::spawn(store.run()))
+                .collect();
+            (stores, tasks)
+        });
+
+        // A never-repeating key, for the reason spelled out in `gossip_propagation`.
+        let mut key = 0u32;
+        group.bench_with_input(BenchmarkId::new(&id, &label), &label, |b, _| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        key = key.wrapping_add(1);
+                        let start = Instant::now();
+                        stores[0].insert(black_box(key), key);
+                        while !stores[1..].iter().all(|s| s.get(&key).is_some()) {
+                            tokio::task::yield_now().await;
+                        }
+                        total += start.elapsed();
+                    }
+                    total
+                })
+            });
+        });
+
+        for task in tasks {
             task.abort();
         }
     }
@@ -440,6 +750,9 @@ criterion_group!(
     cold_sync,
     gossip_fanout,
     gossip_propagation,
+    netem_calibration,
+    cold_sync_rtt,
+    gossip_propagation_rtt,
     durable_rejoin
 );
 criterion_main!(benches);
