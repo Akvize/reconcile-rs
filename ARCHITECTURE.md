@@ -123,7 +123,7 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 
 | Port | Crate | Replaces | Adapter(s) |
 |---|---|---|---|
-| `Clock` | `lww-register/src/clock.rs` | direct `chrono::Utc` read | `HlcClock` (`reconcile/src/clock.rs`) |
+| `Clock` | `lww-register/src/clock.rs` | direct `chrono::Utc` read | `HlcClock` (`src/clock.rs`) |
 | `Transport` | `gossip/src/transport.rs` | `tokio::net::UdpSocket` | `UdpTransport`, `InMemoryTransport` |
 | `Persistence` | `lww-register/src/persistence.rs` | ad hoc file I/O | `FileSnapshot`, `InMemoryPersistence` |
 | `Discovery` | `gossip/src/discovery.rs` | inline IP-scan | `RandomProbe` (speculative), `DnsDiscovery` (authoritative) |
@@ -232,7 +232,7 @@ the tombstone-expiry instant, re-admitting the stored `PhysicalTime` through the
 physical-time read and a `chrono` instant — the domain crate has neither).
 
 `Entry` and `AdmittedTime` are the same "parse, don't validate" shape as
-[`Payload`](../gossip/src/auth.rs) (only obtainable via `Authenticator::open`): construction of an
+[`Payload`](gossip/src/auth.rs) (only obtainable via `Authenticator::open`): construction of an
 invalid instance is either structurally impossible or funneled through one fallible constructor.
 
 Conflict resolution is **domain policy**, not a port: last-write-wins is the concrete default. A
