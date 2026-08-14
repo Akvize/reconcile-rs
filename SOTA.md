@@ -306,7 +306,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   `T_loc`. *b* = 4 wins on bytes and CPU but costs two round-trips — break-even only when the
   "network" is in-process, at microsecond RTTs. Because the policy never crosses the wire and mixed
   pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format decision.
-  Numbers: `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index (#257, closed).
+  Numbers: `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
 - **The arity question has a forty-year analytical treatment, in a literature neither RBSR paper
   cites** ([§4.1](#41-cross-community-vocabulary), [§4.4](#44-bibliography)). Random-access *tree
   algorithms* solve "split a population into `q` groups when the location of the conflicts is
@@ -360,8 +360,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   the peer mostly already holds — a trade that only pays off below the cheapest price this wire
   format can carry an element at, and is a net loss once totalled across payload sizes: worse than
   the default at every value size but the smallest, and there only by a few percent. Numbers:
-  `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index (#315, no `t`, default
-  unmoved).
+  `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
   (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per
