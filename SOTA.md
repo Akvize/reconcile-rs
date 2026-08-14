@@ -287,12 +287,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   `benches/protocol.rs` measures **both columns against a fixed *b* in the same harness** (`u64`
   keys, d = 1, one element missing):
 
-  | n | `√m` bytes | `√m` msgs | `b`=16 bytes | `b`=16 msgs | `t`=32/`b`=16 bytes | msgs |
+  | n | `√m` refine B | `√m` msgs | `b`=16 refine B | `b`=16 msgs | `t`=32/`b`=16 refine B | msgs |
   |---:|---:|---:|---:|---:|---:|---:|
   | 10³ | 2 041 | 6 | 1 701 | 6 | 1 476 | 4 |
   | 10⁴ | 5 395 | 8 | 2 195 | 6 | 1 520 | 4 |
   | 10⁵ | 16 553 | 6 | 2 789 | 6 | 2 294 | 5 |
   | 10⁶ | **53 046** | 8 | **3 834** | 8 | **3 246** | 6 |
+
+  Refinement traffic only. The first two ship one element on top of it — d = 1, ≈ 33 B — so their
+  totals are these numbers. The third ships 7 to 51, which is the `t` bullet below, and the reason
+  the harness now reports totals rather than this column.
 
   ~×3.2 per decade of *n* on the `√m` bytes (i.e. √10). Concretely: **one dropped UDP update in a
   1 M-entry map costs ~53 kB on the next anti-entropy round**, against 3.8 kB for a fixed *b* = 16 —
@@ -379,13 +383,17 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
   reconciliation has its own literature (Mitzenmacher & Pagh, *Distributed Computing* 2018) that no
   RBSR work cites. Unexamined axis, not a known-good one.
-- **The `t` column is not free, and the byte table above does not show its price.** The paper's
-  enumeration threshold wins the refinement column by *stopping early* — and everything it stops on
-  is then shipped as values, almost all of which the peer already holds. At n = 10⁵, d = 100
-  scattered, `t`=32/`b`=16 advertises 88 817 B of refinement against `√m`'s 147 726 B, but enumerates
-  **5 036 elements against 100**: a 50× value amplification hidden behind a 40 % refinement saving.
-  This is why `benches/protocol.rs` reports IDLIST elements alongside advertised ranges, and why a
-  policy comparison that reports only wire ranges would pick the wrong default.
+- **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
+  column by *stopping early* — and everything it stops on is then shipped as values, almost all of
+  which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
+  them in bytes across value payload sizes (8 B…4 KB) and `threshold_sweep` runs `t` = 1…256 at
+  `b` = 16 against the default. At n = 10⁵, d = 100 scattered, `t` = 32 saves 46 % of the refinement
+  bytes (88 817 B against 162 993 B) and ships **5 036 elements instead of 100** — a trade that
+  needs an element to cost ≤ 15 B, where the cheapest this wire format can carry is 30 B (a varint
+  key, a 19-byte `Timestamp`, two framing bytes, then the payload). Totalled: **1.52× the default's
+  bytes at 8-byte values, 36× at 4 KB**. No swept `t` saves more than 4 % anywhere, all of it at
+  8-byte values, and none beats the default at 64 B or above. Details and the decision:
+  `PROGRESS.md`.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
   (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per

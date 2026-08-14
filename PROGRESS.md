@@ -138,7 +138,7 @@ status here. The subsections below organize the same issues by delivery area ins
 | Conflict metadata in the value | §2.4 P2-7 | ✅ HLC F5/[#110](https://github.com/Akvize/reconcile-rs/issues/110), causal-stability GC F4/[#109](https://github.com/Akvize/reconcile-rs/issues/109); pluggable CRDT deferred — [#184](https://github.com/Akvize/reconcile-rs/issues/184) (closed, decision recorded in `ARCHITECTURE.md` §7) |
 | Property-testing + fuzzing | §2.4 P3-8 | ✅ F11/[#113](https://github.com/Akvize/reconcile-rs/issues/113) |
 | Adversarial robustness | §2.4 P3-9 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values, counted+dropped not silent), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
-| Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); `t` unsettled — [#315](https://github.com/Akvize/reconcile-rs/issues/315); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
+| Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); ✅ no `t` ([#315](https://github.com/Akvize/reconcile-rs/issues/315) — measured in total bytes, default unmoved); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
 | Single-shot latency (hybrid sketch) | §2.2 conclusion | ◯ [#185](https://github.com/Akvize/reconcile-rs/issues/185), gated on [#280](https://github.com/Akvize/reconcile-rs/issues/280) |
 | Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` — [#232](https://github.com/Akvize/reconcile-rs/issues/232) item 4c, would ride a future wire-version bump (mechanism delivered by [#309](https://github.com/Akvize/reconcile-rs/issues/309)) |
 
@@ -284,9 +284,9 @@ superseded by this list; the three children below stand on their own.
   than being dropped, as `send_messages_paced` chunks at `BUFFER_SIZE`.
 
   `EnumerateBelowThreshold` wins the refinement column and loses on values: at n = 10⁵, d = 100 it
-  saves 40 % of refinement bytes while enumerating **5 036 elements against 100**. Break-even is
-  13–37 B per entry, and a `Timestamp` alone encodes to 23 B, so the paper's `t` is a net loss on
-  this wire format. That is why `benches/protocol.rs` reports IDLIST elements alongside ranges.
+  saves 40 % of refinement bytes against `√m` while enumerating **5 036 elements against 100**. Read
+  across two units that settles nothing, which is what
+  [#315](https://github.com/Akvize/reconcile-rs/issues/315) below then measured in one.
 
   **The branching factor was swept** (`fan_out_sweep`, *b* = 2…256) rather than inherited from
   Negentropy. At n = 10⁶, d = 1:
@@ -317,6 +317,69 @@ superseded by this list; the three children below stand on their own.
   policy needs a different carrier), and the interaction with the 40 B/range wire aggregate (~79 % of
   the bytes measured under `√m`) — now separable, since the fan-out is a caller's choice rather than
   an edit to the protocol loop.
+- ✅ **The enumeration threshold `t` does not pay for the values it ships** —
+  [#315](https://github.com/Akvize/reconcile-rs/issues/315), measured 2026-08-14. #257 left `t`
+  derived across two units — refinement *bytes* against IDLIST *elements* — which settles nothing.
+
+  **The harness now reports one unit.** `benches/protocol.rs` totals refinement traffic and the
+  values the IDLIST outcomes ship, at four value payload sizes (8 / 64 / 512 / 4096 B, `system`'s
+  `memory_footprint` axis), each element priced by encoding the dated cell the transport really
+  sends. One drive prices every size — no SKIP/IDLIST/SPLIT decision reads a payload — and
+  `payload_size_does_not_move_the_trace` checks that against `u64`, 8 B and 4 KB stores before any
+  table prints, rather than assuming it. `threshold_sweep` then sweeps `t` = 1…256 at `b` = 16
+  against `FixedFanOut(16)`, today's default; #257's figures were against `√m`.
+
+  Totals as a ratio to that default, n = 10⁵, d = 100 scattered:
+
+  | `t` | V = 8 B | 64 B | 512 B | 4 KB |
+  |---|---:|---:|---:|---:|
+  | 2–8 (the best swept band) | **0.96×** | 1.02× | 1.42× | 2.37× |
+  | 16 | 0.96× | 1.06× | 1.63× | 3.01× |
+  | **32 — the paper's** | **1.52×** | **3.12×** | **12.9×** | **36.3×** |
+
+  **The break-even is below the floor, and the floor is structural.** `t` = 32 saves 46 % of the
+  refinement bytes there (88 817 B against 162 993 B) by shipping 5 036 elements instead of 100 — so
+  an element would have to cost **15.0 B** for the trade to come out even (13.5–37.5 B across the
+  measured cells, which is what the earlier derivation got right). One costs **32.7 B** at the
+  *smallest* payload the API can express — that is the half that was missing: a varint key, a
+  19-byte `Timestamp`, the `State` tag and a length varint spend 22–26 B (the key's varint width)
+  before the first payload byte. Both numbers are now printed by the harness, per row, in the same
+  unit — which is the whole fix.
+
+  The same two numbers explain the rest of the table. The 2–8 band's break-even is 69.5 B/element:
+  met by an 8-byte payload (32.7 B), not by a 64-byte one (88.7 B) — exactly where its 0.96× turns
+  into 1.02×. Across every measured (n, d): no `t` ever saves more than 4 %, all of it at 8-byte
+  values; from 64-byte values up none beats the default anywhere, the best case being a tie where
+  the threshold never fires above the default's own cutoffs; `t` = 32 loses in every cell but one
+  (n = 10³, d = 1, V = 8 — by 33 bytes). `t` is a step function, not a dial: a span walks the ladder
+  `n / b^k`, so wide bands of `t` pick the same rung and cost byte-for-byte the same.
+
+  **All of that is in bytes; what the bytes buy is round trips, which now have a price.** In the
+  cell above, `t` = 32 spends 5 one-way messages against the default's 8 — 1.5 round trips saved —
+  and [#280](https://github.com/Akvize/reconcile-rs/issues/280)'s lane prices one round trip at
+  1.00 × RTT. Arithmetic over those two measured columns, not a third measurement, puts the
+  crossover at the bandwidth where the extra bytes cost more than the saved latency, at 50 ms RTT
+  and the link's full rate:
+
+  | payload | extra bytes | break-even bandwidth |
+  |---|---:|---:|
+  | 8 B | 87 kB | ~9 Mb/s |
+  | 64 B | 364 kB | ~39 Mb/s |
+  | 512 B | 2.6 MB | ~276 Mb/s |
+  | 4 KB | 20.3 MB | ~2.2 Gb/s |
+
+  So on a fast, far link carrying tiny values, `t` = 32 can win on wall clock while losing on bytes.
+  That is a caller's trade — the figures are optimistic for `t` besides, since the values go out
+  through `send_messages_paced` rather than at line rate.
+
+  **Decision: the default stays `FixedFanOut(FanOut::NEGENTROPY)`, with no `t`** (2026-08-14). The
+  hypothesis on #315 held, so nothing moves and `SOTA.md` §2.2 needed correcting rather than
+  reversing. A default answers for every value size, and by 4 KB the latency crossover above needs a
+  2.2 Gb/s link. `EnumerateBelowThreshold` stays shipped, now documented with the break-even that
+  disqualifies it: a narrower conflict-resolution stamp, a set-shaped store (`V = ()`) or keys
+  dearer than values move the floor, not the arithmetic, so the parameter stays a caller's to
+  re-measure. Already gated, not remembered — `default_split_fan_out_is_constant_at_sixteen`
+  (`rbsr/src/protocol.rs`) fails CI if the default starts enumerating.
 ### Tracked, not yet started
 - Bulk-build throughput, point-read indexing, per-entry memory overhead, configurable snapshot
   cadence — [#170](https://github.com/Akvize/reconcile-rs/issues/170)–[#173](https://github.com/Akvize/reconcile-rs/issues/173).
@@ -466,7 +529,7 @@ Open and wanted, none blocking.
 
 | Area | Issues |
 |---|---|
-| Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307; #315 and #318 are its follow-ups (the enumeration threshold `t`; a divergence-adaptive policy) |
+| Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307, #315 (the enumeration threshold `t`) 2026-08-14; #318 (a divergence-adaptive policy) is the open follow-up |
 | Persistent core map | #270–#277 |
 | Scaling & topology | #185, #186, #190, #147, #178 |
 | Grid layer | #193, #191, #192 |

@@ -29,7 +29,9 @@
 //! | Algorithm 1's `t` and `b` | the two knobs of a [`RefinementPolicy`] |
 //!
 //! The default [`FixedFanOut`] takes `b` as written (16, Negentropy's) and replaces `t` with four
-//! special cases listed on [`SqrtFanOut`], so the family's published bounds describe it.
+//! special cases listed on [`SqrtFanOut`], so the family's published bounds describe it. Dropping
+//! `t` is a measured choice rather than an omission: an enumerated element costs more on this wire
+//! than the refinement any threshold saves — [`EnumerateBelowThreshold`].
 //!
 //! **The refinement policy is local and never negotiated** (`ARCHITECTURE.md` §3.1): peers running
 //! different policies converge, so swapping one is a behaviour change, never a wire break.
