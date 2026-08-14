@@ -1,0 +1,130 @@
+# The cost of censorship resistance in homomorphic range-based set reconciliation
+
+**Paper skeleton, v0.** Working title. The porteur is **not** the "trilemma" (refuted below by ECMH);
+it is the **three-costs map**. Planning scaffolding for the *next* paper, not part of the fingerprint
+correction on this branch — a candidate to split into its own branch/PR; committed here only so the
+work is tracked. Load-bearing gate S3 (§0) is unverified.
+
+**Thesis (one line).** RBSR wire cost factorizes as `C = |T| · w_fp`, with local cost `T_loc`
+alongside. In the *homomorphic-summary* family, censorship resistance is not free and not a single
+tax: it must be paid in one of {communication `w_fp`, computation `T_loc`, universality `U`}. The
+popular additive-mod-`2^w` combiner (reconcile-rs, Negentropy) is the unique point that appears to
+pay none — and therefore silently fails censorship resistance (Wagner). Non-homomorphic RBSR
+(Meyer–Scherer) escapes the family via a fourth route, paying with tree-structure freedom.
+
+---
+
+## 0. Status of every load-bearing claim
+
+| # | Claim | Status |
+|---|---|---|
+| S1 | Wire cost factorizes `C = \|T\| · w_fp` | ✅ definitional |
+| S2 | Additive mod `2^w` unkeyed is Wagner-forgeable at `w`=256 (~2³¹) | ✅ Meyer §5.2 + **E3 executed** (`rbsr/tests/wagner_false_convergence.rs`) |
+| S3 | Wagner's k-tree needs a quotient chain; **prime-order groups have none**, so ECMH is narrow + C + U + homomorphic | ⚠️ **VERIFY against ECMH paper's security section** — this is the load-bearing gate (arXiv egress-blocked here; the whole "three costs not a trilemma" pivot rests on it) |
+| S4 | Honest-model false convergence ≤ `2\|T\|(2^{-w}+2^{-τ})`; count-exactness | ◐ Theorem 1/2, routine; the open half Amparore §6.1 defers |
+| S5 | `\|T\| = O(b·d·log_b(n/d))`; instance-sensitive in Δ's ordered shape is open | ✅ Meyer §3.2.2 + Amparore §8 (investigation's axis) |
+| S6 | The three censorship costs are inequivalent and no prior work maps them for RBSR | ⚠️ check the homomorphic-hash zoo (LtHash, ECMH, MGS15) doesn't already tabulate this |
+
+---
+
+## 1. Model and the factorization (§ spine)
+
+RBSR over RSOS (Amparore Def. 3.4–3.9). A **fingerprint scheme** = (lift `φ: U → G`, summary
+`Σ = ⊕φ`, comparison map `f_p`). Three cost coordinates, not one:
+
+```
+C_wire = |T| · w_fp          T_loc  (local compute)          R = rounds
+         └────┘  └──┘
+       Factor A  Factor B   ← censorship also pushes here
+   (split policy) (combiner)
+```
+
+- **Factor A** — `|T|`, the refinement-tree size — governed by the split distribution.
+  *The investigation's axis.* We take its bound as given and contribute only the join (§4).
+- **Factor B** — `w_fp` and `T_loc` — governed by the combiner. *Our axis.*
+
+---
+
+## 2. Factor B — the censorship-cost map (the core contribution)
+
+**Properties.** `N` narrow (`w_fp = O(λ)` bits); `C` censorship-resistant vs a chosen-input
+(writing) adversary — split into `C_out` (outsiders) and `C_in` (insiders, i.e. peers you reconcile
+with); `U` universal (peer-independent precompute — Meyer–Scherer); `S` fast (`O(log n)` query,
+`O(polylog)` update).
+
+| combiner (homomorphic) | N | C_out | C_in | U | S | who |
+|---|:--:|:--:|:--:|:--:|:--:|---|
+| additive mod `2^w`, **unkeyed** | ✓ | ✗ | ✗ | ✓ | ✓ | **reconcile-rs default**, Negentropy |
+| additive mod `2^w`, **shared cluster key** | ✓ | ✓ | ✗ | ✓ | ✓ | §7 repair — fine *iff* cluster = trust domain |
+| additive mod `2^w`, **per-peer key** | ✓ | ✓ | ✓ | ✗ | ✓ | — (pays `U`: `O(peers)` precompute) |
+| **wide** secure additive (`k`·10³ bits) | ✗ | ✓ | ✓ | ✓ | ✓ | MGS15 (pays `N`) |
+| **prime-order / ECMH** | ✓ | ✓ | ✓ | ✓ | ✗ | Maitin-Shepard (pays `S`: EC ops ~10²–10³×) |
+| — *non-homomorphic* (SHA + HI tree) | ✓ | ✓ | ✓ | ✓ | ✓* | Meyer–Scherer (escapes the family) |
+
+`*` non-homomorphic `S` is `O(log n)` normally but `O(n)` on adversarially-degenerate inputs, and it
+**requires a history-independent tree** — losing the backing-structure freedom the homomorphic family
+keeps.
+
+**Result B (statement to prove).** *No unkeyed homomorphic combiner over a group carrying a
+Wagner-exploitable quotient chain (`ℤ/2^w`, smooth `ℤ/N`, `GF(2)^n`) achieves `C` at width `O(λ)`.*
+The escapes each pay exactly one coordinate: prime-order group → `S`; width blow-up → `N`; keying →
+`U` (or only `C_in`, if the cluster is a trust domain). The additive-mod-`2^w` point pays none, hence
+`¬C`. **Corollary (reconcile-rs):** it sits at row 1; its three fixes are rows 2–5, each a different
+price; E3 is the `¬C` witness.
+
+This is what Meyer–Scherer's *"neither option is strictly superior"* + their single lumped
+"overhead induced by homomorphic hashing" **miss**: the homomorphic overhead is three inequivalent
+costs, and ECMH is a homomorphic point they did not consider.
+
+---
+
+## 3. Factor A — `|T|` and the split distribution (cite, don't re-derive)
+
+- `|T| = O(b·d·log_b(n/d))` (Meyer §3.2.2, restated). Instance-sensitive in Δ's **ordered shape** is
+  open (Amparore §8); split-distribution optimality is Vogel et al. 2024 in the *channel* model —
+  transfer to the RBSR objective (wire + `T_loc` + MTU ceiling) open; ties to **#318**.
+- Honest-model false convergence `≤ 2|T|(2^{-w}+2^{-τ})` (Theorem 1) — union over the `|T|`
+  comparisons, **not** a birthday bound; count-exactness (Theorem 2). Caveat: the `|T|` dependence of
+  the *honest-model* probability is numerically trivial (`2^{-120}·const`). Do not oversell it.
+- **Boundary with the investigation:** Factor A is theirs. We import its bound; we do not compete on
+  split-distribution optimization.
+
+---
+
+## 4. The join — why "both" is one paper (and honestly, why it's separable)
+
+`Total = |T| · w_fp (+ T_loc)`. The factors are **separable** (optimize each, multiply) — so this is
+a systematization with a result per factor, not a single deep theorem. The **one genuinely joint
+claim**: the censorship corner (Factor B) sets `w_fp`/`T_loc`, hence the *absolute* value of Factor
+A's `|T|` work — ~16–24 B/range (keyed-narrow) vs ~336–520 B/range (wide-secure) vs narrow-but-heavy
+`T_loc` (ECMH). **Designer-facing rule: pick the censorship corner first; it sets what the
+split-distribution work is worth.** Neither the two papers nor the investigation states this.
+
+---
+
+## 5. Positioning (delta over each)
+
+| prior | has | we add |
+|---|---|---|
+| Meyer §5.2 | Wagner on `ℤ/2^w` | the **escape map** (ECMH/keyed/wide) as three inequivalent costs |
+| Meyer–Scherer | design plane, "neither superior", non-homomorphic corner | their "overhead" is 3 costs; ECMH is a homomorphic point they skipped |
+| Amparore §6.1/§8 | defers honest-model bound; names instance-sensitivity | supply the bound; connect it to `\|T\|` |
+| Investigation / Vogel | Factor A (split distribution) | the join (§4) + all of Factor B |
+
+---
+
+## 6. Experiments
+
+E1 measure `|T|`(n,d,b,clustering) · E2 honest-model bound at reduced `w` · **E3 Wagner false-SKIP —
+done** · E4 cost extrapolation · **E6 (new) ECMH `T_loc` vs additive `T_loc` microbench** — the price
+of the prime-order corner · E7 keyed-lift wire/compute overhead.
+
+## 7. Risks (ranked)
+
+1. **S3 — ECMH's Wagner-immunity at 256 bits.** If false, the map collapses toward the original
+   trilemma. Verify against the ECMH paper before anything else. *Load-bearing.*
+2. E6 magnitude: if ECMH `T_loc` is only ~10× (not 10³×), the "computation cost" corner is cheap and
+   the recommendation shifts to ECMH-by-default.
+3. S6: a homomorphic-hash survey may already tabulate the zoo — then Factor B is exposition, not
+   result. Check.
+4. Factor A transfer (Vogel channel-model → RBSR) is the investigation's risk, not ours.
