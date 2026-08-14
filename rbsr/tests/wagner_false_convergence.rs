@@ -6,13 +6,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! **E3 of `paper/false-convergence.md`**: Wagner's k-tree driven against the real
-//! [`protocol_round`], at reduced summary width.
+//! Wagner's k-tree driven against the real [`protocol_round`], at reduced summary width.
 //!
-//! The claim under test is §6.1's — that the additive combiner is a k-sum instance and that the
-//! k-tree applies to `ℤ/2^w` *with no error term*, because reduction mod `2^j` is a group
-//! homomorphism and merging on low-order bits is therefore exact. If that is wrong, §6 and §7 of
-//! the draft collapse and only Theorems 1–2 survive.
+//! The claim under test: the additive combiner is a k-sum instance, and the k-tree applies to
+//! `ℤ/2^w` *with no error term*, because reduction mod `2^j` is a group homomorphism and merging on
+//! low-order bits is therefore exact. A planted solution then makes the driver SKIP a range on two
+//! stores that genuinely differ — a **false convergence**, silent and permanent.
+//!
+//! This is the regression guard on the fingerprint's advertised strength: it fails the day the
+//! combiner is claimed to resist a chosen-input adversary without being keyed. See
+//! [`rsos::fingerprint`]'s module docs for what the shipped combiner does and does not promise.
 //!
 //! Only the **width** is scaled down. The lift is the shipped [`rsos::digest`] (BLAKE3 over the
 //! canonical encoding) reduced mod `2^w`, the algebra is addition mod `2^w`, and the driver is

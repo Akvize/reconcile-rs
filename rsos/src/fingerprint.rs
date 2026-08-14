@@ -17,8 +17,8 @@
 //! collision resistance against a *chosen-input* (writing) adversary: finding a colliding multiset is
 //! Wagner's balance problem over `ℤ/2²⁵⁶`, solvable in ~2³¹ work (a subexponential k-tree, no error
 //! term — carries never disturb a matched low window). So this fingerprint is sound in the honest
-//! model but forgeable by anyone who can write, unless the lift is *keyed*. Analysis and an executable
-//! demonstration against the RBSR driver: `paper/false-convergence.md`, `rbsr/tests/wagner_false_convergence.rs`.
+//! model but forgeable by anyone who can write, unless the lift is *keyed*. Demonstrated against the
+//! RBSR driver in `rbsr/tests/wagner_false_convergence.rs`.
 //!
 //! Meyer, arXiv:2212.13567; Clarke et al., *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
