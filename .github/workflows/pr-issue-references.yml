@@ -1,0 +1,50 @@
+name: pr-issue-references
+
+# Split out of `main.yml` so it can carry `edited`, which is the event this check actually depends
+# on: it reads the PR *description*, and a description changes without a push.
+#
+# `main.yml` cannot carry that type. `on:` is declared per workflow, not per job, so adding `edited`
+# there would re-run `lint-and-test` (~5 min), `coverage`, `mac-hmac` and `deny` every time someone
+# fixed a typo in a body -- and worse, `main.yml`'s `cancel-in-progress: true` would *cancel an
+# in-flight* run to do it. The remedy would cost more than the fault.
+#
+# The fault is real, though, and cost a round trip on #342: editing a description re-ran nothing, and
+# re-running the job by hand would not have helped either, since it reads
+# `github.event.pull_request.body` from the *original* event payload. The only fix available was an
+# empty commit -- which is what 6a24a03 did before it, for the same reason.
+#
+# Same rationale as `issue-integrity.yml` and `labels.yml`: a check whose trigger differs from
+# `main.yml`'s belongs in its own workflow rather than bending `main.yml`'s to fit.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+# Its own group, so a description edit cancels only a previous run of *this* check and never touches
+# a build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  # #203/#230/#283/#309/#312 were all closed by hand citing commits that, at the time, only
+  # existed on the PR branch meant to close them -- the PR hadn't merged yet. Nothing forced the
+  # PR description to say which issues it closes, so nothing caught the mismatch. This job:
+  # every *open* issue mentioned bare in this PR's own body must state its intent, either
+  # `Closes #N` (closes it at merge time, via GitHub's own keyword parsing) or an explicit
+  # non-closing lead-in (`relates to #N`, `see #N`, ...). See `scripts/check-pr-closes-issues.sh`.
+  pr-issue-references:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Every open issue mentioned in this PR's body must state its intent
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # An env var, not `${{ github.event.pull_request.body }}` interpolated straight into
+        # `run:` -- the latter is a known script-injection vector (a PR body is attacker-controlled
+        # text). The script only ever reads $PR_BODY, never evaluates it.
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: ./scripts/check-pr-closes-issues.sh
