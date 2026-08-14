@@ -221,12 +221,11 @@ proptest! {
         }
     }
 
-    /// #358: a retrying/reordering transport can deliver a record the store already holds a
-    /// second time. `insert`'s existing-key branch
-    /// (`rsos/src/fingerprint_tree_map.rs:438-446`) applies a signed `new_fp - old_fp` delta to
-    /// the cached aggregate rather than blindly combining the new lift in, so re-delivering an
-    /// unchanged `(key, value)` pair must contribute a zero delta — the aggregate is bit-for-bit
-    /// unchanged, not merely numerically close.
+    /// A retrying/reordering transport can deliver a record the store already holds a second
+    /// time. `insert`'s existing-key branch (`rsos/src/fingerprint_tree_map.rs:438-446`) applies
+    /// a signed `new_fp - old_fp` delta to the cached aggregate rather than blindly combining the
+    /// new lift in, so re-delivering an unchanged `(key, value)` pair must contribute a zero
+    /// delta — the aggregate is bit-for-bit unchanged, not merely numerically close.
     #[test]
     fn duplicate_delivery_of_an_already_held_record_leaves_the_aggregate_unchanged(
         entries in prop::collection::vec((any::<u8>(), any::<u16>()), 1..200),

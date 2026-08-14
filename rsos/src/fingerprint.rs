@@ -24,11 +24,12 @@
 //!
 //! **The collision bound assumes a set, not a multiset**: every statement above holds only if
 //! each live element is folded in exactly once. `FingerprintTreeMap::insert` on an already-present
-//! key applies a signed `new_fp - old_fp` delta rather than a blind `combine`, so update-in-place,
-//! persistence reload and duplicate wire delivery all stay single-fold — audited in #358, with no
-//! path found that double-folds. Under a genuine multiplicity (an element folded `c` times without
-//! a matching retraction) the bound degrades to `2^-(w - v₂(c))`, and vanishes outright under a
-//! `GF(2)`-linear combiner; see #358 for the derivation.
+//! key applies a signed `new_fp - old_fp` delta rather than a blind `combine` (the type's sole
+//! mutation sink for the cached aggregate), so update-in-place, persistence reload and duplicate
+//! wire delivery all stay single-fold; the latter is pinned by
+//! `tests/proptest_fingerprint_tree_map.rs`'s duplicate-delivery property. Under a genuine
+//! multiplicity (an element folded `c` times without a matching retraction) the bound degrades to
+//! `2^-(w - v₂(c))`, and vanishes outright under a `GF(2)`-linear combiner.
 //!
 //! Meyer, arXiv:2212.13567; Clarke et al., *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
