@@ -275,13 +275,15 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         Ok(Self::build(config, transport, clock, node_id_is_random))
     }
 
-    /// Construct an engine over an explicit [`Clock`] adapter (default transport). Test-only
-    /// seam: a deterministic clock (`ManualClock`) makes HLC behaviour reproducible without real
-    /// wall-clock time.
-    #[cfg(test)]
-    pub(crate) async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
-        // A test-supplied clock implies a test-supplied (stable) identity; mark it as non-random
-        // so persistence tests do not trigger the operator warning.
+    /// Construct an engine over the default [`UdpTransport`], but a caller-supplied [`Clock`]
+    /// instead of [`HlcClock`]. A caller-supplied clock also implies a caller-supplied (stable)
+    /// identity, so this marks it as non-random — see
+    /// [`node_id_is_random`](Replica::node_id_is_random).
+    ///
+    /// The engine trusts `clock` completely, with no way to check it at the type level; see
+    /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
+    /// through) for the full risk writeup and a worked example.
+    pub async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let transport = Self::bind_udp(&config).await?;
         Ok(Self::build(config, transport, clock, false))
     }

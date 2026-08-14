@@ -216,8 +216,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Infallible: the caller has already done the one fallible step, binding. An unreliable
     /// transport cannot violate an invariant, since the protocol already assumes loss, duplication
-    /// and reordering. ([`Clock`](crate::Clock) is deliberately not injectable: a non-monotonic
-    /// clock silently breaks the ordering tombstone collection depends on.)
+    /// and reordering — unlike an injected [`Clock`](crate::Clock)
+    /// ([`new_with_clock`](Self::new_with_clock)'s docs cover what a non-conformant one breaks).
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
@@ -236,9 +236,57 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         Self::from_engine(Replica::<K, V>::with_transport(config, transport))
     }
 
-    /// Test-only constructor taking an explicit [`Clock`], for reproducible ordering tests.
-    #[cfg(test)]
-    pub(crate) async fn new_with_clock(
+    /// Create a `ReplicatedMap` over the default UDP transport, but a caller-supplied
+    /// [`Clock`](crate::Clock) instead of the default `HlcClock` — e.g. to drive deterministic
+    /// ordering in a dependent crate's own tests, the way
+    /// [`InMemoryNetwork`](crate::InMemoryNetwork) does for `Transport`.
+    ///
+    /// # Risks of a non-conformant `Clock`
+    ///
+    /// The store trusts `clock` completely: every write and every received timestamp is ordered
+    /// only by what it returns, and nothing here re-derives or cross-checks physical time. This is
+    /// **not** like [`new_with_transport`](Self::new_with_transport)'s transport swap, where an
+    /// unreliable transport cannot violate an invariant because the protocol already assumes loss,
+    /// duplication and reordering — a broken `Clock` can. Concretely, the naive implementation
+    /// (read the wall clock, stamp `logical = 0`) compiles and type-checks cleanly:
+    ///
+    /// - **Non-monotonic `now()`.** Two same-millisecond local writes to a key can mint an equal
+    ///   `(physical, logical, node_id)`. `Entry::merge`'s strict `>` (`ARCHITECTURE.md` §5
+    ///   invariant 2) then keeps each replica's own value regardless of merge order — the
+    ///   fingerprints never agree and the anti-entropy round re-exchanges that key forever.
+    /// - **`observe(t)` not chased by a later `now() > t`.** A causally-later local write can end
+    ///   up ordered *before* the remote write it was caused by.
+    /// - **A clamping `observe_trusted`.** A backward wall-clock step across a restart (NTP
+    ///   correction, VM pause, manual clock set) leaves the post-restart clock below this node's
+    ///   own already-persisted stamps, and only a clamp-free `observe_trusted` restores it — a
+    ///   clamped one silently shadows this node's own pre-restart writes.
+    ///
+    /// None of this panics, errors, or logs by default — it surfaces as writes that mysteriously
+    /// do not stick, or a cluster that never converges. There is no way to gate this at the type
+    /// level: monotonicity is a runtime property of an arbitrary implementation, not something
+    /// expressible in [`Clock`](crate::Clock)'s signature (`#288`). **Run
+    /// [`assert_conformance`](crate::clock::assert_conformance) over `clock` before passing it
+    /// here** — its own documentation goes through each failure mode in more detail.
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use reconcile::clock::{assert_conformance, Clock, NodeId, Timestamp};
+    /// # use reconcile::{replicated_map::Config, ReplicatedMap};
+    /// # struct MyClock;
+    /// # impl Clock for MyClock {
+    /// #     fn now(&self) -> Timestamp { unimplemented!() }
+    /// #     fn node_id(&self) -> NodeId { NodeId::new(1) }
+    /// #     fn observe(&self, _: Timestamp) {}
+    /// #     fn observe_trusted(&self, _: Timestamp) {}
+    /// # }
+    /// # async fn example() -> std::io::Result<()> {
+    /// let clock = Arc::new(MyClock);
+    /// assert_conformance(&*clock); // panics here, not after it has shipped, if `clock` is broken
+    /// let store = ReplicatedMap::<String, String>::new_with_clock(Config::default(), clock).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn new_with_clock(
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {

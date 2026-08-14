@@ -13,13 +13,20 @@
 //! attaches when minting a reading into a [`Timestamp`]. `BoundedInstant` is the other thing that
 //! needs both a physical-time read and `chrono`: the tombstone-expiry instant derived from a
 //! *stored* stamp, bounded by the same [`MAX_CLOCK_DRIFT`] budget.
+//!
+//! `HlcClock` is the default [`Clock`] adapter, not the only one that can be plugged in:
+//! [`ReplicatedMap::new_with_clock`](crate::ReplicatedMap::new_with_clock) accepts any `Arc<dyn
+//! Clock>` (`#288`). [`assert_conformance`] is what an implementor runs before trusting a
+//! substitute clock — see its docs, linked from
+//! [`ReplicatedMap::new_with_clock`](crate::ReplicatedMap::new_with_clock), for exactly what a
+//! non-conformant one silently breaks.
 
 use parking_lot::Mutex;
 use tracing::warn;
 
 pub use lww_register::clock::{
-    AdmittedTime, Clock, ClockDrift, Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp,
-    MAX_CLOCK_DRIFT,
+    assert_conformance, AdmittedTime, Clock, ClockDrift, Hlc, LogicalCounter, NodeId, PhysicalTime,
+    Timestamp, MAX_CLOCK_DRIFT,
 };
 
 use chrono::{DateTime, Utc};
@@ -230,6 +237,12 @@ impl Clock for ManualClock {
         if remote.hlc() > *last {
             *last = remote.hlc();
         }
+    }
+
+    /// No physical-time read to clamp against, so this is just [`observe`](Clock::observe) —
+    /// sound here only because `ManualClock` never clamps in the first place.
+    fn observe_trusted(&self, remote: Timestamp) {
+        self.observe(remote);
     }
 }
 
@@ -504,5 +517,18 @@ mod tests {
             minted.physical(),
             upper_bound
         );
+    }
+
+    /// The default adapter must itself pass the gate any substitute [`Clock`] has to.
+    #[test]
+    fn hlc_clock_is_conformant() {
+        assert_conformance(&HlcClock::new(NodeId::new(1)));
+    }
+
+    /// `ManualClock` skips the wall clock entirely, but the contract it must uphold for tests to
+    /// mean anything is the same one production adapters uphold.
+    #[test]
+    fn manual_clock_is_conformant() {
+        assert_conformance(&ManualClock::new(NodeId::new(1)));
     }
 }
