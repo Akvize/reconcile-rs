@@ -278,6 +278,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 | **↳ reconcile-rs, default policy** (`b`=16) | O(d log n) | O(d log n) | O(log_16 n) sequential | No | **Good** | reconcile-rs |
 | **↳ reconcile-rs, `SqrtFanOut` policy** (fan-out `√m`) | **Θ(√n)**, d-independent | O(d log n) | Θ(log log n) sequential — *equal to `b`=16 below n≈10¹²* | No (self-adapting) | **Good** | reconcile-rs |
 | **Rateless IBLT** (SIGCOMM 2024) | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming exchange** | **No** | **designed for adversarial** | Ethereum state-sync |
+| **PBS** (VLDB 2020) | near-optimal ≈ d | **low, by design** | O(log d) rounds | **Yes (estimate)** | not stated | research |
 | minisketch/PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity | Bitcoin Erlay (BIP 330) |
 | CertainSync (2025) | bound f(d,U) | linear | rateless | No | **deterministic success** | SIGMETRICS research |
 | Classic IBLT | O(d·(b+log U)) | O(d) | 1 (+estim.) | **Yes** | weak | blockchains |
@@ -377,13 +378,19 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   which, now that the fan-out is a swappable policy, is a one-line change to a caller rather than an
   edit to the protocol loop.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
-  explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
+  explicit adversarial robustness and linear compute → the strongest single-shot candidate on
+  communication. It is not the only point on that front: **PBS** trades a few rounds for markedly
+  lower computation, which is the axis a per-cycle anti-entropy loop is actually sensitive to.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
   if *d* is mis-guessed) and **ordered-range reconciliation** (partial sync by prefix/subspace —
   what Willow exploits in 3D). Sketches reconcile an *opaque* set.
-- **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a sketch (Rateless IBLT) to
-  drain the still-unresolved leaf ranges in one shot — would beat pure FingerprintTreeMap on latency without losing
-  adaptiveness.
+- **Conclusion:** a **hybrid** SOTA design — RBSR to localize coarsely + a leaf sketch to drain the
+  still-unresolved ranges in one shot — would beat pure FingerprintTreeMap on latency without losing
+  adaptiveness. **Which** sketch is a separate, open choice and not RIBLT by default: the selection
+  criterion for a periodic loop is whether the primitive can be maintained *incrementally*, since a
+  rateless encoder that must touch every source symbol per session forfeits RBSR's O(1) in-sync cost
+  ([#185](https://github.com/Akvize/reconcile-rs/issues/185) weighs the candidates and settles on a
+  fixed-capacity sketch for that reason).
 
 ### 2.3 Real differentiators of the approach (structural strengths)
 
@@ -446,7 +453,7 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
 4. **Generic summary over a monoid**: today `rsos` hardwires its range summary to the 256-bit additive
    `Fingerprint` (`ARCHITECTURE.md` §7, tracked as `BYOLiftingMonoid`); generalizing to `RSOS<M: Monoid>`
    also enables sum/min/max/count and sketches. Enables **embedding a sketch in the leaves** (hybrid
-   RBSR + Rateless IBLT) to break the O(log n) RTT cost (§2.2).
+   RBSR + a leaf sketch) to break the O(log n) RTT cost (§2.2).
 5. **Fully expose the RSOS contract** — ✅ **done**: `rank`/`select`/`range` are `pub` on the standalone
    `rsos` crate's `FingerprintTreeMap` (ARCHITECTURE.md §3.2), a reusable generic building block
    independent of `reconcile`. (Previously in tension with an earlier ARCHITECTURE.md draft that kept
@@ -460,6 +467,13 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
    (versioning, diff between snapshots, incremental cold start).
 7. **Conflict metadata in the value**: HLC + total tie-break `(timestamp, node_id)`; ideally
    **pluggable CRDT** values; versioned tombstones with **causal-stability GC**. (cf. F4, F5)
+10. **Write cost under concurrency** *(the axis the family's cost models omit)*: answering
+   `Aggregate(l, u)` in O(log n) requires an up-to-date summary on every node from leaf to root, so
+   **every insert writes the root** — a contention point the contract creates, not an implementation
+   defect. arXiv:2603.19820 §7.1 scopes its evaluation to single-machine with no concurrency, and no
+   RBSR work prices it. The prior art is outside the line: **AB-tree** maintains aggregate metadata
+   in a paginated tree under concurrent updates. Numbering starts at 10 so P0–P3's existing ids stay
+   stable.
 
 **P3 — What makes it *believed* to be SOTA:**
 8. **Property-testing + fuzzing as a foundation**: `proptest` vs `BTreeMap` oracle +
@@ -477,7 +491,8 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
 | Empty vs hash | emptiness/equality decided on `size`, never on the fingerprint |
 | Hash | fixed, versioned hash as a wire contract |
 | Backend | **persistent RSOS** (AELMDB-style), ideally content-addressed |
-| Algo | **hybrid RBSR + Rateless IBLT** for single-shot latency |
+| Algo | **hybrid RBSR + a leaf sketch** for single-shot latency; which sketch is open, and incremental maintainability — not communication optimality — is the selection criterion |
+| Writes | aggregate maintenance that does not serialise every writer on the root |
 | Conflicts | HLC + deterministic total tie-break / pluggable CRDT |
 | Deletions | causal-stability GC (no resurrection) |
 | Confidence | property tests + convergence fuzzing against an oracle |
