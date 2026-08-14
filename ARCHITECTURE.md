@@ -158,6 +158,19 @@ peers running *different* policies converge (`tests/proptest_fingerprint_tree_ma
 Advertising or negotiating a policy would turn that free experiment into a protocol break, and is
 the one thing this seam must never grow ([#257](https://github.com/Akvize/reconcile-rs/issues/257)).
 
+**`Clock` injection ([#288](https://github.com/Akvize/reconcile-rs/issues/288), decided: open it).**
+`Clock` was a published port with zero public implementors and no injection seam — advertising a
+capability that did not exist. Resolved by opening it:
+`ReplicatedMap::new_with_clock`/`Replica::new_with_clock` accept any `Arc<dyn Clock>`, and
+`lww_register::clock::assert_conformance` (re-exported as `reconcile::clock::assert_conformance`)
+is the conformance harness an implementor runs before trusting a substitute clock — monotonicity is
+a runtime property of an arbitrary implementation, not something the type system can gate, so a
+runtime check an implementor must run is the closest thing to a gate available. `Clock::observe_trusted`
+has no default body (previously delegated to `observe`, sound only for a clamp-free adapter): every
+implementor now states its clamp policy explicitly. Both constructors' rustdoc carries the full risk
+writeup — what a non-monotonic `now()`, an `observe` not chased by `now() > t`, or a clamping
+`observe_trusted` each silently break.
+
 **Visibility.** `Clock`/`Transport`/`Persistence`/`Discovery` are public ports on their owning crate.
 The mechanism they wrap is not part of `reconcile`'s own re-export surface (`reconcile::*` does not
 re-export `rbsr::protocol_round`/`initial_ranges`/`RangeAggregate` or `gossip::bincode::{encode,

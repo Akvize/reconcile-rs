@@ -19,6 +19,14 @@
 //! *local clock state* only — a stored remote stamp keeps its original value as LWW data, and the
 //! one consumer deriving an instant from a stored stamp re-admits it (`reconcile::clock`'s
 //! `BoundedInstant`, `ARCHITECTURE.md` §5 invariant 6).
+//!
+//! [`Clock`] is a public, injectable port (`reconcile::Replica::new_with_clock`,
+//! `reconcile::ReplicatedMap::new_with_clock`, `#288`): nothing about it is enforced by the type
+//! system beyond the method signatures, so a monotonicity bug in a third-party adapter compiles
+//! clean and fails only at runtime, silently, as writes that never converge. [`assert_conformance`]
+//! is the gate — run it over any [`Clock`] before trusting it, including [`Clock::observe_trusted`],
+//! which this trait now requires every implementor to state explicitly (no default body: see its
+//! docs for why a default is unsound).
 
 use serde::{Deserialize, Serialize};
 
@@ -346,11 +354,112 @@ pub trait Clock: Send + Sync + 'static {
     /// [`now`](Clock::now) outranks every pre-restart write.
     ///
     /// Implementations must **not** clamp here — the one caller entitled to
-    /// [`AdmittedTime::trusted`] — or a backward clock step re-introduces own-write shadowing.
-    /// The default delegates to [`observe`](Clock::observe), safe only for clamp-free adapters.
-    fn observe_trusted(&self, remote: Timestamp) {
-        self.observe(remote);
+    /// [`AdmittedTime::trusted`] — or a backward clock step re-introduces own-write shadowing. No
+    /// default body: delegating to [`observe`](Clock::observe) is only sound for a clamp-free
+    /// adapter, and a default silently makes that the fallback for every adapter that clamps,
+    /// including one written after this trait. Stating the clamp policy explicitly, every time, is
+    /// the point (`#288`). [`assert_conformance`] checks it holds.
+    fn observe_trusted(&self, remote: Timestamp);
+}
+
+/// Assert that `clock` upholds the [`Clock`] contract [`Entry::merge`](crate::entry::Entry::merge)'s
+/// strict `>` and the tombstone garbage collector depend on. Call this from an implementor's own
+/// test suite before trusting a [`Clock`] adapter in production — nothing in this crate can call it
+/// for you, since it has no way to know your adapter exists.
+///
+/// # What a violation costs
+///
+/// [`Clock`] is `pub`, `now`/`observe`/`observe_trusted` are the only seam the domain reads
+/// physical time through, and nothing here stops a caller from handing `Replica`/`ReplicatedMap` a
+/// clock that is not actually monotonic. That is not a hypothetical: the naive implementation —
+/// read the wall clock, stamp `logical = 0` — type-checks, compiles, and passes review by
+/// inspection. It still breaks correctness, silently, because every place a [`Timestamp`] is
+/// compared assumes strict monotonicity holds:
+///
+/// - **`now()` not monotonic.** Two calls to `now()` returning an equal or decreasing reading let
+///   two local writes to the same key race to an equal `(physical, logical, node_id)`.
+///   `Entry::merge`'s strict `>` (`ARCHITECTURE.md` §5 invariant 2) then keeps *each side's* value
+///   depending on merge order — the two replicas never agree which write won, so the fingerprint
+///   never matches and the anti-entropy round re-exchanges the same key forever.
+/// - **`observe(t)` not chased by a later `now() > t`.** A remote write can then be shadowed by a
+///   local one carrying an *earlier* effective order, even though the remote write causally
+///   happened first from this node's point of view — the causal edge HLC exists to preserve is
+///   lost.
+/// - **`observe_trusted` clamping.** A backward wall-clock step across a restart (NTP correction,
+///   VM pause, manual clock set) leaves the post-restart clock below this node's own
+///   already-persisted stamps; `observe_trusted` restores it, but only if it is never clamped. A
+///   clamped `observe_trusted` re-admits own-write shadowing — the first post-restart write can be
+///   silently discarded by the pre-restart one still on disk.
+///
+/// None of these failure modes panic, error, or log by default: they surface as writes that
+/// mysteriously do not stick, or as a cluster that never converges. `assert_conformance` cannot
+/// prove an adapter correct in general (that would require modeling every possible wall-clock and
+/// scheduler interleaving), but it does what a type system cannot: it drives the specific
+/// interleavings above and panics with a diagnostic the moment one is violated, rather than letting
+/// a faulty adapter ship silently.
+///
+/// # What is checked
+///
+/// - [`now`](Clock::now) is strictly monotonic across a burst of calls with no observation
+///   in between.
+/// - After [`observe`](Clock::observe) of a timestamp with a modest (in-budget) lead over the
+///   clock's own reading, the next [`now`](Clock::now) is strictly greater than it.
+/// - After [`observe_trusted`](Clock::observe_trusted) of a timestamp far beyond
+///   [`MAX_CLOCK_DRIFT`], the next [`now`](Clock::now) is still strictly greater than it —
+///   `observe_trusted` must never clamp.
+///
+/// # Panics
+///
+/// Panics with a diagnostic message identifying which invariant failed and the two readings that
+/// violated it.
+pub fn assert_conformance<C: Clock>(clock: &C) {
+    // 1. `now()` alone must be strictly monotonic.
+    let mut prev = clock.now();
+    for _ in 0..1_000 {
+        let next = clock.now();
+        assert!(
+            next > prev,
+            "Clock::now() must be strictly monotonic: {next:?} is not > {prev:?}"
+        );
+        prev = next;
     }
+
+    // 2. A modest, in-budget lead must be chased by `observe`, not ignored.
+    let modest_future = Timestamp::new(
+        Hlc::new(
+            prev.physical()
+                .saturating_add(ClockDrift::from_millis(1_000)),
+            LogicalCounter::ZERO,
+        ),
+        NodeId::new(clock.node_id().get().wrapping_add(1)),
+    );
+    clock.observe(modest_future);
+    let after_observe = clock.now();
+    assert!(
+        after_observe > modest_future,
+        "Clock::observe(t) must be followed by a now() > t for an in-budget t: {after_observe:?} \
+         is not > {modest_future:?}"
+    );
+
+    // 3. `observe_trusted` must never clamp, even for a stamp far beyond `MAX_CLOCK_DRIFT`.
+    let far_future = Timestamp::new(
+        Hlc::new(
+            after_observe
+                .physical()
+                .saturating_add(MAX_CLOCK_DRIFT)
+                .saturating_add(ClockDrift::from_millis(1)),
+            LogicalCounter::ZERO,
+        ),
+        clock.node_id(),
+    );
+    clock.observe_trusted(far_future);
+    let after_trusted = clock.now();
+    assert!(
+        after_trusted > far_future,
+        "Clock::observe_trusted(t) must never clamp: now() must be > t even for t far beyond \
+         MAX_CLOCK_DRIFT, or a backward wall-clock step across a restart can shadow this node's \
+         own pre-restart writes: {after_trusted:?} is not > {far_future:?}"
+    );
 }
 
 #[cfg(test)]
@@ -505,5 +614,121 @@ mod tests {
             hostile.logical(),
         );
         assert!(trusted > hostile.hlc());
+    }
+
+    /// A correct, minimal [`Clock`], used only to prove [`assert_conformance`] accepts a sound
+    /// implementation rather than rejecting everything indiscriminately.
+    struct ConformantClock {
+        node_id: NodeId,
+        last: std::sync::Mutex<Hlc>,
+    }
+
+    impl Clock for ConformantClock {
+        fn node_id(&self) -> NodeId {
+            self.node_id
+        }
+
+        fn now(&self) -> Timestamp {
+            let mut last = self.last.lock().unwrap();
+            *last = last.next_tick();
+            Timestamp::new(*last, self.node_id)
+        }
+
+        fn observe(&self, remote: Timestamp) {
+            let mut last = self.last.lock().unwrap();
+            last.advance_past_remote(
+                PhysicalTime::EPOCH,
+                AdmittedTime::trusted(remote.physical()),
+                remote.logical(),
+            );
+        }
+
+        fn observe_trusted(&self, remote: Timestamp) {
+            self.observe(remote);
+        }
+    }
+
+    #[test]
+    fn assert_conformance_accepts_a_correct_clock() {
+        assert_conformance(&ConformantClock {
+            node_id: NodeId::new(1),
+            last: std::sync::Mutex::new(Hlc::START),
+        });
+    }
+
+    /// The textbook footgun [`assert_conformance`]'s docs describe: read the wall clock, stamp
+    /// `logical = 0`. Compiles and type-checks; silently breaks `Entry::merge`'s strict `>` the
+    /// moment two calls land in the same physical millisecond.
+    struct NaiveNonMonotonicClock {
+        node_id: NodeId,
+    }
+
+    impl Clock for NaiveNonMonotonicClock {
+        fn node_id(&self) -> NodeId {
+            self.node_id
+        }
+
+        fn now(&self) -> Timestamp {
+            // A real wall clock can — and eventually will — return this same reading twice in a
+            // row; a fixed value only makes the bug deterministic to demonstrate.
+            Timestamp::new(
+                Hlc::new(PhysicalTime::from_millis(1_000), LogicalCounter::ZERO),
+                self.node_id,
+            )
+        }
+
+        fn observe(&self, _remote: Timestamp) {}
+        fn observe_trusted(&self, _remote: Timestamp) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly monotonic")]
+    fn assert_conformance_rejects_a_non_monotonic_clock() {
+        assert_conformance(&NaiveNonMonotonicClock {
+            node_id: NodeId::new(1),
+        });
+    }
+
+    /// The shape `#288` flags independently of the open/close decision: an `observe_trusted` that
+    /// clamps like `observe`. Reintroduces own-write shadowing after a backward clock step, and
+    /// used to type-check silently under the old default body.
+    struct ClampingTrustedClock {
+        node_id: NodeId,
+        last: std::sync::Mutex<Hlc>,
+    }
+
+    impl Clock for ClampingTrustedClock {
+        fn node_id(&self) -> NodeId {
+            self.node_id
+        }
+
+        fn now(&self) -> Timestamp {
+            let mut last = self.last.lock().unwrap();
+            *last = last.next_tick();
+            Timestamp::new(*last, self.node_id)
+        }
+
+        fn observe(&self, remote: Timestamp) {
+            let mut last = self.last.lock().unwrap();
+            let admitted = AdmittedTime::clamped_to_drift(
+                remote.physical(),
+                PhysicalTime::EPOCH,
+                MAX_CLOCK_DRIFT,
+            );
+            last.advance_past_remote(PhysicalTime::EPOCH, admitted, remote.logical());
+        }
+
+        fn observe_trusted(&self, remote: Timestamp) {
+            self.observe(remote); // the bug: clamps a stamp this node itself authored
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "observe_trusted")]
+    fn assert_conformance_rejects_observe_trusted_that_clamps() {
+        assert_conformance(&ClampingTrustedClock {
+            node_id: NodeId::new(1),
+            last: std::sync::Mutex::new(Hlc::START),
+        });
     }
 }

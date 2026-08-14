@@ -14,7 +14,8 @@
 - **Structural migration:** complete — five-crate workspace, ports on the correct side of each
   boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issue
   [#138](https://github.com/Akvize/reconcile-rs/issues/138) stays open for one residual coupling
-  (`timeout_wheel` reads the wall clock directly, pending #288's decision), not the split itself.
+  (`timeout_wheel` reads the wall clock directly, rather than through the now-decided #288 seam),
+  not the split itself.
   [#145](https://github.com/Akvize/reconcile-rs/issues/145), which carried no code work of its own,
   closed 2026-08-14 — its sole criterion, the first split-aware release, is the `v1.0.0` milestone's
   own completion condition, not a separate issue to track it.
@@ -232,7 +233,10 @@ superseded by this list; the three children below stand on their own.
   `debug_assert!` (a no-op in release, now a real `assert!`) — is also **fixed**, 2026-08-13. Two
   needed a maintainer **decision** before the release
   freezes the signatures: [#288](https://github.com/Akvize/reconcile-rs/issues/288) (`Clock` — a
-  published port with no public implementor), still open, and
+  published port with no public implementor), **decided 2026-08-14: opened it** —
+  `ReplicatedMap::new_with_clock`/`Replica::new_with_clock` accept any `Arc<dyn Clock>`,
+  `assert_conformance` ships as the runtime gate (monotonicity cannot be checked at the type level),
+  and `Clock::observe_trusted` lost its unsound default body (`ARCHITECTURE.md` §3.2), and
   [#298](https://github.com/Akvize/reconcile-rs/issues/298) (the generic monoid), **decided
   2026-08-12**, waived off Gate A (§6). [#284](https://github.com/Akvize/reconcile-rs/issues/284) is
   fixed, and the two were one decision: keeping `Rsos` open to third-party backends is what makes
@@ -511,7 +515,7 @@ flowchart TD
 | [#292](https://github.com/Akvize/reconcile-rs/issues/292) | `run(self, shutdown)` signature + `peers`/`members`/`local_addr`/`sync_state`/`snapshot_now` |
 | [#285](https://github.com/Akvize/reconcile-rs/issues/285) | `Authenticator` must carry a multi-key accept set — a public-enum change, and what makes #137 expressible |
 | [#287](https://github.com/Akvize/reconcile-rs/issues/287) | `Transport::Addr` (dead freedom) and `Discovery`'s missing error type — both trait changes |
-| [#288](https://github.com/Akvize/reconcile-rs/issues/288) | **Decision**: `Clock` is a published port with zero public implementors and no injection seam — open it or close it |
+| ✅ [#288](https://github.com/Akvize/reconcile-rs/issues/288) | **Closed** 2026-08-14 — decided open: `new_with_clock` seams made public, `assert_conformance` conformance harness shipped, `Clock::observe_trusted` lost its default body |
 | [#296](https://github.com/Akvize/reconcile-rs/issues/296) | `add_pre_insert`/`add_on_update` are setters that silently discard the previous hook |
 | [#294](https://github.com/Akvize/reconcile-rs/issues/294) | `ReadReplicaMap::fingerprint` never equals `ReplicatedMap::fingerprint` between converged nodes — rename before the trap freezes in. Trimmed 2026-08-14 to this naming freeze; the seven non-blocking capability gaps (persistence, discovery, seed_peer, …) split to [#333](https://github.com/Akvize/reconcile-rs/issues/333) |
 | [#289](https://github.com/Akvize/reconcile-rs/issues/289) [#290](https://github.com/Akvize/reconcile-rs/issues/290) [#291](https://github.com/Akvize/reconcile-rs/issues/291) | *Partial*: the naming freezes only (`ItemRange` vs `Range`, retiring `for_testing`, `Borrow` lookup). The rest is additive |
