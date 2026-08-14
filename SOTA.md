@@ -70,6 +70,22 @@ Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless
 Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
 (CCS 2019); arXiv:2603.19820 (RSOS, 2026).
 
+**One row of this table is measured; every other row is quoted, and nothing here has ever been run
+against another implementation in one harness.** The `reconcile-rs` row comes from
+`benches/protocol.rs`; the family rows come from their own papers — different hardware, different
+workloads, and in places a different cost model altogether (`arXiv:2509.02373`'s figures are
+event-driven simulation in an abstract model; `arXiv:2603.19820`'s are single-machine LMDB). So this
+table ranks by **published claim, not by common measurement**, and the ordering it produces — down to
+§1.3's takeaway below — inherits that. Treat a cross-row comparison as an orientation, never as a
+result.
+
+That is a deliberate position rather than an oversight:
+[#174](https://github.com/Akvize/reconcile-rs/issues/174) dropped its "at least one external
+comparison" criterion on 2026-06-12, for version drift, cross-process timing flakiness and CI weight.
+The decision is sound for the harness; this note records what it costs *here*, where the rankings are
+stated. Anything that needs like-for-like — a claim of the form "family X beats family Y on this
+workload" — needs that criterion back first.
+
 **The published O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2,
 and this implementation uses one** — `rbsr`'s default `RefinementPolicy` is `FixedFanOut(16)`, so
 the family's bounds describe it. The fan-out is a *local, swappable* choice rather than a wire
