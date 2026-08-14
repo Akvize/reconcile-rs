@@ -121,6 +121,17 @@ wire/on-disk format, the protocol, crypto, or GC gets an **adversarial review be
 exceptions. AGENTS.md §10 sends a by-eye rule to CI instead; this one stays by eye because it judges
 whether a change is *correct*, which no command decides.
 
+### SOTA-alignment drift
+
+A rustdoc citing `SOTA.md §N.M` splits into a checkable half and an unavailable one. That the
+section still exists is `check-doc-structure.sh`'s part 5 — a `git grep`-shaped fact, gated the
+same way a Markdown link is. That the rustdoc's *characterization* still matches what the cited
+section currently says is not: it is the same kind of judgment call as the paragraph above, and a
+regex heuristic over free prose has already been measured to fail here (`check-doc-issue-claims.sh`'s
+header: a looser matcher on a *simpler* claim — an issue's open/closed state — produced three
+false positives out of three). It runs instead as a scheduled, non-blocking review outside CI:
+real drift becomes a `C-bug` issue with the citing file/line and the mismatch; no drift, no output.
+
 ## Code coverage
 
 See [`README.md`](./README.md) "Testing and coverage" for the `cargo-llvm-cov` commands. Two extras
