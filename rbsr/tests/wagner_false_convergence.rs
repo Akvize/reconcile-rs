@@ -14,8 +14,8 @@
 //! stores that genuinely differ — a **false convergence**, silent and permanent.
 //!
 //! This is the regression guard on the fingerprint's advertised strength: it fails the day the
-//! combiner is claimed to resist a chosen-input adversary without being keyed. See
-//! [`rsos::fingerprint`]'s module docs for what the shipped combiner does and does not promise.
+//! combiner is claimed to resist a chosen-input adversary. See [`rsos::fingerprint`]'s module docs
+//! for what the shipped combiner does and does not promise.
 //!
 //! Only the **width** is scaled down. The lift is the shipped [`rsos::digest`] (BLAKE3 over the
 //! canonical encoding) reduced mod `2^w`, the algebra is addition mod `2^w`, and the driver is
@@ -216,8 +216,8 @@ impl KTree {
     ///
     /// The lookup is exact: `(a + b) mod 2^w ≡ 0 (mod 2^j)` iff `a ≡ −b (mod 2^j)`, because
     /// reduction mod `2^j` is a homomorphism — carries leave the window upward and never re-enter
-    /// it. This is the step §6.1 claims has no error term, and the assertion at the end of the
-    /// test is what checks it end to end.
+    /// it. This is the step that must carry no error term for the attack to work at all, and the
+    /// assertion at the end of the test is what checks it end to end.
     fn join(&self, left: &[Partial], right: &[Partial], window: u64) -> Vec<Partial> {
         let mut index: HashMap<u64, Vec<&Partial>> = HashMap::new();
         for partial in left {
@@ -348,11 +348,13 @@ fn an_unsolved_plant_of_the_same_shape_is_refined_not_skipped() {
     }
 }
 
-/// Theorem 2, mechanically: an unbalanced difference is never SKIPped, whatever the summary does.
+/// Count exactness, mechanically: an unbalanced difference is never SKIPped, whatever the summary
+/// does.
 ///
 /// The plant here is a *solved* one with a single key removed from peer B, so the fingerprints no
-/// longer agree and neither do the counts. Pinned because §5 claims this holds with probability 1
-/// and with no hypothesis on the lift — a claim that outlives any width.
+/// longer agree and neither do the counts. Pinned because the guarantee is claimed with probability
+/// 1 and with no hypothesis on the lift — `SOTA.md` §2.1 records what it covers and what it does
+/// not — so it must hold at every width, not merely be probable at the shipped one.
 #[test]
 fn an_unbalanced_difference_is_never_skipped() {
     for (width, t) in CONFIGURATIONS {
@@ -369,11 +371,12 @@ fn an_unbalanced_difference_is_never_skipped() {
     }
 }
 
-/// The cost formula §6.1 extrapolates to `w = 256` with, checked against what the runs above spend.
+/// The cost formula the attack extrapolates by, checked against what the runs above spend.
 ///
 /// Work is `2^(t + width/(t+1))`; minimizing over `t` gives `t + 1 = √width` and `2^(2√width − 1)`.
-/// At `width = 256` that is `t = 15`, `k = 32 768` and `2³¹` — the number §6.1 quotes. This test
-/// pins the arithmetic, not the attack: the attack itself is pinned at the widths above.
+/// This test pins the *arithmetic*, so that the cost quoted for a production width is derived from a
+/// verified formula rather than asserted — the figure itself belongs with the finding, not here. The
+/// attack is pinned separately, at the widths above.
 #[test]
 fn wagner_cost_matches_the_k_tree_formula() {
     for (width, t) in CONFIGURATIONS {

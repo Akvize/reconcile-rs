@@ -15,10 +15,12 @@
 //!
 //! Non-`GF(2)`-linearity defeats the linear-algebra collision search that sinks XOR, but it is **not**
 //! collision resistance against a *chosen-input* (writing) adversary: finding a colliding multiset is
-//! Wagner's balance problem over `ℤ/2²⁵⁶`, solvable in ~2³¹ work (a subexponential k-tree, no error
-//! term — carries never disturb a matched low window). So this fingerprint is sound in the honest
-//! model but forgeable by anyone who can write, unless the lift is *keyed*. Demonstrated against the
-//! RBSR driver in `rbsr/tests/wagner_false_convergence.rs`.
+//! Wagner's balance problem over `ℤ/2²⁵⁶`, which a k-tree solves in subexponential time — reduction
+//! mod `2^j` is a group homomorphism, so merging on low-order bits is exact and carries never disturb
+//! a matched window. **What this type guarantees is therefore honest-model soundness, not
+//! unforgeability**: anyone who can write to a replica can craft a collision. Demonstrated against
+//! the RBSR driver in `rbsr/tests/wagner_false_convergence.rs`. What it would cost an attacker, and
+//! which combiner change would restore resistance, are tracked with the finding rather than here.
 //!
 //! Meyer, arXiv:2212.13567; Clarke et al., *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
