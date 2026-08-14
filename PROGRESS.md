@@ -68,7 +68,7 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F3 | Critical | unauthenticated + attacker-controlled timestamp | ✅ | #108 — per-datagram keyed MAC, verified before deserialize (opt-in key) |
 | F4 | Critical | tombstone resurrection (60 s wall-clock GC) | ✅ | #109 — GC gated on causal stability |
 | F5 | High | physical-clock LWW (lossy + non-commutative) | ✅ | #110 — Hybrid Logical Clock + total order |
-| F6 | High | 64-bit XOR fingerprint (weak, craftable) | ✅ | #111 — 256-bit additive BLAKE3 (`rsos/src/fingerprint.rs`, add/sub mod 2²⁵⁶) |
+| F6 | High | 64-bit XOR fingerprint (weak, craftable) | ◐ | #111 — 256-bit additive BLAKE3 (`rsos/src/fingerprint.rs`, add/sub mod 2²⁵⁶) removed the XOR/GF(2)-linear attack and is sound in the **honest model**. Still **craftable by a writing adversary**: Wagner's balance problem over ℤ/2²⁵⁶, ~2³¹ work — verified against the shipped driver (`rbsr/tests/wagner_false_convergence.rs`). The fix is a **keyed lift** (`gossip` already holds the cluster key; today it keys the datagram MAC (F3), not the lift). Analysis: `paper/false-convergence.md` |
 | F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation: an inverted range is rejected before indexing (`rbsr/src/protocol.rs:154`) |
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 + `rsos::encoding` (ARCHITECTURE.md §6) — wire fingerprint is BLAKE3 over an owned canonical byte encoding; `version_hash` derives from it, not `DefaultHasher` |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
@@ -83,8 +83,10 @@ Status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps landed (#151); the `peers` map is bounded by `Config::max_peers` (default 1024, `src/replicated_map.rs:84`) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) closed by PR #245 |
 | F19 | Low | dependency hygiene | ✅ | bincode `with_limit` landed (#151); `overflow-checks = true` and a `cargo deny` CI lane landed 2026-08-13 — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 15 resolved · 4 partial (F9, F10, F16, F17) · 0 open. All Critical resolved; all
-but one High resolved or mitigated.
+**Score:** 14 resolved · 5 partial (F6, F9, F10, F16, F17) · 0 open. All Critical resolved; every
+High resolved or mitigated (F6 honest-model only, F9/F10 partial). F6's reopening is a
+documentation/threat-model correction, not a regression: the fingerprint is unchanged and sound in
+the honest model — what changed is the claim about its adversarial strength (see the F6 note).
 
 ---
 

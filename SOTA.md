@@ -387,11 +387,20 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
 `Fxx` pointers map to its §2 table).
 
 **P0 — Correctness of the structure itself:**
-1. **Secure and wide fingerprint**: replace the 64-bit XOR with a **≥256-bit, non-GF(2)-linear**
-   combiner (hash-then-add mod 2²⁵⁶, MSet-Mu-Hash/LtHash) or *keyed*. XOR = self-inverse + linear →
-   craftable collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³². The path
-   taken by Negentropy. **This is THE criterion that separates a "toy" structure from a SOTA one.**
-   (cf. F6)
+1. **Secure and wide fingerprint**: replace the 64-bit XOR with a wider combiner — but *width and
+   non-GF(2)-linearity are necessary, not sufficient*. XOR = self-inverse + linear → craftable
+   collisions (Gaussian elimination ~2 s even at 256-bit, Bellare–Micciancio) + birthday at 2³².
+   Dropping GF(2)-linearity (hash-then-add mod 2²⁵⁶, the path taken by Negentropy and by `rsos`)
+   defeats *that* attack — but **not** Wagner's k-tree, which solves the balance problem over any
+   `ℤ/2^w` in subexponential time (surveyed in Meyer §5.2; ~2³¹ work at `w = 256`, demonstrated
+   against the shipped driver in `rbsr/tests/wagner_false_convergence.rs`). By the digest sizes Meyer
+   §5.2 cites, a modular-additive summary needs **thousands of bits** (2688–4160 for 128-bit security)
+   against a *chosen-input* (writing) adversary; 256 bits buys ~30. So the honest-model fingerprint is
+   fine at 256 bits, and the adversarial fix is the *keyed* option in this list — a keyed lift stops
+   the grinding (Clarke et al.) — **not** the width. `reconcile-rs` already carries a shared cluster
+   key (`gossip`), so keying is cheap here; note it is applied to the datagram MAC (F3), not yet to
+   the lift. Full analysis and the executable proof:
+   [`paper/false-convergence.md`](./paper/false-convergence.md). (cf. F6)
 2. **Decouple "empty" from "hash==0"** (`size==0`) — otherwise the structure can claim "converged"
    while having lost data. (cf. F1)
 3. **Stable, versioned hash as a wire contract** (pinned SipHash/xxHash/BLAKE3 + golden-vector).
@@ -640,6 +649,14 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
 - Shapiro et al., *CRDTs*, INRIA RR-7506 / SSS 2011 — https://inria.hal.science/inria-00555588/en/
 - Preguiça et al., *Dotted Version Vectors*, arXiv:1011.5808 — https://arxiv.org/abs/1011.5808
 - Clarke et al., *Incremental Multiset Hash Functions*, ASIACRYPT 2003 — https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
+  — where keying makes MSet-Add-Hash collision-resistant; the fix for §2.4 P0-1's adversarial gap.
+- M. Bellare, D. Micciancio, *A New Paradigm for Collision-Free Hashing: Incrementality at Reduced
+  Cost* (AdHash/MuHash), EUROCRYPT 1997 — https://cseweb.ucsd.edu/~mihir/papers/incremental.html —
+  the additive/multiplicative homomorphic hashes, and the reduction of XOR-collision to linear algebra
+  over GF(2) that §2.4 P0-1 cites.
+- D. Wagner, *A Generalized Birthday Problem*, CRYPTO 2002 — https://www.iacr.org/archive/crypto2002/24420288/24420288.pdf
+  — the k-tree solving the balance problem over `ℤ/2^w` in subexponential time; why 256-bit modular
+  addition is not adversarially collision-resistant (§2.4 P0-1, `paper/false-convergence.md` §6).
 - Abadi, *PACELC* — https://en.wikipedia.org/wiki/PACELC_design_principle ; ScyllaDB repair-based tombstone GC — https://www.scylladb.com/2022/06/30/preventing-data-resurrection-with-repair-based-tombstone-garbage-collection/
 
 **Product positioning**

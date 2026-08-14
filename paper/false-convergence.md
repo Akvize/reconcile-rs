@@ -5,9 +5,13 @@ scope: a bound on the probability that an RBSR execution declares convergence on
 differ, as a function of the comparison-map width `τ`, the summary width `w`, the set size `n`, the
 symmetric difference `d`, the fan-out `b`, and the number of rounds.
 
-The bound turns out not to be the interesting half. Stating it precisely forces a split into two
-independent failure layers, and the layer that binds is **not** the one the 40 B/16 B debate is
-about.
+Stating it precisely forces a split into two independent failure layers (§2). After verifying both
+primary sources (§0.1), the layers divide cleanly by who owns them: the **adversarial** layer —
+a writing attacker forcing a collision in the additive summary — is **already settled by Meyer 2023
+§5.2** (Wagner's balance-problem attack), and §6 here only reconfirms it against a shipped driver.
+The **honest-model** layer — the quantitative end-to-end bound over `(τ, w, n, d, b, R)` — is the
+part Amparore §6.1 explicitly defers, and it is what Theorems 1–2 (§4–§5) establish. Read §0.1
+before §6: the framing this note started with (§6 as the contribution) did not survive the PDFs.
 
 ---
 
@@ -211,7 +215,14 @@ varint count — against 40 B today and 16 B for Negentropy. See §7.
 
 ---
 
-## 6. Theorem 3 — the adversarial model, where the analysis actually bites
+## 6. The adversarial model — Meyer 2023 §5.2, reconfirmed against a shipped driver
+
+**Not new.** Meyer §5.2 already reduces the additive combiner's collision-finding to the balance
+problem, cites Wagner [Wag02] solving it in subexponential time, and quotes the digest sizes it
+forces (2688–4160 bits for 128-bit security; 256 bits is far below that). What this section adds is
+**engineering evidence, not theory**: the paper attack, driven to a false SKIP against the
+unmodified `rbsr::protocol_round` (§6.1's E3). Kept because it is the correction the repo needs
+(§11), not because it is a result.
 
 Theorem 1 assumes the sets are fixed independently of `φ`. Drop that. An attacker who can **write**
 to the store chooses the elements, hence chooses `φ`-preimages, and the union bound is void.
@@ -295,20 +306,30 @@ to two different peers is the delivery mechanism.
 extra bytes per range do not change the adversarial security level by one bit. `SOTA.md` §2.1's
 "the price is 40 B/range against 16 B" prices the wrong thing.
 
-### 6.4 The objection, and why it fails here
+### 6.4 What Meyer §5.1 already says about this threat model (V4, corrected)
 
-Meyer's argument (V4 — **verify the exact wording before relying on this**) is that adversarial
-fingerprint collisions do not matter, because a malicious peer can withhold data by simply claiming
-not to have it, which requires no collision at all.
+An earlier draft of this section claimed Meyer *dismisses* adversarial collisions — that he waves
+them off because a malicious peer can withhold data anyway, leaving the two-honest-node attack as an
+unaddressed gap. **The PDF refutes that.** Meyer §5.1 draws exactly the distinction this section
+relies on, and draws it first:
 
-That is correct in the model it assumes — *malicious peer vs. honest peer* — and it does not cover
-the deployment this repository targets. The attack in §6.2 needs the attacker to be a **writer**,
-not a peer. Its victims are **two honest replicas**. Its effect is **persistent** (§8: a
-deterministic collision never self-repairs) and **invisible** (both peers report convergence). None
-of the three properties holds for withholding, where the honest peer's state is untouched and the
-malicious peer is the only one deceived.
+- *Withholding* he does dismiss, correctly: "the malicious node can withhold arbitrary information by
+  simply pretending not to have certain data, which does not require finding collisions at all."
+- The *two-honest-node* attack he names as **the** case that matters: "the cases in which a malicious
+  node can do actual damage by finding a collision are those where it supplies data to two honest
+  nodes such that these two nodes perform faulty synchronization amongst each other" — M crafts
+  `X_A, X_B`, sends them to honest `A, B`, who converge to distinct sets. That is §6.2 verbatim.
 
-**This gap is the thesis.** If V4's wording survives contact with the PDF, this is the contribution.
+So there is no gap to claim here. Meyer identifies the attack, offers only *qualitative* mitigations
+(randomize split boundaries so a planted collision may not be compared; rely on other peers to
+perturb the sets), and states plainly they "are not a substitute for quantitative cryptographic
+analysis." The persistent/invisible/two-honest-victim properties this section stresses are real, but
+they are properties Meyer already grants the attack — not a rebuttal of his.
+
+**What survives as this note's own is narrower and honest:** the *executable* demonstration that the
+attack reaches a false SKIP in a shipped RSOS driver (§6.1), and the observation that it makes the
+40 B/16 B wire trade adversarially irrelevant (§6.3). Both are engineering points for this repo, not
+new cryptanalysis.
 
 ### 6.5 The combiner rationale in this repo is half wrong
 
@@ -371,8 +392,11 @@ Assertions this repository would not accept without a command behind them (`AGEN
   empirical rate with `2C·2^(−w)`. Falsifiable, and it exercises the real `FingerprintTreeMap` and
   the real `protocol_round`. *The bound is worthless unless this matches.*
 - **E3 — the k-tree at reduced width.** ✅ **done**, `rbsr/tests/wagner_false_convergence.rs`, four
-  tests, 0.17 s, inside the standard `cargo test --workspace` gate. Results and controls in §6.1.
-  This was the load-bearing risk and it resolved in favour of §6: **§6 and §7 stand.**
+  tests, 0.17 s, inside the standard `cargo test --workspace` gate. Results and controls in §6.1. It
+  confirms §6.1's *mechanical* claim (the k-tree drives a false SKIP in the real driver with no error
+  term) — which is the repo-relevant point. It does **not** rescue §6's *novelty*: the cryptanalysis
+  is Meyer §5.2 (§0.1). The test's lasting value is as a regression guard on the repo's own security
+  claim (§11), not as evidence for a theorem.
 - **E4 — extrapolate E3 to `w = 256`.** Partly discharged: the cost formula is pinned by test
   against measured work, so `2³¹` is arithmetic on a verified formula rather than an assertion.
   What remains is a wall-clock measurement per list level at a width large enough to be a real
@@ -390,11 +414,19 @@ remainder.
 
 ## 10. Related work and the novelty gates
 
-- **Amparore, arXiv:2603.19820 §6.1** — states the gap. The premise of this document. *V2.*
-- **Meyer, arXiv:2212.13567** — formalizes fingerprint schemes and surveys secure instantiations;
-  reportedly dismisses adversarial collisions via the withholding argument. §6.4 is the rebuttal.
-  *V4, V5 — the highest-risk gate: if Meyer already bounds false convergence end-to-end, Theorem 1
-  is a restatement and only §5–§7 survive.*
+**Verdict of the gates (both PDFs read, §0.1).** The adversarial core (§6) is Meyer 2023 §5.2 and is
+**not novel**. The surviving open core is the **honest-model** bound (Theorem 1) plus **count
+exactness** (Theorem 2) — the part Amparore §6.1 defers and neither paper proves.
+
+- **Amparore, arXiv:2603.19820 §6.1** — states the gap and defers "a full end-to-end collision
+  analysis of fpNE"; its one-sentence L1/L2 split is §2's. The premise of this document, and the
+  home for Theorems 1–2. *V2 ✅.*
+- **Meyer, arXiv:2212.13567 §5** — §5.1 defines the two-honest-node attack as the real one (not a gap
+  — *V4 refuted*); §5.2 reduces the additive combiner to the balance problem, cites Wagner and the
+  2688–16512-bit digest sizes, so §6's cryptanalysis is a **restatement** (*V5 split*: adversarial
+  half closed by Meyer, honest-model half still open). This is the gate that reframed the note.
+- **Meyer & Scherer, RBSR without homomorphic hashing** — the orthogonal escape: no composable
+  summary, no L1. Belongs in the comparison table.
 - **Meyer & Scherer, RBSR without homomorphic hashing** — the orthogonal escape: no composable
   summary, no L1. Belongs in the comparison table.
 - **Wagner, CRYPTO 2002** — the k-tree; AdHash at `O(2^(2√n))`, > 1600-bit modulus for 80-bit
