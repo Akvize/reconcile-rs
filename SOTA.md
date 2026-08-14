@@ -491,8 +491,11 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
 
 **P2 — Durability & distributed properties carried by the structure:**
 6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
-   tombstones, or (b) the true SOTA step — **node content-addressing** for *structural sharing*
-   (versioning, diff between snapshots, incremental cold start).
+   tombstones, or (b) a persistent **copy-on-write** tree, which is what buys *structural sharing* —
+   an untouched subtree keeps its node, so its cached aggregate survives untouched.
+   **Node content-addressing** is a further step layered on that, and what it adds is *cross-version
+   identity* (versioning, diff between snapshots, incremental cold start), not the sharing itself;
+   the two are separable and priced separately.
 7. **Conflict metadata in the value**: HLC + total tie-break `(timestamp, node_id)`; ideally
    **pluggable CRDT** values; versioned tombstones with **causal-stability GC**. (cf. F4, F5)
 10. **Write cost under concurrency** *(the axis the family's cost models omit)*: answering
@@ -518,7 +521,7 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
 | Summary | ≥256-bit non-linear/keyed, **generic (monoid)** |
 | Empty vs hash | emptiness/equality decided on `size`, never on the fingerprint |
 | Hash | fixed, versioned hash as a wire contract |
-| Backend | **persistent RSOS** (AELMDB-style), ideally content-addressed |
+| Backend | **persistent RSOS**, ideally content-addressed |
 | Algo | **hybrid RBSR + a leaf sketch** for single-shot latency; which sketch is open, and incremental maintainability — not communication optimality — is the selection criterion |
 | Writes | aggregate maintenance that does not serialise every writer on the root |
 | Conflicts | HLC + deterministic total tie-break / pluggable CRDT |
