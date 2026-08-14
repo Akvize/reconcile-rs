@@ -3,7 +3,8 @@
 **Paper skeleton, v0.** Working title. The porteur is **not** the "trilemma" (refuted below by ECMH);
 it is the **three-costs map**. Planning scaffolding for the *next* paper, not part of the fingerprint
 correction on this branch — a candidate to split into its own branch/PR; committed here only so the
-work is tracked. Load-bearing gate S3 (§0) is unverified.
+work is tracked. Load-bearing gates **S3 (ECMH security) and S3′/E6 (ECMH compute cost) are now
+resolved** (§0); the remaining open risk is S6 (novelty of the RBSR-specific framing).
 
 **Thesis (one line).** RBSR wire cost factorizes as `C = |T| · w_fp`, with local cost `T_loc`
 alongside. In the *homomorphic-summary* family, censorship resistance is not free and not a single
@@ -20,10 +21,11 @@ pay none — and therefore silently fails censorship resistance (Wagner). Non-ho
 |---|---|---|
 | S1 | Wire cost factorizes `C = \|T\| · w_fp` | ✅ definitional |
 | S2 | Additive mod `2^w` unkeyed is Wagner-forgeable at `w`=256 (~2³¹) | ✅ Meyer §5.2 + **E3 executed** (`rbsr/tests/wagner_false_convergence.rs`) |
-| S3 | Wagner's k-tree needs a quotient chain; **prime-order groups have none**, so ECMH is narrow + C + U + homomorphic | ⚠️ **VERIFY against ECMH paper's security section** — this is the load-bearing gate (arXiv egress-blocked here; the whole "three costs not a trilemma" pivot rests on it) |
+| S3 | Wagner needs a quotient chain; **prime-order EC groups have none**, so ECMH is narrow + C + U + homomorphic | ✅ **confirmed** — ECMH (arXiv:1601.06502v?) §3–§4: EC DL "no known algorithms faster than generic Θ(√\|G\|)"; 256-bit curve = 128-bit security; §4.4 point compresses to `m+1` bits ≈ **32 B on the wire** (so ECMH is `N` too — the skeleton's earlier `¬N` was wrong) |
+| S3′ | ECMH's compute cost over additive (the price of the escape) | ✅ **measured — E6** (`scratchpad/e6`, Ristretto): combine **67×** (2.84 ns → 191 ns), lift **126×** (80 ns → 10.1 µs). Paper's optimized GLS254 ≈ 2.4× end-to-end (3 M elt/s). So the corner costs **~2.4× (hand-optimized) to ~100× (off-the-shelf) compute**, at **zero wire cost** |
 | S4 | Honest-model false convergence ≤ `2\|T\|(2^{-w}+2^{-τ})`; count-exactness | ◐ Theorem 1/2, routine; the open half Amparore §6.1 defers |
 | S5 | `\|T\| = O(b·d·log_b(n/d))`; instance-sensitive in Δ's ordered shape is open | ✅ Meyer §3.2.2 + Amparore §8 (investigation's axis) |
-| S6 | The three censorship costs are inequivalent and no prior work maps them for RBSR | ⚠️ check the homomorphic-hash zoo (LtHash, ECMH, MGS15) doesn't already tabulate this |
+| S6 | The three-ish censorship costs are inequivalent and no prior work maps them for RBSR | ⚠️ check the homomorphic-hash zoo (LtHash, ECMH, MGS15) doesn't already tabulate this **for the RBSR/reconciliation setting** |
 
 ---
 
@@ -57,8 +59,8 @@ with); `U` universal (peer-independent precompute — Meyer–Scherer); `S` fast
 | additive mod `2^w`, **unkeyed** | ✓ | ✗ | ✗ | ✓ | ✓ | **reconcile-rs default**, Negentropy |
 | additive mod `2^w`, **shared cluster key** | ✓ | ✓ | ✗ | ✓ | ✓ | §7 repair — fine *iff* cluster = trust domain |
 | additive mod `2^w`, **per-peer key** | ✓ | ✓ | ✓ | ✗ | ✓ | — (pays `U`: `O(peers)` precompute) |
-| **wide** secure additive (`k`·10³ bits) | ✗ | ✓ | ✓ | ✓ | ✓ | MGS15 (pays `N`) |
-| **prime-order / ECMH** | ✓ | ✓ | ✓ | ✓ | ✗ | Maitin-Shepard (pays `S`: EC ops ~10²–10³×) |
+| **wide** secure additive (`k`·10³ bits) | ✗ | ✓ | ✓ | ✓ | ✓ | MGS15 (pays `N`: 2688–4160 bits) |
+| **prime-order / ECMH** | ✓ | ✓ | ✓ | ✓ | ✗ | Maitin-Shepard — pays only `S`: **2.4×–100× compute** (E6), **0 wire** |
 | — *non-homomorphic* (SHA + HI tree) | ✓ | ✓ | ✓ | ✓ | ✓* | Meyer–Scherer (escapes the family) |
 
 `*` non-homomorphic `S` is `O(log n)` normally but `O(n)` on adversarially-degenerate inputs, and it
@@ -67,14 +69,20 @@ keeps.
 
 **Result B (statement to prove).** *No unkeyed homomorphic combiner over a group carrying a
 Wagner-exploitable quotient chain (`ℤ/2^w`, smooth `ℤ/N`, `GF(2)^n`) achieves `C` at width `O(λ)`.*
-The escapes each pay exactly one coordinate: prime-order group → `S`; width blow-up → `N`; keying →
-`U` (or only `C_in`, if the cluster is a trust domain). The additive-mod-`2^w` point pays none, hence
-`¬C`. **Corollary (reconcile-rs):** it sits at row 1; its three fixes are rows 2–5, each a different
-price; E3 is the `¬C` witness.
+The escapes each pay one coordinate: **width** (wide additive, `¬N`), **universality** (keying, `¬U`
+— or only `C_in` if the cluster is a trust domain), or **compute** (prime-order/ECMH, `¬S`). ECMH is
+the surprising one: it keeps `N` (§4.4: point compresses to ~32 B, *narrower* than reconcile-rs's
+40 B aggregate) and pays **only** `S`. The additive-mod-`2^w` point pays none of the four, hence
+`¬C`. **The homomorphic ceiling** (ECMH §3): any homomorphic hash caps at `√|G|` collision security
+(second-preimage ≤ collision); ECMH *reaches* it at 256 bits, additive *falls below* it (Wagner) — so
+within the family, additive is **strictly dominated by ECMH on security-per-wire-bit**, winning only
+on `S`. **Corollary (reconcile-rs):** it sits at row 1 (`¬C`, E3 is the witness); its fixes are the
+rows below, and **ECMH is the universality-preserving one** — the alternative to keying (#337) that
+does not need a shared secret.
 
-This is what Meyer–Scherer's *"neither option is strictly superior"* + their single lumped
-"overhead induced by homomorphic hashing" **miss**: the homomorphic overhead is three inequivalent
-costs, and ECMH is a homomorphic point they did not consider.
+This is what Meyer–Scherer's *"neither option is strictly superior"* + their single lumped "overhead
+induced by homomorphic hashing" **miss**: that overhead is inequivalent costs, and **ECMH — a
+homomorphic point they did not consider — pays it entirely in compute, at zero wire cost.**
 
 ---
 
@@ -116,15 +124,22 @@ split-distribution work is worth.** Neither the two papers nor the investigation
 ## 6. Experiments
 
 E1 measure `|T|`(n,d,b,clustering) · E2 honest-model bound at reduced `w` · **E3 Wagner false-SKIP —
-done** · E4 cost extrapolation · **E6 (new) ECMH `T_loc` vs additive `T_loc` microbench** — the price
-of the prime-order corner · E7 keyed-lift wire/compute overhead.
+done** · E4 cost extrapolation · **E6 ECMH `T_loc` vs additive — done** (`scratchpad/e6`; combine 67×,
+lift 126× off-the-shelf Ristretto; ~2.4× with the paper's GLS254) · E7 keyed-lift wire/compute
+overhead · **E8 (new) full ECMH combiner inside `FingerprintTreeMap`** — end-to-end insert/query/round
+`T_loc`, plus Ristretto point-compression cost per range on the wire path (E6 measured 4.9 µs/compress,
+cacheable but real at `|T|` ranges/round).
 
 ## 7. Risks (ranked)
 
-1. **S3 — ECMH's Wagner-immunity at 256 bits.** If false, the map collapses toward the original
-   trilemma. Verify against the ECMH paper before anything else. *Load-bearing.*
-2. E6 magnitude: if ECMH `T_loc` is only ~10× (not 10³×), the "computation cost" corner is cheap and
-   the recommendation shifts to ECMH-by-default.
-3. S6: a homomorphic-hash survey may already tabulate the zoo — then Factor B is exposition, not
-   result. Check.
+1. ~~S3~~ ✅ **resolved** — ECMH is Wagner-immune, narrow (32 B wire), universal, homomorphic. The map
+   holds; the pivot away from the trilemma stands.
+2. ~~E6 magnitude~~ ✅ **measured** — not cheap: ~67–126× per op off-the-shelf (µs-scale absolute),
+   ~2.4× hand-optimized. So the compute corner has **real teeth** — this is a genuine speed/security
+   trade, not a free "switch to ECMH". Strengthens the case that the *map* (not a single winner) is
+   the contribution.
+3. **S6 — now the top open risk.** A homomorphic-hash survey may already tabulate the width/compute
+   zoo (ECMH's own §1 compares AdHash/MuHash/ECMH). Our delta must be the **RBSR-specific** framing:
+   `C = |T|·w_fp`, the censorship/universality axes, and the false-convergence tie-in — not the
+   crypto zoo itself. Verify no one has done *that*.
 4. Factor A transfer (Vogel channel-model → RBSR) is the investigation's risk, not ours.
