@@ -21,6 +21,12 @@ rsos = { version = "0.1.0", path = "../rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 
+[dev-dependencies]
+# `tests/pure_deletion_is_never_falsely_skipped.rs` seeds `TRIALS` independent pure-deletion
+# instances from a recorded counter (`StdRng::seed_from_u64(trial)`), not the process RNG — see
+# that module's docs.
+rand = "0.8.5"
+
 [features]
 # Exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
 # vector is built through. Same role and same name as `reconcile`'s own `internal-testing`: a

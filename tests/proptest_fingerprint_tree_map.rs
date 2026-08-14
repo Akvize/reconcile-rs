@@ -220,6 +220,36 @@ proptest! {
             prop_assert_ne!(&ascending, &one_changed);
         }
     }
+
+    /// A retrying/reordering transport can deliver a record the store already holds a second
+    /// time. `insert`'s existing-key branch (`rsos/src/fingerprint_tree_map.rs:438-446`) applies
+    /// a signed `new_fp - old_fp` delta to the cached aggregate rather than blindly combining the
+    /// new lift in, so re-delivering an unchanged `(key, value)` pair must contribute a zero
+    /// delta — the aggregate is bit-for-bit unchanged, not merely numerically close.
+    #[test]
+    fn duplicate_delivery_of_an_already_held_record_leaves_the_aggregate_unchanged(
+        entries in prop::collection::vec((any::<u8>(), any::<u16>()), 1..200),
+        pick in any::<usize>(),
+    ) {
+        let mut tree: FingerprintTreeMap<u8, u16> = FingerprintTreeMap::new();
+        for (k, v) in &entries {
+            tree.insert(*k, *v);
+        }
+        let keys: Vec<u8> = tree.range(..).map(|(k, _)| *k).collect();
+        let key = keys[pick % keys.len()];
+        let value = *tree.get(&key).unwrap();
+
+        let before = tree.aggregate(..);
+        let replaced = tree.insert(key, value);
+        let after = tree.aggregate(..);
+
+        prop_assert_eq!(replaced, Some(value), "the key must already have been present");
+        prop_assert_eq!(
+            before, after,
+            "re-delivering an unchanged record must not move the aggregate"
+        );
+        tree.check_invariants();
+    }
 }
 
 // Property 2: convergence of the diff protocol. Each store gets an arbitrary subset of one
