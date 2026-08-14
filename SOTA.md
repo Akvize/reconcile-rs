@@ -84,7 +84,9 @@ That is a deliberate position rather than an oversight:
 comparison" criterion on 2026-06-12, for version drift, cross-process timing flakiness and CI weight.
 The decision is sound for the harness; this note records what it costs *here*, where the rankings are
 stated. Anything that needs like-for-like — a claim of the form "family X beats family Y on this
-workload" — needs that criterion back first.
+workload" — needs that criterion back first, narrowly:
+[#362](https://github.com/Akvize/reconcile-rs/issues/362) revisits it for the **counted** columns
+against Negentropy, which is the half none of #174's three reasons reach.
 
 **The published O(d log n) / O(log n) figures assume the constant branching factor of Algorithm 2,
 and this implementation uses one** — `rbsr`'s default `RefinementPolicy` is `FixedFanOut(16)`, so
