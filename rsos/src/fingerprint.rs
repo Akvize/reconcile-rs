@@ -13,6 +13,13 @@
 //! combiner it must never become. Hash function *and* input encoding are both pinned here; either
 //! one changing is a wire break, frozen by this module's golden vectors.
 //!
+//! Non-`GF(2)`-linearity defeats the linear-algebra collision search that sinks XOR, but it is **not**
+//! collision resistance against a *chosen-input* (writing) adversary: finding a colliding multiset is
+//! Wagner's balance problem over `ℤ/2²⁵⁶`, solvable in ~2³¹ work (a subexponential k-tree, no error
+//! term — carries never disturb a matched low window). So this fingerprint is sound in the honest
+//! model but forgeable by anyone who can write, unless the lift is *keyed*. Demonstrated against the
+//! RBSR driver in `rbsr/tests/wagner_false_convergence.rs`.
+//!
 //! Meyer, arXiv:2212.13567; Clarke et al., *Incremental Multiset Hash Functions* (ASIACRYPT 2003).
 
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
