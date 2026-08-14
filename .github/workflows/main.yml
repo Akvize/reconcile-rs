@@ -31,8 +31,10 @@ jobs:
       run: cargo fmt --check
     - name: Doc budget (AGENTS.md + CLAUDE.md line cap)
       run: ./scripts/check-doc-budget.sh
-    - name: Domain purity (hexagonal architecture boundary)
+    - name: Domain purity (hexagonal boundary + ARCHITECTURE.md §2's graph vs the manifests)
       run: ./scripts/check-domain-purity.sh
+    - name: Doc structure (link/anchor/path resolution, SOTA.md §4.2 entry format)
+      run: ./scripts/check-doc-structure.sh
     # `--features internal-testing` exposes the `reconcile::testing` seam so the external
     # integration-test oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the benchmark,
     # which reach now-`pub(crate)` reconciliation internals, still compile and run. The
