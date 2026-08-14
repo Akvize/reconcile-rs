@@ -22,8 +22,9 @@ serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 
 [dev-dependencies]
-# `tests/arm_c_zero_rate.rs` seeds `TRIALS` independent pure-deletion instances from a recorded
-# counter (`StdRng::seed_from_u64(trial)`), not the process RNG — see that module's docs.
+# `tests/pure_deletion_is_never_falsely_skipped.rs` seeds `TRIALS` independent pure-deletion
+# instances from a recorded counter (`StdRng::seed_from_u64(trial)`), not the process RNG — see
+# that module's docs.
 rand = "0.8.5"
 
 [features]

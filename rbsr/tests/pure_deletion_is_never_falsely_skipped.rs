@@ -6,7 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! #355 arm C: the two configurations whose predicted false-convergence rate is **exactly zero**.
+//! Two comparison-map configurations whose predicted false-convergence rate is **exactly zero**
+//! under a pure-deletion difference (#355).
 //!
 //! `rbsr` compares the *whole* [`Aggregate`] — `(count, fingerprint)` — never the fingerprint
 //! alone. Under a pure-deletion difference (`Y = X ∖ S`, `S` non-empty), any range that actually
@@ -33,11 +34,12 @@
 //! unreachable, so this test is the regression guard on that unreachability actually holding in the
 //! driver's own code, not merely in the `Aggregate` type it compares.
 //!
-//! **What this arm does not cover.** Byte-sequence determinism (`SOTA.md` §4.4) and the two-sided
-//! confidence interval in #355's acceptance list apply to arms A and B, which measure a non-zero
-//! rate under conflict-shaped and truncation-only differences; both remain open (cluster-scale
-//! compute) and are out of scope here. Arm C's claim is exact, not statistical, so there is no rate
-//! to bound and no run to reproduce byte-for-byte beyond the seeded RNG above.
+//! **What this does not cover.** #355 also specifies a conflict-shaped-difference measurement and a
+//! truncation-only measurement (its "arm A"/"arm B" in the issue's own tracking language — not a
+//! distinction this module needs to carry), both of which predict a *non-zero* rate and need a
+//! two-sided confidence interval plus cluster-scale compute; both remain open. Byte-sequence
+//! determinism (`SOTA.md` §4.4) applies to that rate measurement, not to the exact-zero claim
+//! checked here, so there is no run to reproduce byte-for-byte beyond the seeded RNG above.
 
 #![forbid(unsafe_code)]
 
