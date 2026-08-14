@@ -238,7 +238,10 @@ copy-on-write B+-tree addressed by page number.
     range containing that key is count-balanced at every depth. The failure mode `f_p = id` covers
     outright is the rarer one; the one an LWW register produces continuously falls back on Σ's
     injectivity alone. Truncating a count-folding hash (Negentropy) trades the probability-1 half
-    away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint.
+    away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint. This
+    boundary is also a **policy** signal, not only a correctness one:
+    [#318](https://github.com/Akvize/reconcile-rs/issues/318)'s divergence-adaptive fan-out keys off
+    the same count delta and inherits the same blind spot, and owns what that costs the decision.
 - The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
   durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
   RSOS with a secure fingerprint" — persistence is the gap that remains.**
