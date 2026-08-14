@@ -23,6 +23,7 @@ Load-bearing facts, and their status. Nothing downstream is safe until these are
 | V4 | Meyer (arXiv:2212.13567) formalizes fingerprint security and **dismisses** adversarial collisions on the grounds that a malicious peer can withhold data anyway | ⚠️ second-hand. §6.4 is the rebuttal and it is the paper's thesis — this quote must be exact |
 | V5 | Nobody has published the end-to-end `(τ, w, n, d, b, R)` bound | ⚠️ open. Meyer §? surveys fingerprint schemes; the gap must be established, not assumed |
 | V6 | Clarke et al. (ASIACRYPT 2003): MSet-Add-Hash is set-collision-resistant **only** keyed | ⚠️ re-read; it is the basis of §7's repair |
+| V7 | The k-tree applies to `ℤ/2^w` with no error term, and a planted solution makes the real driver SKIP | ✅ **executed** — `rbsr/tests/wagner_false_convergence.rs`, §6.1 |
 
 ---
 
@@ -207,6 +208,24 @@ An attacker able to inject only 128 records still pays `2³⁹`. The `2¹²⁸` 
 assumed to provide is reached only at `k = 2`, i.e. by an attacker who declines to use the
 structure's homomorphism at all.
 
+**This is executed, not argued** — `rbsr/tests/wagner_false_convergence.rs`. The k-tree is run at
+`w ∈ {32, 48, 64}` against the shipped lift (`rsos::digest` reduced mod `2^w`) and the planted
+solution is handed to the **unmodified `rbsr::protocol_round`** through a `RsosView` backend. At
+every width the driver SKIPs the outer range on two stores that genuinely differ:
+
+| `w` | planted keys `k` | offline lift evaluations |
+|---:|---:|---:|
+| 32 | 8 | 4 096 |
+| 48 | 32 | 16 384 |
+| 64 | 128 | 65 536 |
+
+Three controls keep the result honest: an unsolved plant of the same shape must be *refined* (so
+the test cannot pass against a driver that skips everything), an unbalanced plant must never be
+skipped (Theorem 2, mechanically), and the cost formula is pinned against measured work so the
+extrapolation to `w = 256` is arithmetic rather than assertion. **No error term appeared at any
+width** — merging on low-order bits is exact, as §6.1 predicts, and `ℤ/2^w` behaves as the XOR
+case.
+
 ### 6.2 What that gives the attacker
 
 The two peers' honest content cancels: `Σ(X) − Σ(Y) = Σ(P_X) − Σ(P_Y)`. So planting `k/2` elements
@@ -309,14 +328,21 @@ Assertions this repository would not accept without a command behind them (`AGEN
   drive random pairs to a fixed point, count executions that terminate with `X ≠ Y`. Compare the
   empirical rate with `2C·2^(−w)`. Falsifiable, and it exercises the real `FingerprintTreeMap` and
   the real `protocol_round`. *The bound is worthless unless this matches.*
-- **E3 — the k-tree at reduced width.** Wagner against `w = 48` or `64` (`2^(2√48) ≈ 2¹³`), then
-  plant the solution in two real stores and assert `protocol_round` SKIPs the root while the stores
-  differ. **A working exploit is the strongest possible evidence, and E3 is the load-bearing risk:
-  if the k-tree does not behave as §6.1 claims, §6 and §7 collapse and the paper is Theorems 1–2
-  only.** Do this before writing prose.
-- **E4 — extrapolate E3 to `w = 256`** by measured cost per list level rather than by asserting `2³¹`.
+- **E3 — the k-tree at reduced width.** ✅ **done**, `rbsr/tests/wagner_false_convergence.rs`, four
+  tests, 0.17 s, inside the standard `cargo test --workspace` gate. Results and controls in §6.1.
+  This was the load-bearing risk and it resolved in favour of §6: **§6 and §7 stand.**
+- **E4 — extrapolate E3 to `w = 256`.** Partly discharged: the cost formula is pinned by test
+  against measured work, so `2³¹` is arithmetic on a verified formula rather than an assertion.
+  What remains is a wall-clock measurement per list level at a width large enough to be a real
+  timing (`w = 128`, `2²¹·⁶`), to state the `w = 256` cost in hours rather than in operations.
+- **E5 — the end-to-end attack against `reconcile`.** E3 stops at `protocol_round`. The full chain
+  is two live `ReplicatedMap`s over UDP, the two halves of the plant unicast one to each peer, and an
+  assertion that the divergence survives a full anti-entropy cycle. Not needed to establish the
+  result — E3 already exercises the real driver — but it is what turns "the mechanism is exploitable"
+  into "this deployment is exploitable", and it is the demo that would accompany disclosure (§11).
 
-Everything in E1–E3 can live in-tree behind `internal-testing` and stay CI-green.
+E1–E3 live in-tree and stay CI-green; E3 already does. E4's timing and E5's live drive are the
+remainder.
 
 ---
 
@@ -350,4 +376,10 @@ Independent of publication:
 - `SOTA.md` §2.4 P0-1 — the non-`GF(2)`-linearity rationale does not carry the conclusion (§6.5).
 - `rsos/src/fingerprint.rs` — the module doc's "an abelian group whose carries are not `GF(2)`-linear,
   unlike the XOR combiner it must never become" is correct and *insufficient*; same correction.
-- A keyed-lift issue, gated on E3.
+- A keyed-lift issue — no longer gated on E3, which has passed; gated now on the maintainer decision
+  in §7 (a keyed lift is a wire break, and `rsos` holds no key).
+
+**Disclosure posture (chosen 2026-08-14).** Notify the affected maintainers — `hoytech/negentropy`
+(deployed on nostr), Amparore (AELMDB), and Willow/Earthstar — before any paper or full-width demo.
+The in-tree E3 stays at reduced width: a mechanism demonstration against this repo's own driver, not
+a turnkey attack on a third party. E5's live drive waits on that notification.
