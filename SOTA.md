@@ -834,7 +834,7 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
   LNCS 2442, pp. 288–303) — https://www.iacr.org/archive/crypto2002/24420288/24420288.pdf
   **Bears on:** the k-tree solves the balance problem over `ℤ/2^w` in subexponential time, so a wide
   non-GF(2)-linear combiner is necessary but **not sufficient** — the source for §2.4 P0-1's
-  "Wagner-breakable", and for why the fix is keying rather than more width.
+  "Wagner-breakable", and for why more width is not the remedy.
   → [#337](https://github.com/Akvize/reconcile-rs/issues/337), §2.4 P0-1
 - Abadi, *PACELC* — https://en.wikipedia.org/wiki/PACELC_design_principle ; ScyllaDB repair-based tombstone GC — https://www.scylladb.com/2022/06/30/preventing-data-resurrection-with-repair-based-tombstone-garbage-collection/
 
