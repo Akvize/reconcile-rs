@@ -126,10 +126,21 @@ Both deltas are constants in RTT, and both are integer numbers of one-way hops:
   `n=10000` rows add the same 1 × RTT to very different baselines.
 - **So `cold_sync` never exercised the O(log n) refinement chain**, at any RTT. That chain runs when
   the difference is *small relative to the store* — the regime RBSR exists for. `benches/protocol.rs`
-  counts its rounds (6–8 one-way messages, i.e. 3–4 round trips, across n = 10³…10⁶ at `b` = 16), and
-  the rows above are what converts that count into seconds: **one protocol round trip costs one RTT,
-  measured, with no hidden multiplier**. A single missing element in a 10⁶-entry store is therefore
-  ~4 × RTT — ~200 ms at 50 ms RTT — against 3.8 kB of traffic.
+  counts its rounds, and the rows above are what converts that count into seconds: **one protocol
+  round trip costs one RTT, measured, with no hidden multiplier**. Refinement depth, message count,
+  round trips and the resulting wall clock at 50 ms RTT, across n = 10³…10⁶ at `b` = 16 (`d` = 1, one
+  element missing; `SOTA.md` §2.2 draws the "worst family on latency" conclusion from this table
+  without repeating the numbers):
+
+  | quantity | n = 10³ | 10⁴ | 10⁵ | 10⁶ |
+  |---|---:|---:|---:|---:|
+  | `⌈log₁₆ n⌉` — refinement depth, the model | 3 | 4 | 5 | 5 |
+  | one-way messages, measured — incl. the opening exchange and the closing item transfer | 6 | 6 | 6 | 8 |
+  | round trips = half the row above | 3 | 3 | 3 | **4** |
+  | wall clock at 50 ms RTT | 150 ms | 150 ms | 150 ms | **200 ms** |
+
+  A single missing element in a 10⁶-entry store is therefore ~4 × RTT — ~200 ms at 50 ms RTT —
+  against 3.8 kB of traffic.
 - Pricing that end-to-end rather than by composition needs a difference the two peers disagree on
   *without* disagreeing on timestamps, which only `just_insert`/`just_remove` can build. Those are
   `internal-testing` seams, and `system.rs` is deliberately feature-gate-free — so that lane belongs
@@ -197,23 +208,52 @@ and compares every decision before a table is printed.
 **Why it exists.** RBSR's published bounds — `O(d log n)` communication, `O(log n)` sequential
 rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out
 a swappable `RefinementPolicy`, so what a given configuration costs is a measurement rather than a
-quotation: this target supplies it. For a **single** missing element in a 10⁶-entry store, `b = 16`
-spends 3.8 kB over 78 ranges against `SqrtFanOut`'s ~53 kB over ~1 048 ranges, at the *same* 8
-one-way messages — log₁₆ 10⁶ ≈ 5 is already the iterated-square-root depth at that size, so the
-`Θ(log log n)` round advantage `√m` offers asymptotically does not appear below n ≈ 10¹². The timed
-`reconciliation_drive` group widens the gap further, in a column no RTT caveat touches: 2.10 ms
-against 45.0 µs, ≈47×. Interpretation lives in `SOTA.md` §2.2; the decisions these numbers drove are
-in `PROGRESS.md`. The widest
-single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP fragments at a
-1500-byte MTU); at d = 100 it reaches 160 908 B, i.e. three datagrams. Discussion in `SOTA.md` §2.2.
+quotation: this target supplies it. Interpretation of the numbers below lives in `SOTA.md` §2.2; the
+decisions they drove are in `PROGRESS.md`'s SOTA axis index.
 
-`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256). Bytes and local work follow `b / ln b`
-(minimized near `b = 3`); one-way messages fall as `log_b n` until they hit a floor — 6 at
-`n = 10⁶`, reached at `b = 32` — past which extra `b` is paid for and buys nothing. The widest single
-round grows linearly in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one
-datagram at `b = 16`. Across every measured `(n, d, clustering)`, `b = 16` is the only swept value
-never worse than `√m` on rounds; `b = 4` is the bytes-and-CPU optimum, two round-trips behind, and
-is the value to reach for when bandwidth rather than latency binds.
+Refinement bytes and one-way messages for `SqrtFanOut` (`√m`) against the default `FixedFanOut(16)`
+and the paper's `t`=32 enumeration threshold, same harness, `d` = 1, one element missing (refinement
+traffic only — the first two ship one ≈33 B element on top of it; `t`=32 ships 7–51 and is why the
+totals below differ):
+
+| n | `√m` refine B | `√m` msgs | `b`=16 refine B | `b`=16 msgs | `t`=32/`b`=16 refine B | msgs |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10³ | 2 041 | 6 | 1 701 | 6 | 1 476 | 4 |
+| 10⁴ | 5 395 | 8 | 2 195 | 6 | 1 520 | 4 |
+| 10⁵ | 16 553 | 6 | 2 789 | 6 | 2 294 | 5 |
+| 10⁶ | **53 046** | 8 | **3 834** | 8 | **3 246** | 6 |
+
+For a **single** missing element in a 10⁶-entry store, `b = 16` spends 3.8 kB over 78 ranges against
+`SqrtFanOut`'s ~53 kB over ~1 048 ranges (~×3.2 per decade of n on the `√m` bytes), at the *same* 8
+one-way messages — log₁₆ 10⁶ ≈ 5 is already the iterated-square-root depth at that size, so the
+`Θ(log log n)` round advantage `√m` offers asymptotically does not appear below n ≈ 10¹² (the message
+counts above are identical at n = 10⁶: 8 and 8). Local query cost scales with it: ~13× the
+`Aggregate`/`Rank`/`Select` queries at n = 10⁶ (2 094/2 092/1 040 against 155/152/70). The gap closes
+as `d` grows and scatters — at `d` = 100 over 10⁶ elements the two are within 7 % (270 940 B against
+253 153 B), because ~√n ranges stop being overhead once the difference genuinely needs that many;
+`√m` is worst exactly in the small-`d` regime RBSR exists for.
+
+The timed `reconciliation_drive` group widens the gap further, in a column no RTT caveat touches:
+2.10 ms under `√m` against 45.0 µs at `b` = 16 (≈47×) at n = 10⁶, 460 µs against 25.2 µs at 10⁵, and
+only 1.6× apart at 10³ — steeper than the query-count ratio because a `√n` fan-out's queries are
+individually dearer (wide `Aggregate`s, spread-out `Select`s touch far more of the tree than a narrow
+descent).
+
+The widest single round at d = 1 is 50 781 B (inside the 65 507-byte datagram ceiling, ~35 IP
+fragments at a 1500-byte MTU, any one of which loses the whole round); at d = 100 over 10⁶ elements
+it reaches 160 908 B over 3 300 ranges, i.e. three datagrams and ~189 fragments —
+`send_messages_paced` chunks past the ceiling rather than failing.
+
+`fan_out_sweep` then varies the branching factor alone (`FixedFanOut`, `b` = 2…256). Bytes and local
+work follow `b / ln b` (minimum near `b` = 3: 1 960 B at `b` = 4 against 3 834 B at 16, n = 10⁶,
+d = 1); one-way messages fall as `log_b n` until they hit a floor — 6 at `n = 10⁶`, reached at
+`b = 32` — past which extra `b` is paid for and buys nothing. The widest single round grows linearly
+in `b` and is the hard ceiling: at `n = 10⁵`, `d = 100` it already exceeds one datagram at `b = 16`.
+Across every measured `(n, d, clustering)`, `b = 16` is the only swept value never worse than `√m` on
+rounds, while spending 13.8× fewer bytes, ~45× less `T_loc` and a 63× narrower widest round than
+`√m`; `b = 4` wins on bytes and CPU but costs two round-trips — break-even at an RTT of ≈8 µs at
+1 Gb/s, i.e. only worth it when the "network" is in-process. It is the bandwidth-over-latency value
+to reach for.
 
 `threshold_sweep` does the same for the other Algorithm 1 parameter, the enumeration threshold
 (`EnumerateBelowThreshold`, `t` = 1…256, `b` held at 16), against `FixedFanOut(16)` — today's
@@ -222,8 +262,13 @@ row carries its total as a ratio to that baseline at every value size, plus its 
 element price at which the refinement it saves would exactly pay for the elements it ships. Read
 that against the element price printed above the tables — the same unit, measured the same way. `t`
 is a step function, not a dial: a range's span walks the ladder `n / b^k`, so every `t` between two
-rungs picks the same rung and costs exactly the same. The outcome, and why the default did not move:
-`PROGRESS.md`.
+rungs picks the same rung and costs exactly the same. At n = 10⁵, d = 100 scattered, `t` = 32 saves
+46 % of the refinement bytes (88 817 B against 162 993 B) and ships 5 036 elements instead of 100 —
+a trade that needs an element to cost ≤ 15 B, where the cheapest this wire format can carry is 30 B
+(a varint key, a 19-byte `Timestamp`, two framing bytes, then the payload). Totalled: 1.52× the
+default's bytes at 8-byte values, 36× at 4 KB. No swept `t` saves more than 4 % anywhere, all of it
+at 8-byte values, and none beats the default at 64 B or above. The outcome, and why the default did
+not move: `PROGRESS.md`.
 
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,

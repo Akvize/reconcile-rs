@@ -125,7 +125,10 @@ but one High resolved or mitigated.
 
 Where each axis of [`SOTA.md`](./SOTA.md) §2.4 (structure) and §1.3/§2.2 (algorithm) currently
 stands. An index, not an analysis: the target is stated in `SOTA.md`, the work in the issue, the
-status here. The subsections below organize the same issues by delivery area instead.
+status here — and, for the refinement-policy rows, the measured numbers behind it are in
+[`benches/README.md`](./benches/README.md), not repeated in either document
+([#346](https://github.com/Akvize/reconcile-rs/issues/346)). The subsections below organize the same
+issues by delivery area instead.
 
 | Axis | Target | State |
 |---|---|---|

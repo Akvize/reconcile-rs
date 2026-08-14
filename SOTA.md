@@ -17,6 +17,11 @@
 >   [alphabetical index (§5)](#5-alphabetical-index) lists them; first uses in the text link to it.
 > - **`Fxx`** denotes a finding from the original code audit; its current status lives in
 >   [`PROGRESS.md`](./PROGRESS.md).
+> - **Measured figures live in `benches/README.md`, not here** ([#346](https://github.com/Akvize/reconcile-rs/issues/346),
+>   option A): §1.3/§2.2 state the claim and verdict a benchmark run supports; the harness output
+>   itself — bytes, message counts, timings — is reproduced there, and the decisions it drove are in
+>   [`PROGRESS.md`](./PROGRESS.md)'s SOTA axis index. A refinement-policy or benchmark change should
+>   never require editing this file.
 
 ---
 
@@ -280,81 +285,37 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
 - Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
   difference. That is now priced rather than estimated (F16, [#280](https://github.com/Akvize/reconcile-rs/issues/280)):
-  `benches/system.rs`'s injected-RTT lane measures **one protocol round trip = 1.00 × RTT**
-  end-to-end, no hidden multiplier, so `benches/protocol.rs`'s message column converts directly.
-  Stating the unit, per [#232](https://github.com/Akvize/reconcile-rs/issues/232) — the formula and
-  the benchmark do not count the same thing:
-
-  | quantity | n = 10³ / 10⁴ / 10⁵ / 10⁶ |
-  |---|---|
-  | `⌈log₁₆ n⌉` — refinement depth, the model | 3 / 4 / 5 / 5 |
-  | one-way messages, measured (`benches/protocol.rs`, d = 1, `b` = 16) — incl. the opening exchange and the closing item transfer | 6 / 6 / 6 / 8 |
-  | **round trips** = half the row above | 3 / 3 / 3 / **4** |
-  | **wall clock at 50 ms RTT** | 150 ms / 150 ms / 150 ms / **200 ms** |
-
-  The last row is the cost this family pays that a single-shot sketch does not, in the unit an
-  operator budgets in. Against 3.8 kB of traffic at n = 10⁶.
+  one protocol round trip costs a measured **1.00 × RTT**, no hidden multiplier, so refinement depth
+  converts directly to wall clock — the cost this family pays that a single-shot sketch does not, in
+  the unit an operator budgets in. Quantity table and reproduction: `benches/README.md`'s
+  injected-RTT/loss lane.
 - **A size-derived fan-out sits off that point of the curve, and `rbsr` ships one.** `SqrtFanOut`
   cuts at `step = ⌊√m⌋`, so a range of *m* elements is replaced by ~√m children of ~√m elements
   each. Repeated square-rooting bottoms out in **Θ(log log n)** rounds, not O(log n) — but the first
   SPLIT emits ~√n range aggregates **regardless of d**, so communication is **Θ(√n)**, not
   O(d log n). This is not a change of logarithmic base; it is a different complexity class in both
-  columns, one better and one worse. It is not the default; the numbers below are why.
+  columns, one better and one worse. It is not the default; `benches/protocol.rs` measures why,
+  against both `FixedFanOut(16)` and the paper's `t`=32 enumeration threshold in the same harness —
+  full tables in `benches/README.md`'s "The `protocol` benchmark" section.
 
-  `benches/protocol.rs` measures **both columns against a fixed *b* in the same harness** (`u64`
-  keys, d = 1, one element missing):
-
-  | n | `√m` refine B | `√m` msgs | `b`=16 refine B | `b`=16 msgs | `t`=32/`b`=16 refine B | msgs |
-  |---:|---:|---:|---:|---:|---:|---:|
-  | 10³ | 2 041 | 6 | 1 701 | 6 | 1 476 | 4 |
-  | 10⁴ | 5 395 | 8 | 2 195 | 6 | 1 520 | 4 |
-  | 10⁵ | 16 553 | 6 | 2 789 | 6 | 2 294 | 5 |
-  | 10⁶ | **53 046** | 8 | **3 834** | 8 | **3 246** | 6 |
-
-  Refinement traffic only. The first two ship one element on top of it — d = 1, ≈ 33 B — so their
-  totals are these numbers. The third ships 7 to 51, which is the `t` bullet below, and the reason
-  the harness now reports totals rather than this column.
-
-  ~×3.2 per decade of *n* on the `√m` bytes (i.e. √10). Concretely: **one dropped UDP update in a
-  1 M-entry map costs ~53 kB on the next anti-entropy round**, against 3.8 kB for a fixed *b* = 16 —
-  and ~13× the local `Aggregate`/`Rank`/`Select` queries with it (2 094/2 092/1 040 against
-  155/152/70).
-
-  The paper's local cost *T_loc* is the widest gap, and it is pure CPU, so no RTT caveat touches it:
-  the timed two-peer drive at d = 1 runs **2.10 ms under `√m` against 45.0 µs at *b* = 16 (≈47×)** at
-  n = 10⁶, 460 µs against 25.2 µs at 10⁵, and only 1.6× apart at 10³. Steeper than the query-count
-  ratio because a `√n` fan-out's queries are individually dearer — ~1 000 `Select`s at spread-out
-  ranks and ~1 000 wide `Aggregate`s per round touch far more of the tree than a narrow descent.
-
-  **The compensation is not observable in the reachable range.** Θ(log log n) beats Θ(log_16 n)
-  asymptotically, but at n = 10⁶ the iterated square root bottoms out in ~4 levels and log₁₆ 10⁶ ≈ 5;
-  the measured message counts are *identical* (8 and 8) — and since a round trip now costs a
-  measured 1.00 × RTT (F16 above), equal counts mean equal seconds, not merely equal counts. The
-  separation only reaches a factor of two around n ≈ 10¹², far past what a fully-replicated
-  in-memory store holds. So the `√m` rule pays the Θ(√n) bytes and buys nothing back at any size
-  this crate targets.
-
-  One qualification keeps it from being a one-line verdict: the gap closes as *d* grows and
-  scatters — at d = 100 over 10⁶ elements the two are within 7 % (270 940 B against 253 153 B),
-  because ~√n ranges stop being overhead once the difference genuinely needs that many. `√m` is
-  worst exactly in the small-*d* regime RBSR exists for.
-
-  The widest single round at d = 1 is 50 781 B — inside the 65 507-byte datagram ceiling, but ~35 IP
-  fragments at a 1500-byte MTU, any one of which loses the whole round. At d = 100 over 10⁶ elements
-  it reaches **160 908 B over 3 300 ranges**, i.e. three datagrams: `send_messages_paced` chunks past
-  the ceiling rather than failing, so this degrades into extra datagrams and ~189 fragments rather
-  than breaking. It is a bandwidth and fragmentation cost, not a bug — but it is the reason #257 is a
-  communication-complexity regression rather than a tuning gap.
-- **Sweeping *b* itself lands on 16.** `benches/protocol.rs`'s `fan_out_sweep` runs *b* = 2…256.
-  Bytes and local work follow *b*/ln *b* (minimum near *b* = 3: 1 960 B at *b* = 4 against 3 834 B at
-  16, n = 10⁶, d = 1); one-way messages fall as log_*b* n to a floor of 6, reached at *b* = 32.
-  *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
-  measured (n, d, clustering), while spending 13.8× fewer bytes, ~45× less *T_loc* and a 63×
-  narrower widest round.
-  *b* = 4 wins on bytes and CPU but costs two round-trips — break-even at an RTT of ≈8 µs at 1 Gb/s,
-  i.e. only worth it when the "network" is in-process. Because the policy never crosses the wire and
-  mixed pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format
-  decision.
+  Headline: at n = 10⁶, `√m` costs ~×14 the refinement bytes of `b` = 16 for the same message count
+  (the `Θ(log log n)` round advantage does not appear below n ≈ 10¹² — the two are tied on messages
+  at that size), ~13× the local `Aggregate`/`Rank`/`Select` query count, and ~47× the CPU time to
+  drive a reconciliation (`T_loc`, the paper's local-cost metric — no RTT caveat touches it). The gap
+  closes as *d* grows and scatters: at d = 100 over 10⁶ elements the two are within single digits of
+  a percent, because ~√n ranges stop being overhead once the difference genuinely needs that many.
+  `√m` is worst exactly in the small-*d* regime RBSR exists for, and its widest single round crosses
+  from one UDP datagram's worth of IP fragments to several as *d* grows — a bandwidth/fragmentation
+  cost, not a bug, but the reason #257 is a communication-complexity regression rather than a tuning
+  gap.
+- **Sweeping *b* itself lands on 16.** `fan_out_sweep` runs *b* = 2…256: bytes and local work follow
+  *b*/ln *b* (minimum near *b* = 3), one-way messages fall as log_*b* n to a floor, reached once *b*
+  is in the low tens. *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
+  measured (n, d, clustering), while spending an order of magnitude fewer bytes and far less
+  `T_loc`. *b* = 4 wins on bytes and CPU but costs two round-trips — break-even only when the
+  "network" is in-process, at microsecond RTTs. Because the policy never crosses the wire and mixed
+  pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format decision.
+  Numbers: `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
 - **The arity question has a forty-year analytical treatment, in a literature neither RBSR paper
   cites** ([§4.1](#41-cross-community-vocabulary), [§4.4](#44-bibliography)). Random-access *tree
   algorithms* solve "split a population into `q` groups when the location of the conflicts is
@@ -404,19 +365,17 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
   them in bytes across value payload sizes (8 B…4 KB) and `threshold_sweep` runs `t` = 1…256 at
-  `b` = 16 against the default. At n = 10⁵, d = 100 scattered, `t` = 32 saves 46 % of the refinement
-  bytes (88 817 B against 162 993 B) and ships **5 036 elements instead of 100** — a trade that
-  needs an element to cost ≤ 15 B, where the cheapest this wire format can carry is 30 B (a varint
-  key, a 19-byte `Timestamp`, two framing bytes, then the payload). Totalled: **1.52× the default's
-  bytes at 8-byte values, 36× at 4 KB**. No swept `t` saves more than 4 % anywhere, all of it at
-  8-byte values, and none beats the default at 64 B or above. Details and the decision:
-  `PROGRESS.md`.
+  `b` = 16 against the default. The best-case saving on refinement bytes ships thousands of elements
+  the peer mostly already holds — a trade that only pays off below the cheapest price this wire
+  format can carry an element at, and is a net loss once totalled across payload sizes: worse than
+  the default at every value size but the smallest, and there only by a few percent. Numbers:
+  `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
   (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per
-  round it is ~79 % of the bytes measured above. The two decisions are only separable if the
-  fan-out shrinks — which, now that the fan-out is a swappable policy, is a one-line change to a
-  caller rather than an edit to the protocol loop.
+  round it dominates the bytes above. The two decisions are only separable if the fan-out shrinks —
+  which, now that the fan-out is a swappable policy, is a one-line change to a caller rather than an
+  edit to the protocol loop.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → **single-shot SOTA choice** for this use case.
 - **But** RBSR keeps two assets that sketches lack: **self-adapting** (no *d* estimation, no failure
