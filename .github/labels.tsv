@@ -53,6 +53,16 @@
 #   S-stale  the k8s stale->rotten->closed bot defends a backlog nobody reads. Here the
 #            equivalent is `S-parked` with a wake-up trigger written in the body: an issue is
 #            parked *by decision*, never by neglect.
+#
+# GitHub's native Issue Type/Priority/Effort/Start date/Target date fields — the akvize org has
+# all five enabled — are the same kind of second order and are deliberately not used here. Type
+# is a strict subset of C- (Bug/Feature/Task/Epic vs. nine values) and Priority/Effort duplicate
+# what a milestone plus S- already answer, with the same "arbitrates by hand" failure this
+# section states for P-/E-/T-. Unlike a label, none of the five is covered by
+# `scripts/sync-labels.sh` or `scripts/check-issue-triage.sh`, so a value set on one issue is not
+# a convention, just an unenforced one-off — several were found stamped on #270-#277 (2026-08-14)
+# with nothing behind them and cleared for exactly that reason. Setting any of the five on an
+# issue going forward is the mistake this note exists to prevent.
 
 # ---------------------------------------------------------------------------------------
 # C- — category: what the issue is, i.e. what artifact closes it. Exactly one.
