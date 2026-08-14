@@ -19,3 +19,6 @@ echo "Running doc-budget check"
 
 echo "Running domain-purity check"
 (cd $TEMPDIR; ./scripts/check-domain-purity.sh)
+
+echo "Running doc-structure check"
+(cd $TEMPDIR; ./scripts/check-doc-structure.sh)

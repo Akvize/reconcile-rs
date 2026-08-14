@@ -176,4 +176,74 @@ if [ "$manifest_status" -ne 0 ]; then
     status=1
 fi
 
+# --- Part 3: the graph ARCHITECTURE.md §2 *draws* must be the graph the manifests *are* ----------
+#
+# Parts 1 and 2 enforce the negative — which edges may never exist. Nothing enforced the positive:
+# that the documented graph is the real one. AGENTS.md §9 already carried that as a prose rule
+# ("Widening either set means updating the script **and** `ARCHITECTURE.md` §2 together"), which is
+# exactly the shape §10 says belongs in a failing command instead.
+#
+# It matters beyond tidiness. The §2 diagram was missing `rsos --> reconcile` while the manifest has
+# carried that dependency all along, and the table three lines below the diagram said "depends on
+# all four" — the section contradicted itself. That edge is load-bearing: #308's version-line
+# decision rests on `rsos::Rsos` being in `reconcile`'s public API, which is true only because the
+# edge exists.
+#
+# Direction convention: mermaid `X --> Y` reads "X feeds Y", so it asserts *Y depends on X*.
+# Node ids are not crate names (`lww` is `lww-register`), so ids are mapped through the first
+# whitespace-delimited token of each node's label.
+graph_status=0
+if [ -f ARCHITECTURE.md ]; then
+    documented=$(
+        awk '
+            /^```mermaid/ { inblock = 1; next }
+            /^```/         { inblock = 0 }
+            !inblock       { next }
+            # node declaration:  id["crate-name\n…"]
+            match($0, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\["/) {
+                id = $0; sub(/^[[:space:]]*/, "", id); sub(/\[.*$/, "", id)
+                label = $0; sub(/^[^"]*"/, "", label); sub(/\\n.*$/, "", label); sub(/".*$/, "", label)
+                sub(/[[:space:]].*$/, "", label)
+                name[id] = label; next
+            }
+            # edge:  a --> b
+            match($0, /-->/) {
+                from = $0; sub(/^[[:space:]]*/, "", from); sub(/[[:space:]]*-->.*$/, "", from)
+                to   = $0; sub(/^.*-->[[:space:]]*/, "", to); sub(/[[:space:]].*$/, "", to)
+                if (from in name && to in name) print name[to] "|" name[from]
+            }
+        ' ARCHITECTURE.md | sort -u
+    )
+    actual=$(
+        for m in Cargo.toml */Cargo.toml; do
+            [ -f "$m" ] || continue
+            crate=$(sed -nE 's/^name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$m" | head -1)
+            [ -n "$crate" ] || continue
+            # `gossip` publishes as `reconcile-gossip` (AGENTS.md §11); the diagram uses the name
+            # every dependent writes in source, so normalise to that.
+            [ "$crate" = "reconcile-gossip" ] && crate=gossip
+            awk '/^\[dependencies\]/,/^\[[^d]/' "$m" |
+                sed -nE 's/^([A-Za-z0-9_-]+)[[:space:]]*=.*path[[:space:]]*=.*/\1/p' |
+                while read -r dep; do echo "$crate|$dep"; done
+        done | sort -u
+    )
+    while IFS= read -r edge; do
+        [ -n "$edge" ] || continue
+        grep -qxF "$edge" <<<"$documented" ||
+            { echo "check-domain-purity: ARCHITECTURE.md §2 does not draw ${edge%|*} --> depends on --> ${edge#*|}" >&2; graph_status=1; }
+    done <<<"$actual"
+    while IFS= read -r edge; do
+        [ -n "$edge" ] || continue
+        grep -qxF "$edge" <<<"$actual" ||
+            { echo "check-domain-purity: ARCHITECTURE.md §2 draws ${edge%|*} depending on ${edge#*|}, which no manifest declares" >&2; graph_status=1; }
+    done <<<"$documented"
+fi
+
+if [ "$graph_status" -ne 0 ]; then
+    echo >&2
+    echo "ARCHITECTURE.md §2's mermaid graph and the workspace manifests disagree. The manifests are" >&2
+    echo "ground truth: fix the diagram, or fix the dependency if the diagram was the intent." >&2
+    status=1
+fi
+
 exit "$status"

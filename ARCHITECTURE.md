@@ -47,6 +47,7 @@ flowchart LR
     reconcile["reconcile (facade)\nReplica, ReplicatedMap,\nReadReplicaMap, HlcClock, FileSnapshot"]
 
     rsos --> rbsr
+    rsos --> reconcile
     rbsr --> reconcile
     lww --> reconcile
     gossip --> reconcile

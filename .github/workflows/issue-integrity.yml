@@ -27,7 +27,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/check-closed-issue-shas.sh
 
-  # Same subject as the job above -- the tracker's existing state rather than any one diff -- so
+  # Third job on the same subject, and the reason it is here rather than in `main.yml`: a doc's
+  # claim about an issue goes stale when the *issue* moves, which is not any committer's diff.
+  # Failing a commit for it would punish the wrong person at the wrong time; failing a weekly run
+  # produces work, which is what this is. Checks only the annotated `[#N](…) (closed)` form -- see
+  # the script header for the measured reason free prose is out of scope.
+  doc-issue-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Documentation must not assert an issue state the tracker disagrees with
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/check-doc-issue-claims.sh
+
+  # Same subject as the jobs above -- the tracker's existing state rather than any one diff -- so
   # it belongs on this schedule rather than in a second weekly workflow of its own. It needs no
   # history, hence the default shallow checkout.
   open-issue-labels:

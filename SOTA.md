@@ -744,8 +744,8 @@ sourced from abstracts and search summaries — read before quoting a number fro
   optimum also lands. Different objective (channel throughput), so a convergence to investigate, not
   a transferable bound. → [#257](https://github.com/Akvize/reconcile-rs/issues/257), §2.2
 - **Q. Vogel, Y. Deshpande, Č. Stefanović, W. Kellerer**, *Analysis of d-ary tree algorithms with
-  successive interference cancellation*, `arXiv:2302.08145` (J. Applied Prob. 61(3), 2024) —
-  https://arxiv.org/abs/2302.08145
+  successive interference cancellation*, `doi:10.1017/jpr.2023.107` (J. Applied Prob. 61(3), 2024;
+  preprint `arXiv:2302.08145`) — https://arxiv.org/abs/2302.08145
   **Bears on:** disproves binary-optimality — maximal throughput is reachable at any `d` ≥ 2 **given
   suitable splitting probabilities** — so the binding axis is plausibly the split *distribution*
   rather than the arity, which is what Def. 3.8's balanced equal-rank partition fixes and what
@@ -758,13 +758,15 @@ sourced from abstracts and search summaries — read before quoting a number fro
   complexity*, `doi:10.1109/TIT.2003.815784` (IEEE Trans. Inf. Theory 49(9), 2003)
   **Bears on:** CPI, the primitive PSR partitions down to and the `≈ b·d` optimum §2.2's table
   quotes through minisketch. → §2.2
-- **M. Mitzenmacher, R. Pagh**, *Simple multi-party set reconciliation*, `arXiv:1311.2037`
-  (Distributed Computing 31(6), 2018) — https://arxiv.org/abs/1311.2037
+- **M. Mitzenmacher, R. Pagh**, *Simple multi-party set reconciliation*,
+  `doi:10.1007/s00446-017-0316-0` (Distributed Computing 31(6), 2018; preprint `arXiv:1311.2037`) —
+  https://arxiv.org/abs/1311.2037
   **Bears on:** the only entry here that is not two-party. Every cost model on this page is stated
   for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — an
   unexamined axis with an existing literature. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174)
 - **F. Lázaro, B. Matuz**, *A rate-compatible solution to the set reconciliation problem*,
-  `arXiv:2211.05472` (IEEE Trans. Commun. 71(10), 2023) — https://arxiv.org/abs/2211.05472
+  `arXiv:2211.05472v2` (IEEE Trans. Commun. 71(10), 2023 — v2 is the accepted revision) —
+  https://arxiv.org/abs/2211.05472
   **Bears on:** MET-IBLTs reconcile **without estimating `|d|`** and without worst-case oversizing —
   a third option against which #185 weighs a fixed-capacity IBLT (needs a capacity guess) and RIBLT
   (Ω(n) encoder per session). → [#185](https://github.com/Akvize/reconcile-rs/issues/185)

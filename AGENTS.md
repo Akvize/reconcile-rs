@@ -39,7 +39,8 @@ export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; wit
                                                              # in CI — run the list as CI runs it
 cargo fmt --check
 ./scripts/check-doc-budget.sh                                # AGENTS.md + CLAUDE.md ≤ 200 lines
-./scripts/check-domain-purity.sh                             # hexagonal boundary, §9
+./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
+./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
@@ -59,16 +60,15 @@ whose budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
-| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, `./scripts/check-doc-budget.sh`, `./scripts/check-domain-purity.sh` | 0.4 s |
+| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the three `./scripts/check-doc-*.sh`/`check-domain-purity.sh` gates above | 0.4 s |
 | [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s |
 | [`main.yml`](./.github/workflows/main.yml) | everything above | minutes |
 
 So a commit may be lint-dirty and a push should not be: `git commit` is a save point, `git push` a
 publication, and `git push --no-verify` skips tier 2 on purpose. Both hooks check a materialized
 tree — the index, then the commit being pushed — because what is recorded or published is what has
-to be green, whatever is half-finished on disk. Neither exports `RUSTFLAGS`: that export is for a
-human running the list by hand. `main.yml` and this list are kept in sync by hand — change one,
-change both.
+to be green, whatever is half-finished on disk. `main.yml` and this list are kept in sync by hand —
+change one, change both.
 
 Why `--all-targets` is load-bearing, why the export exists, and why each tier stops where it does:
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) "Why the gate looks like this" — measured, not asserted.
@@ -134,7 +134,7 @@ over `lww-register/src/*.rs` (catches an infrastructure type reached through an 
 re-export). `gossip` deliberately has **no** dependency on `lww-register` — nothing in
 transport/auth/replay/discovery knows what an `Entry`/`Timestamp`/`Key` is; if a change seems to need
 that edge, it has landed in the wrong crate. Widening either set means updating the script **and**
-`ARCHITECTURE.md` §2 together.
+`ARCHITECTURE.md` §2 together; the §2 half is gated — part 3 checks its graph against the manifests.
 
 Docs that change with code, same PR: `README.md`, `ARCHITECTURE.md` §1–§3, this file.
 [`PROGRESS.md`](./PROGRESS.md): living status, update as findings/phases change. `SOTA.md`: durable
