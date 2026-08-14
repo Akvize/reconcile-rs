@@ -148,6 +148,39 @@ issues by delivery area instead.
 The axis cuts across §6's gate rule: an item can be SOTA-critical and post-1.0 (#185), or a release
 gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
 
+### Research axis index
+
+Opened 2026-08-14. Where this repository can test a claim the published work leaves open — an index
+of *questions*, one row per issue, none of them a 1.0 gate. The claim and the evidence live in the
+issue; nothing here restates either. Wire cost factorizes as `|T| · w_fp (+ T_loc)`: the combiner
+half (`w_fp`) is settled in the literature, the refinement-tree half (`|T|`) is not, and the write
+path is in neither.
+
+| Axis | Question | Issue |
+|---|---|---|
+| Refinement tree `\|T\|` | Is the comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
+| Honest-model rate | What is the false-convergence rate at reduced width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
+| Rank determinacy | Does a hash-derived split rule measurably break the bound rank cuts license? | [#356](https://github.com/Akvize/reconcile-rs/issues/356) |
+| Policy affordance | `Comparison` hands a policy the fingerprint, so a third-party policy can void that bound silently | [#352](https://github.com/Akvize/reconcile-rs/issues/352) |
+| Comparison-map width | Post-#257 the width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
+| Fleet vs pair | Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
+| Multiset assumption | Can any path fold one element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
+| Multidimensional order | The analysis is dimension-free; the RSOS contract is not — what does `δ > 1` actually need? | [#360](https://github.com/Akvize/reconcile-rs/issues/360) |
+| Write cost | The contract writes the root on every insert. Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
+
+Two results landed with the index rather than as issues, because they close rather than open:
+
+- **A divergence-adaptive policy is confined to the count**, and the count is blind exactly where the
+  exact-count guarantee has already run out — folded into
+  [#318](https://github.com/Akvize/reconcile-rs/issues/318), which it narrows toward a recorded
+  decision.
+- **Re-ordering the store does not rescue that signal.**
+  `rbsr/tests/balance_under_position_map.rs` drives the unmodified protocol under three position maps
+  and measures which divergences the count can see: a key order ties the conflicting records, a
+  `(key, version)` order leaves them *adjacent* — equally unseparable — and only an order whose
+  leading component is the one that changed makes them visible. "Make `π` injective" is the wrong
+  rule; relocation is.
+
 ### Security / confidentiality
 Former umbrella [#96](https://github.com/Akvize/reconcile-rs/issues/96) closed 2026-08-14 —
 superseded by this list; the three children below stand on their own.
