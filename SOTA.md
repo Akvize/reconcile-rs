@@ -84,6 +84,15 @@ RTTs, heavier rounds) without escaping it, and measurably does not even buy the 
 n ≈ 10¹² (§2.2). Escaping the trade-off rather than moving along it is
 [#185](https://github.com/Akvize/reconcile-rs/issues/185)'s job.
 
+**That ranking is stated at one network point, and F16's lane moved off it.** The RTT column is real
+— a round trip costs 1.00 × RTT end-to-end, so this family's round count converts straight to
+seconds ([§2.2](#22-competitors-at-the-reconciliation-algorithm-level)). But it stops being the
+binding term first: at 0.1 % loss the cost is `reconcile_interval` per lost datagram, already dearer
+than the whole 0-to-50 ms RTT sweep ([#336](https://github.com/Akvize/reconcile-rs/issues/336)). No
+family in the table addresses that term — the penalty is set by the repair cadence, not by how many
+round trips the exchange needed — so a single-shot sketch shortens the chain without touching what
+dominates on a lossy path. Which family wins is a property of the path as much as of the algorithm.
+
 ### 1.4 The SOTA of Merkle/anti-entropy structures
 
 Important panel nuance: **FingerprintTreeMap does NOT belong to the Merkle Search Tree (MST) / prolly-tree
