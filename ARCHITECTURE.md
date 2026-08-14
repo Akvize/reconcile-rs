@@ -393,6 +393,25 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   constraint — `rbsr` stays 0.x (#308) and `M = Fingerprint` moves no wire bytes. The rejected
   alternative (sealing `Rsos`, which keeps every option open at the cost of third-party backends) is
   argued on #298.
+- **Pluggable per-value conflict resolution** — CRDT values beyond LWW-Register
+  ([#184](https://github.com/Akvize/reconcile-rs/issues/184)). **Decided: deferred**, no trigger has
+  fired.
+
+  | Trigger | Would mean |
+  |---|---|
+  | a converging counter | the one genuinely inexpressible gap under LWW |
+  | an opaque third-party CRDT document as `V` | strongest case for a merge seam, gated on staying under the datagram ceiling (#230) |
+
+  Blocked on stable Rust having no cheap opt-in (a defaultable `merge` is specialization,
+  nightly-only) and the datagram ceiling turning a CRDT's own growth into a correctness cliff
+  (#230). The add-wins set — the most-requested CRDT — is already free via key-encoding (#231). Full
+  reasoning, the five-edge cost breakdown and the ranked shortlist: #184.
+- **Partial replication / sharding** — the only surviving answer to capacity pressure
+  ([#186](https://github.com/Akvize/reconcile-rs/issues/186)). A pluggable `Storage` backend
+  (on-disk / LSM / content-addressed) was evaluated as an alternative and **rejected permanently**:
+  larger-than-RAM and full replication are in direct tension — a node holding everything but
+  spilling to disk on read destroys the crate's one unambiguous advantage (`SOTA.md` §1.6). Proposal
+  and staging: #186.
 
 ---
 

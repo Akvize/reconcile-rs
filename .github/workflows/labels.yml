@@ -49,8 +49,24 @@ jobs:
       # issue the moment it is opened, and the weekly audit becomes noise. The issue template also
       # sets it, which covers only template-created issues -- this covers the rest (API,
       # `gh issue create`, transfers).
-      - name: Stamp S-needs-triage
-        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label S-needs-triage
+      #
+      # Guarded on "no S- label yet": an issue created through the API with its full C-/A-/S- set
+      # already present (the shape every issue in this backlog's 2026-08-14 split/rescope pass
+      # used) still fires this same `issues: opened` webhook, and an unconditional `--add-label`
+      # stamped a second, contradictory S- onto seven of nine such issues before this guard existed
+      # -- `--add-label` merges, it does not replace, so "exactly one S-" broke immediately for
+      # the one case this job exists to prevent it for. `gh issue view --json labels` right before
+      # acting keeps the check and the write on the same event instead of trusting a separate run.
+      - name: Stamp S-needs-triage, unless an S- label is already present
+        run: |
+          set -euo pipefail
+          existing=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+          if grep -q '^S-' <<<"$existing"; then
+            echo "already carries an S- label, not stamping:"
+            grep '^S-' <<<"$existing"
+          else
+            gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label S-needs-triage
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
