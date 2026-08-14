@@ -18,12 +18,54 @@ Load-bearing facts, and their status. Nothing downstream is safe until these are
 | # | Claim | Status |
 |---|---|---|
 | V1 | Negentropy: `f_p = trunc_16B(SHA-256(Σ ‖ varint(count)))`, `Σ` = addition mod 2²⁵⁶ of 32-byte LE ids | ✅ verified against `hoytech/negentropy` `docs/negentropy-protocol-v1.md` |
-| V2 | Amparore §6.1 calls `f_p` "probabilistically sound rather than information-theoretically exact" and leaves collision analysis out of scope | ⚠️ inherited from `SOTA.md` §2.1 — the arXiv PDF is unreachable from this sandbox; re-read and quote verbatim |
-| V3 | Wagner: collisions for AdHash on an `n`-bit modulus in `O(2^(2√n))`; modulus must exceed ~1600 bits for 80-bit security | ✅ verified (secondary sources, see §10); re-check against CRYPTO 2002 §5 |
-| V4 | Meyer (arXiv:2212.13567) formalizes fingerprint security and **dismisses** adversarial collisions on the grounds that a malicious peer can withhold data anyway | ⚠️ second-hand. §6.4 is the rebuttal and it is the paper's thesis — this quote must be exact |
-| V5 | Nobody has published the end-to-end `(τ, w, n, d, b, R)` bound | ⚠️ open. Meyer §? surveys fingerprint schemes; the gap must be established, not assumed |
-| V6 | Clarke et al. (ASIACRYPT 2003): MSet-Add-Hash is set-collision-resistant **only** keyed | ⚠️ re-read; it is the basis of §7's repair |
+| V2 | Amparore §6.1 calls `f_p` "probabilistically sound rather than information-theoretically exact" and leaves collision analysis out of scope | ✅ **confirmed verbatim** — PDF read, §0.1 |
+| V3 | Wagner: collisions for AdHash on an `n`-bit modulus in `O(2^(2√n))`; modulus must exceed ~1600 bits for 80-bit security | ✅ verified (secondary sources, §10); Meyer §5.2 cites the concrete digest sizes ([MGS15]), §0.1 |
+| V4 | Meyer formalizes fingerprint security and **dismisses** adversarial collisions on the withholding grounds | ❌ **REFUTED** — Meyer §5.1 does the opposite: he names the two-honest-node attack as *the* real one. §0.1 |
+| V5 | Nobody has published the end-to-end `(τ, w, n, d, b, R)` bound | ◐ **split** — the *adversarial* half is Meyer §5.2 (Wagner, published 2023); the *honest-model quantitative* half is what Amparore §6.1 defers, and it is genuinely open. §0.1 |
+| V6 | Clarke et al. (ASIACRYPT 2003): MSet-Add-Hash is set-collision-resistant **only** keyed | ⚠️ re-read; Meyer proposes *widening* or DLP/lattice, not keying — keying is the repo-specific fix (§7) |
 | V7 | The k-tree applies to `ℤ/2^w` with no error term, and a planted solution makes the real driver SKIP | ✅ **executed** — `rbsr/tests/wagner_false_convergence.rs`, §6.1 |
+
+## 0.1 Verification outcome (2026-08-14, both PDFs read)
+
+**The proposed adversarial contribution (§6) is substantially pre-empted by Meyer 2023 §5.** The
+verdicts, quote-backed:
+
+- **V2 ✅.** Amparore §6.1, verbatim: *"Negentropy's concrete comparison rule fpNE should be read as
+  probabilistically sound rather than information-theoretically exact. A false SKIP may arise
+  whenever two unequal ranges yield the same comparison value, **either because the underlying
+  aggregate A(·) is not injective as a set summary, or because distinct encodings of aggregates
+  collide after hashing and truncation to 128 bits**. … A full end-to-end collision analysis of fpNE
+  is outside the scope of the present paper."* The bold clause **is** this document's §2 L1/L2 split —
+  Amparore states it in one sentence; §2 only makes it precise.
+
+- **V4 ❌ refuted.** Meyer §5.1 does not dismiss the attack — he *defines* it as the real one:
+  *"the cases in which a malicious node can do actual damage by finding a collision are those where
+  it supplies data to two honest nodes such that these two nodes perform faulty synchronization
+  amongst each other. Specifically: let M be a malicious node, A B be honest nodes, then a successful
+  attack consists of crafting sets X_A, X_B and sending these to A and B respectively, so that when
+  [they] run the synchronization protocol, they end up with distinct sets."* That is exactly §6.2.
+  Withholding is the case Meyer dismisses (*"does not require finding collisions at all"*), and §6.4
+  attacked that dismissal as if it covered the two-node attack. **It does not. §6.4's thesis targets
+  a claim Meyer never made.**
+
+- **V5 ◐ split.** Meyer §5.2 already contains the entire cryptanalytic core of §6: *"For addition,
+  the balance problem is as hard as subset sum … Wagner showed however in [Wag02] how to solve the
+  balance problem in subexponential time for addition. [MGS15] suggests addition for combining SHA-3
+  digests, and proposes using fingerprints of length between 2688 and 4160 or 6528 to 16512 bits to
+  achieve security levels of 128 or 256 bit respectively against Wagner's attack. [Lyu05] gives an
+  improvement over Wagner's attack finding collisions in O(2^(n^ε))."* So §6.1 (Wagner over `ℤ/2^w`),
+  §6.3 (256-bit addition is weak), §6.5 (xor/GF(2) via [BM97]) and most of §10's bibliography are
+  **Meyer 2023, not new.** What is *not* in either paper: the explicit honest-model bound
+  `2C(n,d,b)·(2^−w + 2^−τ)` with the union taken over **comparisons** (Meyer's §5 opener is
+  qualitative; his pigeonhole count is over all `2^n` subsets) — this is precisely what Amparore
+  §6.1 defers, and precisely what the original prompt asked for. **Theorem 1 + Theorem 2 are the
+  surviving open core; §6 is context.**
+
+**Consequence for the framing.** This is not "the real paper" as an adversarial-crypto result — that
+result is Meyer's. What survives is (a) the honest-model end-to-end bound Amparore explicitly left
+open, (b) Theorem 2's count-exactness refinement, which is in neither paper, (c) the executable
+demonstration that Meyer's paper attack **bites the shipped `reconcile-rs` driver** (E3), and (d) a
+material correction to this repo's own docs — see §11, promoted from a footnote to the main result.
 
 ---
 
