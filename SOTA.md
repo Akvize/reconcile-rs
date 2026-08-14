@@ -312,19 +312,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   per level over `log_b n = ln n / ln b` levels, so `refinement ≈ aggregate_size · ln n · (b / ln b)`;
   `d/db (b/ln b) = (ln b − 1)/(ln b)²` vanishes at `ln b = 1`. Over the integers the optimum is
   **`b` = 3**, with `b` = 2 and `b` = 4 tied above it. Every earlier sweep stepped over it — they ran
-  powers of two — so `fan_out_sweep` now carries `b` = 3, and the advertised-range count tests the
-  model with **no fitted constant** (n = 10⁶, d = 1):
-
-  | `b` | 2 | **3** | 4 | 8 | 16 | 32 | 256 |
-  |---|---:|---:|---:|---:|---:|---:|---:|
-  | ranges, measured | 42 | **38** | 40 | 53 | 78 | 101 | 520 |
-  | `b · ln n / ln b` | 39.9 | **37.7** | 39.9 | 53.2 | 79.7 | 127.6 | 637.8 |
-  | refinement bytes | 2 061 | **1 868** | 1 960 | 2 613 | 3 834 | 5 021 | 25 880 |
-
-  `b` = 3 is the measured minimum, as predicted, and within a rounding of the predicted count. The
-  model holds to ~2 ranges through `b` = 16 and then over-predicts, because the descent bottoms out
-  before the last level can use its full fan-out — truncation, and it is why the byte column's
-  implied constant drifts (≈ 680 at `b` = 3…8, ≈ 560 at 256) while the small-`b` end does not.
+  powers of two — so `fan_out_sweep` now carries `b` = 3. The verdict: `b` = 3 is the measured
+  minimum, and the model predicts the advertised-range count **with no fitted constant**, holding
+  through `b` = 16 before over-predicting where the descent bottoms out and the last level cannot
+  use its full fan-out. Numbers: `benches/README.md`.
 - **Sweeping *b* against the other columns still lands on 16.** One-way messages fall as log_*b* n to
   a floor, reached once *b* is in the low tens. *b* = 16 is the only swept value **never worse than `√m` on rounds** across every
   measured (n, d, clustering), while spending an order of magnitude fewer bytes and far less
