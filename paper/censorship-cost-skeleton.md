@@ -25,7 +25,29 @@ pay none — and therefore silently fails censorship resistance (Wagner). Non-ho
 | S3′ | ECMH's compute cost over additive (the price of the escape) | ✅ **measured — E6** (`scratchpad/e6`, Ristretto): combine **67×** (2.84 ns → 191 ns), lift **126×** (80 ns → 10.1 µs). Paper's optimized GLS254 ≈ 2.4× end-to-end (3 M elt/s). So the corner costs **~2.4× (hand-optimized) to ~100× (off-the-shelf) compute**, at **zero wire cost** |
 | S4 | Honest-model false convergence ≤ `2\|T\|(2^{-w}+2^{-τ})`; count-exactness | ◐ Theorem 1/2, routine; the open half Amparore §6.1 defers |
 | S5 | `\|T\| = O(b·d·log_b(n/d))`; instance-sensitive in Δ's ordered shape is open | ✅ Meyer §3.2.2 + Amparore §8 (investigation's axis) |
-| S6 | The three-ish censorship costs are inequivalent and no prior work maps them for RBSR | ⚠️ check the homomorphic-hash zoo (LtHash, ECMH, MGS15) doesn't already tabulate this **for the RBSR/reconciliation setting** |
+| S6 | The censorship-cost map is novel for the RBSR setting | ❌ **fails** — Meyer §5.2 already owns it: names ECMH ([MSTA17]), states the width-vs-compute tradeoff, and **explicitly asks for the benchmark** ("requires benchmarking to make an informed choice"). See the Verdict below |
+
+## Verdict (S6 closed, 2026-08-14): there is no novel *theory* paper here
+
+Meyer 2212.13567 §5 contains the whole censorship axis: the two-honest-node threat (§5.1), the Wagner
+weakness of additive-mod-`2^w` (§5.2), **ECMH as the elliptic-curve option** ([MSTA17], §5.2), the
+**width-vs-compute tradeoff** verbatim, and an **explicit call for the benchmark** this skeleton's E6
+answers. Amparore §6.1 defers only the honest-model bound (Theorem 1/2 — routine). So Factor B is not
+a research contribution; it is *executing what Meyer specified*.
+
+**What genuinely remains, and its honest genre — engineering + measurement, not theory:**
+
+- **E3** — the executable attack against a *shipped* RBSR driver. Meyer's is analysis; nobody had run
+  it. Evidence, not a theorem.
+- **E6** — the benchmark Meyer §5.2 explicitly asked for (additive vs ECMH combiner cost). A number,
+  not a theorem.
+- **The reconcile-rs fix** — key the lift (#337 Fix A) or switch to ECMH (Fix B). Real repo value; a
+  live vulnerability closed. This is the deliverable that matters.
+
+**Where to take it:** land the fix and the measurement as repo work (PR #338, #337, the analysis
+docs), optionally an experience/measurement note — *not* a theory paper. The only genuinely-open
+*theoretical* seam is **Factor A** (instance-sensitive `|T|` / split distribution, Amparore §8 +
+Vogel) — the **investigation's** axis, not this one. If a paper is wanted, it is there, not here.
 
 ---
 
