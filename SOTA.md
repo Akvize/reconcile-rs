@@ -8,7 +8,9 @@
 >
 > - **Literature survey dated:** 2026-05-30, with a targeted addendum on 2026-08-10 (arXiv:2603.19820
 >   read in full against its four published repositories; §1.3/§2.1/§2.2/§2.3 revised and eight
->   references added — sources cited inline and in the [bibliography (§4)](#4-bibliography)).
+>   references added — sources cited inline and in the [bibliography (§4)](#4-bibliography)) and a
+>   cross-community pass on 2026-08-14 ([§4.1](#41-cross-community-vocabulary) — the `cs.IT`/`cs.NI`
+>   dialect this document had never searched; §2.2 revised, [§4.3](#43-search-log) opened).
 > - **Scope:** the FingerprintTreeMap as a *data structure* and RBSR as an *algorithm*, compared to the published
 >   state of the art — not an audit of any particular commit.
 > - **Navigation:** a [glossary (§3)](#3-glossary) defines ~120 terms and an
@@ -320,6 +322,46 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   i.e. only worth it when the "network" is in-process. Because the policy never crosses the wire and
   mixed pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format
   decision.
+- **The arity question has a forty-year analytical treatment, in a literature neither RBSR paper
+  cites** ([§4.1](#41-cross-community-vocabulary), [§4.4](#44-bibliography)). Random-access *tree
+  algorithms* solve "split a population into `q` groups when the location of the conflicts is
+  unknown, recurse on the conflicted groups" — structurally the refinement loop, with collision
+  feedback where this protocol has fingerprint inequality.
+
+  | | Result | Bears on |
+  |---|---|---|
+  | Mathys & Flajolet 1985 | `Q` ∈ {2, 3} preferred; throughput for `Q` > 3 "quickly degrades" | the measured `b`/ln `b` minimum at `b` = 3–4 lands in the same place |
+  | Vogel et al. 2024 | **disproves** binary-optimality: maximal throughput is reachable at *any* `d` ≥ 2 **given suitable splitting probabilities** | the binding axis may be the split *distribution*, not the arity |
+
+  Two cautions before either is quoted as support. The objectives differ — channel throughput
+  against wire bytes plus `T_loc` — so the coinciding optimum is a **convergence to investigate, not
+  a transferred theorem**; and this crate's binding constraint, the widest-round datagram/MTU
+  ceiling, has no counterpart in the channel model. What does transfer cleanly is the *question*
+  Vogel et al. reopen: Algorithm 2 and `FixedFanOut` both cut a **balanced** partition by equal rank
+  (Def. 3.8), and nothing in RBSR requires that.
+  [#318](https://github.com/Akvize/reconcile-rs/issues/318)'s uneven, signal-driven split therefore
+  has adjacent analytical support it was not claiming.
+- **arXiv:2603.19820 §8 names this gap as open**, in the vocabulary `benches/protocol.rs` measures:
+
+  > it remains important to evaluate the RSOS view across other storage engines and update regimes,
+  > and **to understand more systematically how split policies, branching factors, and enumeration
+  > thresholds interact with the underlying index**
+
+  The same paragraph asks for "instance-sensitive bounds for local work that depend not only on
+  `|∆(X,Y)|` but also on the **ordered shape of the mismatches**" — the `Clustering` axis that target
+  already sweeps. Two of the paper's stated open directions are instrumented here.
+- **A benchmarking framework for set reconciliation already exists, and excludes RBSR.** GenSync
+  (IEEE TNSM 2022) ships FullSync / CPISync / IBLTSync behind one interface with a cgroup-based
+  lane injecting latency, bandwidth, loss and CPU budget, and reports **no universally dominant
+  protocol** with the winner sensitive to network parameters. Two consequences: any harness claim
+  here scopes to refinement policies *inside* RBSR, which GenSync does not carry; and its injection
+  lane is prior art for [#280](https://github.com/Akvize/reconcile-rs/issues/280) — evaluate before
+  building.
+- **Every cost model on this page is two-party; the system is N-party.** RBSR, PSR, CPI and RIBLT
+  all state their bounds for one pair of peers, while `ReplicatedMap` runs a gossip cluster whose
+  per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
+  reconciliation has its own literature (Mitzenmacher & Pagh, *Distributed Computing* 2018) that no
+  RBSR work cites. Unexamined axis, not a known-good one.
 - **The `t` column is not free, and the byte table above does not show its price.** The paper's
   enumeration threshold wins the refinement column by *stopping early* — and everything it stops on
   is then shipped as values, almost all of which the peer already holds. At n = 10⁵, d = 100
@@ -588,7 +630,79 @@ surrounding system.
 
 ## 4. Bibliography
 
-**Set reconciliation**
+### 4.1 Cross-community vocabulary
+
+> Two literatures work on the same recursive-partition skeleton under two names. This document
+> searched one of them until 2026-08-14. The map is the instrument that catches the other; it is not
+> a claim that the two are interchangeable — the rows marked **No** are where conflating them
+> produces a wrong statement.
+
+| Here (`cs.DC` / `cs.CR`) | There (`cs.IT` / `cs.NI`) | Same? |
+|---|---|---|
+| **RBSR** — range-based set reconciliation | **PSR** — partitioned set reconciliation | **Cousins.** Same skeleton; the per-partition primitive differs — next row |
+| `Fingerprint` / `RangeAggregate` / comparison value `f_p` | **SR** — set representation data structure `Z` | **No.** `Z.recovery()` restores the differing *elements* (CPI / IBLT / BCH); a fingerprint only decides equality |
+| enumeration threshold `t`, on `\|X ∩ [l,u)\|` — **range size** | `m̄`, on `δ` — **number of differences** (= sketch capacity) | **No.** Analogous role, different quantity |
+| fan-out `b`, `FixedFanOut`, balanced `b`-partition (Def. 3.8) | partition arity; **`Q`-ary** / **`d`-ary** splitting | ≈ |
+| difference size `d` | `δ` | Yes |
+| store size `n` | — (PSR bounds are stated over `δ` alone) | No counterpart |
+| refinement round / one-way message | communication round | ≈ |
+| `T_loc` | time complexity | ≈ |
+
+**The two lines share one ancestor and have not read each other since.** Verified from both reference
+lists: Meyer (SRDS 2023) and arXiv:2603.19820 [16] both cite Minsky & Trachtenberg (Allerton 2002);
+arXiv:2603.19820's 27 references carry **no** tree-algorithm, PSR-as-named or benchmarking-framework
+work, and arXiv:2509.02373's 25 references carry **no** Meyer, Amparore, Negentropy or Willow.
+
+```
+                 Minsky & Trachtenberg, Allerton 2002
+                        (divide-and-conquer root)
+                    ┌──────────────┴──────────────┐
+      fingerprint-based                      sketch-based
+      RBSR  (cs.DC/cs.CR)                    PSR  (cs.IT/cs.NI)
+      Meyer 2023 → Amparore 2026             Lázaro & Stefanović 2025 (EPSR)
+      Negentropy, Willow                     CPI, IBLT, GenSync, tree algorithms
+                    └──────── no citations either way ────────┘
+```
+
+*Bibliographic caveat:* that root is cited as **Scalable** set reconciliation (arXiv:2603.19820 [16],
+and this page) and as **Practical** set reconciliation (arXiv:2509.02373 [10], same venue and year).
+Unresolved — check the proceedings before citing either form.
+
+| Community | Venues | Terms to search |
+|---|---|---|
+| Distributed systems / P2P | SRDS, ICDCS, EuroSys + PaPoC, arXiv preprints, protocol specs | range-based set reconciliation, anti-entropy, Merkle diff, range fingerprint, prolly/MST |
+| Information theory / networking | IEEE Trans. Inf. Theory, **IEEE TNSM**, IEEE Trans. Commun., SIGCOMM, ISIT | partitioned set reconciliation, characteristic polynomial interpolation, PinSketch/BCH, IBLT, MET-IBLT, rateless |
+| Random access / MAC — *EPSR's source* | IEEE Trans. Inf. Theory, IEEE Trans. Commun., ISIT, GLOBECOM | tree algorithms, collision resolution, splitting algorithms, **`Q`-ary** / **`d`-ary**, Capetanakis, Tsybakov–Mikhailov |
+
+### 4.2 Entry format
+
+```
+- **Authors**, *Title*, `arXiv:NNNN.NNNNNvV` | `doi:10.xxxx/…` (venue, year) — <url>
+  **Bears on:** <one sentence — the single claim that touches this repo>. → #NNN, §X.Y
+```
+
+1. **Version-pinned identifier.** `arXiv:2509.02373v1`, never bare — a claim can move between
+   versions, and a silently retargeting citation is the drift §9 exists to stop.
+2. **`Bears on:` is mandatory, one sentence.** No bearing, no entry; background belongs in §3.
+3. **Forward pointer**, so the bibliography is navigable in both directions rather than write-only.
+
+Entries predating this format are grandfathered; add the two fields when next touching one.
+
+### 4.3 Search log
+
+The coverage boundary is a fact, and it had no home — so a survey pass could not tell what an earlier
+pass had already ruled out. Record negative results too.
+
+| Date | Terms / dialect | Scope | Outcome |
+|---|---|---|---|
+| 2026-05-30 | "range-based set reconciliation" | `cs.DC` / `cs.CR` | Baseline survey. Held the Allerton-2002 root but **never searched the PSR dialect** |
+| 2026-08-10 | arXiv:2603.19820 + its four repositories | targeted | §1.3/§2.1/§2.2/§2.3 revised, 8 references added |
+| 2026-08-14 | "partitioned set reconciliation"; reference lists of arXiv:2509.02373 (25) and arXiv:2603.19820 (27), walked one level | `cs.IT` / `cs.NI` | **§4.4's `cs.IT` group** — EPSR, GenSync, the tree-algorithm arity lineage, multi-party, MET-IBLT. §2.2 revised |
+| 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not established.** The measured `b`/ln `b` law has no confirmed analytical counterpart — open |
+
+### 4.4 Bibliography
+
+**Set reconciliation — range-based (`cs.DC` / `cs.CR`)**
 - A. Meyer, *Range-Based Set Reconciliation*, arXiv:2212.13567 (IEEE SRDS 2023) — https://arxiv.org/abs/2212.13567 ; primer: https://logperiodic.com/rbsr.html
 - L. Yang, Y. Gilad, M. Alizadeh, *Practical Rateless Set Reconciliation*, SIGCOMM 2024, arXiv:2402.02668 — https://arxiv.org/abs/2402.02668 ; impl. https://github.com/yangl1996/riblt
 - minisketch (Bitcoin Core) — https://github.com/bitcoin-core/minisketch ; BIP 330 — https://bips.dev/330/
@@ -602,13 +716,74 @@ surrounding system.
   reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
   communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).
 - Y. Minsky, A. Trachtenberg, *Scalable set reconciliation*, Allerton 2002 — the divide-and-conquer
-  ancestry of range-based refinement, predating the RBSR framing.
+  ancestry of range-based refinement, predating the RBSR framing. **Also the root of the PSR line**
+  ([§4.1](#41-cross-community-vocabulary)): the one paper both dialects cite, and the reason this
+  page held the ancestor for months without ever reaching its `cs.IT` continuation.
 - *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
 - *ConflictSync*, arXiv:2505.01144 (2025, Baquero group) — the first digest-driven synchronisation
   algorithm for state-based CRDTs, cutting transfer up to 18× — https://arxiv.org/abs/2505.01144
 - *Rateless Bloom Filters*, arXiv:2510.27614 (2025, Baquero group) — https://arxiv.org/abs/2510.27614
   ; both validate §2.2's hybrid conclusion and show delta-CRDT sync converging toward digest-driven
   sync, i.e. toward what this crate already does.
+
+**Set reconciliation — partitioned and sketch-based (`cs.IT` / `cs.NI`)** *(§4.1's other dialect,
+opened 2026-08-14. arXiv:2509.02373 and arXiv:2603.19820 were read as PDFs; the rest of this group is
+sourced from abstracts and search summaries — read before quoting a number from it.)*
+
+- **F. Lázaro, Č. Stefanović**, *Tree algorithms for set reconciliation*, `arXiv:2509.02373v1`
+  (submitted to IEEE, 2025) — https://arxiv.org/abs/2509.02373
+  **Bears on:** EPSR transmits one child's SR per split and derives the sibling's by subtracting from
+  the parent's, so a **group**-valued summary saves one transmission per split where a monoid or a
+  conventional hash cannot — `Fingerprint` (add/sub mod 2²⁵⁶) qualifies. Their near-halving is
+  specific to **binary** partitioning; at fan-out `b` the saving is `1/b`, ~6 % at `b` = 16.
+  → [#298](https://github.com/Akvize/reconcile-rs/issues/298), [#185](https://github.com/Akvize/reconcile-rs/issues/185), §2.2
+- **N. Boškov, A. Trachtenberg, D. Starobinski**, *GenSync: A New Framework for Benchmarking and
+  Optimizing Reconciliation of Data*, `doi:10.1109/TNSM.2022.3164369` (IEEE TNSM 19(4), 2022) —
+  https://github.com/nislab/gensync
+  **Bears on:** an open-source testbed for set-reconciliation *families* with a cgroup-based
+  latency/bandwidth/loss lane, reporting no universally dominant protocol; **carries no RBSR**, so a
+  harness claim here scopes to refinement policies inside RBSR, and its injection lane is prior art
+  to evaluate before building one. → [#280](https://github.com/Akvize/reconcile-rs/issues/280), [#174](https://github.com/Akvize/reconcile-rs/issues/174), §2.2
+- **J. Capetanakis**, *Tree algorithms for packet broadcast channels*, `doi:10.1109/TCOM.1979.1094661`
+  (IEEE Trans. Commun. 25(5), 1979) · **P. Mathys, P. Flajolet**, *Q-ary collision resolution
+  algorithms in random-access systems with free or blocked channel access*,
+  `doi:10.1109/TIT.1985.1057013` (IEEE Trans. Inf. Theory 31(2), 1985)
+  **Bears on:** the founding and the `Q`-ary analyses of splitting when conflict locations are
+  unknown — `Q` ∈ {2,3} preferred, degrading past 3, which is where this repo's measured `b`/ln `b`
+  optimum also lands. Different objective (channel throughput), so a convergence to investigate, not
+  a transferable bound. → [#257](https://github.com/Akvize/reconcile-rs/issues/257), §2.2
+- **Q. Vogel, Y. Deshpande, Č. Stefanović, W. Kellerer**, *Analysis of d-ary tree algorithms with
+  successive interference cancellation*, `arXiv:2302.08145` (J. Applied Prob. 61(3), 2024) —
+  https://arxiv.org/abs/2302.08145
+  **Bears on:** disproves binary-optimality — maximal throughput is reachable at any `d` ≥ 2 **given
+  suitable splitting probabilities** — so the binding axis is plausibly the split *distribution*
+  rather than the arity, which is what Def. 3.8's balanced equal-rank partition fixes and what
+  [#318](https://github.com/Akvize/reconcile-rs/issues/318) proposes to vary. → [#318](https://github.com/Akvize/reconcile-rs/issues/318), §2.2
+- **A. J. E. M. Janssen, M. J. de Jong**, *Analysis of contention tree algorithms*,
+  `doi:10.1109/18.868486` (IEEE Trans. Inf. Theory 46(6), 2000)
+  **Bears on:** levels-to-resolution statistics for arbitrary node degree — the analytical form of
+  the round-count column `benches/protocol.rs` reports empirically. → [#257](https://github.com/Akvize/reconcile-rs/issues/257)
+- **Y. Minsky, A. Trachtenberg, R. Zippel**, *Set reconciliation with nearly optimal communication
+  complexity*, `doi:10.1109/TIT.2003.815784` (IEEE Trans. Inf. Theory 49(9), 2003)
+  **Bears on:** CPI, the primitive PSR partitions down to and the `≈ b·d` optimum §2.2's table
+  quotes through minisketch. → §2.2
+- **M. Mitzenmacher, R. Pagh**, *Simple multi-party set reconciliation*, `arXiv:1311.2037`
+  (Distributed Computing 31(6), 2018) — https://arxiv.org/abs/1311.2037
+  **Bears on:** the only entry here that is not two-party. Every cost model on this page is stated
+  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — an
+  unexamined axis with an existing literature. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174)
+- **F. Lázaro, B. Matuz**, *A rate-compatible solution to the set reconciliation problem*,
+  `arXiv:2211.05472` (IEEE Trans. Commun. 71(10), 2023) — https://arxiv.org/abs/2211.05472
+  **Bears on:** MET-IBLTs reconcile **without estimating `|d|`** and without worst-case oversizing —
+  a third option against which #185 weighs a fixed-capacity IBLT (needs a capacity guess) and RIBLT
+  (Ω(n) encoder per session). → [#185](https://github.com/Akvize/reconcile-rs/issues/185)
+- **M. Goodrich, M. Mitzenmacher**, *Invertible Bloom lookup tables*, Allerton 2011 ·
+  **D. Eppstein, M. Goodrich, F. Uyeda, G. Varghese**, *What's the difference? Efficient set
+  reconciliation without prior context*, `doi:10.1145/2043164.2018462` (SIGCOMM 2011) ·
+  **P. Ozisik et al.**, *Graphene*, `doi:10.1145/3341302.3342082` (SIGCOMM 2019)
+  **Bears on:** the IBLT origin, the difference-digest framing §1.3's table row rests on, and the
+  Bloom-prefilter-plus-IBLT hybrid that prefigures ConflictSync's two-stage design.
+  → [#185](https://github.com/Akvize/reconcile-rs/issues/185), §1.3
 
 **Merkle / anti-entropy structures**
 - A. Auvolat, F. Taïani, *Merkle Search Trees*, SRDS 2019 — https://inria.hal.science/hal-02303490 ; crate https://github.com/domodwyer/merkle-search-tree ; Bluesky/atproto usage — https://atproto.com/specs/repository

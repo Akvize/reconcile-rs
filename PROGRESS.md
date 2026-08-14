@@ -6,21 +6,24 @@
 > **[Issue #138](https://github.com/Akvize/reconcile-rs/issues/138)** tracks the architecture
 > migration to closure.
 
-- **Last updated:** 2026-08-13.
+- **Last updated:** 2026-08-14.
 - **Release 1.0.0:** what the release commits to and what gates it — **§6 below**, mirroring
   [#206](https://github.com/Akvize/reconcile-rs/issues/206) (rewritten 2026-08-11 around an explicit
   definition of 1.0; the 2026-06 phase plan it replaced is dissolved into the issues each
   disposition belonged to).
 - **Structural migration:** complete — five-crate workspace, ports on the correct side of each
-  boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issues
-  [#138](https://github.com/Akvize/reconcile-rs/issues/138) and
-  [#145](https://github.com/Akvize/reconcile-rs/issues/145) stay open pending the first
-  split-aware release (below), not because code work remains.
+  boundary, domain purity compiler-enforced (`ARCHITECTURE.md`). Tracking issue
+  [#138](https://github.com/Akvize/reconcile-rs/issues/138) stays open for one residual coupling
+  (`timeout_wheel` reads the wall clock directly, pending #288's decision), not the split itself.
+  [#145](https://github.com/Akvize/reconcile-rs/issues/145), which carried no code work of its own,
+  closed 2026-08-14 — its sole criterion, the first split-aware release, is the `v1.0.0` milestone's
+  own completion condition, not a separate issue to track it.
 - **Publish status:** only `reconcile` `0.2.1` is on crates.io, and it **predates this workspace
   split** — it vendors what are now `rsos`/`rbsr`/`lww-register`/`gossip` directly. The four sibling
   crates have never been published; the release pipeline to publish all five
   (`.github/workflows/tags.yml`, AGENTS.md §11) is implemented but has not been run. Tracked in
-  [#204](https://github.com/Akvize/reconcile-rs/issues/204) (open): the next tag is a breaking
+  [#204](https://github.com/Akvize/reconcile-rs/issues/204) (closed 2026-08-14, mechanics resolved —
+  the version decision itself lives in §6's "Version to cut" row): the next tag is a breaking
   release (recent renames, the wire-format changes below), so it is deliberately a maintainer call,
   not bumped by a feature PR.
 
@@ -131,10 +134,10 @@ status here. The subsections below organize the same issues by delivery area ins
 | Secure, wide summary | §2.4 P0-1 | ✅ F6/[#111](https://github.com/Akvize/reconcile-rs/issues/111) — 256-bit additive BLAKE3 |
 | Emptiness decided on size, not hash | §2.4 P0-2 | ✅ F1/[#106](https://github.com/Akvize/reconcile-rs/issues/106); the map's own `==` re-fixed by `cc4d7c4` ([#282](https://github.com/Akvize/reconcile-rs/issues/282)) |
 | Stable hash as a wire contract | §2.4 P0-3 | ✅ F8/[#111](https://github.com/Akvize/reconcile-rs/issues/111) + `rsos::encoding` |
-| Generic monoid summary | §2.4 P1-4 | **waived to 2.0** — [#298](https://github.com/Akvize/reconcile-rs/issues/298), §6 Waivers |
+| Generic monoid summary | §2.4 P1-4 | **waived to 2.0** — [#298](https://github.com/Akvize/reconcile-rs/issues/298) (closed), §6 Waivers |
 | RSOS contract exposed | §2.4 P1-5 | ✅ `rank`/`select`/`range` `pub` on `rsos`; iterator residue [#92](https://github.com/Akvize/reconcile-rs/issues/92), [#291](https://github.com/Akvize/reconcile-rs/issues/291) |
 | Persistence / content-addressing | §2.4 P2-6 | ◯ [#271](https://github.com/Akvize/reconcile-rs/issues/271) (+#272–#277), [#188](https://github.com/Akvize/reconcile-rs/issues/188). Build-vs-adopt call recorded on #271, undecided |
-| Conflict metadata in the value | §2.4 P2-7 | ✅ HLC F5/[#110](https://github.com/Akvize/reconcile-rs/issues/110), causal-stability GC F4/[#109](https://github.com/Akvize/reconcile-rs/issues/109); pluggable CRDT deferred — [#184](https://github.com/Akvize/reconcile-rs/issues/184) |
+| Conflict metadata in the value | §2.4 P2-7 | ✅ HLC F5/[#110](https://github.com/Akvize/reconcile-rs/issues/110), causal-stability GC F4/[#109](https://github.com/Akvize/reconcile-rs/issues/109); pluggable CRDT deferred — [#184](https://github.com/Akvize/reconcile-rs/issues/184) (closed, decision recorded in `ARCHITECTURE.md` §7) |
 | Property-testing + fuzzing | §2.4 P3-8 | ✅ F11/[#113](https://github.com/Akvize/reconcile-rs/issues/113) |
 | Adversarial robustness | §2.4 P3-9 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values, counted+dropped not silent), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
 | Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); `t` unsettled — [#315](https://github.com/Akvize/reconcile-rs/issues/315); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
@@ -144,7 +147,9 @@ status here. The subsections below organize the same issues by delivery area ins
 The axis cuts across §6's gate rule: an item can be SOTA-critical and post-1.0 (#185), or a release
 gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
 
-### Security / confidentiality (umbrella [#96](https://github.com/Akvize/reconcile-rs/issues/96))
+### Security / confidentiality
+Former umbrella [#96](https://github.com/Akvize/reconcile-rs/issues/96) closed 2026-08-14 —
+superseded by this list; the three children below stand on their own.
 - ✅ Confidentiality + integrity — XChaCha20-Poly1305 AEAD on payloads.
 - ◯ Per-node authentication / anti-MITM — [#136](https://github.com/Akvize/reconcile-rs/issues/136).
 - ◯ Forward secrecy (ephemeral-key handshake) — [#135](https://github.com/Akvize/reconcile-rs/issues/135).
@@ -321,10 +326,8 @@ gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
   point-read, memory footprint, bulk-load, cold anti-entropy convergence, gossip fan-out/propagation
   scaling, and durable rejoin — see `benches/README.md`. Still open: an external (e.g. Redis)
   comparison, non-CI and feature-gated.
-- Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT, generic monoid
-  summary) — [#185](https://github.com/Akvize/reconcile-rs/issues/185).
-- Pluggable per-value conflict resolution beyond LWW-Register —
-  [#184](https://github.com/Akvize/reconcile-rs/issues/184).
+- Cut sync latency below O(log n) sequential RTTs (hybrid RBSR + Rateless IBLT) —
+  [#185](https://github.com/Akvize/reconcile-rs/issues/185).
 - `FingerprintTreeMap` iterator refinements: `size_hint`/`ExactSizeIterator`/`FusedIterator`,
   `Debug`/`Clone`, a fully-lazy traversal (stack built on first `next()` rather than at
   construction), `DoubleEndedIterator` + `seek_lower_bound`/`seek_upper_bound` — SOTA.md §2.4 P1
@@ -371,6 +374,12 @@ The load-bearing correctness/security properties are documented once, in
 Status mirror of [#206](https://github.com/Akvize/reconcile-rs/issues/206), which owns the plan and
 the reasoning. Update a row when its issue moves; don't restate the argument.
 
+**Membership is mechanically re-derivable** — the `v1.0.0` milestone plus the `M-breaking` label
+(Gate A) or the milestone alone (Gate B/C) is the live query; if it and a table below ever disagree,
+the query wins: `is:open milestone:v1.0.0 label:M-breaking` (Gate A), `is:open milestone:v1.0.0`
+(all three gates). The tables stay because the *reasoning* per row is not re-derivable — only the
+membership drifted on 2026-08-13.
+
 | 1.0.0 freezes | Holds today |
 |---|---|
 | `reconcile`'s public API — semver from then on | no — Gate A |
@@ -406,7 +415,7 @@ flowchart TD
 | [#287](https://github.com/Akvize/reconcile-rs/issues/287) | `Transport::Addr` (dead freedom) and `Discovery`'s missing error type — both trait changes |
 | [#288](https://github.com/Akvize/reconcile-rs/issues/288) | **Decision**: `Clock` is a published port with zero public implementors and no injection seam — open it or close it |
 | [#296](https://github.com/Akvize/reconcile-rs/issues/296) | `add_pre_insert`/`add_on_update` are setters that silently discard the previous hook |
-| [#294](https://github.com/Akvize/reconcile-rs/issues/294) | `ReadReplicaMap::fingerprint` never equals `ReplicatedMap::fingerprint` between converged nodes — rename before the trap freezes in |
+| [#294](https://github.com/Akvize/reconcile-rs/issues/294) | `ReadReplicaMap::fingerprint` never equals `ReplicatedMap::fingerprint` between converged nodes — rename before the trap freezes in. Trimmed 2026-08-14 to this naming freeze; the seven non-blocking capability gaps (persistence, discovery, seed_peer, …) split to [#333](https://github.com/Akvize/reconcile-rs/issues/333) |
 | [#289](https://github.com/Akvize/reconcile-rs/issues/289) [#290](https://github.com/Akvize/reconcile-rs/issues/290) [#291](https://github.com/Akvize/reconcile-rs/issues/291) | *Partial*: the naming freezes only (`ItemRange` vs `Range`, retiring `for_testing`, `Borrow` lookup). The rest is additive |
 
 ### Gate B — the 1.0 claims must be true
@@ -418,7 +427,7 @@ flowchart TD
 | ✅ [#203](https://github.com/Akvize/reconcile-rs/issues/203) | **Closed** 2026-08-13 — dedicated `mac-hmac` CI job. The `macos` build was added, then made test-executing (loopback aliasing), then **removed entirely** the same day: the project claims no macOS deployment target, and a public repo's runner minutes are unbilled, so cost was never the trade-off — coverage-for-a-platform-nobody-ships-on was. Recorded as a waiver, §6 Waivers (poll-budget scaling under the coverage job's slower runtime is a separable follow-up, not tracked here) |
 | ✅ [#202](https://github.com/Akvize/reconcile-rs/issues/202) | **Closed** 2026-08-13 — chunked snapshot cloning bounds the write stall, directory fsync after rename, bounded retry with backoff on transient load failure (the port-contract redesign — async, associated error type — is a separable follow-up, not tracked here) |
 | ✅ [#230](https://github.com/Akvize/reconcile-rs/issues/230) | **Closed** 2026-08-13 — an oversized value is dropped with a dedicated, counted, alertable signal (`reconcile_values_oversized_total`) instead of the empty-datagram/EMSGSIZE failure loop |
-| [#205](https://github.com/Akvize/reconcile-rs/issues/205) | Items 1, 3, 5, 7, 8. Item **7** is also a Gate-A item: `internal-testing` is an ordinary feature of a published crate, so 1.0 would freeze `reconcile::testing` into the public surface |
+| [#205](https://github.com/Akvize/reconcile-rs/issues/205) | Now an index over 8 native sub-issues (split 2026-08-14; item 3 struck as obsolete). Gate B: [#325](https://github.com/Akvize/reconcile-rs/issues/325) (keyless-mode leak), [#328](https://github.com/Akvize/reconcile-rs/issues/328) (k8s readiness), [#330](https://github.com/Akvize/reconcile-rs/issues/330) (internal-testing), [#331](https://github.com/Akvize/reconcile-rs/issues/331) (pace() wedge). [#330](https://github.com/Akvize/reconcile-rs/issues/330) is also Gate A: `internal-testing` on a published crate freezes `reconcile::testing` into 1.0 |
 
 ### Gate C — release mechanics and semver coherence
 
@@ -440,13 +449,13 @@ flowchart LR
 
 | Issue | State |
 |---|---|
-| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ decided — diagram above. Reversible by construction: `0.x → 1.0` is additive, `1.0 → 2.0` is not, and #307's `feat(rbsr)!` on `main` the same day (`protocol_round` → `RoundOutcome`, `SqrtFanOut` retired as default) would have forced that 2.0. Remaining: version bumps, card wording, mechanical re-check via #311 |
+| [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **closed** 2026-08-14 — decided, diagram above. Reversible by construction: `0.x → 1.0` is additive, `1.0 → 2.0` is not, and #307's `feat(rbsr)!` on `main` the same day (`protocol_round` → `RoundOutcome`, `SqrtFanOut` retired as default) would have forced that 2.0. Remaining is mechanical: version bumps, card wording, the re-check via #311 |
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
 | [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
 | [#312](https://github.com/Akvize/reconcile-rs/issues/312) | ✅ resolved 2026-08-13 — `deny.toml` + `main.yml`'s `deny` job, `overflow-checks = true` with the trade-off recorded (§3) |
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
-| [#204](https://github.com/Akvize/reconcile-rs/issues/204) | **Mostly resolved in the tree**: `tags.yml` verifies tag against manifest and publishes in dependency order; the docs no longer say `0.0.0-git`. What remains is its Problem 3 — the version decision |
+| [#204](https://github.com/Akvize/reconcile-rs/issues/204) | ✅ **closed** 2026-08-14 — `tags.yml` verifies tag against manifest and publishes in dependency order, docs no longer say `0.0.0-git`. Its one open item, the version decision, is not separate tracking — it is the row directly below |
 
 **Version to cut** (open; required output of #206). `0.2.1` predates the split, so the next tag
 breaks whatever number it carries: `1.0.0` directly only if Gate A is complete, else `0.3.0` carrying
@@ -459,12 +468,11 @@ Open and wanted, none blocking.
 | Area | Issues |
 |---|---|
 | Performance & evidence | #170–#174, #187, #280, #281 — #257 landed 2026-08-11 via #307; #315 and #318 are its follow-ups (the enumeration threshold `t`; a divergence-adaptive policy) |
-| Generic monoid summary | #298 — **waived**, see below |
 | Persistent core map | #270–#277 |
 | Scaling & topology | #185, #186, #190, #147, #178 |
-| Grid layer | #193, #191, #192, #184 |
-| Crypto roadmap | #96, #135, #136, #137 |
-| Docs & ergonomics | #72, #92, #231, #232; additive remainder of #289–#291, #289 also gating `rbsr`'s promotion (#308) |
+| Grid layer | #193, #191, #192 |
+| Crypto roadmap | #135, #136, #137 |
+| Docs & ergonomics | #72, #92, #231, #232; additive remainder of #289–#291, #289 also gating `rbsr`'s promotion |
 
 #299 is a decision to write down, not code to build — rides along regardless.
 
@@ -474,7 +482,7 @@ A Gate A or Gate B row may also leave the list **waived** — cost named, accept
 
 | Issue | Accepted cost | Basis |
 |---|---|---|
-| #298 generic monoid *(2026-08-12)* | a 2.0.0 if a generic summary is ever wanted — `rsos::Rsos` is in `reconcile`'s public API, associated-type defaults are unstable | the seam's shape is undetermined with zero instances (`Group`/`Monoid` fork, `ARCHITECTURE.md` §7); both motivations lapsed — sketch-in-leaves dead at ~1.6 GB (#185), Meyer & Scherer 2024 weakens the theoretical half |
+| #298 generic monoid *(2026-08-12, closed 2026-08-14)* | a 2.0.0 if a generic summary is ever wanted — `rsos::Rsos` is in `reconcile`'s public API, associated-type defaults are unstable | the seam's shape is undetermined with zero instances (`Group`/`Monoid` fork, `ARCHITECTURE.md` §7); both motivations lapsed — sketch-in-leaves dead at ~1.6 GB (#185), Meyer & Scherer 2024 weakens the theoretical half |
 | #203 macOS CI lane *(2026-08-13)* | non-Linux code paths (DNS resolver, socket-buffer clamping, endianness-sensitive code) compile and run on no platform but `ubuntu-latest` between now and whenever this is revisited | no macOS deployment target is claimed anywhere in the project; runner cost was never the real trade-off (public-repo Actions minutes are unbilled) — the lane was removed because untested-platform coverage for a platform nobody ships on isn't worth the workflow's complexity, not because it was expensive |
 
 The row's original justification — *`RangeAggregate` is the wire type* — was itself wrong by the
