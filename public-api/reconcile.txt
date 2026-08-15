@@ -1,6 +1,8 @@
 pub mod reconcile
 pub use reconcile::Aggregate
 pub use reconcile::Clock
+pub use reconcile::ClusterKey
+pub use reconcile::ClusterKeyError
 pub use reconcile::DiscoverFuture
 pub use reconcile::Discovery
 pub use reconcile::DiscoveryKind
@@ -129,7 +131,7 @@ impl<K> !core::panic::unwind_safe::UnwindSafe for reconcile::read_replica_set::R
 pub mod reconcile::replicated_map
 pub struct reconcile::replicated_map::Config
 pub reconcile::replicated_map::Config::bulk_send_rate: core::option::Option<usize>
-pub reconcile::replicated_map::Config::cluster_key: core::option::Option<[u8; 32]>
+pub reconcile::replicated_map::Config::cluster_key: core::option::Option<reconcile_gossip::auth::ClusterKey>
 pub reconcile::replicated_map::Config::encrypt: bool
 pub reconcile::replicated_map::Config::freshness_window: core::time::Duration
 pub reconcile::replicated_map::Config::insecure_no_key: bool
@@ -146,7 +148,7 @@ pub reconcile::replicated_map::Config::remote_interval: u32
 pub reconcile::replicated_map::Config::send_buffer_size: core::option::Option<usize>
 impl reconcile::replicated_map::Config
 pub fn reconcile::replicated_map::Config::with_bulk_send_rate(self, usize) -> Self
-pub fn reconcile::replicated_map::Config::with_cluster_key(self, [u8; 32]) -> Self
+pub fn reconcile::replicated_map::Config::with_cluster_key(self, reconcile_gossip::auth::ClusterKey) -> Self
 pub fn reconcile::replicated_map::Config::with_freshness_window(self, core::time::Duration) -> Self
 pub fn reconcile::replicated_map::Config::with_insecure_no_key(self) -> Self
 pub fn reconcile::replicated_map::Config::with_listen_addr(self, core::net::ip_addr::IpAddr) -> Self
@@ -165,7 +167,6 @@ impl core::clone::Clone for reconcile::replicated_map::Config
 pub fn reconcile::replicated_map::Config::clone(&self) -> reconcile::replicated_map::Config
 impl core::default::Default for reconcile::replicated_map::Config
 pub fn reconcile::replicated_map::Config::default() -> Self
-impl core::marker::Copy for reconcile::replicated_map::Config
 impl core::marker::Freeze for reconcile::replicated_map::Config
 impl core::marker::Send for reconcile::replicated_map::Config
 impl core::marker::Sync for reconcile::replicated_map::Config

@@ -41,7 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
-use reconcile::{replicated_map::Config, NodeId, ReplicatedMap};
+use reconcile::{replicated_map::Config, ClusterKey, NodeId, ReplicatedMap};
 
 /// Read a required environment variable or exit with a clear message.
 fn required(name: &str) -> String {
@@ -51,20 +51,6 @@ fn required(name: &str) -> String {
 /// Read an optional environment variable, falling back to `default`.
 fn optional(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
-}
-
-/// Decode a 32-byte cluster key from a hex string (64 hex chars).
-fn parse_cluster_key(hex: &str) -> [u8; 32] {
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .expect("RECONCILE_CLUSTER_KEY must be valid hexadecimal")
-        })
-        .collect();
-    bytes
-        .try_into()
-        .expect("RECONCILE_CLUSTER_KEY must decode to exactly 32 bytes (64 hex chars)")
 }
 
 /// Derive a stable, per-pod node id from the (stable) StatefulSet pod name.
@@ -118,7 +104,11 @@ async fn main() {
         .with_node_id(node_id_from(&pod_name));
 
     match std::env::var("RECONCILE_CLUSTER_KEY") {
-        Ok(hex) if !hex.is_empty() => config = config.with_cluster_key(parse_cluster_key(&hex)),
+        Ok(hex) if !hex.is_empty() => {
+            let key = ClusterKey::from_hex(&hex)
+                .unwrap_or_else(|err| panic!("RECONCILE_CLUSTER_KEY: {err}"));
+            config = config.with_cluster_key(key);
+        }
         _ => {
             warn!(
                 "RECONCILE_CLUSTER_KEY is unset: the cluster runs UNAUTHENTICATED, and any host \
