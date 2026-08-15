@@ -85,6 +85,12 @@ const DEFAULT_DISCOVERY_DECOMMISSION_FLOOR: Duration = Duration::from_secs(600);
 /// threshold.
 const DEFAULT_BULK_SEND_RATE: usize = 32 * 1024 * 1024;
 
+/// Floor on a configured [`Config::bulk_send_rate`]. Below this, [`pace`](crate::replica::pace)
+/// holds the per-peer in-flight mark across a sleep long enough to be effectively unbounded,
+/// silently wedging that peer's sync for the duration of the dump. A value under the floor is
+/// clamped up to it, with a warning — see #331.
+pub(crate) const MIN_BULK_SEND_RATE: usize = 1024 * 1024;
+
 /// Default `SO_SNDBUF`/`SO_RCVBUF` request (see [`Config::recv_buffer_size`]). 8 MiB: the kernel
 /// clamps to the OS maximum, so it helps on a tuned host and costs nothing on an untuned one,
 /// while the stock default holds too few datagrams for a cold-sync burst.
@@ -1371,6 +1377,10 @@ pub struct Config {
     /// inter-datagram gap, the *receiver's* idle timer reopens the same re-initiation, since
     /// pacing only guards the sender against a *concurrent* dump. Only the bulk dump is paced;
     /// comparisons, acks and broadcasts go immediately.
+    ///
+    /// A nonzero value below 1 MiB/s is clamped up to it, with a warning: below that floor, the
+    /// per-peer in-flight mark is held across an effectively unbounded sleep, silently wedging
+    /// that peer's sync for the duration of the dump — see #331.
     pub bulk_send_rate: Option<usize>,
     /// `SO_RCVBUF` request in bytes, default 8 MiB; `None` leaves the OS default.
     ///

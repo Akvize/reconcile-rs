@@ -33,7 +33,7 @@ use crate::clock::{Clock, HlcClock, NodeId, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::observability;
-use crate::replicated_map::{Config, MAX_NETS};
+use crate::replicated_map::{Config, MAX_NETS, MIN_BULK_SEND_RATE};
 use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
 use gossip::auth;
@@ -357,6 +357,18 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             }
         }
         let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
+        let bulk_send_rate = config.bulk_send_rate.map(|rate| {
+            if rate > 0 && rate < MIN_BULK_SEND_RATE {
+                warn!(
+                    "bulk_send_rate {rate} B/s is below the {MIN_BULK_SEND_RATE} B/s floor and \
+                     would wedge a peer's bulk dump for an effectively unbounded sleep; clamping \
+                     up to the floor. See #331."
+                );
+                MIN_BULK_SEND_RATE
+            } else {
+                rate
+            }
+        });
         let map = FingerprintTreeMap::<K, Entry<Timestamp, V>>::new();
         let projection = FingerprintTreeMap::<K, State<V>>::new();
         // The geographical networks this cluster spans. With none declared, fall back to the
@@ -386,7 +398,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 remote_interval: Arc::new(AtomicU32::new(config.remote_interval)),
                 remote_fanout: Arc::new(AtomicUsize::new(config.remote_fanout)),
                 reconcile_interval: Arc::new(RwLock::new(config.reconcile_interval)),
-                bulk_send_rate: config.bulk_send_rate,
+                bulk_send_rate,
                 bulk_in_flight: Arc::new(RwLock::new(HashSet::new())),
                 bulk_dumps_in_flight: Arc::new(AtomicUsize::new(0)),
                 max_concurrent_bulk_dumps: config.max_concurrent_bulk_dumps,
@@ -2034,6 +2046,35 @@ mod pacing {
         let messages = bulk_updates(256, 1024);
         assert!(time_send(&messages, None).await < Duration::from_millis(200));
         assert!(time_send(&messages, Some(0)).await < Duration::from_millis(200));
+    }
+
+    /// A nonzero `bulk_send_rate` below the floor is clamped up to it rather than holding the
+    /// per-peer in-flight mark across an effectively unbounded sleep (#331). Zero and `None`
+    /// still pass through unpaced.
+    #[tokio::test]
+    async fn tiny_bulk_send_rate_is_clamped_to_the_floor() {
+        use crate::replica::Replica;
+        use crate::replicated_map::{Config, MIN_BULK_SEND_RATE};
+
+        async fn engine(addr: &str, bulk_send_rate: Option<usize>) -> Replica<i32, i32> {
+            let config = Config {
+                bulk_send_rate,
+                ..Config::default().with_listen_addr(addr.parse().unwrap())
+            };
+            Replica::new(config).await.expect("bind failed")
+        }
+
+        let tiny = engine("127.0.0.80", Some(1)).await;
+        assert_eq!(tiny.bulk_send_rate, Some(MIN_BULK_SEND_RATE));
+
+        let none = engine("127.0.0.81", None).await;
+        assert_eq!(none.bulk_send_rate, None);
+
+        let zero = engine("127.0.0.82", Some(0)).await;
+        assert_eq!(zero.bulk_send_rate, Some(0));
+
+        let above_floor = engine("127.0.0.83", Some(MIN_BULK_SEND_RATE * 2)).await;
+        assert_eq!(above_floor.bulk_send_rate, Some(MIN_BULK_SEND_RATE * 2));
     }
 
     /// A single message whose own encoding exceeds the datagram budget must be dropped — never
