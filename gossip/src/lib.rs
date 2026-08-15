@@ -25,6 +25,7 @@
 //! (`ARCHITECTURE.md` §2).
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod auth;
 // Named after the external crate it wraps; `::bincode::…` disambiguates from this module.

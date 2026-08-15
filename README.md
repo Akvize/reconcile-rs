@@ -162,6 +162,18 @@ the pairs that disagree until every node is rebuilt against the same wire versio
 as a coordinated rollout, not a rolling one, until a version window is introduced (tracked by
 issue #309, which also gates whether one ever is).
 
+### Metrics endpoint exposure
+
+> **`reconcile::prometheus::serve` binds whatever address you give it — every example in this
+> README, in `src/prometheus.rs`'s doc comments, and in the `examples/k8s/` manifests uses
+> `0.0.0.0:9000` for concreteness, i.e. all interfaces.** The `/metrics` endpoint is not a secret —
+> it carries operational metrics (peer/gossip counts, round timing, byte and datagram totals,
+> failure counters), not cluster data — but binding all-interfaces exposes that operational surface
+> to anything that can reach the port, same as any other unauthenticated HTTP listener. In
+> production, bind to a private/internal interface (e.g. the pod IP, not `0.0.0.0`) or restrict
+> reachability with a network policy / firewall rule, the same way you would for any other
+> `/metrics` endpoint.
+
 ## Persistence
 
 By default a `ReplicatedMap` is held purely in memory: a process restart loses the entire dataset,
@@ -211,7 +223,9 @@ stays lean:
   `reconcile_datagrams_dropped_total`, `reconcile_round_duration_seconds`, …). When this feature is
   off, every metric call site compiles to a no-op.
 - `metrics-prometheus` — additionally provides `reconcile::prometheus` to install a Prometheus
-  recorder and either serve a `/metrics` endpoint or render the exposition text yourself:
+  recorder and either serve a `/metrics` endpoint or render the exposition text yourself. Binding
+  it to `0.0.0.0` (as in the example below, and in the `examples/k8s/` manifests) exposes it on
+  every interface — see [Metrics endpoint exposure](#metrics-endpoint-exposure):
 
 ```rust,no_run
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -254,6 +268,13 @@ grep -A1 '^Udp:' /proc/net/snmp        # the RcvbufErrors column
 ```
 
 Set either field to `None` to leave the inherited OS default untouched.
+
+### Reconciliation interval floor
+
+`Config::reconcile_interval` (default 1 s) has a floor — roughly a few × RTT, and at or above the
+pacing gap between datagrams at the configured `Config::bulk_send_rate`. Shortening it below that
+floor does not converge faster: the mechanism, and why cold sync ends up both slower and
+re-amplified while idle chatter balloons, is documented on `Config::reconcile_interval` itself.
 
 ## Read replica (`ReadReplicaMap`)
 

@@ -43,6 +43,7 @@
 //! every [`rsos::Rsos`], so any backend works with no per-type code here.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 mod policy;
 mod protocol;

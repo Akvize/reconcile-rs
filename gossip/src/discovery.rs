@@ -72,6 +72,8 @@ pub struct RandomProbe {
 }
 
 impl RandomProbe {
+    /// Wrap the engine's live `nets`/`rng` handles. No copy is taken: retuning either through the
+    /// shared lock changes what a subsequent [`discover`](Discovery::discover) probes.
     pub fn new(nets: Arc<RwLock<Vec<IpNet>>>, rng: Arc<RwLock<StdRng>>) -> Self {
         RandomProbe { nets, rng }
     }

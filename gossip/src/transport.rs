@@ -149,6 +149,7 @@ mod in_memory {
     }
 
     impl InMemoryNetwork {
+        /// An empty fabric with no bound transports. Equivalent to [`Default::default`].
         pub fn new() -> Self {
             InMemoryNetwork::default()
         }

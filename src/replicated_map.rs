@@ -582,6 +582,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         *self.engine.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
+    /// Fingerprint of the live entries (value **and** timestamp) over `range`: `O(range size)`,
+    /// used as the anti-entropy comparison value — equal fingerprints on both peers mean equal
+    /// content over the range. See [`value_fingerprint`](Self::value_fingerprint) for the
+    /// timestamp-less counterpart.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.fingerprint(range)
     }
@@ -945,6 +949,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         }
     }
 
+    /// Run one round of anti-entropy against the configured peers: compare fingerprints, exchange
+    /// any differing ranges, and merge what comes back. Normally driven on
+    /// [`reconcile_interval`](Config::reconcile_interval) by the background task spawned at
+    /// construction; exposed for callers that want to force an out-of-band round (e.g. in tests).
     pub async fn start_reconciliation(&self) {
         let mut buf = Vec::new();
         self.engine.start_reconciliation(&mut buf).await;
@@ -1295,9 +1303,17 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 /// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
 pub const MAX_NETS: usize = 8;
 
+/// Construction parameters for a [`ReplicatedMap`]. Build with [`Config::default`] and the
+/// `with_*` builders (e.g. [`with_port`](Config::with_port),
+/// [`with_listen_addr`](Config::with_listen_addr), [`with_net`](Config::with_net)); every field
+/// is `pub` for direct construction where that reads better.
 #[derive(Clone, Copy)]
 pub struct Config {
+    /// UDP port to bind. `0` (the default) asks the OS for an ephemeral port; read back the
+    /// actual bound port from the running [`ReplicatedMap`] when it matters.
     pub port: u16,
+    /// Local address to bind the UDP socket to (default `127.0.0.1`). Also determines which
+    /// declared [`nets`](Self::nets) entry, if any, is this node's local network.
     pub listen_addr: IpAddr,
     /// The geographical networks the cluster spans, each a CIDR; declare them with
     /// [`with_net`](Config::with_net). Empty slots are `None`.
@@ -1333,10 +1349,15 @@ pub struct Config {
     /// How long the loop waits for inbound activity before initiating a round: the **background**
     /// anti-entropy cadence (default 1 s). Local writes broadcast immediately, independent of it.
     ///
-    /// Background traffic grows as `1/interval` per local peer, and the setting is
-    /// counterproductive below a few × RTT (and below the bulk pacing gap, see
-    /// [`bulk_send_rate`](Self::bulk_send_rate)): the diff is multi-round-trip, so re-initiating
-    /// early only floods the single receive loop. Retunable via
+    /// Floor it at roughly a few × RTT, and at or above the pacing gap between datagrams at the
+    /// configured [`bulk_send_rate`](Self::bulk_send_rate) (default 32 MiB/s ⇒ ~2 ms between
+    /// full-size datagrams). Below that floor, shortening the interval does **not** converge
+    /// faster: the diff is multi-round-trip, so this node's own idle timer fires between a
+    /// holder's paced datagrams mid-transfer and re-issues a full diff over ranges still in
+    /// flight. Cold sync then gets both slower and re-amplified — well past the byte cost a
+    /// single paced dump keeps it near, see [`bulk_send_rate`](Self::bulk_send_rate) — while
+    /// steady-state idle chatter balloons, since background traffic grows as `1/interval` per
+    /// local peer. Retunable via
     /// [`set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
     pub reconcile_interval: Duration,
     /// Metering rate of a single **bulk** value transfer to one peer (default 32 MiB/s); `None`
@@ -1345,8 +1366,11 @@ pub struct Config {
     /// An unpaced burst overruns the receiver's socket buffer, and the resulting lull makes this
     /// node's own [`reconcile_interval`](Self::reconcile_interval) re-issue a diff over ranges
     /// still in flight — byte amplification far past the dataset size. Pacing on a background task,
-    /// plus at most one bulk transfer per peer, keeps a cold sync ≈ the dataset size. Only the
-    /// bulk dump is paced; comparisons, acks and broadcasts go immediately.
+    /// plus at most one bulk transfer per peer, keeps a cold sync ≈ the dataset size — but only
+    /// down to [`reconcile_interval`](Self::reconcile_interval)'s floor: below the resulting
+    /// inter-datagram gap, the *receiver's* idle timer reopens the same re-initiation, since
+    /// pacing only guards the sender against a *concurrent* dump. Only the bulk dump is paced;
+    /// comparisons, acks and broadcasts go immediately.
     pub bulk_send_rate: Option<usize>,
     /// `SO_RCVBUF` request in bytes, default 8 MiB; `None` leaves the OS default.
     ///
@@ -1401,11 +1425,13 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// Set [`port`](Self::port).
     #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
+    /// Set [`listen_addr`](Self::listen_addr).
     #[must_use]
     pub fn with_listen_addr(mut self, listen_addr: IpAddr) -> Self {
         self.listen_addr = listen_addr;

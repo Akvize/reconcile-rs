@@ -36,11 +36,14 @@
 //! README "Security model".
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod clock;
 pub mod persistence;
 pub mod read_replica_map;
+pub mod read_replica_set;
 pub mod replicated_map;
+pub mod replicated_set;
 pub(crate) mod snapshot;
 
 // Sibling crates re-exported under their historical paths (`ARCHITECTURE.md` §2).
@@ -70,7 +73,9 @@ pub use rsos::{
 
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};
 pub use read_replica_map::ReadReplicaMap;
+pub use read_replica_set::ReadReplicaSet;
 pub use replicated_map::ReplicatedMap;
+pub use replicated_set::ReplicatedSet;
 
 /// Internal seam for the integration tests, behind `cfg(test)` or `internal-testing`.
 ///
