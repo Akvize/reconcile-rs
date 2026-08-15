@@ -77,6 +77,18 @@ impl<K, V> PersistedState<K, V> {
     }
 }
 
+/// Entries alone, with `members` and `tombstone_acks` empty — the common case in tests and any
+/// fresh construction where causal-stability membership and tombstone acks haven't been observed
+/// yet. Reach for [`PersistedState::new`] instead when either needs a real value.
+impl<K, V> From<DatedEntries<K, V>> for PersistedState<K, V> {
+    fn from(entries: DatedEntries<K, V>) -> Self {
+        PersistedState {
+            entries,
+            ..Default::default()
+        }
+    }
+}
+
 /// A pluggable durable backend for a replicated map.
 ///
 /// Held behind an [`Arc`](std::sync::Arc) and snapshotted from a background task, hence

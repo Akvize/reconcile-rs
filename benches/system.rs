@@ -22,7 +22,7 @@
 //!
 //! [#280]: https://github.com/Akvize/reconcile-rs/issues/280
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -711,7 +711,7 @@ fn durable_rejoin(c: &mut Criterion) {
     for &size in SIZES {
         let dir = tempfile::tempdir().unwrap();
         let snapshot = FileSnapshot::new(dir.path().join("reconcile.snapshot"));
-        let state: PersistedState<u32, u32> = PersistedState::new(
+        let state: PersistedState<u32, u32> = PersistedState::from(
             (0..size as u32)
                 .map(|k| {
                     (
@@ -728,9 +728,7 @@ fn durable_rejoin(c: &mut Criterion) {
                         ),
                     )
                 })
-                .collect(),
-            HashSet::new(),
-            HashMap::new(),
+                .collect::<Vec<_>>(),
         );
         Persistence::<u32, u32>::save(&snapshot, &state).expect("save");
 

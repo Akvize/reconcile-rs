@@ -2350,11 +2350,10 @@ mod replicated_map_tests {
         );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
-            .save(&PersistedState::new(
-                vec![(42, crate::entry::Entry::present(persisted_stamp, 999))],
-                Default::default(),
-                Default::default(),
-            ))
+            .save(&PersistedState::from(vec![(
+                42,
+                crate::entry::Entry::present(persisted_stamp, 999),
+            )]))
             .unwrap();
 
         // Create a store with the ManualClock and load the persisted state.
@@ -2402,11 +2401,10 @@ mod replicated_map_tests {
         );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
-            .save(&PersistedState::new(
-                vec![(7, crate::entry::Entry::tombstone(tombstone_stamp))], // tombstone
-                Default::default(),
-                Default::default(),
-            ))
+            .save(&PersistedState::from(vec![(
+                7,
+                crate::entry::Entry::tombstone(tombstone_stamp), // tombstone
+            )]))
             .unwrap();
 
         let store = ReplicatedMap::<i32, i32>::new_with_clock(
