@@ -418,7 +418,10 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
 
   Blocked on stable Rust having no cheap opt-in (a defaultable `merge` is specialization,
   nightly-only) and the datagram ceiling turning a CRDT's own growth into a correctness cliff
-  (#230). The add-wins set — the most-requested CRDT — is already free via key-encoding (#231). Full
+  (#230). The add-wins set — the most-requested CRDT — is already free via key-encoding, no new
+  machinery required: see [README "Modelling sets"](README.md#modelling-sets) for the encoding, its
+  per-element diff/tombstone/datagram-ceiling rationale, and how it differs from textbook add-wins
+  (#231). That encoding is a large part of why this seam is affordable to leave deferred. Full
   reasoning, the five-edge cost breakdown and the ranked shortlist: #184.
 - **Partial replication / sharding** — the only surviving answer to capacity pressure
   ([#186](https://github.com/Akvize/reconcile-rs/issues/186)). A pluggable `Storage` backend
