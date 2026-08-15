@@ -83,12 +83,14 @@ store.insert(set_id, my_or_set);
 ```
 
 Here that is the wrong encoding, and the right one needs no new machinery — each element is its own
-key:
+key. `ReplicatedMap<K, ()>` has set-shaped sugar for exactly this (`insert_member`/`remove_member`/
+`contains`, wrapping `insert`/`remove`/`get`), so a call site reads as a set operation rather than
+the raw `()` value peeking through:
 
 ```rust
 // DO: each element is a key
-store.insert((set_id, element), ());
-store.remove(&(set_id, element));
+store.insert_member((set_id, element));
+store.remove_member(&(set_id, element));
 ```
 
 Because the store is an ordered map reconciled by range diff, membership-as-keys gives, for free,
