@@ -120,6 +120,14 @@ list, a document) that would otherwise be reshipped whole on any change — not 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) §7 for why this is also part of why a pluggable CRDT `Resolve`
 seam stays deferred.
 
+**This is the current scope boundary, not a workaround standing in for a missing feature.** Every
+set sharing the one store's tree means one anti-entropy cadence and one fingerprint for everything
+in it — a `(set_id, element)` collision domain, not an isolated collection with its own fingerprint
+or conflict policy. Several independently-typed named collections, each with its own policy and
+anti-entropy isolation, is [#191](https://github.com/Akvize/reconcile-rs/issues/191) (parked, part
+of [#193](https://github.com/Akvize/reconcile-rs/issues/193)'s future `reconcile-grid` layer) —
+deliberately out of this crate's lean core, not an oversight in this encoding.
+
 ## Documentation
 
 - [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
