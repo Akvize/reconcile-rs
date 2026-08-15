@@ -516,7 +516,7 @@ flowchart TD
 | [#285](https://github.com/Akvize/reconcile-rs/issues/285) | `Authenticator` must carry a multi-key accept set — a public-enum change, and what makes #137 expressible |
 | [#287](https://github.com/Akvize/reconcile-rs/issues/287) | `Transport::Addr` (dead freedom) and `Discovery`'s missing error type — both trait changes |
 | ✅ [#288](https://github.com/Akvize/reconcile-rs/issues/288) | **Closed** 2026-08-14 — decided open: `new_with_clock` seams made public, `assert_conformance` conformance harness shipped, `Clock::observe_trusted` lost its default body |
-| [#296](https://github.com/Akvize/reconcile-rs/issues/296) | `add_pre_insert`/`add_on_update` are setters that silently discard the previous hook |
+| ✅ [#296](https://github.com/Akvize/reconcile-rs/issues/296) | **Closed** 2026-08-15 — renamed to `set_pre_insert`/`set_on_update` (cheapest-honest fix per #79's arbitration), doc corrected, replace-semantics test added |
 | [#294](https://github.com/Akvize/reconcile-rs/issues/294) | `ReadReplicaMap::fingerprint` never equals `ReplicatedMap::fingerprint` between converged nodes — rename before the trap freezes in. Trimmed 2026-08-14 to this naming freeze; the seven non-blocking capability gaps (persistence, discovery, seed_peer, …) split to [#333](https://github.com/Akvize/reconcile-rs/issues/333) |
 | [#289](https://github.com/Akvize/reconcile-rs/issues/289) [#290](https://github.com/Akvize/reconcile-rs/issues/290) [#291](https://github.com/Akvize/reconcile-rs/issues/291) | *Partial*: the naming freezes only (`ItemRange` vs `Range`, retiring `for_testing`, `Borrow` lookup). The rest is additive |
 

@@ -1513,7 +1513,7 @@ mod deadlock_regressions {
         // path; guard against re-entering more than once so the hook cannot recurse forever.
         let once = Arc::new(AtomicBool::new(false));
         let guard = once.clone();
-        svc.add_pre_insert(move |&k, v| {
+        svc.set_pre_insert(move |&k, v| {
             if !guard.swap(true, Ordering::SeqCst) {
                 let _ = hook_svc.just_insert(k + 100, v.value().copied().unwrap_or_default() + 100);
             }
@@ -1524,6 +1524,37 @@ mod deadlock_regressions {
         assert!(
             flag.load(Ordering::SeqCst),
             "The pre-insert hook never ran to completion (likely deadlocked)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_pre_insert_replaces_previous_hook() {
+        let config = Config::default()
+            .with_port(8080)
+            .with_listen_addr("127.0.0.45".parse().unwrap());
+        let svc = ReplicatedMap::new(config).await.expect("bind failed");
+
+        let first_ran = Arc::new(AtomicBool::new(false));
+        let second_ran = Arc::new(AtomicBool::new(false));
+
+        let first_ran2 = first_ran.clone();
+        svc.set_pre_insert(move |_, _| {
+            first_ran2.store(true, Ordering::SeqCst);
+        });
+        let second_ran2 = second_ran.clone();
+        svc.set_pre_insert(move |_, _| {
+            second_ran2.store(true, Ordering::SeqCst);
+        });
+
+        let _ = svc.just_insert(1, 1_u8);
+
+        assert!(
+            !first_ran.load(Ordering::SeqCst),
+            "the first pre-insert hook ran after being replaced"
+        );
+        assert!(
+            second_ran.load(Ordering::SeqCst),
+            "the second pre-insert hook never ran"
         );
     }
 

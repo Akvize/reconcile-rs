@@ -143,7 +143,7 @@ async fn main() {
     let seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     {
         let seen = seen.clone();
-        store.add_pre_insert(move |key: &String, value| {
+        store.set_pre_insert(move |key: &String, value| {
             // `value.value()` is `None` for a tombstone (a delete); only announce live keys.
             if value.value().is_some() && seen.lock().unwrap().insert(key.clone()) {
                 info!(%key, "store now holds this key (local write or reconciled from a peer)");

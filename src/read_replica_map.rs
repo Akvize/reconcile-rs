@@ -201,9 +201,10 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         *self.net.read()
     }
 
-    /// Register a hook invoked outside the map lock, before each inbound value is integrated. A
-    /// deletion arrives as `State::Tombstone`.
-    pub fn add_on_update<F: Send + Sync + Fn(&K, &State<V>) + 'static>(&self, on_update: F) {
+    /// Set the hook invoked outside the map lock, before each inbound value is integrated. A
+    /// deletion arrives as `State::Tombstone`. This is a setter: a second call replaces the
+    /// first, it does not add to it.
+    pub fn set_on_update<F: Send + Sync + Fn(&K, &State<V>) + 'static>(&self, on_update: F) {
         *self.on_update.write() = Box::new(on_update);
     }
 
@@ -667,11 +668,36 @@ mod tests {
             .expect("bind failed");
         let count = Arc::new(AtomicUsize::new(0));
         let count2 = count.clone();
-        read_replica.add_on_update(move |_, _| {
+        read_replica.set_on_update(move |_, _| {
             count2.fetch_add(1, Ordering::SeqCst);
         });
         read_replica.integrate(vec![(1, State::Present(10)), (2, State::Tombstone)]);
         assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    /// A second `set_on_update` call replaces the first hook rather than adding to it.
+    #[tokio::test]
+    async fn set_on_update_replaces_previous_hook() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let read_replica = ReadReplicaMap::<i32, i32>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+        let first_count = Arc::new(AtomicUsize::new(0));
+        let second_count = Arc::new(AtomicUsize::new(0));
+
+        let first_count2 = first_count.clone();
+        read_replica.set_on_update(move |_, _| {
+            first_count2.fetch_add(1, Ordering::SeqCst);
+        });
+        let second_count2 = second_count.clone();
+        read_replica.set_on_update(move |_, _| {
+            second_count2.fetch_add(1, Ordering::SeqCst);
+        });
+
+        read_replica.integrate(vec![(1, State::Present(10))]);
+
+        assert_eq!(first_count.load(Ordering::SeqCst), 0);
+        assert_eq!(second_count.load(Ordering::SeqCst), 1);
     }
 
     /// The read replica's value-only fingerprint matches an independently-built tree of the same

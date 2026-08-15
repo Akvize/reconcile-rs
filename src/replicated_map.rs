@@ -308,7 +308,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
             discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
         };
-        svc.add_pre_insert(|_, _| {});
+        svc.set_pre_insert(|_, _| {});
         svc
     }
 
@@ -526,11 +526,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self
     }
 
-    /// Register a pre-insert hook, invoked before each key/value pair reaches the map. Callable
-    /// more than once.
+    /// Set the pre-insert hook, invoked before each key/value pair reaches the map. This is a
+    /// setter: a second call replaces the first, it does not add to it.
+    ///
+    /// Also fires once per entry on process restart when persistence is enabled (see
+    /// [`with_persistence`](Self::with_persistence)), replaying the full persisted dataset
+    /// through the hook — a hook that assumes it only sees genuinely new state must account for
+    /// this.
     ///
     /// Hooks run outside the map's write lock, so a hook may call back into an insert method.
-    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, V>) + 'static>(
+    pub fn set_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, V>) + 'static>(
         &self,
         pre_insert: F,
     ) {
