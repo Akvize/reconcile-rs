@@ -9,9 +9,9 @@
 #   1. exactly one C-*   what artifact closes this issue
 #   2. at least one A-*  where it lands
 #   3. exactly one S-*   whether it can be acted on now
-#   4. S-blocked names its blocker as #NNN in the body
+#   4. S-blocked names its blocker as "blocked by #NNN", not as a bare #NNN
 #   6. a named gate that has already been satisfied is reported (see below)
-#   7. a closed issue does not still carry unticked acceptance boxes
+#   7. an issue closed on or after TRIAGE_BOXES_SINCE carries no unticked acceptance box
 #   8. an open parent whose every sub-issue is closed is reported
 #
 # "Does 1.0.0 wait on this" is a milestone, not a label (`.github/labels.tsv`), so there is
@@ -55,15 +55,16 @@
 #               all-references tier stayed silent on a discharged blocker — the exact failure this
 #               rule exists to catch, defeated by an incidental mention.
 #   S-parked    the trigger may not be an issue at all ("when a user asks for it"), so an
-#               all-closed rule would be wrong. Only an explicit annotation is read:
-#               `gated on #N`, `blocked by #N`, `parked on #N`, `waits on #N`, `unparked when
-#               #N`. Free prose is deliberately out of scope — "Related: #280 (the message
-#               column stays unpriced either way)" in #315 means the opposite of a dependency,
-#               and a matcher that read it as one would be wrong on its first try.
+#               all-closed rule would be wrong. Only an explicit annotation is read — the
+#               vocabulary is `BLOCKER_KEYWORDS` below. Free prose is deliberately out of scope
+#               — "Related: #280 (the message column stays unpriced either way)" in #315 means
+#               the opposite of a dependency, and a matcher that read it as one would be wrong
+#               on its first try.
 #
 # Usage:
 #   ./scripts/check-issue-triage.sh                  # report + fail on violations
 #   TRIAGE_SLA_DAYS=14 ./scripts/check-issue-triage.sh
+#   TRIAGE_BOXES_SINCE=2026-08-15 ./scripts/check-issue-triage.sh    # rule 7's window
 #
 # Requires: gh (authenticated, or GH_TOKEN in the environment) and jq.
 # CI-only by design (AGENTS.md §3): it needs the network and the issue tracker, so it fits
@@ -75,6 +76,18 @@ cd "$SCRIPT_DIR/.."
 
 REPO=${REPO:-Akvize/reconcile-rs}
 LABELS_FILE=.github/labels.tsv
+
+# The annotation vocabulary rules 4 and 6 read, written once and passed into every jq program that
+# needs it. Two copies of an alternation are two things to keep in step, and the one that drifts is
+# the one nobody re-reads (AGENTS.md §9). `blocked on` is in the list because it is what people
+# actually write — #328 said "Blocked on #292's `sync_state()`" and went unread for that alone.
+BLOCKER_KEYWORDS='gated on|blocked by|blocked on|parked on|waits on|waiting on|unparked when'
+
+# Rule 7's window. Everything closed before this predates the rule, and there is no honest way to
+# drain that tail: ticking an acceptance box on a closed issue to satisfy a linter records work as
+# done that nobody did. So the rule is *bounded* rather than grandfathered issue by issue — it fails
+# from the cutoff onward and reports the history as a count, which is the fact; the list is not.
+BOXES_SINCE=${TRIAGE_BOXES_SINCE:-2026-08-15}
 
 if ! command -v jq >/dev/null 2>&1; then
     echo "check-issue-triage: jq is required" >&2
@@ -145,16 +158,16 @@ while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok title; do
     # blocker from a "Part of", a "Related:" or a number in a sentence. That is how the #271
     # cluster sat blocked on a discharged design call with nothing to notice it.
     #
-    # It only notes: the convention postdates most of this backlog, and failing on issues written
-    # before it would make the check red for a reason their authors could not have avoided.
-    # Promote to `report` once the notes drain to zero.
+    # Both tiers fail. `bare` noted rather than failed while the backlog it postdated was annotated;
+    # that drained on 2026-08-15 (the eleven then-open S-blocked issues), so the distinction is now
+    # only in the message — a bare reference and no reference are different mistakes to fix.
     case "$blocked_ok" in
         ok) ;;
-        bare) note "$number" "S-blocked names #NNN but not as 'blocked by #NNN' — rule 6 cannot read it — $title" ;;
+        bare) report "$number" "S-blocked names #NNN but not as 'blocked by #NNN' — rule 6 cannot read it — $title" ;;
         *)  report "$number" "S-blocked with no #NNN blocker in the body — $title" ;;
     esac
 done < <(
-    jq -r --arg known "$known" '
+    jq -r --arg known "$known" --arg kw "$BLOCKER_KEYWORDS" '
         ($known | split("\n")) as $known |
         .[] |
         [ .number,
@@ -163,7 +176,7 @@ done < <(
           ([.labels[].name | select(startswith("S-"))] | length),
           ([.labels[].name | select(. as $n | $known | index($n) | not)] | length),
           (if ([.labels[].name] | index("S-blocked"))
-           then (if ((.body // "") | test("(?i)(?:gated on|blocked by|parked on|waits on|waiting on|unparked when)[ \t:*_`]*#[0-9]+")) then "ok"
+           then (if ((.body // "") | test("(?i)(?:" + $kw + ")[ \t:*_`]*#[0-9]+")) then "ok"
                  elif ((.body // "") | test("#[0-9]+")) then "bare"
                  else "missing" end)
            else "ok" end),
@@ -224,11 +237,16 @@ if command -v gh >/dev/null 2>&1; then
         # character: bash collapses runs of it, so an empty middle field silently shifts every
         # column after it and the title lands in `refs`. The rules above never emit an empty
         # field, which is why the same `read` has been safe there.
-        jq -r '
+        jq -r --arg kw "$BLOCKER_KEYWORDS" '
             def refs_all: [ (.body // "") | scan("#([0-9]+)") | .[0] ] | unique;
+            # One keyword, then the whole run of numbers it introduces — "blocked by #273, #274 and
+            # #275" names three blockers, and reading only the first is worse than reading none: the
+            # rule would fire the moment #273 closed, while #274 and #275 were still open. The run
+            # stops at the first thing that is not another #NNN, so "blocked by #276, which #277
+            # supersedes" still yields #276 alone.
             def refs_annotated: [ (.body // "")
-                | scan("(?i)(?:gated on|blocked by|parked on|waits on|waiting on|unparked when)[ \t:*_`]*#([0-9]+)")
-                | .[0] ] | unique;
+                | scan("(?i)(?:" + $kw + ")[ \t:*_`]*((?:#[0-9]+(?:[ \t]*(?:,|and|&|/)[ \t]*)?)+)")
+                | .[0] | scan("#([0-9]+)") | .[0] ] | unique;
             def field: join(" ") | if . == "" then "-" else . end;
             .[]
             | . as $i
@@ -260,23 +278,42 @@ fi
 # This does not forbid bundling — that is a judgement about how to write an issue. It makes the
 # half-close loud, which is the damage. The fix at the source is sub-issues: one number each,
 # closing one does not close the others, and a dependency becomes expressible.
-if [ -z "${ISSUES_JSON:-}" ] && command -v gh >/dev/null 2>&1; then
+#
+# Bounded by `BOXES_SINCE` (declared above with the reason). ISO-8601 sorts lexicographically, so a
+# date-only cutoff compares directly against `closedAt`'s full timestamp — no date arithmetic, and
+# nothing to get wrong across the `date` implementations §3's SLA block already has to straddle.
+if [ -n "${CLOSED_ISSUES_JSON:-}" ]; then
+    closed=$(cat "$CLOSED_ISSUES_JSON")
+elif [ -z "${ISSUES_JSON:-}" ] && command -v gh >/dev/null 2>&1; then
+    closed=$(gh issue list --repo "$REPO" --state closed --limit 500 \
+        --json number,title,body,closedAt)
+else
+    closed=""
+fi
+
+if [ -n "$closed" ]; then
     while IFS=$'\t' read -r number open_boxes title; do
         [ -n "$number" ] || continue
-        # Notes rather than fails, for the same reason rule 4 does: this scans every closed issue
-        # in the repository, and the convention postdates most of them. Failing would make the job
-        # red on history nobody is going to reopen. Promote once the notes drain.
-        note "$number" "closed with $open_boxes unticked acceptance box(es) — split it, or tick them — $title"
+        report "$number" "closed with $open_boxes unticked acceptance box(es) — split it, or tick them — $title"
     done < <(
-        gh issue list --repo "$REPO" --state closed --limit 500 --json number,title,body \
-            | jq -r '
-                .[]
-                | . as $i
-                | ([ (.body // "") | scan("(?m)^[ \t]*[-*][ \t]+\\[[ ]\\]") ] | length) as $open
-                | select($open > 0)
-                | [ $i.number, $open, $i.title ] | @tsv
-            '
+        jq -r --arg since "$BOXES_SINCE" '
+            .[]
+            | . as $i
+            | select((.closedAt // "") >= $since)
+            | ([ (.body // "") | scan("(?m)^[ \t]*[-*][ \t]+\\[[ ]\\]") ] | length) as $open
+            | select($open > 0)
+            | [ $i.number, $open, $i.title ] | @tsv
+        ' <<<"$closed"
     )
+
+    # The tail is a count, not a list: naming each of them every run would bury the window's
+    # findings under history that is, by construction, never going to change.
+    historical=$(jq --arg since "$BOXES_SINCE" '
+        [ .[] | select((.closedAt // "") < $since)
+              | select(([ (.body // "") | scan("(?m)^[ \t]*[-*][ \t]+\\[[ ]\\]") ] | length) > 0) ]
+        | length' <<<"$closed")
+    [ "$historical" -eq 0 ] ||
+        echo "  · $historical issue(s) closed before $BOXES_SINCE carry unticked boxes — predate the rule, not gated"
 fi
 
 # --- Rule 8: every sub-issue closed, parent still open -------------------------------------
