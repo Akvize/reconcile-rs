@@ -44,6 +44,7 @@
 //! second element dimension. A set-only RSOS is the degenerate case `V = ()`.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod aggregate;
 pub mod encoding;
