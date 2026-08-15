@@ -29,9 +29,9 @@ ln -sf ../../pre-commit .git/hooks/pre-commit
 ln -sf ../../pre-push .git/hooks/pre-push
 ```
 
-## 3. Build, lint, test — run all before declaring work done
+## 3. Build, lint, test
 
-In CI's order (`.github/workflows/main.yml`):
+In CI's order (`.github/workflows/main.yml`) — most of this already runs via hooks (§2), see below:
 
 ```bash
 export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint
@@ -54,9 +54,9 @@ cargo package --workspace --allow-dirty                       # release packagin
 cargo deny check                                              # advisories/licenses/sources, deny.toml
 ```
 
-`--workspace`, never `--all`. This list is what CI runs and what "done" means. The two git hooks run
-tiered *subsets* of it and deliberately do not reproduce it; a check belongs in the earliest tier
-whose budget it fits, and if it fits none of them it is CI-only by design:
+`--workspace`, never `--all`. The hooks below auto-run tiered *subsets* of this on every commit/push
+(§2) — don't replay their commands by hand. What fits neither tier is CI-only by design; run it
+locally only when the change plausibly touches it, not reflexively:
 
 | tier | what runs | cost |
 |---|---|---|
