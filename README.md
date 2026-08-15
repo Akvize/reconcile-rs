@@ -72,6 +72,53 @@ Because every replica holds everything, memory use and write fan-out grow with t
 node count; see [`SOTA.md`](SOTA.md) for the detailed positioning and the issue tracker for current
 performance limitations.
 
+## Modelling sets
+
+The most-requested CRDT beyond LWW-Register is an add-wins set (OR-Set). The instinct is to store
+the whole set as one value:
+
+```rust
+// DON'T: the whole set is one value
+store.insert(set_id, my_or_set);
+```
+
+Here that is the wrong encoding, and the right one needs no new machinery — each element is its own
+key:
+
+```rust
+// DO: each element is a key
+store.insert((set_id, element), ());
+store.remove(&(set_id, element));
+```
+
+Because the store is an ordered map reconciled by range diff, membership-as-keys gives, for free,
+what a set-as-value has to build for itself:
+
+| property | as keys | as one value |
+|---|---|---|
+| diff granularity | two replicas differing by one element exchange one element | re-ships the entire set state on any divergence |
+| tombstones | reuses the existing causal-stability GC (issue #109), which already prevents resurrection | needs its own separate element-tombstone GC |
+| datagram ceiling | never reached — one element per datagram, regardless of set size | crosses ~65 KB as cardinality grows, then silently stops converging (issue #230) |
+
+**Semantics.** This is last-write-wins *per element* over the HLC total order (see "Conflict
+resolution" below), not textbook add-wins. The two differ only when an add and a remove of the
+*same* element are genuinely concurrent — the HLC total order picks one deterministic winner instead
+of biasing towards the add. For any pair of updates with a causal (happens-before) relationship, and
+for concurrent updates to *different* elements, the two are indistinguishable.
+
+**Anti-pattern.** Storing the set as one value re-ships the entire encoded set on every write, so
+diff cost and per-datagram size both grow with cardinality — the failure mode documented for
+sets-as-values on Riak ([arXiv:1605.06424](https://arxiv.org/abs/1605.06424)): treating a large
+collection as a single opaque value defeats the underlying store's own delta-replication and GC, and
+growth eventually exceeds a single message. Here that ceiling is the datagram limit (issue #230);
+key-encoding avoids it structurally instead of pushing it further out.
+
+More generally: prefer many small keys over few large composite values. The same per-element diff
+granularity, tombstone reuse, and datagram-ceiling avoidance apply to any large composite (a map, a
+list, a document) that would otherwise be reshipped whole on any change — not just sets. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §7 for why this is also part of why a pluggable CRDT `Resolve`
+seam stays deferred.
+
 ## Documentation
 
 - [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
