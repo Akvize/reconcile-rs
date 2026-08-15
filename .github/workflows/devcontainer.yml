@@ -25,8 +25,13 @@ jobs:
       devcontainer: ${{ steps.filter.outputs.devcontainer }}
     steps:
       - uses: actions/checkout@v3
+      # Not on `merge_group`: that event gives `paths-filter` no base to diff against, and a throw
+      # here would fail this job, which would *skip* `devcontainer-ci` rather than run it -- green
+      # having built nothing. The queue therefore builds unconditionally, which is also the right
+      # answer on its own terms: it validates a combination no single pull request tested.
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           filters: |
             devcontainer:
@@ -36,7 +41,7 @@ jobs:
   devcontainer-ci:
     name: Build & Test in Devcontainer
     needs: changes
-    if: needs.changes.outputs.devcontainer == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.devcontainer == 'true'
     runs-on: ubuntu-latest
 
     steps:

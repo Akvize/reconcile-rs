@@ -16,19 +16,16 @@ env:
   RUSTDOCFLAGS: -Dwarnings
 
 jobs:
-  # Which expensive jobs a change can possibly affect. Two rules govern every `if:` below, and
-  # neither is negotiable:
+  # Which expensive jobs a change can possibly affect.
   #
-  #   1. Skipping is **pull-request only**. On `push` to main and inside the merge queue every job
-  #      runs unconditionally -- the queue validates a *combination* no single PR ever tested, so a
-  #      path filter there could let a broken pair through. `paths-filter` also has nothing
-  #      meaningful to diff against on those events.
-  #   2. The filter lives in `if:`, never in `on.pull_request.paths`. A job skipped by `if:` counts
-  #      as a **passing** required check; a workflow filtered out by `on.*.paths` leaves its check
-  #      pending forever and blocks the merge. `devcontainer.yml` established this pattern and its
-  #      header carries the full reasoning.
+  # `merge_group` is the one event that never filters. The queue validates a *combination* no single
+  # pull request tested, so skipping there could let a broken pair through -- and `paths-filter` has
+  # no base to diff against on that event anyway, so it is not even asked. Pull requests and pushes
+  # both diff cleanly and are both filtered.
   #
-  # The sub-second gates deliberately carry no filter at all -- see `quick-gates`.
+  # The filter never lives in `on.*.paths`: a job skipped by `if:` reports **success** to branch
+  # protection, whereas a workflow filtered out by `on.*.paths` leaves its check pending forever and
+  # blocks the merge. That distinction is why `ci-success` below can be the single required check.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -36,13 +33,9 @@ jobs:
       deps: ${{ steps.filter.outputs.deps }}
     steps:
     - uses: actions/checkout@v3
-    # Only ever consulted on a pull request, so only ever *run* on one. If this step threw on a
-    # `merge_group` or `push` event -- where it has no base to diff against -- the whole `changes`
-    # job would fail, and every job that `needs:` it would be skipped rather than run: a green
-    # pipeline that tested nothing, which is the worst failure this file could have.
     - uses: dorny/paths-filter@v3
       id: filter
-      if: github.event_name == 'pull_request'
+      if: github.event_name != 'merge_group'
       with:
         filters: |
           rust:
@@ -57,16 +50,21 @@ jobs:
             - 'deny.toml'
             - '.github/workflows/main.yml'
 
-  # ~2 s, no compilation, and therefore no path filter: gating a free check can only ever skip it
-  # wrongly. Two of these are not documentation-only anyway -- `check-domain-purity.sh` reads the
-  # manifests and `lww-register/src`, and `check-doc-structure.sh` greps rustdoc for `SOTA.md`
-  # citations -- so a `**/*.md` filter would have been wrong on its own terms.
-  quick-gates:
+  fmt:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Format
-      run: cargo fmt --check
+    - run: cargo fmt --check
+
+  # This repository's own invariants, none of which compiles anything (~2 s all told) -- hence no
+  # path filter: gating a free check can only ever skip it wrongly. Two of them are not
+  # documentation-only anyway. `check-domain-purity.sh` reads the manifests and `lww-register/src`;
+  # `check-doc-structure.sh` greps rustdoc for `SOTA.md` citations. A `**/*.md` filter would have
+  # been wrong on its own terms.
+  repo-gates:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
     - name: Doc budget (AGENTS.md + CLAUDE.md line cap)
       run: ./scripts/check-doc-budget.sh
     - name: Domain purity (hexagonal boundary + ARCHITECTURE.md §2's graph vs the manifests)
@@ -74,70 +72,81 @@ jobs:
     - name: Doc structure (link/anchor/path resolution, SOTA.md §4.2 entry format)
       run: ./scripts/check-doc-structure.sh
 
-  # The default feature axis. Kept under its original name because branch protection pins required
-  # checks by job name, so renaming this one would strand the merge queue on a check that no longer
-  # exists. The four jobs below were split *out* of it rather than reshuffled with it, for the same
-  # reason: adding names is safe, changing them is not.
-  #
-  # `--features internal-testing` exposes the `reconcile::testing` seam so the external integration
-  # oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the benchmarks, which
-  # reach now-`pub(crate)` reconciliation internals, still compile and run.
-  lint-and-test:
+  # Both feature axes in one job: they are 20 s and 11 s, and the second reuses the first's
+  # dependency build. Splitting them would add a runner start to save nothing.
+  clippy:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - name: Lint
-      run: cargo clippy --workspace --features internal-testing --all-targets
-    - name: Build
-      run: cargo build --workspace --verbose
-    - name: Run tests
-      run: cargo test --workspace --features internal-testing --verbose
-    - name: Run doc-tests
-      run: cargo test --doc --workspace --features internal-testing --verbose
+    # `--features internal-testing` exposes the `reconcile::testing` seam so the external
+    # integration oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the
+    # benchmarks, which reach now-`pub(crate)` reconciliation internals, still compile.
+    - run: cargo clippy --workspace --features internal-testing --all-targets
+    - run: cargo clippy --workspace --all-features --all-targets
 
-  # The second feature axis, split off because CI gates the two separately on purpose (AGENTS.md
-  # §6: feature interactions hide bugs) and they share no compiled artifact -- a different feature
-  # set is a different `target/` fingerprint, so running them in one job never reused anything.
+  test:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo build --workspace --verbose
+    - run: cargo test --workspace --features internal-testing --verbose
+    - run: cargo test --doc --workspace --features internal-testing --verbose
+
+  # AGENTS.md §6 gates the two feature variants separately on purpose: feature interactions hide
+  # bugs. A different feature set is a different `target/` fingerprint, so this shares no compiled
+  # artifact with `test` and loses nothing by running beside it.
   test-all-features:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - name: Lint (all features)
-      run: cargo clippy --workspace --all-features --all-targets
-    - name: Run tests (all features)
-      run: cargo test --workspace --all-features --verbose
+    - run: cargo test --workspace --all-features --verbose
+
+  # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
+  # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
+  # user-selectable crypto backend — was compiled by no CI job at all. This is the one job that
+  # selects it explicitly.
+  test-mac-hmac:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
+    - run: cargo build --workspace --no-default-features --features mac-hmac --verbose
+    - run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
 
   # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
   docs:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - name: Generate the documentation
-      run: cargo doc --workspace --verbose
-    - name: Generate the documentation (all features)
-      run: cargo doc --workspace --all-features --verbose
+    - run: cargo doc --workspace --verbose
+    - run: cargo doc --workspace --all-features --verbose
 
-  # Its own job because it is the only step that builds in the **release** profile, so it shared
+  # Its own job because it is the only **release**-profile build in the pipeline, so it shared
   # nothing with the debug steps it used to sit among and was simply 70 s added to their critical
-  # path -- the single largest step in the old monolith.
-  bench-compile:
+  # path -- the largest single step in the pre-split job.
+  bench:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - name: Check that the benchmarks can still compile
-      run: cargo bench --no-run --features internal-testing
+    - run: cargo bench --no-run --features internal-testing
 
   # Packaging check for the whole workspace -- all five members, the release path end to end (#204,
   # AGENTS.md §11). `--workspace` is what makes that possible: cargo strips `path` at publish time
@@ -152,13 +161,13 @@ jobs:
   # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate, which
   # is the breakage this check exists to catch, without contacting the registry to upload.
   #
-  # The one job with no `target/` cache, deliberately. CONTRIBUTING.md documents a measured
-  # incident where a stale sibling rlib in `target/` made exactly this command fail on an
-  # unresolved import that did not exist in the tree -- a false negative on the release gate is
-  # worth more than the ~14 s a cache would save here. Registry only, as before.
+  # The one job with no `target/` cache, deliberately. CONTRIBUTING.md documents a measured incident
+  # where a stale sibling rlib in `target/` made exactly this command fail on an unresolved import
+  # that did not exist in the tree -- a false negative on the release gate is worth more than the
+  # ~14 s a cache would save. Registry only.
   package:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -169,30 +178,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    - name: Check that the whole workspace packages cleanly
-      run: cargo package --workspace --allow-dirty
-
-  # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
-  # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
-  # user-selectable crypto backend — was compiled by no CI job at all. This is the one job that
-  # selects it explicitly.
-  mac-hmac:
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: Swatinem/rust-cache@v2
-    - name: Lint (mac-hmac)
-      run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
-    - name: Build (mac-hmac)
-      run: cargo build --workspace --no-default-features --features mac-hmac --verbose
-    - name: Run tests (mac-hmac)
-      run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
+    - run: cargo package --workspace --allow-dirty
 
   # `pr-issue-references` used to live here. It reads the PR *description*, which changes without a
   # push, so it needs the `edited` event type -- and `on:` is per workflow, not per job, so carrying
-  # it here would re-run every build job below on a typo fix, cancelling any in flight. It is now
+  # it here would re-run every build job on a typo fix, cancelling any in flight. It is now
   # `.github/workflows/pr-issue-references.yml`; that file's header has the full reasoning.
 
   # #312: advisories (RustSec), license compliance, and a dependency-source allowlist. Config in
@@ -200,10 +190,10 @@ jobs:
   # the action's default `all` is deliberate here.
   #
   # Gated on `deps` rather than `rust`: this reads the dependency graph and `deny.toml`, so a pure
-  # `.rs` edit cannot change its verdict, but a manifest edit that touches no `.rs` file can.
+  # `.rs` edit cannot change its verdict, while a manifest edit touching no `.rs` file can.
   deny:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -211,7 +201,7 @@ jobs:
 
   coverage:
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -229,3 +219,40 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: lcov.info
         fail_ci_if_error: false
+
+  # **The single required status check.** Branch protection pins required checks by job name, so a
+  # list of a dozen names has to be re-edited in repository settings every time a job is added,
+  # renamed or split -- and nothing fails loudly when someone forgets, because a check that is not
+  # in the list simply is not enforced. Requiring one aggregate instead makes that class of mistake
+  # impossible; it is the convention `hyper`, `tokio` and `clap` all converged on.
+  #
+  # `if: always()` is load-bearing. Without it this job inherits the default `needs` behaviour and
+  # is *skipped* whenever any dependency is skipped -- which, with the path filters above, is most
+  # pull requests. A skipped required check passes, so the gate would silently stop gating.
+  #
+  # The condition treats `skipped` as acceptable (that is the filter working) and `failure` or
+  # `cancelled` as fatal. `success` is not tested for, because a job that neither succeeded, failed,
+  # nor was cancelled cannot exist.
+  ci-success:
+    name: ci-success
+    if: always()
+    needs:
+      - changes
+      - fmt
+      - repo-gates
+      - clippy
+      - test
+      - test-all-features
+      - test-mac-hmac
+      - docs
+      - bench
+      - package
+      - deny
+      - coverage
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fail if any job failed or was cancelled
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: |
+        echo "::error::one or more CI jobs failed or were cancelled"
+        exit 1
