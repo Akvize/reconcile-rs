@@ -49,8 +49,13 @@ git config --global user.name
 git config --global user.email
 ls -l .git/hooks/pre-commit .git/hooks/pre-push   # both hooks linked
 rustc --version
+cargo deny --version       # AGENTS.md §3's last line; the only one needing a subcommand
 command -v rust-analyzer dockerfile-language-server-nodejs taplo marksman
 ```
+
+An image built before `cargo-deny` was added to `Dockerfile.dev` passes every check above except
+that one — rebuild (`make dc-rebuild`, or `make build`) rather than installing it by hand, so the
+image and this list stay the same artifact.
 
 ## Git hooks
 
