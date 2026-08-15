@@ -1330,10 +1330,15 @@ pub struct Config {
     /// How long the loop waits for inbound activity before initiating a round: the **background**
     /// anti-entropy cadence (default 1 s). Local writes broadcast immediately, independent of it.
     ///
-    /// Background traffic grows as `1/interval` per local peer, and the setting is
-    /// counterproductive below a few × RTT (and below the bulk pacing gap, see
-    /// [`bulk_send_rate`](Self::bulk_send_rate)): the diff is multi-round-trip, so re-initiating
-    /// early only floods the single receive loop. Retunable via
+    /// Floor it at roughly a few × RTT, and at or above the pacing gap between datagrams at the
+    /// configured [`bulk_send_rate`](Self::bulk_send_rate) (default 32 MiB/s ⇒ ~2 ms between
+    /// full-size datagrams). Below that floor, shortening the interval does **not** converge
+    /// faster: the diff is multi-round-trip, so this node's own idle timer fires between a
+    /// holder's paced datagrams mid-transfer and re-issues a full diff over ranges still in
+    /// flight. Cold sync then gets both slower and re-amplified — well past the byte cost a
+    /// single paced dump keeps it near, see [`bulk_send_rate`](Self::bulk_send_rate) — while
+    /// steady-state idle chatter balloons, since background traffic grows as `1/interval` per
+    /// local peer. Retunable via
     /// [`set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
     pub reconcile_interval: Duration,
     /// Metering rate of a single **bulk** value transfer to one peer (default 32 MiB/s); `None`
@@ -1342,8 +1347,11 @@ pub struct Config {
     /// An unpaced burst overruns the receiver's socket buffer, and the resulting lull makes this
     /// node's own [`reconcile_interval`](Self::reconcile_interval) re-issue a diff over ranges
     /// still in flight — byte amplification far past the dataset size. Pacing on a background task,
-    /// plus at most one bulk transfer per peer, keeps a cold sync ≈ the dataset size. Only the
-    /// bulk dump is paced; comparisons, acks and broadcasts go immediately.
+    /// plus at most one bulk transfer per peer, keeps a cold sync ≈ the dataset size — but only
+    /// down to [`reconcile_interval`](Self::reconcile_interval)'s floor: below the resulting
+    /// inter-datagram gap, the *receiver's* idle timer reopens the same re-initiation, since
+    /// pacing only guards the sender against a *concurrent* dump. Only the bulk dump is paced;
+    /// comparisons, acks and broadcasts go immediately.
     pub bulk_send_rate: Option<usize>,
     /// `SO_RCVBUF` request in bytes, default 8 MiB; `None` leaves the OS default.
     ///

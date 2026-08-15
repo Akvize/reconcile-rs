@@ -255,6 +255,13 @@ grep -A1 '^Udp:' /proc/net/snmp        # the RcvbufErrors column
 
 Set either field to `None` to leave the inherited OS default untouched.
 
+### Reconciliation interval floor
+
+`Config::reconcile_interval` (default 1 s) has a floor — roughly a few × RTT, and at or above the
+pacing gap between datagrams at the configured `Config::bulk_send_rate`. Shortening it below that
+floor does not converge faster: the mechanism, and why cold sync ends up both slower and
+re-amplified while idle chatter balloons, is documented on `Config::reconcile_interval` itself.
+
 ## Read replica (`ReadReplicaMap`)
 
 For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReplicatedMap`
