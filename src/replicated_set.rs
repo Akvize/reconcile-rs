@@ -291,6 +291,7 @@ mod replicated_set_tests {
             remote_interval: 6,
             remote_fanout: 2,
             cluster_key: None,
+            insecure_no_key: true,
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),

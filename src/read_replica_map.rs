@@ -118,6 +118,11 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// # Errors
     ///
     /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new(config: Config) -> io::Result<Self> {
         // The read replica keeps the OS default socket buffer sizes (`None`/`None`) rather than
         // reading `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and
@@ -133,15 +138,22 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// [`ReplicatedMap::new_with_transport`](crate::ReplicatedMap::new_with_transport) — which is
     /// what lets one be driven against a dated peer with no real sockets.
     ///
-    /// Infallible: the caller has already done the one fallible step, binding.
+    /// The caller has already done the one fallible I/O step, binding.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
     /// # use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap};
     /// let network = InMemoryNetwork::new();
     /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
-    /// let read_replica =
-    ///     ReadReplicaMap::<String, String>::new_with_transport(Config::default(), transport);
+    /// let read_replica = ReadReplicaMap::<String, String>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
     /// ```
     pub fn new_with_transport(
         config: Config,
@@ -150,14 +162,17 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         Self::build(config, transport)
     }
 
-    /// Assemble a read replica from an already-constructed [`Transport`]. Pure wiring — no I/O — so
-    /// it is infallible; the fallible socket bind lives in [`new`](Self::new).
+    /// Assemble a read replica from an already-constructed [`Transport`]. Pure wiring — no I/O.
+    /// Panics rather than being fallible; see [`new_with_transport`](Self::new_with_transport).
+    /// The fallible socket bind lives in [`new`](Self::new).
     fn build(config: Config, transport: Arc<dyn Transport<Addr = SocketAddr>>) -> Self {
+        config.check_key_or_insecure_opt_in();
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
-                "SECURITY: no cluster key set — the lightweight read replica accepts \
-                 UNAUTHENTICATED datagrams. Set Config::with_cluster_key to match the dated cluster."
+                "SECURITY: running with Config::with_insecure_no_key() — the lightweight read \
+                 replica accepts UNAUTHENTICATED datagrams. Set Config::with_cluster_key to \
+                 match the dated cluster."
             );
         }
         let authenticator_enabled = !matches!(authenticator, auth::Authenticator::Disabled);
@@ -560,7 +575,7 @@ mod tests {
 
     fn ephemeral_config() -> Config {
         // Port 0 (ephemeral) on the loopback default network.
-        Config::default()
+        Config::default().with_insecure_no_key()
     }
 
     /// `get` returns the live value, and absent keys are `None`.

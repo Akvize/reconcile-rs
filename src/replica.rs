@@ -263,6 +263,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// # Errors
     ///
     /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new(config: Config) -> io::Result<Self> {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
@@ -283,6 +288,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// The engine trusts `clock` completely, with no way to check it at the type level; see
     /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
     /// through) for the full risk writeup and a worked example.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let transport = Self::bind_udp(&config).await?;
         Ok(Self::build(config, transport, clock, false))
@@ -338,6 +348,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
     ) -> Self {
+        config.check_key_or_insecure_opt_in();
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         match &authenticator {
             #[cfg(feature = "encryption")]
@@ -349,10 +360,12 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             }
             auth::Authenticator::Disabled => {
                 warn!(
-                    "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any \
-                     host that can send UDP to this port can forge updates and poison the \
-                     cluster via last-write-wins. Set Config::with_cluster_key on every node, or \
-                     restrict the network to a trusted underlay. See REVIEW.md F3."
+                    "SECURITY: running with Config::with_insecure_no_key() — UDP reconciliation \
+                     is UNAUTHENTICATED. Any host that can send UDP to this port can forge \
+                     updates and poison the cluster via last-write-wins, and any host inside the \
+                     configured nets will eventually receive the ENTIRE DATASET via paced diff \
+                     dumps once RandomProbe discovers it. Set Config::with_cluster_key on every \
+                     node, or restrict the network to a trusted underlay. See REVIEW.md F3."
                 );
             }
         }
