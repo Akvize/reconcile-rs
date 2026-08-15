@@ -21,7 +21,7 @@ use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
 fn isolated_store(addr: &str) -> ReplicatedMap<i32, i32> {
     let network = InMemoryNetwork::new();
     let transport = Arc::new(network.bind(format!("{addr}:8300").parse().unwrap()));
-    ReplicatedMap::new_with_transport(Config::default(), transport)
+    ReplicatedMap::new_with_transport(Config::default().with_insecure_no_key(), transport)
 }
 
 #[test]

@@ -38,6 +38,7 @@ fn config(port: u16, addr: &str) -> Config {
         .with_port(port)
         .with_listen_addr(addr.parse().unwrap())
         .with_net("127.0.0.1/8".parse().unwrap())
+        .with_insecure_no_key()
 }
 
 async fn isolated(port: u16, addr: &str) -> ReplicatedMap<i32, i32> {

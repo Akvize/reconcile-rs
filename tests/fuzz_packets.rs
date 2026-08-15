@@ -62,9 +62,10 @@ async fn malformed_datagrams_do_not_panic_or_corrupt_state() {
     let victim_addr = "127.0.0.70";
     let config = Config::default()
         .with_port(port)
-        .with_listen_addr(victim_addr.parse().unwrap());
-    // No cluster key: arbitrary bytes are *not* dropped at the auth gate and
-    // reach the deserializer, which is exactly the path we want to fuzz.
+        .with_listen_addr(victim_addr.parse().unwrap())
+        // No cluster key: arbitrary bytes are *not* dropped at the auth gate and reach the
+        // deserializer, which is exactly the path we want to fuzz.
+        .with_insecure_no_key();
     let store = ReplicatedMap::<i32, String>::new(config)
         .await
         .expect("bind failed");

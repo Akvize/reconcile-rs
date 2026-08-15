@@ -21,7 +21,8 @@ mod deadlock_regressions {
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr("127.0.0.44".parse().unwrap());
+            .with_listen_addr("127.0.0.44".parse().unwrap())
+            .with_insecure_no_key();
         let svc = ReplicatedMap::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 
@@ -51,7 +52,8 @@ mod deadlock_regressions {
     async fn set_pre_insert_replaces_previous_hook() {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr("127.0.0.45".parse().unwrap());
+            .with_listen_addr("127.0.0.45".parse().unwrap())
+            .with_insecure_no_key();
         let svc = ReplicatedMap::new(config).await.expect("bind failed");
 
         let first_ran = Arc::new(AtomicBool::new(false));
@@ -107,7 +109,8 @@ mod deadlock_regressions {
             let reinserted = rt.block_on(async {
                 let config = Config::default()
                     .with_port(8083)
-                    .with_listen_addr("127.0.0.50".parse().unwrap());
+                    .with_listen_addr("127.0.0.50".parse().unwrap())
+                    .with_insecure_no_key();
                 let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");
 
                 // The same re-entrant hook as the direct-path test, registered on the engine whose
@@ -272,7 +275,8 @@ mod causal_stability {
     async fn engine(addr: &str) -> Replica<i32, i32> {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr(addr.parse().unwrap());
+            .with_listen_addr(addr.parse().unwrap())
+            .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
     }
 
@@ -491,7 +495,8 @@ mod clock_port {
     async fn engine_mints_through_the_injected_clock() {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr("127.0.0.70".parse().unwrap());
+            .with_listen_addr("127.0.0.70".parse().unwrap())
+            .with_insecure_no_key();
         let clock = Arc::new(ManualClock::new(NodeId::new(42)));
         let eng: Replica<i32, i32> = Replica::new_with_clock(config, clock)
             .await
@@ -598,7 +603,9 @@ mod pacing {
         async fn engine(addr: &str, bulk_send_rate: Option<usize>) -> Replica<i32, i32> {
             let config = Config {
                 bulk_send_rate,
-                ..Config::default().with_listen_addr(addr.parse().unwrap())
+                ..Config::default()
+                    .with_listen_addr(addr.parse().unwrap())
+                    .with_insecure_no_key()
             };
             Replica::new(config).await.expect("bind failed")
         }
@@ -755,7 +762,8 @@ mod tombstone_ack_bounds {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
             .with_port(0)
-            .with_listen_addr(addr.parse().unwrap());
+            .with_listen_addr(addr.parse().unwrap())
+            .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
     }
 
@@ -905,7 +913,8 @@ mod dump_budget {
         let config = Config::default()
             .with_port(0)
             .with_listen_addr("127.0.0.99".parse().unwrap())
-            .with_max_concurrent_bulk_dumps(1);
+            .with_max_concurrent_bulk_dumps(1)
+            .with_insecure_no_key();
         let eng = Replica::<i32, i32>::new(config).await.expect("bind failed");
 
         let peer_a: std::net::SocketAddr = "127.0.0.100:9001".parse().unwrap();
@@ -975,6 +984,7 @@ mod in_memory_convergence {
                 .with_listen_addr(ip)
                 .with_port(port)
                 .with_reconcile_interval(Duration::from_millis(5))
+                .with_insecure_no_key()
         };
         let a: Replica<u32, u32> = Replica::new_with_transport(
             cfg(a_ip),

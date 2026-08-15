@@ -51,7 +51,8 @@ async fn read_replica_converges_with_dated_store() {
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
-            .with_net(net),
+            .with_net(net)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed");
@@ -61,7 +62,8 @@ async fn read_replica_converges_with_dated_store() {
         Config::default()
             .with_port(port)
             .with_listen_addr(read_replica_addr)
-            .with_net(net),
+            .with_net(net)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed")
@@ -118,7 +120,8 @@ async fn read_replica_does_not_block_tombstone_gc() {
         Config::default()
             .with_port(port)
             .with_listen_addr(dated_addr)
-            .with_net(net),
+            .with_net(net)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed")
@@ -127,7 +130,8 @@ async fn read_replica_does_not_block_tombstone_gc() {
         Config::default()
             .with_port(port)
             .with_listen_addr(read_replica_addr)
-            .with_net(net),
+            .with_net(net)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed")
@@ -175,6 +179,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
             .with_port(port)
             .with_listen_addr(ip)
             .with_net(net)
+            .with_insecure_no_key()
     };
     let dated = ReplicatedMap::<String, String>::new_with_transport(
         config(dated_ip),

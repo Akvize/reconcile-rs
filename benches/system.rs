@@ -74,7 +74,8 @@ fn loaded_store(rt: &Runtime, kvs: &[(u32, u32)]) -> ReplicatedMap<u32, u32> {
             Config::default()
                 .with_port(0)
                 .with_listen_addr("127.0.0.1".parse().unwrap())
-                .with_net("127.0.0.1/8".parse().unwrap()),
+                .with_net("127.0.0.1/8".parse().unwrap())
+                .with_insecure_no_key(),
         )
         .await
         .expect("bind failed");
@@ -191,6 +192,7 @@ fn cold_sync(c: &mut Criterion) {
                                 .with_port(port)
                                 .with_listen_addr(addr)
                                 .with_net("127.0.0.1/8".parse().unwrap())
+                                .with_insecure_no_key()
                         };
                         // A is loaded with no peer declared, so `insert_bulk` broadcasts to nobody.
                         let a = ReplicatedMap::<u32, u32>::new(cfg(addr_a))
@@ -288,7 +290,8 @@ fn mesh_with<T: Transport<Addr = SocketAddr>>(
             let config = Config::default()
                 .with_port(port)
                 .with_listen_addr(addr)
-                .with_net("127.0.0.1/8".parse().unwrap());
+                .with_net("127.0.0.1/8".parse().unwrap())
+                .with_insecure_no_key();
             ReplicatedMap::<u32, u32>::new_with_transport(config, Arc::new(transport))
         })
         .collect();

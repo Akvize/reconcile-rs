@@ -132,6 +132,7 @@ pub reconcile::replicated_map::Config::bulk_send_rate: core::option::Option<usiz
 pub reconcile::replicated_map::Config::cluster_key: core::option::Option<[u8; 32]>
 pub reconcile::replicated_map::Config::encrypt: bool
 pub reconcile::replicated_map::Config::freshness_window: core::time::Duration
+pub reconcile::replicated_map::Config::insecure_no_key: bool
 pub reconcile::replicated_map::Config::listen_addr: core::net::ip_addr::IpAddr
 pub reconcile::replicated_map::Config::max_concurrent_bulk_dumps: usize
 pub reconcile::replicated_map::Config::max_peers: usize
@@ -147,6 +148,7 @@ impl reconcile::replicated_map::Config
 pub fn reconcile::replicated_map::Config::with_bulk_send_rate(self, usize) -> Self
 pub fn reconcile::replicated_map::Config::with_cluster_key(self, [u8; 32]) -> Self
 pub fn reconcile::replicated_map::Config::with_freshness_window(self, core::time::Duration) -> Self
+pub fn reconcile::replicated_map::Config::with_insecure_no_key(self) -> Self
 pub fn reconcile::replicated_map::Config::with_listen_addr(self, core::net::ip_addr::IpAddr) -> Self
 pub fn reconcile::replicated_map::Config::with_max_concurrent_bulk_dumps(self, usize) -> Self
 pub fn reconcile::replicated_map::Config::with_max_peers(self, usize) -> Self

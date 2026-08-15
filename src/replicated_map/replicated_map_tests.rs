@@ -20,6 +20,7 @@ fn ephemeral_config() -> Config {
         remote_interval: 6,
         remote_fanout: 2,
         cluster_key: None,
+        insecure_no_key: true,
         node_id: None,
         encrypt: false,
         reconcile_interval: Duration::from_secs(1),
@@ -30,6 +31,20 @@ fn ephemeral_config() -> Config {
         max_peers: super::DEFAULT_MAX_PEERS,
         max_concurrent_bulk_dumps: super::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
     }
+}
+
+/// #325: a `Config` with neither a cluster key nor the explicit insecure opt-in must refuse to
+/// build at all, rather than silently running unauthenticated — the whole point of the guard.
+#[tokio::test]
+#[should_panic(expected = "Config::cluster_key is None")]
+async fn missing_key_and_no_insecure_opt_in_panics_at_construction() {
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .expect("OS should hand out an ephemeral port")
+        .local_addr()
+        .expect("a bound socket reports its own address")
+        .port();
+    let config = Config::default().with_port(port);
+    let _ = ReplicatedMap::<i32, i32>::new(config).await;
 }
 
 /// D4: the node id is settable through `Config` and readable back off the store, and the
@@ -104,7 +119,8 @@ async fn tombstones_expiration() {
     let config = Config::default()
         .with_port(8090)
         .with_listen_addr("127.0.0.45".parse().unwrap())
-        .with_net("127.0.0.45/32".parse().unwrap());
+        .with_net("127.0.0.45/32".parse().unwrap())
+        .with_insecure_no_key();
     let store = ReplicatedMap::<i32, i32>::new(config)
         .await
         .expect("bind failed")
@@ -566,6 +582,7 @@ fn discovery_config() -> Config {
     Config::default()
         .with_port(0)
         .with_listen_addr("127.0.0.1".parse().unwrap())
+        .with_insecure_no_key()
 }
 
 /// A member that vanishes from discovery for `miss_threshold` consecutive successful rounds is
@@ -900,7 +917,8 @@ async fn new_returns_err_on_bind_failure() {
 
     let config = Config::default()
         .with_port(busy.port())
-        .with_listen_addr(busy.ip());
+        .with_listen_addr(busy.ip())
+        .with_insecure_no_key();
     let result = ReplicatedMap::<i32, i32>::new(config).await;
     let err = result
         .err()
@@ -960,7 +978,8 @@ async fn peer_cap_blocks_unknown_sender_at_capacity() {
         .with_port(port)
         .with_listen_addr(target_addr)
         .with_net("127.0.0.180/30".parse().unwrap())
-        .with_max_peers(2);
+        .with_max_peers(2)
+        .with_insecure_no_key();
 
     let store = ReplicatedMap::<i32, i32>::new(config)
         .await
@@ -1017,7 +1036,8 @@ async fn peer_cap_allows_known_member_at_capacity() {
         .with_port(port)
         .with_listen_addr(target_addr)
         .with_net("127.0.0.184/30".parse().unwrap())
-        .with_max_peers(2);
+        .with_max_peers(2)
+        .with_insecure_no_key();
 
     let store = ReplicatedMap::<i32, i32>::new(config)
         .await
@@ -1073,7 +1093,8 @@ async fn decommission_frees_peer_cap_slot() {
     let config = Config::default()
         .with_port(0)
         .with_listen_addr("127.0.0.1".parse().unwrap())
-        .with_max_peers(2);
+        .with_max_peers(2)
+        .with_insecure_no_key();
 
     let store = ReplicatedMap::<i32, i32>::new(config)
         .await

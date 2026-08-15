@@ -306,11 +306,13 @@ mod imp {
         let cfg1 = Config::default()
             .with_port(port)
             .with_listen_addr(addr1)
-            .with_net(net);
+            .with_net(net)
+            .with_insecure_no_key();
         let cfg2 = Config::default()
             .with_port(port)
             .with_listen_addr(addr2)
-            .with_net(net);
+            .with_net(net)
+            .with_insecure_no_key();
 
         let mut rng = rand::rngs::ThreadRng::default();
 
@@ -371,11 +373,13 @@ mod imp {
         let cfg1 = Config::default()
             .with_port(port)
             .with_listen_addr(addr1)
-            .with_net(net);
+            .with_net(net)
+            .with_insecure_no_key();
         let cfg2 = Config::default()
             .with_port(port)
             .with_listen_addr(addr2)
-            .with_net(net);
+            .with_net(net)
+            .with_insecure_no_key();
 
         let mut rng = rand::rngs::ThreadRng::default();
 

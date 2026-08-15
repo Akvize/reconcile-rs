@@ -231,7 +231,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// let network = InMemoryNetwork::new();
     /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
     /// let store = ReplicatedMap::<String, String>::new_with_transport(
-    ///     Config::default(),
+    ///     Config::default().with_insecure_no_key(),
     ///     transport,
     /// );
     /// ```
@@ -288,7 +288,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # async fn example() -> std::io::Result<()> {
     /// let clock = Arc::new(MyClock);
     /// assert_conformance(&*clock); // panics here, not after it has shipped, if `clock` is broken
-    /// let store = ReplicatedMap::<String, String>::new_with_clock(Config::default(), clock).await?;
+    /// let store =
+    ///     ReplicatedMap::<String, String>::new_with_clock(Config::default().with_insecure_no_key(), clock)
+    ///         .await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1345,9 +1347,18 @@ pub struct Config {
     pub remote_fanout: usize,
     /// Optional shared cluster secret enabling per-datagram MAC authentication.
     ///
-    /// `None` — the default — is **unauthenticated**: any host reaching the port can forge
-    /// updates. When set, every node needs the same key and the same MAC backend feature.
+    /// `None` is **unauthenticated**: any host reaching the port can forge updates, and
+    /// [`RandomProbe`](crate::discovery::RandomProbe) answers any host inside the configured
+    /// [`nets`](Self::nets) — a stranger squatting one IP eventually receives the **entire
+    /// dataset**, unauthenticated, via paced diff dumps. `None` without also setting
+    /// [`insecure_no_key`](Self::insecure_no_key) is refused at construction time (see
+    /// [`with_insecure_no_key`](Self::with_insecure_no_key)) rather than silently running that way.
+    /// When set, every node needs the same key and the same MAC backend feature.
     pub cluster_key: Option<[u8; 32]>,
+    /// Explicit, loudly-named opt-in to run with [`cluster_key`](Self::cluster_key) unset. Default
+    /// `false`. Set only through [`with_insecure_no_key`](Self::with_insecure_no_key) — see #325 and
+    /// README "Security model" for exactly what a keyless prober receives.
+    pub insecure_no_key: bool,
     /// Identity of this node: the tie-break in the HLC total order. Random at startup when
     /// `None`.
     ///
@@ -1427,6 +1438,7 @@ impl Default for Config {
             remote_interval: 6,
             remote_fanout: 2,
             cluster_key: None,
+            insecure_no_key: false,
             node_id: None,
             encrypt: false,
             reconcile_interval: Duration::from_secs(1),
@@ -1539,11 +1551,43 @@ impl Config {
     ///
     /// Incoming datagrams are verified before deserialization and silently dropped on failure.
     /// Every node must share the key and the MAC backend feature (`mac-blake3` or `mac-hmac`);
-    /// without one the store warns loudly at startup and runs unauthenticated.
+    /// without one, construction refuses to proceed unless
+    /// [`with_insecure_no_key`](Self::with_insecure_no_key) opted in explicitly.
     #[must_use]
     pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
         self.cluster_key = Some(key);
         self
+    }
+
+    /// Explicit, loudly-named opt-in to run with no [`cluster_key`](Self::cluster_key) at all.
+    ///
+    /// Without either this or [`with_cluster_key`](Self::with_cluster_key), construction refuses
+    /// to proceed (#325): [`RandomProbe`](crate::discovery::RandomProbe) answers any host inside
+    /// the configured [`nets`](Self::nets), so a stranger squatting one IP eventually receives the
+    /// **entire dataset**, unauthenticated, via paced diff dumps — see README "Security model".
+    /// Call this only when the network is a trusted underlay the cluster fully controls.
+    #[must_use]
+    pub fn with_insecure_no_key(mut self) -> Self {
+        self.insecure_no_key = true;
+        self
+    }
+
+    /// Guard for #325: `cluster_key: None` without the explicit `insecure_no_key` opt-in is a
+    /// construction-time error, not a silent unauthenticated run. Shared by every engine
+    /// constructor (`Replica`, `ReadReplicaMap`) so none of them can bypass it.
+    ///
+    /// # Panics
+    ///
+    /// If `cluster_key` is `None` and `insecure_no_key` is `false`.
+    pub(crate) fn check_key_or_insecure_opt_in(&self) {
+        assert!(
+            self.cluster_key.is_some() || self.insecure_no_key,
+            "Config::cluster_key is None: every peer this node ever discovers (any host inside \
+             the configured nets) would receive the entire dataset, unauthenticated, via paced \
+             diff dumps. Set Config::with_cluster_key, or opt in explicitly with \
+             Config::with_insecure_no_key() if the network is a trusted underlay. See README \
+             \"Security model\"."
+        );
     }
 
     /// Set an explicit node identity for the HLC tie-break; must be distinct per node.

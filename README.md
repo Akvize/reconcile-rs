@@ -147,6 +147,15 @@ deliberately out of this crate's lean core, not an oversight in this encoding.
 > poison propagates to the whole cluster through last-write-wins. UDP source addresses are
 > spoofable, so this is anonymous.
 
+Beyond forgery, an unauthenticated node also **discloses** its data: [`RandomProbe`], the default
+discovery mechanism, answers any host inside the configured `nets`, and once discovered, a peer
+receives the **entire dataset** over time via paced anti-entropy diff dumps — no forged datagram
+required, just an IP inside the cluster's network. Because of this, `Config::cluster_key: None`
+without also calling [`Config::with_insecure_no_key`] is refused at construction time (`Replica`/
+`ReadReplicaMap` panic with a message pointing back here) rather than silently running that way; call
+`with_insecure_no_key()` only when the network itself is a trusted underlay the cluster fully
+controls.
+
 Two consequences of a far-future stamp are bounded even without a key, because neither depends on
 trusting the sender. The stamp cannot pin this node's Hybrid Logical Clock into the future — a
 remote reading more than `MAX_CLOCK_DRIFT` (1 hour) ahead of local physical time is clamped before
