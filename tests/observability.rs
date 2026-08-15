@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use reconcile::{replicated_map::Config, ReplicatedMap};
+use reconcile::{replicated_map::Config, ClusterKey, ReplicatedMap};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -106,7 +106,7 @@ async fn cluster_key_suppresses_the_security_warning() {
     let subscriber = Registry::default().with(layer);
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let config = local_config().with_cluster_key([7u8; 32]);
+    let config = local_config().with_cluster_key(ClusterKey::new([7u8; 32]));
     let _store = ReplicatedMap::<String, String>::new(config)
         .await
         .expect("bind failed");

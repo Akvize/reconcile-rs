@@ -5,7 +5,7 @@ use rand::{
     Rng, SeedableRng,
 };
 
-use reconcile::{clock::NodeId, replicated_map::Config, Fingerprint, ReplicatedMap};
+use reconcile::{clock::NodeId, replicated_map::Config, ClusterKey, Fingerprint, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..100 {
@@ -217,12 +217,12 @@ async fn authenticated_nodes_converge() {
         .with_port(port)
         .with_listen_addr(addr1)
         .with_net(net)
-        .with_cluster_key(key);
+        .with_cluster_key(ClusterKey::new(key));
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net)
-        .with_cluster_key(key);
+        .with_cluster_key(ClusterKey::new(key));
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
@@ -520,13 +520,13 @@ async fn encrypted_nodes_converge() {
         .with_port(port)
         .with_listen_addr(addr1)
         .with_net(net)
-        .with_cluster_key(key)
+        .with_cluster_key(ClusterKey::new(key))
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net)
-        .with_cluster_key(key)
+        .with_cluster_key(ClusterKey::new(key))
         .with_encryption();
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -576,13 +576,13 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
         .with_port(port)
         .with_listen_addr(addr1)
         .with_net(net)
-        .with_cluster_key([0x42u8; 32])
+        .with_cluster_key(ClusterKey::new([0x42u8; 32]))
         .with_encryption();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net)
-        .with_cluster_key([0x99u8; 32]) // different key
+        .with_cluster_key(ClusterKey::new([0x99u8; 32])) // different key
         .with_encryption();
 
     let store1 = ReplicatedMap::new(cfg1)
@@ -887,7 +887,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
         .with_port(port)
         .with_listen_addr(addr_victim)
         .with_net(net)
-        .with_cluster_key(key);
+        .with_cluster_key(ClusterKey::new(key));
 
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
@@ -948,7 +948,7 @@ async fn replayed_sealed_datagram_is_rejected() {
         .with_port(port)
         .with_listen_addr(addr_victim)
         .with_net(net)
-        .with_cluster_key(key);
+        .with_cluster_key(ClusterKey::new(key));
 
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
@@ -1011,7 +1011,7 @@ async fn decommissioned_peer_replay_is_rejected() {
         .with_port(port)
         .with_listen_addr(addr_victim)
         .with_net(net)
-        .with_cluster_key(key);
+        .with_cluster_key(ClusterKey::new(key));
 
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await

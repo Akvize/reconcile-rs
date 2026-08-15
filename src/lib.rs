@@ -47,6 +47,7 @@ pub mod replicated_set;
 pub(crate) mod snapshot;
 
 // Sibling crates re-exported under their historical paths (`ARCHITECTURE.md` §2).
+pub use gossip::auth::{ClusterKey, ClusterKeyError};
 pub use gossip::{discovery, transport};
 pub use lww_register::{bounds, entry};
 
@@ -87,7 +88,7 @@ pub mod testing {
     /// Seal `payload` with MAC authentication: `tag(32) || seq(8 LE) || stamp(8 LE) ||
     /// version(1) || payload` (the wire-version byte).
     pub fn seal_datagram(key: [u8; 32], seq: u64, stamp: u64, payload: &[u8]) -> Vec<u8> {
-        gossip::auth::Authenticator::new(Some(key), false).seal(
+        gossip::auth::Authenticator::new(Some(gossip::auth::ClusterKey::new(key)), false).seal(
             gossip::replay::Seq::new(seq),
             gossip::replay::Stamp::new(stamp),
             payload,
