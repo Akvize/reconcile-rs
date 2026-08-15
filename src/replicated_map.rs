@@ -1288,39 +1288,6 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 }
 
-/// Set-shaped sugar for the membership-as-keys encoding (README "Modelling sets"): a
-/// `ReplicatedMap<K, ()>` already *is* a replicated set, since `()` round-trips as any other
-/// [`Value`]. These wrap [`insert`](Self::insert)/[`remove`](Self::remove)/[`get`](Self::get) to
-/// return `bool` instead of a `()`-shaped `Option`, so call sites read as set operations rather
-/// than a workaround.
-impl<K: Key + Hash> ReplicatedMap<K, ()> {
-    /// Add `key` as a set member. Returns whether it was already present (idempotent either way).
-    ///
-    /// # Panics
-    ///
-    /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
-    #[must_use]
-    pub fn insert_member(&self, key: K) -> bool {
-        self.insert(key, ()).is_some()
-    }
-
-    /// Remove `key` from the set. Returns whether it was present.
-    ///
-    /// # Panics
-    ///
-    /// See [`remove`](Self::remove) — the broadcast requires an ambient Tokio runtime.
-    #[must_use]
-    pub fn remove_member(&self, key: &K) -> bool {
-        self.remove(key).is_some()
-    }
-
-    /// Whether `key` is currently a member.
-    #[must_use]
-    pub fn contains(&self, key: &K) -> bool {
-        self.get(key).is_some()
-    }
-}
-
 /// Maximum number of geographical networks (CIDRs) a [`Config`] can declare. A fixed-size array
 /// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
 pub const MAX_NETS: usize = 8;
@@ -1613,25 +1580,6 @@ mod replicated_map_tests {
         store.insert(1, 1);
         let stamp = store.engine.map.read().get(&1).unwrap().stamp;
         assert_eq!(stamp.node_id(), store.node_id());
-    }
-
-    /// #377: `ReplicatedMap<K, ()>`'s set-shaped sugar wraps `insert`/`remove`/`get` faithfully —
-    /// `insert_member`/`remove_member` report prior presence, `contains` reports current presence.
-    #[tokio::test]
-    async fn set_sugar_wraps_insert_remove_get_as_bools() {
-        let store = ReplicatedMap::<i32, ()>::new(ephemeral_config())
-            .await
-            .unwrap();
-
-        assert!(!store.contains(&1));
-        assert!(!store.insert_member(1)); // wasn't present
-        assert!(store.contains(&1));
-        assert!(store.insert_member(1)); // already present, idempotent
-        assert!(store.contains(&1));
-
-        assert!(store.remove_member(&1)); // was present
-        assert!(!store.contains(&1));
-        assert!(!store.remove_member(&1)); // already gone
     }
 
     /// D2: two stores wired to a caller-supplied `Transport` converge over it, with no UDP socket
