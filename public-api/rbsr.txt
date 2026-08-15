@@ -23,9 +23,8 @@ pub struct rbsr::Comparison
 impl rbsr::Comparison
 pub fn rbsr::Comparison::agrees(&self) -> bool
 pub const fn rbsr::Comparison::children_emitted(&self) -> usize
-pub const fn rbsr::Comparison::local(&self) -> rsos::aggregate::Aggregate
 pub const fn rbsr::Comparison::new(rsos::aggregate::Aggregate, rsos::aggregate::Aggregate, usize) -> rbsr::Comparison
-pub const fn rbsr::Comparison::remote(&self) -> rsos::aggregate::Aggregate
+pub const fn rbsr::Comparison::remote_size(&self) -> usize
 pub const fn rbsr::Comparison::span(&self) -> usize
 impl core::clone::Clone for rbsr::Comparison
 pub fn rbsr::Comparison::clone(&self) -> rbsr::Comparison
