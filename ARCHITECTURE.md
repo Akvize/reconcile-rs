@@ -353,6 +353,12 @@ guarantees `PROGRESS.md` tracks the resolution history of.
    "bad_mac". No accepted-version window exists today — README "Wire versioning" states the
    operational consequence. Guarded by `tests/wire_format.rs`'s envelope vector and
    `mixed_wire_versions_are_reported_not_silently_dropped`.
+12. **A `RefinementPolicy` cannot see a fingerprint** (#352) — the skip rule's soundness bound
+   unions a per-comparison collision probability over the ranges an execution compares, legal only
+   because those ranges are cut by rank (`Select`), a function of the data alone; a policy that cut
+   by a fingerprint byte instead would void that bound silently. `rbsr::Comparison` exposes
+   `span()`/`remote_size()`/`agrees()`/`children_emitted()` only — no accessor returns a
+   fingerprint or a full `Aggregate` — so the violation is structural, not merely documented.
 
 ---
 
