@@ -16,17 +16,55 @@ env:
   RUSTDOCFLAGS: -Dwarnings
 
 jobs:
-  lint-and-test:
+  # Which expensive jobs a change can possibly affect. Two rules govern every `if:` below, and
+  # neither is negotiable:
+  #
+  #   1. Skipping is **pull-request only**. On `push` to main and inside the merge queue every job
+  #      runs unconditionally -- the queue validates a *combination* no single PR ever tested, so a
+  #      path filter there could let a broken pair through. `paths-filter` also has nothing
+  #      meaningful to diff against on those events.
+  #   2. The filter lives in `if:`, never in `on.pull_request.paths`. A job skipped by `if:` counts
+  #      as a **passing** required check; a workflow filtered out by `on.*.paths` leaves its check
+  #      pending forever and blocks the merge. `devcontainer.yml` established this pattern and its
+  #      header carries the full reasoning.
+  #
+  # The sub-second gates deliberately carry no filter at all -- see `quick-gates`.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      deps: ${{ steps.filter.outputs.deps }}
+    steps:
+    - uses: actions/checkout@v3
+    # Only ever consulted on a pull request, so only ever *run* on one. If this step threw on a
+    # `merge_group` or `push` event -- where it has no base to diff against -- the whole `changes`
+    # job would fail, and every job that `needs:` it would be skipped rather than run: a green
+    # pipeline that tested nothing, which is the worst failure this file could have.
+    - uses: dorny/paths-filter@v3
+      id: filter
+      if: github.event_name == 'pull_request'
+      with:
+        filters: |
+          rust:
+            - '**/*.rs'
+            - '**/Cargo.toml'
+            - 'Cargo.lock'
+            - 'rust-toolchain*'
+            - '.github/workflows/main.yml'
+          deps:
+            - '**/Cargo.toml'
+            - 'Cargo.lock'
+            - 'deny.toml'
+            - '.github/workflows/main.yml'
+
+  # ~2 s, no compilation, and therefore no path filter: gating a free check can only ever skip it
+  # wrongly. Two of these are not documentation-only anyway -- `check-domain-purity.sh` reads the
+  # manifests and `lww-register/src`, and `check-doc-structure.sh` greps rustdoc for `SOTA.md`
+  # citations -- so a `**/*.md` filter would have been wrong on its own terms.
+  quick-gates:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Enable caching
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Format
       run: cargo fmt --check
     - name: Doc budget (AGENTS.md + CLAUDE.md line cap)
@@ -35,41 +73,102 @@ jobs:
       run: ./scripts/check-domain-purity.sh
     - name: Doc structure (link/anchor/path resolution, SOTA.md §4.2 entry format)
       run: ./scripts/check-doc-structure.sh
-    # `--features internal-testing` exposes the `reconcile::testing` seam so the external
-    # integration-test oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the benchmark,
-    # which reach now-`pub(crate)` reconciliation internals, still compile and run. The
-    # `--all-features` steps already cover it; the default steps make it explicit so the oracle
-    # always runs.
+
+  # The default feature axis. Kept under its original name because branch protection pins required
+  # checks by job name, so renaming this one would strand the merge queue on a check that no longer
+  # exists. The four jobs below were split *out* of it rather than reshuffled with it, for the same
+  # reason: adding names is safe, changing them is not.
+  #
+  # `--features internal-testing` exposes the `reconcile::testing` seam so the external integration
+  # oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the benchmarks, which
+  # reach now-`pub(crate)` reconciliation internals, still compile and run.
+  lint-and-test:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
     - name: Lint
       run: cargo clippy --workspace --features internal-testing --all-targets
-    - name: Lint (all features)
-      run: cargo clippy --workspace --all-features --all-targets
     - name: Build
       run: cargo build --workspace --verbose
     - name: Run tests
       run: cargo test --workspace --features internal-testing --verbose
-    - name: Run tests (all features)
-      run: cargo test --workspace --all-features --verbose
     - name: Run doc-tests
       run: cargo test --doc --workspace --features internal-testing --verbose
-    - name: Check that the benchmarks can still compile
-      run: cargo bench --no-run --features internal-testing
+
+  # The second feature axis, split off because CI gates the two separately on purpose (AGENTS.md
+  # §6: feature interactions hide bugs) and they share no compiled artifact -- a different feature
+  # set is a different `target/` fingerprint, so running them in one job never reused anything.
+  test-all-features:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
+    - name: Lint (all features)
+      run: cargo clippy --workspace --all-features --all-targets
+    - name: Run tests (all features)
+      run: cargo test --workspace --all-features --verbose
+
+  # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
+  docs:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
     - name: Generate the documentation
       run: cargo doc --workspace --verbose
     - name: Generate the documentation (all features)
       run: cargo doc --workspace --all-features --verbose
-    # Packaging check for the whole workspace — all five members, the release path end to end
-    # (#204, AGENTS.md §11). `--workspace` is what makes that possible: cargo strips `path` at
-    # publish time and resolves each intra-workspace dependency from crates.io, so a *per-crate*
-    # `cargo package -p rbsr` still fails with "no matching package named `rsos`" until `rsos` is
-    # actually published — only `rsos`, `lww-register` and `reconcile-gossip` (the members with no
-    # intra-workspace dependency) can be checked one at a time today. `--workspace` packages them
-    # together and resolves the `path` + `version` pairs against a local temporary registry
-    # instead, which covers `rbsr` and `reconcile` too. Keep it as one invocation for that reason;
-    # splitting it back into per-crate steps silently drops two crates from the check.
-    #
-    # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate,
-    # which is the breakage this check exists to catch, without contacting the registry to upload.
+
+  # Its own job because it is the only step that builds in the **release** profile, so it shared
+  # nothing with the debug steps it used to sit among and was simply 70 s added to their critical
+  # path -- the single largest step in the old monolith.
+  bench-compile:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
+    - name: Check that the benchmarks can still compile
+      run: cargo bench --no-run --features internal-testing
+
+  # Packaging check for the whole workspace -- all five members, the release path end to end (#204,
+  # AGENTS.md §11). `--workspace` is what makes that possible: cargo strips `path` at publish time
+  # and resolves each intra-workspace dependency from crates.io, so a *per-crate* `cargo package -p
+  # rbsr` still fails with "no matching package named `rsos`" until `rsos` is actually published --
+  # only `rsos`, `lww-register` and `reconcile-gossip` (the members with no intra-workspace
+  # dependency) can be checked one at a time today. `--workspace` packages them together and
+  # resolves the `path` + `version` pairs against a local temporary registry instead, which covers
+  # `rbsr` and `reconcile` too. Keep it as one invocation for that reason; splitting it back into
+  # per-crate steps silently drops two crates from the check.
+  #
+  # `cargo package` (not `publish --dry-run`): it packages *and* compiles the packaged crate, which
+  # is the breakage this check exists to catch, without contacting the registry to upload.
+  #
+  # The one job with no `target/` cache, deliberately. CONTRIBUTING.md documents a measured
+  # incident where a stale sibling rlib in `target/` made exactly this command fail on an
+  # unresolved import that did not exist in the tree -- a false negative on the release gate is
+  # worth more than the ~14 s a cache would save here. Registry only, as before.
+  package:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Enable caching (registry only -- see above)
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Check that the whole workspace packages cleanly
       run: cargo package --workspace --allow-dirty
 
@@ -78,16 +177,12 @@ jobs:
   # user-selectable crypto backend — was compiled by no CI job at all. This is the one job that
   # selects it explicitly.
   mac-hmac:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Enable caching
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - uses: Swatinem/rust-cache@v2
     - name: Lint (mac-hmac)
       run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
     - name: Build (mac-hmac)
@@ -103,26 +198,27 @@ jobs:
   # #312: advisories (RustSec), license compliance, and a dependency-source allowlist. Config in
   # `deny.toml`. `checks: advisories` alone would silently skip a license/bans/sources regression;
   # the action's default `all` is deliberate here.
+  #
+  # Gated on `deps` rather than `rust`: this reads the dependency graph and `deny.toml`, so a pure
+  # `.rs` edit cannot change its verdict, but a manifest edit that touches no `.rs` file can.
   deny:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: EmbarkStudios/cargo-deny-action@v2
 
   coverage:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - name: Install llvm-tools-preview
       run: rustup component add llvm-tools-preview
     - uses: taiki-e/install-action@cargo-llvm-cov
-    - name: Enable caching
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - uses: Swatinem/rust-cache@v2
     # `--all-features`: `internal-testing`-gated seams (e.g. `just_insert`) are what the
     # integration-test oracles build against; without it this job fails to compile.
     - name: Generate code coverage
