@@ -65,6 +65,7 @@
 #   ./scripts/check-issue-triage.sh                  # report + fail on violations
 #   TRIAGE_SLA_DAYS=14 ./scripts/check-issue-triage.sh
 #   TRIAGE_BOXES_SINCE=2026-08-15 ./scripts/check-issue-triage.sh    # rule 7's window
+#   TRIAGE_GRACE_MINUTES=0 ./scripts/check-issue-triage.sh           # bind rules 1-4 immediately
 #
 # Requires: gh (authenticated, or GH_TOKEN in the environment) and jq.
 # CI-only by design (AGENTS.md §3): it needs the network and the issue tracker, so it fits
@@ -88,6 +89,20 @@ BLOCKER_KEYWORDS='gated on|blocked by|blocked on|parked on|waits on|waiting on|u
 # done that nobody did. So the rule is *bounded* rather than grandfathered issue by issue — it fails
 # from the cutoff onward and reports the history as a count, which is the fact; the list is not.
 BOXES_SINCE=${TRIAGE_BOXES_SINCE:-2026-08-15}
+
+# How long an issue may exist before the label rules bind. Not politeness -- a correctness fix.
+# Rule 3 fires before the `S-needs-triage` exemption below can, so an issue with no labels *at all*
+# is a violation from the instant it is created, and stays one until whoever filed it finishes
+# typing. Measured on 2026-08-15: #383 was created at 13:07:52 and labelled at 13:07:56, and this
+# check ran at 13:07:53 -- it failed a pull request on a four-second window that had already closed
+# by the time anyone read the log. That is noise, and noise is what makes a gate ignorable.
+#
+# Freshly-filed issues are still counted and named, just not failed on: "not yet triaged" is a real
+# state, and staying silent about it would trade one wrong answer for another. `TRIAGE_SLA_DAYS`
+# remains the deadline that eventually does bind.
+GRACE_MINUTES=${TRIAGE_GRACE_MINUTES:-60}
+grace_cutoff=$(date -u -d "${GRACE_MINUTES} minutes ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+    date -u -v-"${GRACE_MINUTES}"M +%Y-%m-%dT%H:%M:%SZ)
 
 if ! command -v jq >/dev/null 2>&1; then
     echo "check-issue-triage: jq is required" >&2
@@ -130,11 +145,20 @@ note() {
     printf '  #%-5s · %s\n' "$1" "$2"
 }
 
-while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok title; do
+while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok fresh title; do
     [ -n "$number" ] || continue
 
+    # Within the grace window every finding below downgrades to a note. One `if` rather than a
+    # branch at each call site: whichever rule an issue trips in its first hour, the answer is the
+    # same -- say so, do not fail on it.
+    if [ "$fresh" = "fresh" ]; then
+        say=note
+    else
+        say=report
+    fi
+
     if [ "$statuses" -ne 1 ]; then
-        report "$number" "$statuses S- labels, expected exactly 1 — $title"
+        $say "$number" "$statuses S- labels, expected exactly 1 — $title"
         continue
     fi
 
@@ -147,11 +171,11 @@ while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok title; do
     fi
 
     if ! $untriaged_state; then
-        [ "$kinds" -eq 1 ] || report "$number" "$kinds C- labels, expected exactly 1 — $title"
-        [ "$areas" -ge 1 ] || report "$number" "no A- label — $title"
+        [ "$kinds" -eq 1 ] || $say "$number" "$kinds C- labels, expected exactly 1 — $title"
+        [ "$areas" -ge 1 ] || $say "$number" "no A- label — $title"
     fi
 
-    [ "$unknown" -eq 0 ] || report "$number" "$unknown label(s) absent from $LABELS_FILE — $title"
+    [ "$unknown" -eq 0 ] || $say "$number" "$unknown label(s) absent from $LABELS_FILE — $title"
 
     # Three states, not two. "bare" is a #NNN somewhere in the body with no keyword in front of
     # it — enough for rule 4 as originally written, and useless to rule 6, which cannot tell a
@@ -163,11 +187,11 @@ while IFS=$'\t' read -r number kinds areas statuses unknown blocked_ok title; do
     # only in the message — a bare reference and no reference are different mistakes to fix.
     case "$blocked_ok" in
         ok) ;;
-        bare) report "$number" "S-blocked names #NNN but not as 'blocked by #NNN' — rule 6 cannot read it — $title" ;;
-        *)  report "$number" "S-blocked with no #NNN blocker in the body — $title" ;;
+        bare) $say "$number" "S-blocked names #NNN but not as 'blocked by #NNN' — rule 6 cannot read it — $title" ;;
+        *)  $say "$number" "S-blocked with no #NNN blocker in the body — $title" ;;
     esac
 done < <(
-    jq -r --arg known "$known" --arg kw "$BLOCKER_KEYWORDS" '
+    jq -r --arg known "$known" --arg kw "$BLOCKER_KEYWORDS" --arg grace "$grace_cutoff" '
         ($known | split("\n")) as $known |
         .[] |
         [ .number,
@@ -180,6 +204,7 @@ done < <(
                  elif ((.body // "") | test("#[0-9]+")) then "bare"
                  else "missing" end)
            else "ok" end),
+          (if (.createdAt // "") >= $grace then "fresh" else "-" end),
           .title
         ] | @tsv
     ' <<<"$issues"
