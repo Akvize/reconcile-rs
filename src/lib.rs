@@ -67,8 +67,8 @@ pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport}
 // `IterMut`/`ValuesMut` are deliberately not re-exported: they leave fingerprints stale.
 // `FingerprintTreeMap::with_mut` is the supported mutation path.
 pub use rsos::{
-    Aggregate, Fingerprint, FingerprintTreeMap, IntoIter, IntoKeys, IntoValues, Iter, Keys, Rsos,
-    Values,
+    Aggregate, Fingerprint, FingerprintTreeMap, IntoIter, IntoKeys, IntoValues, ItemRange, Iter,
+    Keys, Rsos, Values,
 };
 
 pub use persistence::{FileSnapshot, InMemoryPersistence, PersistedState, Persistence};

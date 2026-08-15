@@ -14,6 +14,7 @@
 //! crate root docs.
 
 use std::cmp::Ordering;
+use std::iter::FusedIterator;
 use std::ops::{Bound, RangeBounds};
 
 use arrayvec::ArrayVec;
@@ -790,6 +791,9 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 
 /// Iterator over the key-value pairs of a [`FingerprintTreeMap`] whose key falls within a range, in
 /// key order. Returned by [`FingerprintTreeMap::range`].
+///
+/// Named `ItemRange`, not `Range`: the latter would collide with [`std::ops::Range`], which this
+/// type's own generic parameter `R` is frequently instantiated with. Frozen (#291).
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
     /// Owned, not borrowed: a borrowed range makes `map.range(lo..hi)` on runtime bounds `E0716`.
     range: R,
@@ -824,6 +828,56 @@ impl<'a, K: Ord, V, R: RangeBounds<K>> Iterator for ItemRange<'a, K, V, R> {
         } else {
             None
         }
+    }
+
+    /// Exact: mirrors [`next`](Self::next)'s traversal on a cloned stack (references are `Copy`,
+    /// so this borrows rather than mutates `self`) to count the remaining matches without
+    /// requiring `R: Clone`.
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let mut stack = self.stack.clone();
+        let mut count = 0usize;
+        while let Some((node, children_passed)) = stack.pop() {
+            #[allow(clippy::collapsible_if)]
+            if 0 < children_passed && children_passed <= node.keys.len() {
+                if !self.range.contains(&node.keys[children_passed - 1]) {
+                    break;
+                }
+            }
+            if children_passed <= node.keys.len() {
+                stack.push((node, children_passed + 1));
+                if let Some(children) = node.children.as_ref() {
+                    stack.push((&children[children_passed], 0));
+                }
+            }
+            if 0 < children_passed && children_passed <= node.keys.len() {
+                count += 1;
+            }
+        }
+        (count, Some(count))
+    }
+}
+
+/// Exact per [`size_hint`](Iterator::size_hint) above.
+impl<'a, K: Ord, V, R: RangeBounds<K>> ExactSizeIterator for ItemRange<'a, K, V, R> {}
+
+/// Range exhaustion clears the stack (see [`next`](Iterator::next)) rather than leaving it
+/// mid-traversal, so a post-`None` call is always `None` again.
+impl<'a, K: Ord, V, R: RangeBounds<K>> FusedIterator for ItemRange<'a, K, V, R> {}
+
+impl<'a, K, V, R: RangeBounds<K> + Clone> Clone for ItemRange<'a, K, V, R> {
+    fn clone(&self) -> Self {
+        ItemRange {
+            range: self.range.clone(),
+            stack: self.stack.clone(),
+        }
+    }
+}
+
+impl<'a, K: std::fmt::Debug + Ord, V: std::fmt::Debug, R: RangeBounds<K> + Clone> std::fmt::Debug
+    for ItemRange<'a, K, V, R>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_map().entries(self.clone()).finish()
     }
 }
 
@@ -1097,6 +1151,55 @@ mod tests {
         assert_eq!(tree.aggregate(bounds).size(), 10);
 
         assert_eq!(tree.range((lo + 1)..(hi - 1)).count(), 8);
+    }
+
+    #[test]
+    fn item_range_trait_stack_is_usable_through_the_reexport() {
+        // Nameable via `rsos::ItemRange`, not only `rsos::fingerprint_tree_map::ItemRange` (#291).
+        use crate::ItemRange;
+
+        let tree: FingerprintTreeMap<u64, u64> = (0..30).map(|k| (k, k * 3)).collect();
+        let range: ItemRange<'_, u64, u64, _> = tree.range(10..20);
+
+        assert_eq!(range.len(), 10, "ExactSizeIterator::len");
+        assert_eq!(range.size_hint(), (10, Some(10)));
+
+        let cloned = range.clone();
+        assert_eq!(
+            cloned.map(|(k, _)| *k).collect::<Vec<_>>(),
+            (10..20).collect::<Vec<u64>>(),
+            "Clone must preserve remaining traversal state"
+        );
+
+        let debugged = format!("{:?}", tree.range(10..20));
+        for k in 10..20 {
+            assert!(
+                debugged.contains(&k.to_string()),
+                "Debug output {debugged:?} missing key {k}"
+            );
+        }
+
+        // A fused iterator keeps returning `None` after exhaustion.
+        let mut exhausted = tree.range(25..25);
+        assert_eq!(exhausted.next(), None);
+        assert_eq!(exhausted.next(), None);
+        assert_eq!(exhausted.size_hint(), (0, Some(0)));
+    }
+
+    #[test]
+    fn item_range_size_hint_matches_partial_traversal() {
+        let tree: FingerprintTreeMap<u64, u64> = (0..50).map(|k| (k, k)).collect();
+        let mut range = tree.range(5..45);
+        assert_eq!(range.size_hint(), (40, Some(40)));
+
+        for expected_remaining in (0..40).rev() {
+            range.next();
+            assert_eq!(
+                range.size_hint(),
+                (expected_remaining, Some(expected_remaining))
+            );
+        }
+        assert_eq!(range.next(), None);
     }
 
     #[test]
