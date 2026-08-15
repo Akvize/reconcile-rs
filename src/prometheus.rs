@@ -22,6 +22,10 @@
 //! # }
 //! ```
 //!
+//! `0.0.0.0` above is for concreteness, not a recommendation: [`serve`] binds whatever address you
+//! give it, and `0.0.0.0` is every interface. See README.md's "Metrics endpoint exposure" (under
+//! "Security model") for what that exposes and how to scope it down in production.
+//!
 //! # Rendering the exposition text yourself (configurable hook)
 //!
 //! ```no_run
