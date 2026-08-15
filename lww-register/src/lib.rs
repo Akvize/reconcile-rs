@@ -21,6 +21,7 @@
 //! `scripts/check-domain-purity.sh`.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod bounds;
 pub mod clock;

@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 /// is none to include in a content summary.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum State<V> {
+    /// A live value.
     Present(V),
+    /// No live value: the key was deleted (or never inserted).
     Tombstone,
 }
 
@@ -35,6 +37,7 @@ impl<V> State<V> {
         }
     }
 
+    /// `true` if this is a tombstone (no live value).
     pub fn is_tombstone(&self) -> bool {
         matches!(self, State::Tombstone)
     }
@@ -77,6 +80,7 @@ pub struct Entry<T, V> {
 }
 
 impl<T, V> Entry<T, V> {
+    /// Build a live entry: `value`, stamped with `stamp`.
     pub fn present(stamp: T, value: V) -> Self {
         Entry {
             stamp,
@@ -84,6 +88,7 @@ impl<T, V> Entry<T, V> {
         }
     }
 
+    /// Build a tombstone entry stamped with `stamp` — no live value.
     pub fn tombstone(stamp: T) -> Self {
         Entry {
             stamp,
@@ -99,6 +104,7 @@ impl<T, V> Entry<T, V> {
         }
     }
 
+    /// `true` if this entry is a tombstone (no live value).
     pub fn is_tombstone(&self) -> bool {
         self.state.is_tombstone()
     }

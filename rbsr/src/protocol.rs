@@ -104,6 +104,8 @@ pub struct RangeAggregate<K> {
 /// an excluded start or included end stays unspellable.
 #[cfg(feature = "internal-testing")]
 impl<K> RangeAggregate<K> {
+    /// Build a `RangeAggregate` with chosen bounds and aggregate, bypassing [`initial_ranges`] /
+    /// [`protocol_round`]. See the impl-level docs above for the bound encoding.
     pub fn for_testing(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
         RangeAggregate {
             range: KeyRange::new(

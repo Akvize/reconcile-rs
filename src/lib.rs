@@ -36,6 +36,7 @@
 //! README "Security model".
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod clock;
 pub mod persistence;

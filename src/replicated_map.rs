@@ -582,6 +582,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         *self.engine.pre_insert.write() = Box::new(wrapped_pre_insert);
     }
 
+    /// Fingerprint of the live entries (value **and** timestamp) over `range`: `O(range size)`,
+    /// used as the anti-entropy comparison value — equal fingerprints on both peers mean equal
+    /// content over the range. See [`value_fingerprint`](Self::value_fingerprint) for the
+    /// timestamp-less counterpart.
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.engine.fingerprint(range)
     }
@@ -945,6 +949,10 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         }
     }
 
+    /// Run one round of anti-entropy against the configured peers: compare fingerprints, exchange
+    /// any differing ranges, and merge what comes back. Normally driven on
+    /// [`reconcile_interval`](Config::reconcile_interval) by the background task spawned at
+    /// construction; exposed for callers that want to force an out-of-band round (e.g. in tests).
     pub async fn start_reconciliation(&self) {
         let mut buf = Vec::new();
         self.engine.start_reconciliation(&mut buf).await;
@@ -1292,9 +1300,17 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 /// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
 pub const MAX_NETS: usize = 8;
 
+/// Construction parameters for a [`ReplicatedMap`]. Build with [`Config::default`] and the
+/// `with_*` builders (e.g. [`with_port`](Config::with_port),
+/// [`with_listen_addr`](Config::with_listen_addr), [`with_net`](Config::with_net)); every field
+/// is `pub` for direct construction where that reads better.
 #[derive(Clone, Copy)]
 pub struct Config {
+    /// UDP port to bind. `0` (the default) asks the OS for an ephemeral port; read back the
+    /// actual bound port from the running [`ReplicatedMap`] when it matters.
     pub port: u16,
+    /// Local address to bind the UDP socket to (default `127.0.0.1`). Also determines which
+    /// declared [`nets`](Self::nets) entry, if any, is this node's local network.
     pub listen_addr: IpAddr,
     /// The geographical networks the cluster spans, each a CIDR; declare them with
     /// [`with_net`](Config::with_net). Empty slots are `None`.
@@ -1406,10 +1422,12 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// Set [`port`](Self::port).
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
+    /// Set [`listen_addr`](Self::listen_addr).
     pub fn with_listen_addr(mut self, listen_addr: IpAddr) -> Self {
         self.listen_addr = listen_addr;
         self

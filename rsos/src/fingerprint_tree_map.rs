@@ -345,6 +345,7 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
 }
 
 impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+    /// An empty tree. Equivalent to [`Default::default`].
     pub fn new() -> Self {
         Default::default()
     }
