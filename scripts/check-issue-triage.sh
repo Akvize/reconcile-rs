@@ -42,10 +42,16 @@
 #
 # Two forms, because the two labels carry different guarantees:
 #
-#   S-blocked   rule 4 already guarantees a #NNN is named, and the label means exactly "blocked
-#               by another issue". So: if EVERY issue the body references is closed, it cannot
-#               still be blocked. No judgement about which reference is "the" blocker — if any
-#               candidate is still open, this says nothing.
+#   S-blocked   two tiers, because "which reference is *the* blocker" is a judgement only when the
+#               issue declined to say. If the body carries an explicit annotation, that IS the
+#               blocker set and nothing else counts; otherwise every referenced issue is a
+#               candidate and all of them must be closed. Either way the rule fires only when no
+#               blocker is left open, so it never guesses.
+#
+#               The fallback alone was measured too weak on 2026-08-15: #356 read "blocked by #355"
+#               *and* carried a "Related: #352" footer. #355 closed, #352 did not, and the
+#               all-references tier stayed silent on a discharged blocker — the exact failure this
+#               rule exists to catch, defeated by an incidental mention.
 #   S-parked    the trigger may not be an issue at all ("when a user asks for it"), so an
 #               all-closed rule would be wrong. Only an explicit annotation is read:
 #               `gated on #N`, `blocked by #N`, `parked on #N`, `waits on #N`, `unparked when
@@ -166,8 +172,8 @@ if command -v gh >/dev/null 2>&1; then
         [ -n "$closed_refs" ] || continue
 
         if [ "$which" = "S-blocked" ]; then
-            # Only when nothing referenced is still open: with an open candidate present, which
-            # one is "the" blocker is a judgement, and this stays out of it.
+            # Only when nothing in the blocker set is still open. Which set that is was decided
+            # above: the annotated one when the body named it, every reference otherwise.
             [ "$open_left" -eq 0 ] || continue
             report "$number" "S-blocked, but every issue it references is closed —$closed_refs — $title"
         else
@@ -181,14 +187,19 @@ if command -v gh >/dev/null 2>&1; then
         jq -r '
             def refs_all: [ (.body // "") | scan("#([0-9]+)") | .[0] ] | unique;
             def refs_annotated: [ (.body // "")
-                | scan("(?i)(?:gated on|blocked by|parked on|waits on|waiting on|unparked when)[ \t:]*#([0-9]+)")
+                | scan("(?i)(?:gated on|blocked by|parked on|waits on|waiting on|unparked when)[ \t:*_`]*#([0-9]+)")
                 | .[0] ] | unique;
             def field: join(" ") | if . == "" then "-" else . end;
             .[]
             | . as $i
             | ([$i.labels[].name]) as $l
             | if ($l | index("S-blocked")) then
-                  [ $i.number, "S-blocked", (($i | refs_all) | field), $i.title ]
+                  # Annotated blockers win when present; the all-references tier is the fallback
+                  # for a body that named no blocker in a machine-readable form.
+                  [ $i.number, "S-blocked",
+                    (($i | refs_annotated) as $named
+                     | (if ($named | length) > 0 then $named else ($i | refs_all) end) | field),
+                    $i.title ]
               elif ($l | index("S-parked")) then
                   [ $i.number, "S-parked", (($i | refs_annotated) | field), $i.title ]
               else empty end
