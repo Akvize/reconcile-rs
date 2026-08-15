@@ -1,0 +1,133 @@
+name: issue-triage-semantic
+
+# The half of triage no command decides, run right after the half that is all command.
+#
+# `scripts/check-issue-triage.sh` is deliberately built to validate patterns and refuse judgements:
+# rule 5 ("an S-parked issue states its wake-up trigger") is declined in its own header as a
+# judgement, `check-doc-issue-claims.sh` limits itself to an annotated form because a looser matcher
+# on free prose was measured at three false positives out of three, and no rule anywhere decides
+# whether a `C-`/`A-` label is the *right* one -- they are only counted.
+#
+# CONTRIBUTING.md already specifies this job, under "SOTA-alignment drift": *"a scheduled,
+# non-blocking review outside CI: real drift becomes a `C-bug` issue with the citing file/line and
+# the mismatch; no drift, no output."* Until now nothing implemented it.
+#
+# It also absorbs the work that fell to a human three times on 2026-08-15 alone: deciding whether an
+# issue closed with unticked boxes is a bookkeeping gap (the work landed, nobody ticked) or a real
+# half-close (a row nothing delivered). Each took roughly half an hour of reading issues, merged
+# pull requests and `main` -- mechanical in shape, judgement in substance, which is exactly the
+# boundary this workflow sits on.
+on:
+  workflow_run:
+    workflows: ["issue-integrity"]
+    types: [completed]
+
+# One at a time. Two concurrent passes could both decide to re-home the same row.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write        # edit bodies, fix labels, open the successor issue for a half-close
+  actions: read        # read the triggering run's job logs -- the input this whole job reads
+  # Deliberately NOT pull-requests: write. AGENTS.md §9: an agent folds an outcome into a body, a
+  # title or a new issue. Comments belong to humans, so it is not given the ability to post one.
+
+jobs:
+  triage:
+    # Only the two events an outside contributor cannot cause, and that is the security boundary,
+    # not a nicety.
+    #
+    # `workflow_run` executes in the **base** repository's context, with its secrets and its write
+    # permissions, even when the run that triggered it came from a fork's pull request. That is the
+    # standard privilege-escalation shape for this event, and this job holds `issues: write`.
+    # `schedule` fires from the repository itself; `workflow_dispatch` needs write access already.
+    # Neither is reachable from a fork, so the surface closes completely.
+    #
+    # It is also right on the merits, in both directions. `issue-integrity` now runs on pull
+    # requests too, and there the author is present and owns the finding --
+    # `check-pr-closes-issues.sh` asks them before the merge, so a second opinion is noise. And
+    # `workflow_dispatch` is exactly the "I have just closed a batch, re-run it" case that
+    # `issue-integrity.yml`'s own header describes: the sweep that most needs this pass behind it.
+    if: >-
+      github.event.workflow_run.event == 'schedule' ||
+      github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: half of this job's verdicts are "did this actually land on main", which
+          # needs more than a shallow clone to answer.
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Swap for `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` if that is
+          # the secret `/install-github-app` created for this repository.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Grants the CI-reading tools (`get_ci_status`, `download_job_log`) that pair with the
+          # `actions: read` permission above.
+          additional_permissions: |
+            actions: read
+          claude_args: "--max-turns 40"
+          prompt: |
+            You are doing the **semantic half** of issue triage on ${{ github.repository }} — the
+            half `scripts/check-issue-triage.sh` deliberately declines to judge.
+
+            CONTRIBUTING.md already specifies this job under "SOTA-alignment drift": a scheduled,
+            non-blocking review outside CI, where real drift becomes an issue carrying the citing
+            file/line and the mismatch, and **no drift produces no output**. Honour that last
+            clause literally.
+
+            ## 1. Read the evidence
+
+            The `issue-integrity` run that triggered this is
+            `${{ github.event.workflow_run.id }}` (conclusion:
+            `${{ github.event.workflow_run.conclusion }}`). Read the job logs of
+            `open-issue-labels`, `doc-issue-claims` and `closed-issue-shas`.
+
+            Read it even when the run passed. Rules 7 and 8 emit *notes* that do not fail the job,
+            and those notes are precisely the material here — a green run is not an empty one.
+
+            ## 2. Classify each finding, against the tree, never against a pull request title
+
+            For every rule 7 hit — a closed issue with unticked boxes — decide which of two things
+            it is, resting the decision on `origin/main` rather than on inference:
+
+            - **Bookkeeping gap.** The work is verifiably delivered and nobody ticked. Verify
+              *each* box against the tree — the actual file, line, symbol. Then tick it, and write
+              in the edit what you verified, not which pull request you believed.
+            - **Half-close.** A row nothing delivered. Do **not** tick it. Take it out of the
+              checklist, say plainly it was not done here, and re-home it into a new issue linked
+              both ways. That is the remedy the rule's own header prescribes.
+
+            Rule 6 hits: verify the named blocker is genuinely discharged — read what it actually
+            delivered, not merely that it closed — before proposing any label change. Rule 8 notes:
+            decide whether the parent still carries work of its own.
+
+            Then the part no command reaches: `S-parked` issues whose stated wake-up trigger has
+            quietly fired; `C-`/`A-` labels that are simply wrong; doc claims about issue state
+            that a regex cannot adjudicate.
+
+            ## 3. Hard limits — each learnt from a real mistake in this repository
+
+            - **Never tick a box you have not verified in the tree.** Ticking unverified work
+              records as done what nobody did, corrupting the record these checks exist to protect.
+              In doubt, leave it and report it.
+            - **Never relabel on inference.** A blocker closing does not mean the thing it blocked
+              is ready. This exact error was made on #356 and had to be reverted.
+            - **Never post a comment.** AGENTS.md §9: fold the outcome into a body, a title, or a
+              new issue.
+            - **Every issue you create satisfies `.github/labels.tsv`**: exactly one `C-`, at least
+              one `A-`, exactly one `S-`.
+            - **Touch nothing younger than an hour.** `TRIAGE_GRACE_MINUTES` exists because a rule
+              once fired on the four-second gap between an issue being filed and being labelled.
+            - **Finding nothing is a valid and expected outcome.** Do not manufacture work to look
+              useful.
+
+            ## 4. Report
+
+            Finish with what you changed and what you deliberately left, each with its evidence. A
+            finding you cannot ground in the tree should be named and left untouched — naming it is
+            the deliverable, resolving it is not.
