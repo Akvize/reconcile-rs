@@ -1,0 +1,239 @@
+pub mod rbsr
+pub enum rbsr::Decision
+pub rbsr::Decision::Enumerate
+pub rbsr::Decision::Skip
+pub rbsr::Decision::Split(rbsr::SplitStride)
+impl core::clone::Clone for rbsr::Decision
+pub fn rbsr::Decision::clone(&self) -> rbsr::Decision
+impl core::cmp::Eq for rbsr::Decision
+impl core::cmp::PartialEq for rbsr::Decision
+pub fn rbsr::Decision::eq(&self, &rbsr::Decision) -> bool
+impl core::fmt::Debug for rbsr::Decision
+pub fn rbsr::Decision::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::Decision
+impl core::marker::StructuralPartialEq for rbsr::Decision
+impl core::marker::Freeze for rbsr::Decision
+impl core::marker::Send for rbsr::Decision
+impl core::marker::Sync for rbsr::Decision
+impl core::marker::Unpin for rbsr::Decision
+impl core::marker::UnsafeUnpin for rbsr::Decision
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::Decision
+impl core::panic::unwind_safe::UnwindSafe for rbsr::Decision
+pub struct rbsr::Comparison
+impl rbsr::Comparison
+pub fn rbsr::Comparison::agrees(&self) -> bool
+pub const fn rbsr::Comparison::children_emitted(&self) -> usize
+pub const fn rbsr::Comparison::local(&self) -> rsos::aggregate::Aggregate
+pub const fn rbsr::Comparison::new(rsos::aggregate::Aggregate, rsos::aggregate::Aggregate, usize) -> rbsr::Comparison
+pub const fn rbsr::Comparison::remote(&self) -> rsos::aggregate::Aggregate
+pub const fn rbsr::Comparison::span(&self) -> usize
+impl core::clone::Clone for rbsr::Comparison
+pub fn rbsr::Comparison::clone(&self) -> rbsr::Comparison
+impl core::cmp::Eq for rbsr::Comparison
+impl core::cmp::PartialEq for rbsr::Comparison
+pub fn rbsr::Comparison::eq(&self, &rbsr::Comparison) -> bool
+impl core::fmt::Debug for rbsr::Comparison
+pub fn rbsr::Comparison::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::Comparison
+impl core::marker::StructuralPartialEq for rbsr::Comparison
+impl core::marker::Freeze for rbsr::Comparison
+impl core::marker::Send for rbsr::Comparison
+impl core::marker::Sync for rbsr::Comparison
+impl core::marker::Unpin for rbsr::Comparison
+impl core::marker::UnsafeUnpin for rbsr::Comparison
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::Comparison
+impl core::panic::unwind_safe::UnwindSafe for rbsr::Comparison
+pub struct rbsr::EnumerateBelowThreshold
+impl rbsr::EnumerateBelowThreshold
+pub const rbsr::EnumerateBelowThreshold::PAPER: rbsr::EnumerateBelowThreshold
+pub const fn rbsr::EnumerateBelowThreshold::fan_out(&self) -> rbsr::FanOut
+pub const fn rbsr::EnumerateBelowThreshold::new(usize, rbsr::FanOut) -> rbsr::EnumerateBelowThreshold
+pub const fn rbsr::EnumerateBelowThreshold::threshold(&self) -> usize
+impl core::clone::Clone for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::clone(&self) -> rbsr::EnumerateBelowThreshold
+impl core::cmp::Eq for rbsr::EnumerateBelowThreshold
+impl core::cmp::PartialEq for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::eq(&self, &rbsr::EnumerateBelowThreshold) -> bool
+impl core::default::Default for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::default() -> rbsr::EnumerateBelowThreshold
+impl core::fmt::Debug for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::EnumerateBelowThreshold
+impl core::marker::StructuralPartialEq for rbsr::EnumerateBelowThreshold
+impl rbsr::RefinementPolicy for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl core::marker::Freeze for rbsr::EnumerateBelowThreshold
+impl core::marker::Send for rbsr::EnumerateBelowThreshold
+impl core::marker::Sync for rbsr::EnumerateBelowThreshold
+impl core::marker::Unpin for rbsr::EnumerateBelowThreshold
+impl core::marker::UnsafeUnpin for rbsr::EnumerateBelowThreshold
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::EnumerateBelowThreshold
+impl core::panic::unwind_safe::UnwindSafe for rbsr::EnumerateBelowThreshold
+pub struct rbsr::FanOut(_)
+impl rbsr::FanOut
+pub const rbsr::FanOut::BINARY: rbsr::FanOut
+pub const rbsr::FanOut::NEGENTROPY: rbsr::FanOut
+pub const fn rbsr::FanOut::get(self) -> usize
+pub const fn rbsr::FanOut::new(usize) -> rbsr::FanOut
+impl core::clone::Clone for rbsr::FanOut
+pub fn rbsr::FanOut::clone(&self) -> rbsr::FanOut
+impl core::cmp::Eq for rbsr::FanOut
+impl core::cmp::Ord for rbsr::FanOut
+pub fn rbsr::FanOut::cmp(&self, &rbsr::FanOut) -> core::cmp::Ordering
+impl core::cmp::PartialEq for rbsr::FanOut
+pub fn rbsr::FanOut::eq(&self, &rbsr::FanOut) -> bool
+impl core::cmp::PartialOrd for rbsr::FanOut
+pub fn rbsr::FanOut::partial_cmp(&self, &rbsr::FanOut) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for rbsr::FanOut
+pub fn rbsr::FanOut::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::FanOut
+impl core::marker::StructuralPartialEq for rbsr::FanOut
+impl core::marker::Freeze for rbsr::FanOut
+impl core::marker::Send for rbsr::FanOut
+impl core::marker::Sync for rbsr::FanOut
+impl core::marker::Unpin for rbsr::FanOut
+impl core::marker::UnsafeUnpin for rbsr::FanOut
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::FanOut
+impl core::panic::unwind_safe::UnwindSafe for rbsr::FanOut
+pub struct rbsr::FixedFanOut
+impl rbsr::FixedFanOut
+pub const fn rbsr::FixedFanOut::fan_out(&self) -> rbsr::FanOut
+pub const fn rbsr::FixedFanOut::new(rbsr::FanOut) -> rbsr::FixedFanOut
+impl core::clone::Clone for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::clone(&self) -> rbsr::FixedFanOut
+impl core::cmp::Eq for rbsr::FixedFanOut
+impl core::cmp::PartialEq for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::eq(&self, &rbsr::FixedFanOut) -> bool
+impl core::default::Default for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::default() -> rbsr::FixedFanOut
+impl core::fmt::Debug for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::FixedFanOut
+impl core::marker::StructuralPartialEq for rbsr::FixedFanOut
+impl rbsr::RefinementPolicy for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl core::marker::Freeze for rbsr::FixedFanOut
+impl core::marker::Send for rbsr::FixedFanOut
+impl core::marker::Sync for rbsr::FixedFanOut
+impl core::marker::Unpin for rbsr::FixedFanOut
+impl core::marker::UnsafeUnpin for rbsr::FixedFanOut
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::FixedFanOut
+impl core::panic::unwind_safe::UnwindSafe for rbsr::FixedFanOut
+pub struct rbsr::RangeAggregate<K>
+impl<'de, K> serde::de::Deserialize<'de> for rbsr::RangeAggregate<K> where K: serde::de::Deserialize<'de>
+pub fn rbsr::RangeAggregate<K>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<K: core::clone::Clone> core::clone::Clone for rbsr::RangeAggregate<K>
+pub fn rbsr::RangeAggregate<K>::clone(&self) -> rbsr::RangeAggregate<K>
+impl<K: core::cmp::Eq> core::cmp::Eq for rbsr::RangeAggregate<K>
+impl<K: core::cmp::PartialEq> core::cmp::PartialEq for rbsr::RangeAggregate<K>
+pub fn rbsr::RangeAggregate<K>::eq(&self, &rbsr::RangeAggregate<K>) -> bool
+impl<K: core::cmp::PartialEq> core::marker::StructuralPartialEq for rbsr::RangeAggregate<K>
+impl<K: core::fmt::Debug> core::fmt::Debug for rbsr::RangeAggregate<K>
+pub fn rbsr::RangeAggregate<K>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<K> serde::ser::Serialize for rbsr::RangeAggregate<K> where K: serde::ser::Serialize
+pub fn rbsr::RangeAggregate<K>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<K> core::marker::Freeze for rbsr::RangeAggregate<K> where K: core::marker::Freeze
+impl<K> core::marker::Send for rbsr::RangeAggregate<K> where K: core::marker::Send
+impl<K> core::marker::Sync for rbsr::RangeAggregate<K> where K: core::marker::Sync
+impl<K> core::marker::Unpin for rbsr::RangeAggregate<K> where K: core::marker::Unpin
+impl<K> core::marker::UnsafeUnpin for rbsr::RangeAggregate<K> where K: core::marker::UnsafeUnpin
+impl<K> core::panic::unwind_safe::RefUnwindSafe for rbsr::RangeAggregate<K> where K: core::panic::unwind_safe::RefUnwindSafe
+impl<K> core::panic::unwind_safe::UnwindSafe for rbsr::RangeAggregate<K> where K: core::panic::unwind_safe::UnwindSafe
+pub struct rbsr::RoundOutcome
+impl rbsr::RoundOutcome
+pub const fn rbsr::RoundOutcome::children(&self) -> usize
+pub const fn rbsr::RoundOutcome::dropped_malformed(&self) -> usize
+pub const fn rbsr::RoundOutcome::enumerated(&self) -> usize
+pub const fn rbsr::RoundOutcome::skipped(&self) -> usize
+pub const fn rbsr::RoundOutcome::split(&self) -> usize
+impl core::clone::Clone for rbsr::RoundOutcome
+pub fn rbsr::RoundOutcome::clone(&self) -> rbsr::RoundOutcome
+impl core::cmp::Eq for rbsr::RoundOutcome
+impl core::cmp::PartialEq for rbsr::RoundOutcome
+pub fn rbsr::RoundOutcome::eq(&self, &rbsr::RoundOutcome) -> bool
+impl core::default::Default for rbsr::RoundOutcome
+pub fn rbsr::RoundOutcome::default() -> rbsr::RoundOutcome
+impl core::fmt::Debug for rbsr::RoundOutcome
+pub fn rbsr::RoundOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::RoundOutcome
+impl core::marker::StructuralPartialEq for rbsr::RoundOutcome
+impl core::ops::arith::AddAssign for rbsr::RoundOutcome
+pub fn rbsr::RoundOutcome::add_assign(&mut self, rbsr::RoundOutcome)
+impl core::marker::Freeze for rbsr::RoundOutcome
+impl core::marker::Send for rbsr::RoundOutcome
+impl core::marker::Sync for rbsr::RoundOutcome
+impl core::marker::Unpin for rbsr::RoundOutcome
+impl core::marker::UnsafeUnpin for rbsr::RoundOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::RoundOutcome
+impl core::panic::unwind_safe::UnwindSafe for rbsr::RoundOutcome
+pub struct rbsr::SplitStride(_)
+impl rbsr::SplitStride
+pub const rbsr::SplitStride::ONE: rbsr::SplitStride
+pub fn rbsr::SplitStride::for_fan_out(usize, rbsr::FanOut) -> rbsr::SplitStride
+pub const fn rbsr::SplitStride::get(self) -> usize
+pub const fn rbsr::SplitStride::per_child(usize) -> rbsr::SplitStride
+impl core::clone::Clone for rbsr::SplitStride
+pub fn rbsr::SplitStride::clone(&self) -> rbsr::SplitStride
+impl core::cmp::Eq for rbsr::SplitStride
+impl core::cmp::Ord for rbsr::SplitStride
+pub fn rbsr::SplitStride::cmp(&self, &rbsr::SplitStride) -> core::cmp::Ordering
+impl core::cmp::PartialEq for rbsr::SplitStride
+pub fn rbsr::SplitStride::eq(&self, &rbsr::SplitStride) -> bool
+impl core::cmp::PartialOrd for rbsr::SplitStride
+pub fn rbsr::SplitStride::partial_cmp(&self, &rbsr::SplitStride) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for rbsr::SplitStride
+pub fn rbsr::SplitStride::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::SplitStride
+impl core::marker::StructuralPartialEq for rbsr::SplitStride
+impl core::marker::Freeze for rbsr::SplitStride
+impl core::marker::Send for rbsr::SplitStride
+impl core::marker::Sync for rbsr::SplitStride
+impl core::marker::Unpin for rbsr::SplitStride
+impl core::marker::UnsafeUnpin for rbsr::SplitStride
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::SplitStride
+impl core::panic::unwind_safe::UnwindSafe for rbsr::SplitStride
+pub struct rbsr::SqrtFanOut
+impl core::clone::Clone for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::clone(&self) -> rbsr::SqrtFanOut
+impl core::cmp::Eq for rbsr::SqrtFanOut
+impl core::cmp::PartialEq for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::eq(&self, &rbsr::SqrtFanOut) -> bool
+impl core::default::Default for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::default() -> rbsr::SqrtFanOut
+impl core::fmt::Debug for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for rbsr::SqrtFanOut
+impl core::marker::StructuralPartialEq for rbsr::SqrtFanOut
+impl rbsr::RefinementPolicy for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl core::marker::Freeze for rbsr::SqrtFanOut
+impl core::marker::Send for rbsr::SqrtFanOut
+impl core::marker::Sync for rbsr::SqrtFanOut
+impl core::marker::Unpin for rbsr::SqrtFanOut
+impl core::marker::UnsafeUnpin for rbsr::SqrtFanOut
+impl core::panic::unwind_safe::RefUnwindSafe for rbsr::SqrtFanOut
+impl core::panic::unwind_safe::UnwindSafe for rbsr::SqrtFanOut
+pub trait rbsr::RefinementPolicy
+pub fn rbsr::RefinementPolicy::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl rbsr::RefinementPolicy for rbsr::EnumerateBelowThreshold
+pub fn rbsr::EnumerateBelowThreshold::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl rbsr::RefinementPolicy for rbsr::FixedFanOut
+pub fn rbsr::FixedFanOut::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl rbsr::RefinementPolicy for rbsr::SqrtFanOut
+pub fn rbsr::SqrtFanOut::decide(&self, rbsr::Comparison) -> rbsr::Decision
+impl<P: rbsr::RefinementPolicy + ?core::marker::Sized> rbsr::RefinementPolicy for &P
+pub fn &P::decide(&self, rbsr::Comparison) -> rbsr::Decision
+pub trait rbsr::RsosView<K>
+pub fn rbsr::RsosView::aggregate<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::aggregate::Aggregate
+pub fn rbsr::RsosView::rank(&self, &K) -> usize
+pub fn rbsr::RsosView::select(&self, usize) -> &K
+pub fn rbsr::RsosView::size(&self) -> usize
+impl<K, T: rsos::rsos_trait::Rsos<K>> rbsr::RsosView<K> for T
+pub fn T::aggregate<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::aggregate::Aggregate
+pub fn T::rank(&self, &K) -> usize
+pub fn T::select(&self, usize) -> &K
+pub fn T::size(&self) -> usize
+pub fn rbsr::initial_ranges<K, B: rbsr::RsosView<K>>(&B) -> alloc::vec::Vec<rbsr::RangeAggregate<K>>
+pub fn rbsr::protocol_round<K, B: rbsr::RsosView<K>>(&B, alloc::vec::Vec<rbsr::RangeAggregate<K>>, &mut alloc::vec::Vec<rbsr::RangeAggregate<K>>, &mut alloc::vec::Vec<rbsr::EnumerationRange<K>>) -> rbsr::RoundOutcome where K: core::clone::Clone
+pub fn rbsr::protocol_round_with_policy<K, B, P>(&B, &P, alloc::vec::Vec<rbsr::RangeAggregate<K>>, &mut alloc::vec::Vec<rbsr::RangeAggregate<K>>, &mut alloc::vec::Vec<rbsr::EnumerationRange<K>>) -> rbsr::RoundOutcome where K: core::clone::Clone, B: rbsr::RsosView<K>, P: rbsr::RefinementPolicy + ?core::marker::Sized
+pub type rbsr::EnumerationRange<K> = (core::ops::range::Bound<K>, core::ops::range::Bound<K>)

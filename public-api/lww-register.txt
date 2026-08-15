@@ -1,0 +1,513 @@
+pub mod lww_register
+pub mod lww_register::bounds
+pub trait lww_register::bounds::Key: core::clone::Clone + core::fmt::Debug + core::cmp::Ord + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+impl<T> lww_register::bounds::Key for T where T: core::clone::Clone + core::fmt::Debug + core::cmp::Ord + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+pub trait lww_register::bounds::Value: core::clone::Clone + core::fmt::Debug + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+impl<T> lww_register::bounds::Value for T where T: core::clone::Clone + core::fmt::Debug + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+pub mod lww_register::clock
+pub struct lww_register::clock::AdmittedTime
+impl lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::clamped_to_drift(lww_register::clock::PhysicalTime, lww_register::clock::PhysicalTime, lww_register::clock::ClockDrift) -> lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::physical(self) -> lww_register::clock::PhysicalTime
+pub fn lww_register::clock::AdmittedTime::trusted(lww_register::clock::PhysicalTime) -> lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::was_clamped(self) -> bool
+impl core::clone::Clone for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::clone(&self) -> lww_register::clock::AdmittedTime
+impl core::cmp::Eq for lww_register::clock::AdmittedTime
+impl core::cmp::Ord for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::cmp(&self, &lww_register::clock::AdmittedTime) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::eq(&self, &lww_register::clock::AdmittedTime) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::partial_cmp(&self, &lww_register::clock::AdmittedTime) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::AdmittedTime
+pub fn lww_register::clock::AdmittedTime::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::AdmittedTime
+impl core::marker::StructuralPartialEq for lww_register::clock::AdmittedTime
+impl core::marker::Freeze for lww_register::clock::AdmittedTime
+impl core::marker::Send for lww_register::clock::AdmittedTime
+impl core::marker::Sync for lww_register::clock::AdmittedTime
+impl core::marker::Unpin for lww_register::clock::AdmittedTime
+impl core::marker::UnsafeUnpin for lww_register::clock::AdmittedTime
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::AdmittedTime
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::AdmittedTime
+pub struct lww_register::clock::ClockDrift(_)
+impl lww_register::clock::ClockDrift
+pub const fn lww_register::clock::ClockDrift::from_millis(u64) -> lww_register::clock::ClockDrift
+pub const fn lww_register::clock::ClockDrift::millis(self) -> u64
+impl core::clone::Clone for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::clone(&self) -> lww_register::clock::ClockDrift
+impl core::cmp::Eq for lww_register::clock::ClockDrift
+impl core::cmp::Ord for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::cmp(&self, &lww_register::clock::ClockDrift) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::eq(&self, &lww_register::clock::ClockDrift) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::partial_cmp(&self, &lww_register::clock::ClockDrift) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::default() -> lww_register::clock::ClockDrift
+impl core::fmt::Debug for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::ClockDrift
+pub fn lww_register::clock::ClockDrift::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::ClockDrift
+impl core::marker::StructuralPartialEq for lww_register::clock::ClockDrift
+impl core::marker::Freeze for lww_register::clock::ClockDrift
+impl core::marker::Send for lww_register::clock::ClockDrift
+impl core::marker::Sync for lww_register::clock::ClockDrift
+impl core::marker::Unpin for lww_register::clock::ClockDrift
+impl core::marker::UnsafeUnpin for lww_register::clock::ClockDrift
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::ClockDrift
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::ClockDrift
+pub struct lww_register::clock::Hlc
+impl lww_register::clock::Hlc
+pub const lww_register::clock::Hlc::START: lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::advance_past_remote(&mut self, lww_register::clock::PhysicalTime, lww_register::clock::AdmittedTime, lww_register::clock::LogicalCounter)
+pub const fn lww_register::clock::Hlc::logical(&self) -> lww_register::clock::LogicalCounter
+pub const fn lww_register::clock::Hlc::new(lww_register::clock::PhysicalTime, lww_register::clock::LogicalCounter) -> lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::next_tick(self) -> lww_register::clock::Hlc
+pub const fn lww_register::clock::Hlc::physical(&self) -> lww_register::clock::PhysicalTime
+impl core::clone::Clone for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::clone(&self) -> lww_register::clock::Hlc
+impl core::cmp::Eq for lww_register::clock::Hlc
+impl core::cmp::Ord for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::cmp(&self, &lww_register::clock::Hlc) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::eq(&self, &lww_register::clock::Hlc) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::partial_cmp(&self, &lww_register::clock::Hlc) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::default() -> lww_register::clock::Hlc
+impl core::fmt::Debug for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::Hlc
+impl core::marker::StructuralPartialEq for lww_register::clock::Hlc
+impl serde::ser::Serialize for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::Hlc
+pub fn lww_register::clock::Hlc::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::Hlc
+impl core::marker::Send for lww_register::clock::Hlc
+impl core::marker::Sync for lww_register::clock::Hlc
+impl core::marker::Unpin for lww_register::clock::Hlc
+impl core::marker::UnsafeUnpin for lww_register::clock::Hlc
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::Hlc
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::Hlc
+pub struct lww_register::clock::LogicalCounter(_)
+impl lww_register::clock::LogicalCounter
+pub const lww_register::clock::LogicalCounter::ZERO: lww_register::clock::LogicalCounter
+pub const fn lww_register::clock::LogicalCounter::get(self) -> u32
+pub const fn lww_register::clock::LogicalCounter::new(u32) -> lww_register::clock::LogicalCounter
+impl core::clone::Clone for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::clone(&self) -> lww_register::clock::LogicalCounter
+impl core::cmp::Eq for lww_register::clock::LogicalCounter
+impl core::cmp::Ord for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::cmp(&self, &lww_register::clock::LogicalCounter) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::eq(&self, &lww_register::clock::LogicalCounter) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::partial_cmp(&self, &lww_register::clock::LogicalCounter) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::default() -> lww_register::clock::LogicalCounter
+impl core::fmt::Debug for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::LogicalCounter
+impl core::marker::StructuralPartialEq for lww_register::clock::LogicalCounter
+impl serde::ser::Serialize for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::LogicalCounter
+pub fn lww_register::clock::LogicalCounter::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::LogicalCounter
+impl core::marker::Send for lww_register::clock::LogicalCounter
+impl core::marker::Sync for lww_register::clock::LogicalCounter
+impl core::marker::Unpin for lww_register::clock::LogicalCounter
+impl core::marker::UnsafeUnpin for lww_register::clock::LogicalCounter
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::LogicalCounter
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::LogicalCounter
+pub struct lww_register::clock::NodeId(_)
+impl lww_register::clock::NodeId
+pub const fn lww_register::clock::NodeId::get(self) -> u64
+pub const fn lww_register::clock::NodeId::new(u64) -> lww_register::clock::NodeId
+impl core::clone::Clone for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::clone(&self) -> lww_register::clock::NodeId
+impl core::cmp::Eq for lww_register::clock::NodeId
+impl core::cmp::Ord for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::cmp(&self, &lww_register::clock::NodeId) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::eq(&self, &lww_register::clock::NodeId) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::partial_cmp(&self, &lww_register::clock::NodeId) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::default() -> lww_register::clock::NodeId
+impl core::fmt::Debug for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::NodeId
+impl core::marker::StructuralPartialEq for lww_register::clock::NodeId
+impl serde::ser::Serialize for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::NodeId
+pub fn lww_register::clock::NodeId::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::NodeId
+impl core::marker::Send for lww_register::clock::NodeId
+impl core::marker::Sync for lww_register::clock::NodeId
+impl core::marker::Unpin for lww_register::clock::NodeId
+impl core::marker::UnsafeUnpin for lww_register::clock::NodeId
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::NodeId
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::NodeId
+pub struct lww_register::clock::PhysicalTime(_)
+impl lww_register::clock::PhysicalTime
+pub const lww_register::clock::PhysicalTime::EPOCH: lww_register::clock::PhysicalTime
+pub const fn lww_register::clock::PhysicalTime::from_millis(u64) -> lww_register::clock::PhysicalTime
+pub const fn lww_register::clock::PhysicalTime::millis(self) -> u64
+pub const fn lww_register::clock::PhysicalTime::next_ms(self) -> lww_register::clock::PhysicalTime
+pub const fn lww_register::clock::PhysicalTime::saturating_add(self, lww_register::clock::ClockDrift) -> lww_register::clock::PhysicalTime
+impl core::clone::Clone for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::clone(&self) -> lww_register::clock::PhysicalTime
+impl core::cmp::Eq for lww_register::clock::PhysicalTime
+impl core::cmp::Ord for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::cmp(&self, &lww_register::clock::PhysicalTime) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::eq(&self, &lww_register::clock::PhysicalTime) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::partial_cmp(&self, &lww_register::clock::PhysicalTime) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::default() -> lww_register::clock::PhysicalTime
+impl core::fmt::Debug for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::PhysicalTime
+impl core::marker::StructuralPartialEq for lww_register::clock::PhysicalTime
+impl serde::ser::Serialize for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::PhysicalTime
+pub fn lww_register::clock::PhysicalTime::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::PhysicalTime
+impl core::marker::Send for lww_register::clock::PhysicalTime
+impl core::marker::Sync for lww_register::clock::PhysicalTime
+impl core::marker::Unpin for lww_register::clock::PhysicalTime
+impl core::marker::UnsafeUnpin for lww_register::clock::PhysicalTime
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::PhysicalTime
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::PhysicalTime
+pub struct lww_register::clock::Timestamp
+impl lww_register::clock::Timestamp
+pub const fn lww_register::clock::Timestamp::hlc(&self) -> lww_register::clock::Hlc
+pub const fn lww_register::clock::Timestamp::logical(&self) -> lww_register::clock::LogicalCounter
+pub const fn lww_register::clock::Timestamp::new(lww_register::clock::Hlc, lww_register::clock::NodeId) -> lww_register::clock::Timestamp
+pub const fn lww_register::clock::Timestamp::node_id(&self) -> lww_register::clock::NodeId
+pub const fn lww_register::clock::Timestamp::physical(&self) -> lww_register::clock::PhysicalTime
+impl core::clone::Clone for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::clone(&self) -> lww_register::clock::Timestamp
+impl core::cmp::Eq for lww_register::clock::Timestamp
+impl core::cmp::Ord for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::cmp(&self, &lww_register::clock::Timestamp) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::eq(&self, &lww_register::clock::Timestamp) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::partial_cmp(&self, &lww_register::clock::Timestamp) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::default() -> lww_register::clock::Timestamp
+impl core::fmt::Debug for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::Timestamp
+impl core::marker::StructuralPartialEq for lww_register::clock::Timestamp
+impl serde::ser::Serialize for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::Timestamp
+impl core::marker::Send for lww_register::clock::Timestamp
+impl core::marker::Sync for lww_register::clock::Timestamp
+impl core::marker::Unpin for lww_register::clock::Timestamp
+impl core::marker::UnsafeUnpin for lww_register::clock::Timestamp
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::Timestamp
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::Timestamp
+pub const lww_register::clock::MAX_CLOCK_DRIFT: lww_register::clock::ClockDrift
+pub trait lww_register::clock::Clock: core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::clock::Clock::node_id(&self) -> lww_register::clock::NodeId
+pub fn lww_register::clock::Clock::now(&self) -> lww_register::clock::Timestamp
+pub fn lww_register::clock::Clock::observe(&self, lww_register::clock::Timestamp)
+pub fn lww_register::clock::Clock::observe_trusted(&self, lww_register::clock::Timestamp)
+pub fn lww_register::clock::assert_conformance<C: lww_register::clock::Clock>(&C)
+pub mod lww_register::entry
+pub enum lww_register::entry::State<V>
+pub lww_register::entry::State::Present(V)
+pub lww_register::entry::State::Tombstone
+impl<V> lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::as_value(&self) -> core::option::Option<&V>
+pub fn lww_register::entry::State<V>::as_value_mut(&mut self) -> core::option::Option<&mut V>
+pub fn lww_register::entry::State<V>::is_tombstone(&self) -> bool
+impl<'de, V> serde::de::Deserialize<'de> for lww_register::entry::State<V> where V: serde::de::Deserialize<'de>
+pub fn lww_register::entry::State<V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<V: core::clone::Clone> core::clone::Clone for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::clone(&self) -> lww_register::entry::State<V>
+impl<V: core::cmp::Eq> core::cmp::Eq for lww_register::entry::State<V>
+impl<V: core::cmp::PartialEq> core::cmp::PartialEq for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::eq(&self, &lww_register::entry::State<V>) -> bool
+impl<V: core::cmp::PartialEq> core::marker::StructuralPartialEq for lww_register::entry::State<V>
+impl<V: core::fmt::Debug> core::fmt::Debug for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<V: core::hash::Hash> core::hash::Hash for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl<V> core::convert::From<core::option::Option<V>> for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::from(core::option::Option<V>) -> Self
+impl<V> core::convert::From<lww_register::entry::State<V>> for core::option::Option<V>
+pub fn core::option::Option<V>::from(lww_register::entry::State<V>) -> Self
+impl<V> serde::ser::Serialize for lww_register::entry::State<V> where V: serde::ser::Serialize
+pub fn lww_register::entry::State<V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<V> core::marker::Freeze for lww_register::entry::State<V> where V: core::marker::Freeze
+impl<V> core::marker::Send for lww_register::entry::State<V> where V: core::marker::Send
+impl<V> core::marker::Sync for lww_register::entry::State<V> where V: core::marker::Sync
+impl<V> core::marker::Unpin for lww_register::entry::State<V> where V: core::marker::Unpin
+impl<V> core::marker::UnsafeUnpin for lww_register::entry::State<V> where V: core::marker::UnsafeUnpin
+impl<V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::State<V> where V: core::panic::unwind_safe::RefUnwindSafe
+impl<V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::State<V> where V: core::panic::unwind_safe::UnwindSafe
+pub struct lww_register::entry::Entry<T, V>
+pub lww_register::entry::Entry::stamp: T
+pub lww_register::entry::Entry::state: lww_register::entry::State<V>
+impl<T, V> lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::is_tombstone(&self) -> bool
+pub fn lww_register::entry::Entry<T, V>::new(T, core::option::Option<V>) -> Self
+pub fn lww_register::entry::Entry<T, V>::present(T, V) -> Self
+pub fn lww_register::entry::Entry<T, V>::tombstone(T) -> Self
+pub fn lww_register::entry::Entry<T, V>::value(&self) -> core::option::Option<&V>
+pub fn lww_register::entry::Entry<T, V>::value_mut(&mut self) -> core::option::Option<&mut V>
+impl<T: core::cmp::Ord + core::marker::Copy, V: core::clone::Clone> lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::merge(&self, &Self) -> Self
+pub fn lww_register::entry::Entry<T, V>::project(&self) -> lww_register::entry::State<V>
+impl<'de, T, V> serde::de::Deserialize<'de> for lww_register::entry::Entry<T, V> where T: serde::de::Deserialize<'de>, V: serde::de::Deserialize<'de>
+pub fn lww_register::entry::Entry<T, V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<T, V> serde::ser::Serialize for lww_register::entry::Entry<T, V> where T: serde::ser::Serialize, V: serde::ser::Serialize
+pub fn lww_register::entry::Entry<T, V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<T: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::clone(&self) -> lww_register::entry::Entry<T, V>
+impl<T: core::cmp::Eq, V: core::cmp::Eq> core::cmp::Eq for lww_register::entry::Entry<T, V>
+impl<T: core::cmp::PartialEq, V: core::cmp::PartialEq> core::cmp::PartialEq for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::eq(&self, &lww_register::entry::Entry<T, V>) -> bool
+impl<T: core::cmp::PartialEq, V: core::cmp::PartialEq> core::marker::StructuralPartialEq for lww_register::entry::Entry<T, V>
+impl<T: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: core::hash::Hash, V: core::hash::Hash> core::hash::Hash for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, V: core::marker::Freeze
+impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, V: core::marker::Send
+impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, V: core::marker::Sync
+impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, V: core::marker::Unpin
+impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, V: core::marker::UnsafeUnpin
+impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+pub mod lww_register::persistence
+pub struct lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> lww_register::persistence::InMemoryPersistence<K, V>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::new() -> Self
+impl<K, V> core::default::Default for lww_register::persistence::InMemoryPersistence<K, V>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::default() -> Self
+impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persistence::InMemoryPersistence<K, V> where K: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static, V: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+impl<K, V> !core::marker::Freeze for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+#[non_exhaustive] pub struct lww_register::persistence::PersistedState<K, V>
+pub lww_register::persistence::PersistedState::entries: lww_register::persistence::DatedEntries<K, V>
+pub lww_register::persistence::PersistedState::members: std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>
+pub lww_register::persistence::PersistedState::tombstone_acks: std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>
+impl<K, V> lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::new(lww_register::persistence::DatedEntries<K, V>, std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>) -> Self
+impl<'de, K, V> serde::de::Deserialize<'de> for lww_register::persistence::PersistedState<K, V> where K: serde::de::Deserialize<'de> + core::cmp::Eq + core::hash::Hash, V: serde::de::Deserialize<'de>
+pub fn lww_register::persistence::PersistedState<K, V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<K, V> core::convert::From<alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>> for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::from(lww_register::persistence::DatedEntries<K, V>) -> Self
+impl<K, V> core::default::Default for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::default() -> Self
+impl<K, V> serde::ser::Serialize for lww_register::persistence::PersistedState<K, V> where K: serde::ser::Serialize, V: serde::ser::Serialize
+pub fn lww_register::persistence::PersistedState<K, V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::clone(&self) -> lww_register::persistence::PersistedState<K, V>
+impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where K: core::marker::Sync, V: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V>
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+pub trait lww_register::persistence::Persistence<K, V>: core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::persistence::Persistence::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::persistence::Persistence::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persistence::InMemoryPersistence<K, V> where K: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static, V: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+pub type lww_register::persistence::DatedEntries<K, V> = alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>
+pub enum lww_register::State<V>
+pub lww_register::State::Present(V)
+pub lww_register::State::Tombstone
+impl<V> lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::as_value(&self) -> core::option::Option<&V>
+pub fn lww_register::entry::State<V>::as_value_mut(&mut self) -> core::option::Option<&mut V>
+pub fn lww_register::entry::State<V>::is_tombstone(&self) -> bool
+impl<'de, V> serde::de::Deserialize<'de> for lww_register::entry::State<V> where V: serde::de::Deserialize<'de>
+pub fn lww_register::entry::State<V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<V: core::clone::Clone> core::clone::Clone for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::clone(&self) -> lww_register::entry::State<V>
+impl<V: core::cmp::Eq> core::cmp::Eq for lww_register::entry::State<V>
+impl<V: core::cmp::PartialEq> core::cmp::PartialEq for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::eq(&self, &lww_register::entry::State<V>) -> bool
+impl<V: core::cmp::PartialEq> core::marker::StructuralPartialEq for lww_register::entry::State<V>
+impl<V: core::fmt::Debug> core::fmt::Debug for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<V: core::hash::Hash> core::hash::Hash for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl<V> core::convert::From<core::option::Option<V>> for lww_register::entry::State<V>
+pub fn lww_register::entry::State<V>::from(core::option::Option<V>) -> Self
+impl<V> core::convert::From<lww_register::entry::State<V>> for core::option::Option<V>
+pub fn core::option::Option<V>::from(lww_register::entry::State<V>) -> Self
+impl<V> serde::ser::Serialize for lww_register::entry::State<V> where V: serde::ser::Serialize
+pub fn lww_register::entry::State<V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<V> core::marker::Freeze for lww_register::entry::State<V> where V: core::marker::Freeze
+impl<V> core::marker::Send for lww_register::entry::State<V> where V: core::marker::Send
+impl<V> core::marker::Sync for lww_register::entry::State<V> where V: core::marker::Sync
+impl<V> core::marker::Unpin for lww_register::entry::State<V> where V: core::marker::Unpin
+impl<V> core::marker::UnsafeUnpin for lww_register::entry::State<V> where V: core::marker::UnsafeUnpin
+impl<V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::State<V> where V: core::panic::unwind_safe::RefUnwindSafe
+impl<V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::State<V> where V: core::panic::unwind_safe::UnwindSafe
+pub struct lww_register::Entry<T, V>
+pub lww_register::Entry::stamp: T
+pub lww_register::Entry::state: lww_register::entry::State<V>
+impl<T, V> lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::is_tombstone(&self) -> bool
+pub fn lww_register::entry::Entry<T, V>::new(T, core::option::Option<V>) -> Self
+pub fn lww_register::entry::Entry<T, V>::present(T, V) -> Self
+pub fn lww_register::entry::Entry<T, V>::tombstone(T) -> Self
+pub fn lww_register::entry::Entry<T, V>::value(&self) -> core::option::Option<&V>
+pub fn lww_register::entry::Entry<T, V>::value_mut(&mut self) -> core::option::Option<&mut V>
+impl<T: core::cmp::Ord + core::marker::Copy, V: core::clone::Clone> lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::merge(&self, &Self) -> Self
+pub fn lww_register::entry::Entry<T, V>::project(&self) -> lww_register::entry::State<V>
+impl<'de, T, V> serde::de::Deserialize<'de> for lww_register::entry::Entry<T, V> where T: serde::de::Deserialize<'de>, V: serde::de::Deserialize<'de>
+pub fn lww_register::entry::Entry<T, V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<T, V> serde::ser::Serialize for lww_register::entry::Entry<T, V> where T: serde::ser::Serialize, V: serde::ser::Serialize
+pub fn lww_register::entry::Entry<T, V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<T: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::clone(&self) -> lww_register::entry::Entry<T, V>
+impl<T: core::cmp::Eq, V: core::cmp::Eq> core::cmp::Eq for lww_register::entry::Entry<T, V>
+impl<T: core::cmp::PartialEq, V: core::cmp::PartialEq> core::cmp::PartialEq for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::eq(&self, &lww_register::entry::Entry<T, V>) -> bool
+impl<T: core::cmp::PartialEq, V: core::cmp::PartialEq> core::marker::StructuralPartialEq for lww_register::entry::Entry<T, V>
+impl<T: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: core::hash::Hash, V: core::hash::Hash> core::hash::Hash for lww_register::entry::Entry<T, V>
+pub fn lww_register::entry::Entry<T, V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, V: core::marker::Freeze
+impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, V: core::marker::Send
+impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, V: core::marker::Sync
+impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, V: core::marker::Unpin
+impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, V: core::marker::UnsafeUnpin
+impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+pub struct lww_register::InMemoryPersistence<K, V>
+impl<K, V> lww_register::persistence::InMemoryPersistence<K, V>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::new() -> Self
+impl<K, V> core::default::Default for lww_register::persistence::InMemoryPersistence<K, V>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::default() -> Self
+impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persistence::InMemoryPersistence<K, V> where K: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static, V: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+impl<K, V> !core::marker::Freeze for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+#[non_exhaustive] pub struct lww_register::PersistedState<K, V>
+pub lww_register::PersistedState::entries: lww_register::persistence::DatedEntries<K, V>
+pub lww_register::PersistedState::members: std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>
+pub lww_register::PersistedState::tombstone_acks: std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>
+impl<K, V> lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::new(lww_register::persistence::DatedEntries<K, V>, std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>) -> Self
+impl<'de, K, V> serde::de::Deserialize<'de> for lww_register::persistence::PersistedState<K, V> where K: serde::de::Deserialize<'de> + core::cmp::Eq + core::hash::Hash, V: serde::de::Deserialize<'de>
+pub fn lww_register::persistence::PersistedState<K, V>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl<K, V> core::convert::From<alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>> for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::from(lww_register::persistence::DatedEntries<K, V>) -> Self
+impl<K, V> core::default::Default for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::default() -> Self
+impl<K, V> serde::ser::Serialize for lww_register::persistence::PersistedState<K, V> where K: serde::ser::Serialize, V: serde::ser::Serialize
+pub fn lww_register::persistence::PersistedState<K, V>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::clone(&self) -> lww_register::persistence::PersistedState<K, V>
+impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::persistence::PersistedState<K, V>
+pub fn lww_register::persistence::PersistedState<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where K: core::marker::Send, V: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where K: core::marker::Sync, V: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V>
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+pub struct lww_register::Timestamp
+impl lww_register::clock::Timestamp
+pub const fn lww_register::clock::Timestamp::hlc(&self) -> lww_register::clock::Hlc
+pub const fn lww_register::clock::Timestamp::logical(&self) -> lww_register::clock::LogicalCounter
+pub const fn lww_register::clock::Timestamp::new(lww_register::clock::Hlc, lww_register::clock::NodeId) -> lww_register::clock::Timestamp
+pub const fn lww_register::clock::Timestamp::node_id(&self) -> lww_register::clock::NodeId
+pub const fn lww_register::clock::Timestamp::physical(&self) -> lww_register::clock::PhysicalTime
+impl core::clone::Clone for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::clone(&self) -> lww_register::clock::Timestamp
+impl core::cmp::Eq for lww_register::clock::Timestamp
+impl core::cmp::Ord for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::cmp(&self, &lww_register::clock::Timestamp) -> core::cmp::Ordering
+impl core::cmp::PartialEq for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::eq(&self, &lww_register::clock::Timestamp) -> bool
+impl core::cmp::PartialOrd for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::partial_cmp(&self, &lww_register::clock::Timestamp) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::default() -> lww_register::clock::Timestamp
+impl core::fmt::Debug for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for lww_register::clock::Timestamp
+impl core::marker::StructuralPartialEq for lww_register::clock::Timestamp
+impl serde::ser::Serialize for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+impl<'de> serde::de::Deserialize<'de> for lww_register::clock::Timestamp
+pub fn lww_register::clock::Timestamp::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+impl core::marker::Freeze for lww_register::clock::Timestamp
+impl core::marker::Send for lww_register::clock::Timestamp
+impl core::marker::Sync for lww_register::clock::Timestamp
+impl core::marker::Unpin for lww_register::clock::Timestamp
+impl core::marker::UnsafeUnpin for lww_register::clock::Timestamp
+impl core::panic::unwind_safe::RefUnwindSafe for lww_register::clock::Timestamp
+impl core::panic::unwind_safe::UnwindSafe for lww_register::clock::Timestamp
+pub trait lww_register::Clock: core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::Clock::node_id(&self) -> lww_register::clock::NodeId
+pub fn lww_register::Clock::now(&self) -> lww_register::clock::Timestamp
+pub fn lww_register::Clock::observe(&self, lww_register::clock::Timestamp)
+pub fn lww_register::Clock::observe_trusted(&self, lww_register::clock::Timestamp)
+pub trait lww_register::Key: core::clone::Clone + core::fmt::Debug + core::cmp::Ord + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+impl<T> lww_register::bounds::Key for T where T: core::clone::Clone + core::fmt::Debug + core::cmp::Ord + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+pub trait lww_register::Persistence<K, V>: core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::Persistence::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::Persistence::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persistence::InMemoryPersistence<K, V> where K: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static, V: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
+pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
+pub trait lww_register::Value: core::clone::Clone + core::fmt::Debug + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+impl<T> lww_register::bounds::Value for T where T: core::clone::Clone + core::fmt::Debug + core::marker::Send + core::marker::Sync + serde::ser::Serialize + serde::de::DeserializeOwned + 'static
+pub type lww_register::DatedEntries<K, V> = alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>
