@@ -410,8 +410,8 @@ decommissioning one, or retuning WAN traffic on the fly. These `&self` methods o
 take effect on the running `run()` loop:
 
 ```rust
-store.add_net("10.4.0.0/16".parse().unwrap()); // start gossiping with a new location
-store.remove_net("10.3.0.0/16".parse().unwrap()); // stop probing a retired one
+let _: bool = store.add_net("10.4.0.0/16".parse().unwrap()); // start gossiping with a new location
+let _: bool = store.remove_net("10.3.0.0/16".parse().unwrap()); // stop probing a retired one
 store.set_nets(&nets);                          // replace the whole topology at once
 store.set_remote_interval(3);                   // retune cross-network cadence
 store.set_remote_fanout(4);                     //   and fan-out

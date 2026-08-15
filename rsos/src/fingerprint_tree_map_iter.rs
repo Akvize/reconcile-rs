@@ -143,6 +143,7 @@ impl<K, V> FingerprintTreeMap<K, V> {
     /// let pairs: Vec<_> = tree.iter().collect();
     /// assert_eq!(pairs, vec![(&1, &"a"), (&2, &"b")]);
     /// ```
+    #[must_use]
     pub fn iter(&self) -> Iter<'_, K, V> {
         self.into_iter()
     }
@@ -250,6 +251,7 @@ impl<K, V> FingerprintTreeMap<K, V> {
     /// let pairs: Vec<_> = tree.into_values().collect();
     /// assert_eq!(pairs, vec![("a"), ("b")]);
     /// ```
+    #[must_use]
     pub fn into_values(self) -> IntoValues<K, V> {
         IntoValues {
             inner: self.into_iter(),
@@ -280,6 +282,7 @@ impl<K, V> FingerprintTreeMap<K, V> {
     /// let pairs: Vec<_> = tree.values().collect();
     /// assert_eq!(pairs, vec![(&"a"), (&"b")]);
     /// ```
+    #[must_use]
     pub fn values(&self) -> Values<'_, K, V> {
         Values { inner: self.iter() }
     }
@@ -333,6 +336,7 @@ impl<K, V> FingerprintTreeMap<K, V> {
     /// let ks: Vec<_> = tree.clone().into_keys().collect();
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
+    #[must_use]
     pub fn into_keys(self) -> IntoKeys<K, V> {
         IntoKeys {
             inner: self.into_iter(),
@@ -363,6 +367,7 @@ impl<K, V> FingerprintTreeMap<K, V> {
     /// let ks: Vec<_> = tree.keys().copied().collect();
     /// assert_eq!(ks, vec![1, 2]);
     /// ```
+    #[must_use]
     pub fn keys(&self) -> Keys<'_, K, V> {
         Keys { inner: self.iter() }
     }

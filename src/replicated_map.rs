@@ -419,11 +419,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             cursor = Some(last_key.clone());
             entries.extend(chunk);
         }
-        let state = PersistedState {
+        let state = PersistedState::new(
             entries,
-            members: self.engine.members.read().clone(),
-            tombstone_acks: self.engine.tombstone_acks.read().clone(),
-        };
+            self.engine.members.read().clone(),
+            self.engine.tombstone_acks.read().clone(),
+        );
         if let Err(err) = self.persistence.save(&state) {
             warn!("failed to persist reconcile store snapshot: {err}");
         }
@@ -1016,6 +1016,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns
     /// `false` (and logs) if the [`MAX_NETS`] cap is already reached. The local network is re-derived.
+    #[must_use]
     pub fn add_net(&self, net: IpNet) -> bool {
         self.engine.add_net(net)
     }
@@ -1023,6 +1024,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// (runtime) Stop declaring a network, returning whether it was present. Known peers keep
     /// being repaired; add a replacement net before removing the old one to keep discovery
     /// connected through a migration.
+    #[must_use]
     pub fn remove_net(&self, net: IpNet) -> bool {
         self.engine.remove_net(net)
     }
@@ -1256,6 +1258,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
     /// `k` is live).
+    #[must_use]
     pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
         self.mutate_live(k, f)
     }
@@ -1423,11 +1426,13 @@ impl Default for Config {
 }
 impl Config {
     /// Set [`port`](Self::port).
+    #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
     /// Set [`listen_addr`](Self::listen_addr).
+    #[must_use]
     pub fn with_listen_addr(mut self, listen_addr: IpAddr) -> Self {
         self.listen_addr = listen_addr;
         self
@@ -1438,6 +1443,7 @@ impl Config {
     /// # Panics
     ///
     /// If more than [`MAX_NETS`] networks are declared.
+    #[must_use]
     pub fn with_net(mut self, net: IpNet) -> Self {
         let slot = self
             .nets
@@ -1453,6 +1459,7 @@ impl Config {
     /// # Panics
     ///
     /// If the total exceeds [`MAX_NETS`].
+    #[must_use]
     pub fn with_nets(mut self, nets: &[IpNet]) -> Self {
         for &net in nets {
             self = self.with_net(net);
@@ -1462,6 +1469,7 @@ impl Config {
 
     /// Set how often (in reconciliation rounds) the full anti-entropy comparison is sent to
     /// remote-network peers (default `6`). See [`remote_interval`](Config::remote_interval).
+    #[must_use]
     pub fn with_remote_interval(mut self, interval: u32) -> Self {
         self.remote_interval = interval;
         self
@@ -1469,6 +1477,7 @@ impl Config {
 
     /// Set the maximum number of peers contacted per remote network on each cross-network round
     /// (default `2`). See [`remote_fanout`](Config::remote_fanout).
+    #[must_use]
     pub fn with_remote_fanout(mut self, fanout: usize) -> Self {
         self.remote_fanout = fanout;
         self
@@ -1478,6 +1487,7 @@ impl Config {
     /// initiating a round (default 1 s). See [`reconcile_interval`](Config::reconcile_interval).
     /// Retunable at runtime via
     /// [`ReplicatedMap::set_reconcile_interval`](crate::ReplicatedMap::set_reconcile_interval).
+    #[must_use]
     pub fn with_reconcile_interval(mut self, interval: Duration) -> Self {
         self.reconcile_interval = interval;
         self
@@ -1486,6 +1496,7 @@ impl Config {
     /// Set the rate, in bytes per second, at which a single bulk anti-entropy value transfer to one
     /// peer is paced (default 32 MiB/s). See [`bulk_send_rate`](Config::bulk_send_rate); to disable
     /// pacing (the historical back-to-back burst), set that field to `None` directly.
+    #[must_use]
     pub fn with_bulk_send_rate(mut self, bytes_per_sec: usize) -> Self {
         self.bulk_send_rate = Some(bytes_per_sec);
         self
@@ -1494,6 +1505,7 @@ impl Config {
     /// Request `size` bytes for `SO_RCVBUF`; the kernel clamps to the OS maximum. Raising this
     /// with the matching sysctl is the fix for datagrams dropped during a cold sync. Set
     /// [`recv_buffer_size`](Config::recv_buffer_size) to `None` for the OS default.
+    #[must_use]
     pub fn with_recv_buffer_size(mut self, size: usize) -> Self {
         self.recv_buffer_size = Some(size);
         self
@@ -1501,6 +1513,7 @@ impl Config {
 
     /// Request `size` bytes for `SO_SNDBUF`; the kernel clamps to the OS maximum. Set
     /// [`send_buffer_size`](Config::send_buffer_size) to `None` for the OS default.
+    #[must_use]
     pub fn with_send_buffer_size(mut self, size: usize) -> Self {
         self.send_buffer_size = Some(size);
         self
@@ -1512,18 +1525,21 @@ impl Config {
     /// Incoming datagrams are verified before deserialization and silently dropped on failure.
     /// Every node must share the key and the MAC backend feature (`mac-blake3` or `mac-hmac`);
     /// without one the store warns loudly at startup and runs unauthenticated.
+    #[must_use]
     pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
         self.cluster_key = Some(key);
         self
     }
 
     /// Set an explicit node identity for the HLC tie-break; must be distinct per node.
+    #[must_use]
     pub fn with_node_id(mut self, node_id: NodeId) -> Self {
         self.node_id = Some(node_id);
         self
     }
 
     /// Set [`freshness_window`](Config::freshness_window). No effect unkeyed.
+    #[must_use]
     pub fn with_freshness_window(mut self, window: Duration) -> Self {
         self.freshness_window = window;
         self
@@ -1531,12 +1547,14 @@ impl Config {
 
     /// Set the maximum number of distinct peers tracked (default 1024). See
     /// [`max_peers`](Config::max_peers).
+    #[must_use]
     pub fn with_max_peers(mut self, max: usize) -> Self {
         self.max_peers = max;
         self
     }
 
     /// Set [`max_concurrent_bulk_dumps`](Config::max_concurrent_bulk_dumps) (default 4).
+    #[must_use]
     pub fn with_max_concurrent_bulk_dumps(mut self, max: usize) -> Self {
         self.max_concurrent_bulk_dumps = max;
         self
@@ -1552,6 +1570,7 @@ impl Config {
     ///
     /// Requires the `encryption` cargo feature.
     #[cfg(feature = "encryption")]
+    #[must_use]
     pub fn with_encryption(mut self) -> Self {
         self.encrypt = true;
         self
@@ -2357,11 +2376,10 @@ mod replicated_map_tests {
         );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
-            .save(&PersistedState {
-                entries: vec![(42, crate::entry::Entry::present(persisted_stamp, 999))],
-                members: Default::default(),
-                tombstone_acks: Default::default(),
-            })
+            .save(&PersistedState::from(vec![(
+                42,
+                crate::entry::Entry::present(persisted_stamp, 999),
+            )]))
             .unwrap();
 
         // Create a store with the ManualClock and load the persisted state.
@@ -2409,11 +2427,10 @@ mod replicated_map_tests {
         );
         let backend = Arc::new(InMemoryPersistence::<i32, i32>::new());
         backend
-            .save(&PersistedState {
-                entries: vec![(7, crate::entry::Entry::tombstone(tombstone_stamp))], // tombstone
-                members: Default::default(),
-                tombstone_acks: Default::default(),
-            })
+            .save(&PersistedState::from(vec![(
+                7,
+                crate::entry::Entry::tombstone(tombstone_stamp), // tombstone
+            )]))
             .unwrap();
 
         let store = ReplicatedMap::<i32, i32>::new_with_clock(

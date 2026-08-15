@@ -37,6 +37,7 @@ pub type DatedEntries<K, V> = Vec<(K, Entry<Timestamp, V>)>;
     serialize = "K: Serialize, V: Serialize",
     deserialize = "K: Deserialize<'de> + Eq + std::hash::Hash, V: Deserialize<'de>"
 ))]
+#[non_exhaustive]
 pub struct PersistedState<K, V> {
     /// Every key with its dated value. A `None` payload is a tombstone.
     pub entries: DatedEntries<K, V>,
@@ -44,6 +45,48 @@ pub struct PersistedState<K, V> {
     pub members: HashSet<IpAddr>,
     /// Per-tombstone acknowledgments: `key -> (peer -> version token of the tombstone it holds)`.
     pub tombstone_acks: HashMap<K, HashMap<IpAddr, u64>>,
+}
+
+// Not `#[derive(Default)]`: a derive would add `K: Default, V: Default` bounds neither field
+// actually needs (an empty `Vec`/`HashSet`/`HashMap` needs none of that on its element types).
+impl<K, V> Default for PersistedState<K, V> {
+    fn default() -> Self {
+        PersistedState {
+            entries: DatedEntries::default(),
+            members: HashSet::default(),
+            tombstone_acks: HashMap::default(),
+        }
+    }
+}
+
+impl<K, V> PersistedState<K, V> {
+    /// Build a state from its three fields — `#[non_exhaustive]` blocks the struct-literal form
+    /// outside this crate, even with every field named, so this is the constructor callers reach
+    /// for instead.
+    #[must_use]
+    pub fn new(
+        entries: DatedEntries<K, V>,
+        members: HashSet<IpAddr>,
+        tombstone_acks: HashMap<K, HashMap<IpAddr, u64>>,
+    ) -> Self {
+        PersistedState {
+            entries,
+            members,
+            tombstone_acks,
+        }
+    }
+}
+
+/// Entries alone, with `members` and `tombstone_acks` empty — the common case in tests and any
+/// fresh construction where causal-stability membership and tombstone acks haven't been observed
+/// yet. Reach for [`PersistedState::new`] instead when either needs a real value.
+impl<K, V> From<DatedEntries<K, V>> for PersistedState<K, V> {
+    fn from(entries: DatedEntries<K, V>) -> Self {
+        PersistedState {
+            entries,
+            ..Default::default()
+        }
+    }
 }
 
 /// A pluggable durable backend for a replicated map.
