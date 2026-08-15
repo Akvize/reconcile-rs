@@ -338,6 +338,7 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
 }
 
 impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
@@ -745,6 +746,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// # Panics
     ///
     /// If the position is out of bounds.
+    #[must_use]
     pub fn select(&self, index: usize) -> &K {
         fn aux<K: Ord, V>(node: &Node<K, V>, mut index: usize) -> &K {
             if let Some(children) = node.children.as_ref() {
@@ -767,11 +769,13 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 
     /// Number of elements in the tree.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.root.subtree.size()
     }
 
     /// Whether the tree holds no elements.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -862,6 +866,7 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
 
     /// The smallest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
     /// leftmost path.
+    #[must_use]
     pub fn first_key_value(&self) -> Option<(&K, &V)> {
         let mut node = self.root.as_ref();
         while let Some(children) = node.children.as_ref() {
@@ -872,6 +877,7 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
 
     /// The largest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
     /// rightmost path.
+    #[must_use]
     pub fn last_key_value(&self) -> Option<(&K, &V)> {
         let mut node = self.root.as_ref();
         while let Some(children) = node.children.as_ref() {

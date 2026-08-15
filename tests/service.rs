@@ -732,8 +732,8 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
     );
 
     // Inject the peer network at runtime on both nodes — discovery now probes the peer.
-    store1.add_net(peer2_host);
-    store2.add_net(peer1_host);
+    assert!(store1.add_net(peer2_host));
+    assert!(store2.add_net(peer1_host));
 
     assert_until!(store2.fingerprint(..) == start_fingerprint);
 

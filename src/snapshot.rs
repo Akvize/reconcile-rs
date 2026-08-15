@@ -186,8 +186,8 @@ mod tests {
         key_acks.insert("127.0.0.1".parse().unwrap(), 42u64);
         acks.insert(7, key_acks);
 
-        PersistedState {
-            entries: vec![
+        PersistedState::new(
+            vec![
                 (
                     1,
                     Entry::present(
@@ -207,8 +207,8 @@ mod tests {
                 ), // tombstone
             ],
             members,
-            tombstone_acks: acks,
-        }
+            acks,
+        )
     }
 
     fn assert_states_eq(a: &PersistedState<i32, String>, b: &PersistedState<i32, String>) {

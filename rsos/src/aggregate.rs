@@ -37,11 +37,13 @@ impl Aggregate {
     };
 
     /// Build an aggregate from `(|S|, Σ(S))` — Def. 3.5's argument order, not the field order.
+    #[must_use]
     pub const fn new(size: usize, fingerprint: Fingerprint) -> Aggregate {
         Aggregate { fingerprint, size }
     }
 
     /// `|S|`: the number of elements covered.
+    #[must_use]
     pub const fn size(&self) -> usize {
         self.size
     }
@@ -50,11 +52,13 @@ impl Aggregate {
     ///
     /// A non-empty range can summarize to [`Fingerprint::ZERO`]; emptiness is decided on
     /// [`size`](Aggregate::size).
+    #[must_use]
     pub const fn fingerprint(&self) -> Fingerprint {
         self.fingerprint
     }
 
     /// `|S| == 0`. Decided on the count, never on the fingerprint.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.size == 0
     }

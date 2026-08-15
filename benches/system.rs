@@ -711,8 +711,8 @@ fn durable_rejoin(c: &mut Criterion) {
     for &size in SIZES {
         let dir = tempfile::tempdir().unwrap();
         let snapshot = FileSnapshot::new(dir.path().join("reconcile.snapshot"));
-        let state: PersistedState<u32, u32> = PersistedState {
-            entries: (0..size as u32)
+        let state: PersistedState<u32, u32> = PersistedState::new(
+            (0..size as u32)
                 .map(|k| {
                     (
                         k,
@@ -729,9 +729,9 @@ fn durable_rejoin(c: &mut Criterion) {
                     )
                 })
                 .collect(),
-            members: HashSet::new(),
-            tombstone_acks: HashMap::new(),
-        };
+            HashSet::new(),
+            HashMap::new(),
+        );
         Persistence::<u32, u32>::save(&snapshot, &state).expect("save");
 
         group.throughput(Throughput::Elements(size as u64));
