@@ -60,11 +60,27 @@ dependency is legitimately attractive.
 |---|---|---|---|---|---|---|
 | Naive XOR RBSR | O(d log n) | O(d log n) | **O(log n)** | No (self-adapting) | **Weak** (forgeable XOR) | Earthstar, Willow |
 | **Secure-fingerprint RBSR (≥256-bit), fixed fan-out *b*** | O(d log n) | O(d log n) | O(log n) | No | Good | Negentropy (prod, *b*=16) |
-| **↳ as instantiated in reconcile-rs** (`b`=16, swappable policy) | O(d log n) | O(d log n) | O(log_16 n) sequential — *8 one-way msgs at n=10⁶* | No | Good | reconcile-rs |
+| **↳ as instantiated in reconcile-rs** (`b`=16, swappable policy) | O(d log n) | O(d log n) | O(log_16 n) sequential | No | Good | reconcile-rs |
 | IBLT / Difference Digest | O(d·(b+log U)) | **O(d)** | 1 (+estim.) | **Yes** | Weak | blockchains |
 | **Rateless IBLT (SIGCOMM 2024)** | **≈ d** (3-4× < non-rateless) | **linear** (2-2000× < minisketch) | **1 streaming** | **No** | **Designed for adversarial** | Ethereum state-sync |
 | minisketch / PinSketch (CPI) | **optimal ≈ b·d** | O(d²) | 1 (+ext.) | **Yes (capacity)** | deterministic if capacity OK | Bitcoin Erlay (BIP 330) |
 | Merkle-tree diffing | O(d log n) | O(d log n) | O(log n) | No | hash-dependent | Dynamo, Cassandra, Riak |
+
+**The RTT column's `O(log_16 n)` is a model term, and `benches/protocol.rs` measures a different
+unit — quote the one you mean.** `⌈log₁₆ n⌉` is refinement-tree *depth*, the quantity the complexity
+bound is stated in. The benchmark instead counts one-way protocol *messages* (opening comparison and
+closing item exchange included), which lands in the same neighbourhood but is not the same number:
+
+| n | 10³ | 10⁴ | 10⁵ | 10⁶ |
+|---|---:|---:|---:|---:|
+| `⌈log₁₆ n⌉` (model, refinement rounds) | 3 | 4 | 5 | 5 |
+| one-way messages (`benches/protocol.rs`, `b`=16, measured) | 6 | 6 | 6 | 8 |
+
+At n = 10⁹, `⌈log₁₆ n⌉` = 8 (model only — `benches/protocol.rs` does not sweep n this high). An
+earlier revision of this section read the model term as a round-trip *count* ("≈3 sequential
+round-trips for 1M, ≈4 for 1B") — wrong on both the unit and the value, from conflating refinement
+depth with measured message count. Quote the benchmark for a number; the formula is the model behind
+it, not the same quantity.
 
 Sources: Meyer arXiv:2212.13567 & logperiodic.com/rbsr.html; *Practical Rateless Set
 Reconciliation*, SIGCOMM 2024, arXiv:2402.02668; minisketch (bitcoin-core) & BIP 330; Erlay
@@ -248,7 +264,7 @@ copy-on-write B+-tree addressed by page number.
     this makes it "probabilistically sound rather than information-theoretically exact" and leaves
     the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
     256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
-    the injectivity of Σ with no truncation term. The price is 40 B/range against 16 B — see §2.2.
+    the injectivity of Σ with no truncation term. The price is 44 B/range against 16 B — see §2.2.
     What the exact count buys, and what it does not: a range whose peers hold **different
     cardinalities** can never be SKIPped — probability 1, no assumption on the hash — so a dropped
     write or an unreplicated tombstone is structurally covered. A **same-key/different-value
@@ -306,7 +322,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
 **Critical reading (stated profile: large n, small d, latency-sensitive, P2P):**
 - Fixed-*b* RBSR is the **worst family on latency**: O(log n) **sequential RTTs** to isolate a
-  difference. That is now priced rather than estimated (F16, [#280](https://github.com/Akvize/reconcile-rs/issues/280)):
+  difference — `⌈log₁₆ n⌉` refinement rounds as the model, a different (larger) one-way message count
+  as `benches/protocol.rs` measures it; see [§1.3](#13-the-sota-of-set-reconciliation-sourced) for
+  both numbers and why they aren't the same quantity. That is now priced rather than estimated (F16,
+  [#280](https://github.com/Akvize/reconcile-rs/issues/280)):
   one protocol round trip costs a measured **1.00 × RTT**, no hidden multiplier, so refinement depth
   converts directly to wall clock — the cost this family pays that a single-shot sketch does not, in
   the unit an operator budgets in. Quantity table and reproduction: `benches/README.md`'s
@@ -400,11 +419,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   the default at every value size but the smallest, and there only by a few percent. Numbers:
   `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
-  `usize` count — 40 B per advertised range, against Negentropy's 16 B truncated comparison value
-  (§2.1). That is the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per
-  round it dominates the bytes above. The two decisions are only separable if the fan-out shrinks —
-  which, now that the fan-out is a swappable policy, is a one-line change to a caller rather than an
-  edit to the protocol loop.
+  `usize` count — 44 B per advertised range, against Negentropy's 16 B truncated comparison value
+  (§2.1). That 44 B is 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
+  derives `Serialize` and takes `gossip::bincode`'s `DefaultOptions`, which varint-encodes each
+  random 64-bit limb at up to 9 B rather than a fixed-width `[u8; 32]`) plus an 8 B count. That is
+  the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per round it dominates
+  the bytes above. The two decisions are only separable if the fan-out shrinks — which, now that the
+  fan-out is a swappable policy, is a one-line change to a caller rather than an edit to the protocol
+  loop. Recovering the 4 B/limb varint overhead needs a raw-bytes `Serialize` impl, which is a wire
+  break — out of scope for this doc fix, and deferred to ride the wire-version-field train #309
+  landed rather than costing a 2.0 on its own; decision recorded in `PROGRESS.md`'s SOTA axis index.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → the strongest single-shot candidate on
   communication. It is not the only point on that front: **PBS** trades a few rounds for markedly
