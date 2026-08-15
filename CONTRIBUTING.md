@@ -114,6 +114,34 @@ Measured on this workspace, four cores, warm `target/`.
   covered for the common case. Doc tests are *not* in that list — plain `cargo test` already runs
   them, which is why §3's separate `cargo test --doc` line is belt-and-braces, not extra coverage.
 
+### `cargo package` can fail on a stale sibling, and only locally
+
+Reproducible: pull a commit that adds a **public item to a workspace sibling**, run §3's list in a
+warm tree, and `cargo package` fails on that item while every other command passes.
+
+```
+error[E0432]: unresolved import `lww_register::clock::assert_conformance`
+error: failed to verify package tarball
+```
+
+`cargo package`'s verify step builds each packaged crate against its packaged siblings, and it can
+link a sibling rlib compiled **before** the new item existed. Two things make it confusing:
+
+| | |
+|---|---|
+| `cargo build` / `cargo test` pass | they resolve the sibling by path, from current source |
+| deleting `target/package` does not help | the stale rlib is in `target/debug/deps`, not there |
+
+Confirm and work around it with a throwaway target directory, which forces a clean sibling:
+
+```bash
+CARGO_TARGET_DIR=$(mktemp -d) cargo package --workspace --allow-dirty
+```
+
+If that passes, the tree is fine and the warm `target/` was the whole story. CI never sees this —
+it starts from a cold target — so a local-only `cargo package` failure on a symbol a sibling just
+gained is this, not the change under test.
+
 ## The one gate no script runs
 
 Anything touching the load-bearing invariants ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §5), the
