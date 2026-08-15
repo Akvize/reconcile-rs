@@ -72,11 +72,13 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     // store1 finds peers through discovery (which initially reports store2 present).
     let discovery = ScriptedDiscovery::new(vec![addr2]);

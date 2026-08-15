@@ -326,7 +326,8 @@ async fn a_replicated_map_converges_over_a_lossy_delayed_link() {
                 .with_net("127.0.0.1/8".parse().unwrap())
                 // A lost datagram is repaired by the next anti-entropy round, so this cadence is
                 // the test's runtime. The 1 s default would make it a minute-long test.
-                .with_reconcile_interval(Duration::from_millis(20)),
+                .with_reconcile_interval(Duration::from_millis(20))
+                .with_insecure_no_key(),
             Arc::new(transport),
         );
         (store, impairments)

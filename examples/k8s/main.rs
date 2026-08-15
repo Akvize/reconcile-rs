@@ -119,10 +119,14 @@ async fn main() {
 
     match std::env::var("RECONCILE_CLUSTER_KEY") {
         Ok(hex) if !hex.is_empty() => config = config.with_cluster_key(parse_cluster_key(&hex)),
-        _ => warn!(
-            "RECONCILE_CLUSTER_KEY is unset: the cluster runs UNAUTHENTICATED. Set it (from a \
-             Kubernetes Secret) on every pod in production."
-        ),
+        _ => {
+            warn!(
+                "RECONCILE_CLUSTER_KEY is unset: the cluster runs UNAUTHENTICATED, and any host \
+                 inside the pod network eventually receives the ENTIRE DATASET via paced diff \
+                 dumps. Set it (from a Kubernetes Secret) on every pod in production."
+            );
+            config = config.with_insecure_no_key();
+        }
     }
 
     // Expose /metrics for the kubelet readiness/liveness probes.

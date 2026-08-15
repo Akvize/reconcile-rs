@@ -27,6 +27,7 @@ fn config(addr: &str, port: u16) -> Config {
     Config::default()
         .with_port(port)
         .with_listen_addr(addr.parse().unwrap())
+        .with_insecure_no_key()
 }
 
 /// Current value of `reconcile_datagrams_dropped_total{reason=<reason>}` in the process-global

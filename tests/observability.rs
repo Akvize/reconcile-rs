@@ -27,6 +27,7 @@ fn local_config() -> Config {
         .with_port(0) // ephemeral port: avoids clashing with the other integration tests
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_net("127.0.0.1/8".parse().unwrap())
+        .with_insecure_no_key()
 }
 
 /// Keep every `tracing` callsite hot for the whole binary.

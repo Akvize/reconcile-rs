@@ -51,11 +51,13 @@ async fn test() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let key_values: [(String, String); 1000] = core::array::from_fn(|_| {
@@ -161,11 +163,13 @@ async fn get_mut_edit_propagates_to_peers() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::new(cfg1)
         .await
@@ -269,12 +273,14 @@ async fn concurrent_writes_converge() {
         .with_port(port)
         .with_listen_addr(addr1)
         .with_net(net)
-        .with_node_id(NodeId::new(1));
+        .with_node_id(NodeId::new(1))
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net)
-        .with_node_id(NodeId::new(2));
+        .with_node_id(NodeId::new(2))
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::<String, String>::new(cfg1)
         .await
@@ -325,11 +331,13 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     // Aggressive wall-clock expiry so that, without causal-stability gating, the tombstone
     // would be GC'd almost immediately.
@@ -394,11 +402,13 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::<i32, i32>::new(cfg1)
         .await
@@ -461,11 +471,13 @@ async fn test_malformed_datagram_does_not_crash() {
     let cfg1 = Config::default()
         .with_port(port)
         .with_listen_addr(addr1)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
-        .with_net(net);
+        .with_net(net)
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::new(cfg1)
         .await
@@ -614,14 +626,16 @@ async fn cross_net_reconciliation() {
         .with_net(net_a)
         .with_net(net_b)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net_b)
         .with_net(net_a)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::new(cfg1)
         .await
@@ -665,14 +679,16 @@ async fn cross_net_discovery_without_seed() {
         .with_net(net_a)
         .with_net(peer2_host)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net_b)
         .with_net(peer1_host)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
 
     // No `with_seed`: the two nodes must find each other purely through per-network discovery probes.
     let store1 = ReplicatedMap::new(cfg1).await.expect("bind failed");
@@ -708,13 +724,15 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
         .with_listen_addr(addr1)
         .with_net(net_a)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(net_b)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
 
     let store1 = ReplicatedMap::new(cfg1).await.expect("bind failed");
     store1.insert("k".to_string(), "v".to_string());
@@ -755,13 +773,15 @@ async fn unclassified_peer_is_still_reconciled() {
         .with_listen_addr(addr1)
         .with_net(foreign_net)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
     let cfg2 = Config::default()
         .with_port(port)
         .with_listen_addr(addr2)
         .with_net(foreign_net)
         .with_remote_interval(1)
-        .with_remote_fanout(1);
+        .with_remote_fanout(1)
+        .with_insecure_no_key();
 
     // Seeded so each knows the other, even though neither address is in any declared network.
     let store1 = ReplicatedMap::new(cfg1)
@@ -802,7 +822,8 @@ async fn runtime_config_setters() {
         Config::default()
             .with_port(0)
             .with_listen_addr(addr)
-            .with_net(net_c),
+            .with_net(net_c)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed");
@@ -1066,6 +1087,7 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
             .with_listen_addr(addr)
             .with_net(net)
             .with_reconcile_interval(Duration::from_millis(100))
+            .with_insecure_no_key()
     };
     let store1 = ReplicatedMap::<i32, i32>::new(mk(addr1))
         .await
@@ -1140,6 +1162,7 @@ async fn tombstone_gc_converges_in_3_node_cluster_line() {
             .with_listen_addr(addr)
             .with_net(net)
             .with_reconcile_interval(Duration::from_millis(100))
+            .with_insecure_no_key()
     };
     // Line: A seeds B; B seeds A and C; C seeds B. Seeds define the intended topology; a stray
     // discovery probe could only add connectivity, which never prevents GC convergence.

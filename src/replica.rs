@@ -263,6 +263,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// # Errors
     ///
     /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new(config: Config) -> io::Result<Self> {
         // Default adapter for the `Clock` port: the chrono-backed Hybrid Logical Clock. This is the
         // only place the engine names a concrete clock; everything else goes through `dyn Clock`.
@@ -283,6 +288,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// The engine trusts `clock` completely, with no way to check it at the type level; see
     /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
     /// through) for the full risk writeup and a worked example.
+    ///
+    /// # Panics
+    ///
+    /// If `config.cluster_key` is `None` without also setting
+    /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new_with_clock(config: Config, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let transport = Self::bind_udp(&config).await?;
         Ok(Self::build(config, transport, clock, false))
@@ -338,6 +348,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
     ) -> Self {
+        config.check_key_or_insecure_opt_in();
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         match &authenticator {
             #[cfg(feature = "encryption")]
@@ -349,10 +360,12 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             }
             auth::Authenticator::Disabled => {
                 warn!(
-                    "SECURITY: no cluster key set — UDP reconciliation is UNAUTHENTICATED. Any \
-                     host that can send UDP to this port can forge updates and poison the \
-                     cluster via last-write-wins. Set Config::with_cluster_key on every node, or \
-                     restrict the network to a trusted underlay. See REVIEW.md F3."
+                    "SECURITY: running with Config::with_insecure_no_key() — UDP reconciliation \
+                     is UNAUTHENTICATED. Any host that can send UDP to this port can forge \
+                     updates and poison the cluster via last-write-wins, and any host inside the \
+                     configured nets will eventually receive the ENTIRE DATASET via paced diff \
+                     dumps once RandomProbe discovers it. Set Config::with_cluster_key on every \
+                     node, or restrict the network to a trusted underlay. See REVIEW.md F3."
                 );
             }
         }
@@ -1513,7 +1526,8 @@ mod deadlock_regressions {
     async fn pre_insert_hook_can_call_insert_again_without_deadlock() {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr("127.0.0.44".parse().unwrap());
+            .with_listen_addr("127.0.0.44".parse().unwrap())
+            .with_insecure_no_key();
         let svc = ReplicatedMap::new(config).await.expect("bind failed");
         svc.insert_bulk(&[(1, 10_u8)]);
 
@@ -1568,7 +1582,8 @@ mod deadlock_regressions {
             let reinserted = rt.block_on(async {
                 let config = Config::default()
                     .with_port(8083)
-                    .with_listen_addr("127.0.0.50".parse().unwrap());
+                    .with_listen_addr("127.0.0.50".parse().unwrap())
+                    .with_insecure_no_key();
                 let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");
 
                 // The same re-entrant hook as the direct-path test, registered on the engine whose
@@ -1733,7 +1748,8 @@ mod causal_stability {
     async fn engine(addr: &str) -> Replica<i32, i32> {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr(addr.parse().unwrap());
+            .with_listen_addr(addr.parse().unwrap())
+            .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
     }
 
@@ -1952,7 +1968,8 @@ mod clock_port {
     async fn engine_mints_through_the_injected_clock() {
         let config = Config::default()
             .with_port(8080)
-            .with_listen_addr("127.0.0.70".parse().unwrap());
+            .with_listen_addr("127.0.0.70".parse().unwrap())
+            .with_insecure_no_key();
         let clock = Arc::new(ManualClock::new(NodeId::new(42)));
         let eng: Replica<i32, i32> = Replica::new_with_clock(config, clock)
             .await
@@ -2059,7 +2076,9 @@ mod pacing {
         async fn engine(addr: &str, bulk_send_rate: Option<usize>) -> Replica<i32, i32> {
             let config = Config {
                 bulk_send_rate,
-                ..Config::default().with_listen_addr(addr.parse().unwrap())
+                ..Config::default()
+                    .with_listen_addr(addr.parse().unwrap())
+                    .with_insecure_no_key()
             };
             Replica::new(config).await.expect("bind failed")
         }
@@ -2213,7 +2232,8 @@ mod tombstone_ack_bounds {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
             .with_port(0)
-            .with_listen_addr(addr.parse().unwrap());
+            .with_listen_addr(addr.parse().unwrap())
+            .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
     }
 
@@ -2363,7 +2383,8 @@ mod dump_budget {
         let config = Config::default()
             .with_port(0)
             .with_listen_addr("127.0.0.99".parse().unwrap())
-            .with_max_concurrent_bulk_dumps(1);
+            .with_max_concurrent_bulk_dumps(1)
+            .with_insecure_no_key();
         let eng = Replica::<i32, i32>::new(config).await.expect("bind failed");
 
         let peer_a: std::net::SocketAddr = "127.0.0.100:9001".parse().unwrap();
@@ -2433,6 +2454,7 @@ mod in_memory_convergence {
                 .with_listen_addr(ip)
                 .with_port(port)
                 .with_reconcile_interval(Duration::from_millis(5))
+                .with_insecure_no_key()
         };
         let a: Replica<u32, u32> = Replica::new_with_transport(
             cfg(a_ip),

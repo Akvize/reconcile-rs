@@ -48,7 +48,8 @@ async fn isolated_store(
         Config::default()
             .with_listen_addr(listen_addr)
             .with_net(probe_net.parse().unwrap())
-            .with_port(port),
+            .with_port(port)
+            .with_insecure_no_key(),
     )
     .await
     .expect("bind failed")
