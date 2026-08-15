@@ -69,12 +69,9 @@ dependency is legitimately attractive.
 **The RTT column's `O(log_16 n)` is a model term, and `benches/protocol.rs` measures a different
 unit — quote the one you mean.** `⌈log₁₆ n⌉` is refinement-tree *depth*, the quantity the complexity
 bound is stated in. The benchmark instead counts one-way protocol *messages* (opening comparison and
-closing item exchange included), which lands in the same neighbourhood but is not the same number:
-
-| n | 10³ | 10⁴ | 10⁵ | 10⁶ |
-|---|---:|---:|---:|---:|
-| `⌈log₁₆ n⌉` (model, refinement rounds) | 3 | 4 | 5 | 5 |
-| one-way messages (`benches/protocol.rs`, `b`=16, measured) | 6 | 6 | 6 | 8 |
+closing item exchange included), which lands in the same neighbourhood but is not the same number.
+Both rows, plus the round-trip and wall-clock conversion at 50 ms RTT: `benches/README.md`'s
+"Results: what RTT ≈ 0 was hiding" table.
 
 At n = 10⁹, `⌈log₁₆ n⌉` = 8 (model only — `benches/protocol.rs` does not sweep n this high). An
 earlier revision of this section read the model term as a round-trip *count* ("≈3 sequential
