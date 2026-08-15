@@ -4,7 +4,7 @@ pub enum reconcile_gossip::auth::Authenticator
 pub reconcile_gossip::auth::Authenticator::Disabled
 pub reconcile_gossip::auth::Authenticator::Enabled(reconcile_gossip::auth::ClusterKey)
 impl reconcile_gossip::auth::Authenticator
-pub fn reconcile_gossip::auth::Authenticator::new(core::option::Option<[u8; 32]>, bool) -> Self
+pub fn reconcile_gossip::auth::Authenticator::new(core::option::Option<reconcile_gossip::auth::ClusterKey>, bool) -> Self
 pub fn reconcile_gossip::auth::Authenticator::open<'a>(&self, &'a [u8]) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>>
 pub fn reconcile_gossip::auth::Authenticator::overhead(&self) -> usize
 pub fn reconcile_gossip::auth::Authenticator::seal(&self, reconcile_gossip::replay::Seq, reconcile_gossip::replay::Stamp, &[u8]) -> alloc::vec::Vec<u8>
@@ -17,6 +17,26 @@ impl core::marker::Unpin for reconcile_gossip::auth::Authenticator
 impl core::marker::UnsafeUnpin for reconcile_gossip::auth::Authenticator
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Authenticator
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Authenticator
+pub enum reconcile_gossip::auth::ClusterKeyError
+pub reconcile_gossip::auth::ClusterKeyError::InvalidHexDigit
+pub reconcile_gossip::auth::ClusterKeyError::WrongByteLength(usize)
+pub reconcile_gossip::auth::ClusterKeyError::WrongHexLength(usize)
+impl core::cmp::Eq for reconcile_gossip::auth::ClusterKeyError
+impl core::cmp::PartialEq for reconcile_gossip::auth::ClusterKeyError
+pub fn reconcile_gossip::auth::ClusterKeyError::eq(&self, &reconcile_gossip::auth::ClusterKeyError) -> bool
+impl core::error::Error for reconcile_gossip::auth::ClusterKeyError
+impl core::fmt::Debug for reconcile_gossip::auth::ClusterKeyError
+pub fn reconcile_gossip::auth::ClusterKeyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for reconcile_gossip::auth::ClusterKeyError
+pub fn reconcile_gossip::auth::ClusterKeyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for reconcile_gossip::auth::ClusterKeyError
+impl core::marker::Freeze for reconcile_gossip::auth::ClusterKeyError
+impl core::marker::Send for reconcile_gossip::auth::ClusterKeyError
+impl core::marker::Sync for reconcile_gossip::auth::ClusterKeyError
+impl core::marker::Unpin for reconcile_gossip::auth::ClusterKeyError
+impl core::marker::UnsafeUnpin for reconcile_gossip::auth::ClusterKeyError
+impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::ClusterKeyError
+impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::ClusterKeyError
 pub struct reconcile_gossip::auth::Authenticated
 impl core::marker::Freeze for reconcile_gossip::auth::Authenticated
 impl core::marker::Send for reconcile_gossip::auth::Authenticated
@@ -38,9 +58,15 @@ impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Blake3M
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Blake3Mac
 pub struct reconcile_gossip::auth::ClusterKey(_)
 impl reconcile_gossip::auth::ClusterKey
+pub fn reconcile_gossip::auth::ClusterKey::from_hex(&str) -> core::result::Result<Self, reconcile_gossip::auth::ClusterKeyError>
 pub fn reconcile_gossip::auth::ClusterKey::new([u8; 32]) -> Self
 impl core::clone::Clone for reconcile_gossip::auth::ClusterKey
 pub fn reconcile_gossip::auth::ClusterKey::clone(&self) -> reconcile_gossip::auth::ClusterKey
+impl core::convert::TryFrom<&[u8]> for reconcile_gossip::auth::ClusterKey
+pub type reconcile_gossip::auth::ClusterKey::Error = reconcile_gossip::auth::ClusterKeyError
+pub fn reconcile_gossip::auth::ClusterKey::try_from(&[u8]) -> core::result::Result<Self, Self::Error>
+impl core::fmt::Debug for reconcile_gossip::auth::ClusterKey
+pub fn reconcile_gossip::auth::ClusterKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for reconcile_gossip::auth::ClusterKey
 impl core::marker::Send for reconcile_gossip::auth::ClusterKey
 impl core::marker::Sync for reconcile_gossip::auth::ClusterKey

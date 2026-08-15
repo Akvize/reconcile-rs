@@ -330,12 +330,12 @@ mod imp {
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
-                    let store1 = ReplicatedMap::new(cfg1)
+                    let store1 = ReplicatedMap::new(cfg1.clone())
                         .await
                         .expect("bind failed")
                         .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReplicatedMap::new(cfg2)
+                    let store2 = ReplicatedMap::new(cfg2.clone())
                         .await
                         .expect("bind failed")
                         .with_seed(addr1);
@@ -397,12 +397,12 @@ mod imp {
             group.sampling_mode(SamplingMode::Linear);
             group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
                 rt.block_on(async {
-                    let store1 = ReplicatedMap::new(cfg1)
+                    let store1 = ReplicatedMap::new(cfg1.clone())
                         .await
                         .expect("bind failed")
                         .with_seed(addr2);
                     store1.insert_bulk(&key_values[..size]);
-                    let store2 = ReplicatedMap::new(cfg2)
+                    let store2 = ReplicatedMap::new(cfg2.clone())
                         .await
                         .expect("bind failed")
                         .with_seed(addr1);

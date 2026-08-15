@@ -186,6 +186,17 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    # The same staleness class as the target/ incident above, one layer over: this job's own
+    # `cargo package --workspace` extracts each just-packaged workspace crate into
+    # ~/.cargo/registry/src/.../<name>-<version>/ to verify it, and cargo treats registry content
+    # as immutable per name@version -- so a restored cache from an earlier run (same Cargo.lock
+    # hash, since these are path deps with no lockfile-visible content change) keeps serving that
+    # earlier run's source for the four unpublished, version-frozen workspace crates
+    # (rsos/rbsr/lww-register/reconcile-gossip stay at 0.1.0 across ordinary commits), so a later
+    # commit's edits verify against stale registry sources instead of themselves. Purge just those
+    # four names before packaging; everything else in the restored cache -- real crates.io deps --
+    # is exactly what the cache exists to keep.
+    - run: rm -rf ~/.cargo/registry/src/*/{rsos,rbsr,lww-register,reconcile-gossip}-* ~/.cargo/registry/cache/*/{rsos,rbsr,lww-register,reconcile-gossip}-*
     - run: cargo package --workspace --allow-dirty
 
   # `pr-issue-references` used to live here. It reads the PR *description*, which changes without a

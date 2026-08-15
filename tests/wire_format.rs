@@ -71,7 +71,7 @@ fn wire_format_is_unchanged_by_the_aggregate_collapse() {
 /// same relative position (right after the replay header, ahead of the payload) in both.
 #[test]
 fn envelope_pins_the_wire_version_byte() {
-    use gossip::auth::{Authenticator, KEY_LEN, TAG_LEN};
+    use gossip::auth::{Authenticator, ClusterKey, KEY_LEN, TAG_LEN};
     use gossip::replay::{Seq, Stamp, REPLAY_HEADER_LEN};
 
     let payload = b"payload";
@@ -91,7 +91,7 @@ fn envelope_pins_the_wire_version_byte() {
     // different tag over the identical protected region, which is exactly what this vector does
     // NOT need to pin: only the plaintext framing (position of seq/stamp/version/payload) is the
     // wire contract; the tag is opaque by design.
-    let sealed = Authenticator::new(Some([0x42; KEY_LEN]), false).seal(
+    let sealed = Authenticator::new(Some(ClusterKey::new([0x42; KEY_LEN])), false).seal(
         Seq::new(0x0102030405060708),
         Stamp::new(0x1112131415161718),
         payload,
