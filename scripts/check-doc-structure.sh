@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Structural correctness of the repository's Markdown, in three parts: link targets resolve, anchor
-# links resolve, and SOTA.md's bibliography entries carry what §4.2 says they must.
+# links resolve, and SOTA.md's bibliography entries carry what §4.2 says they must. A fourth part
+# extends this across the Markdown/Rust boundary: a rustdoc's `SOTA.md §N.M` citation must still
+# name a section that exists.
 #
 # Why this is gated rather than reviewed: a link that resolves nowhere renders as a link. Nothing
 # about `[`Payload`](../gossip/src/auth.rs)` looks wrong in a diff -- ARCHITECTURE.md sits at the
@@ -117,8 +119,8 @@ done
 # forward pointer. That makes the format self-enforcing as entries migrate, with no flag day -- and
 # it is exactly the shape §10 asks for, since "remember to pin the version" is otherwise a rule a
 # human applies by eye.
+entries=0
 if [ -f SOTA.md ]; then
-    entries=0
     while IFS=$'\t' read -r lineno block; do
         entries=$((entries + 1))
         if ! grep -qE 'arXiv:[0-9]{4}\.[0-9]{4,5}v[0-9]+|doi:10\.' <<<"$block"; then
@@ -133,7 +135,45 @@ if [ -f SOTA.md ]; then
         { if (buf != "" && buf ~ /Bears on:/) printf "%d\t%s\n", start, buf; buf = "" }
         END { if (buf != "" && buf ~ /Bears on:/) printf "%d\t%s\n", start, buf }
     ' SOTA.md)
-    echo "check-doc-structure: ${#DOCS[@]} docs, $links_checked anchor links, $entries §4.2 entries"
 fi
+
+# ---- 5: `SOTA.md §N.M` citations in the Rust sources resolve to an existing heading -------------
+#
+# Rustdocs cite SOTA.md by section number instead of restating its prose (AGENTS.md §9: a fact
+# lives in exactly one place). When a section is renumbered or dropped, nothing about `SOTA.md
+# §2.4` in a rustdoc looks wrong in a diff -- the same failure mode part 1 catches for a Markdown
+# link that resolves nowhere, just across the Markdown/Rust boundary that part never crossed.
+#
+# Section numbers only: a sub-token after the number (a design-axis row like `P3-9`, a glossary id
+# like `g91`) has no cheap way to verify without a real risk of false positives, so it is left
+# alone -- the same trade this script's part 3 already makes for backticked paths.
+#
+# The match requires the § to sit directly against the backtick-quoted `SOTA.md` token, not merely
+# share a line with it: `rsos/src/lib.rs`'s "`SOTA.md` §2.2/§2.4, `ARCHITECTURE.md` §7" is one real
+# line with two unrelated citations, and a looser match attributes the ARCHITECTURE.md §7 to
+# SOTA.md -- the exact class of wrong-file misattribution `check-pr-closes-issues.sh`'s own header
+# warns about for issue numbers.
+sota_citations=0
+if [ -f SOTA.md ]; then
+    mapfile -t SOTA_SECTIONS < <(
+        grep -oE '^#{2,3}[[:space:]]+[0-9]+(\.[0-9]+)?' SOTA.md | sed -E 's/^#{2,3}[[:space:]]+//'
+    )
+    while IFS=: read -r file lineno text; do
+        while IFS= read -r section; do
+            [ -z "$section" ] && continue
+            sota_citations=$((sota_citations + 1))
+            known=0
+            for s in "${SOTA_SECTIONS[@]}"; do
+                [ "$s" = "$section" ] && known=1 && break
+            done
+            [ "$known" = 1 ] || fail "$file:$lineno: cites \`SOTA.md\` §$section, which does not exist"
+        done < <(grep -oE '§[0-9]+(\.[0-9]+)?' <<<"$text" | tr -d '§')
+    done < <(
+        grep -rnoE '`SOTA\.md`[[:space:]]+§[0-9]+(\.[0-9]+)?(/§[0-9]+(\.[0-9]+)?)*' \
+            --include='*.rs' --exclude-dir=target -- .
+    )
+fi
+
+echo "check-doc-structure: ${#DOCS[@]} docs, $links_checked anchor links, $entries §4.2 entries, $sota_citations SOTA.md citations"
 
 exit "$status"
