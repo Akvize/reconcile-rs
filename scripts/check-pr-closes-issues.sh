@@ -35,8 +35,14 @@ for n in "${all_refs[@]:-}"; do
     [ -z "$n" ] && continue
     is_in "$n" "${closing_refs[@]:-}" && continue
     is_in "$n" "${nonclosing_refs[@]:-}" && continue
-    # Numbers are a shared namespace between issues and PRs; a self-reference or a reference to
-    # another PR fails this lookup and is silently skipped -- this check is about issues only.
+    # Numbers are a shared namespace between issues and PRs, and this lookup does **not** separate
+    # them: `gh issue view` resolves a pull request number too, and reports `OPEN` for an open one.
+    # So an open PR mentioned here needs an intent word exactly like an issue does. Measured on
+    # PR #379, whose body named an open sibling PR and failed on it -- this comment previously
+    # claimed such a reference "fails this lookup and is silently skipped", which was never true.
+    #
+    # What is genuinely skipped: a merged or closed PR (state is not OPEN, same as a closed issue)
+    # and a number that resolves to nothing at all.
     state=$(gh issue view "$n" --repo "$REPO" --json state -q .state 2>/dev/null || echo "")
     if [ "$state" = "OPEN" ]; then
         echo "check-pr-closes-issues: #$n is open and mentioned without stating intent -- add 'Closes #$n' if this PR resolves it, or 'relates to #$n' if it doesn't" >&2
