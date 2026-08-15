@@ -28,11 +28,10 @@ const B: usize = 6;
 const MIN_CAPACITY: usize = B - 1;
 const MAX_CAPACITY: usize = 2 * B - 1;
 
-// `Node::insert`'s split only fires at `self.keys.len() == MAX_CAPACITY`; at `B >= 3` that leaves
-// at least one key on each side of the split, so the "empty node" hazard below cannot occur.
-// `B == 2` is the trap (`MAX_CAPACITY == 3`, so a split at `mid = 1` can leave a sibling with zero
-// keys) — enforced here instead of left as a comment a future edit of `B` could silently violate.
-const _: () = assert!(B >= 3);
+const _: usize = B.checked_sub(3).expect(
+    "B must be >= 3: Node::insert's split only fires at MAX_CAPACITY, and at B == 2 \
+     (MAX_CAPACITY == 3) a split at mid = 1 leaves a sibling with zero keys",
+);
 
 type InsertionTuple<K, V> = Option<(K, V, Fingerprint, Box<Node<K, V>>)>;
 
@@ -167,8 +166,8 @@ impl<K, V> Node<K, V> {
     ) -> InsertionTuple<K, V> {
         assert_eq!(self.children.is_none(), right_child.is_none());
         if self.keys.is_full() {
-            // Safe to split at any `self.keys.len() == MAX_CAPACITY` here: `const _: () = assert!(B
-            // >= 3);` above rules out the `B == 2` case that would leave an empty sibling node.
+            // Safe to split at any `self.keys.len() == MAX_CAPACITY` here: the `B.checked_sub(3)`
+            // assertion above rules out the `B == 2` case that would leave an empty sibling node.
             let mid = self.keys.len() / 2;
             let mut right_sibling = Box::new(Node {
                 keys: ArrayVec::from_iter(self.keys.drain(mid + 1..)),
