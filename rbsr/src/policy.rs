@@ -69,10 +69,23 @@ impl FanOut {
     }
 }
 
-/// Everything a [`RefinementPolicy`] is shown about one active range: two [`Aggregate`]s and a
-/// counter.
+/// Everything a [`RefinementPolicy`] is shown about one active range: two [`Aggregate`]s reduced
+/// to what a policy may soundly read, plus a counter.
 ///
 /// No keys, no bounds, no store — a policy decides *how* to refine a range, never *which*.
+///
+/// # Law: no fingerprint-derived decisions (#352)
+///
+/// The skip rule's soundness bound unions a per-comparison collision probability over the ranges
+/// an execution compares — legal only because those ranges are cut by `Select`
+/// ([`RsosView::select`](crate::RsosView::select)), i.e. by rank, a function of the data alone. A
+/// policy that derives a split stride (or any other
+/// decision) from a fingerprint byte compiles and converges, but reintroduces the oracle
+/// dependence the rank split exists to avoid, voiding that bound silently: no error, no test
+/// failure, just an unprovable protocol. [`span`](Self::span) and
+/// [`remote_size`](Self::remote_size) are `size()`-only and therefore always safe; `Comparison`
+/// carries no accessor that returns a fingerprint or a full [`Aggregate`], so the violation is
+/// structurally unspellable rather than merely discouraged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Comparison {
     local: Aggregate,
@@ -90,21 +103,16 @@ impl Comparison {
         }
     }
 
-    /// `A(X ∩ [l, u))`: this peer's own aggregate over the range.
-    pub const fn local(&self) -> Aggregate {
-        self.local
-    }
-
-    /// `A(Y ∩ [l, u))`: Def. 3.6's comparison value as advertised. Unauthenticated peer input —
-    /// readable, never to be assumed true.
-    pub const fn remote(&self) -> Aggregate {
-        self.remote
-    }
-
     /// `|X ∩ [l, u)|`: **local** elements covered — what `t` is compared against, and what a
     /// [`Decision::Split`] cuts, since a split is by local rank.
     pub const fn span(&self) -> usize {
         self.local.size()
+    }
+
+    /// `|Y ∩ [l, u)|`: **remote** elements covered, as advertised. Unauthenticated peer input —
+    /// readable, never to be assumed true.
+    pub const fn remote_size(&self) -> usize {
+        self.remote.size()
     }
 
     /// Whether the range is already resolved.
@@ -207,7 +215,7 @@ pub trait RefinementPolicy {
 /// actually matters. [`EnumerateBelowThreshold`] reaches the same outcomes through `t`.
 fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
     let local = comparison.span();
-    let remote = comparison.remote().size();
+    let remote = comparison.remote_size();
     if comparison.agrees() {
         Some(Decision::Skip)
     } else if remote == 0 {
