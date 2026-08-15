@@ -144,7 +144,7 @@ issues by delivery area instead.
 | Adversarial robustness | §2.4 P3-9 | ✅ [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract), [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values, counted+dropped not silent), [#150](https://github.com/Akvize/reconcile-rs/issues/150) (peers cap) |
 | Refinement policy — fan-out, threshold | §1.3, §2.2 | ✅ `b` = 16 ([#257](https://github.com/Akvize/reconcile-rs/issues/257), closed); ✅ no `t` ([#315](https://github.com/Akvize/reconcile-rs/issues/315) — measured in total bytes, default unmoved); divergence-adaptive — [#318](https://github.com/Akvize/reconcile-rs/issues/318) |
 | Single-shot latency (hybrid sketch) | §2.2 conclusion | ◯ [#185](https://github.com/Akvize/reconcile-rs/issues/185), gated on [#280](https://github.com/Akvize/reconcile-rs/issues/280) |
-| Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` — [#232](https://github.com/Akvize/reconcile-rs/issues/232) item 4c, would ride a future wire-version bump (mechanism delivered by [#309](https://github.com/Akvize/reconcile-rs/issues/309)) |
+| Wire aggregate size | §2.2 | ◯ 36 B not 32 per `Fingerprint` (varint, not fixed-width) — decided on the record by [#232](https://github.com/Akvize/reconcile-rs/issues/232): declined here, rides the wire-version-field train [#309](https://github.com/Akvize/reconcile-rs/issues/309) landed rather than costing a 2.0 |
 
 The axis cuts across §6's gate rule: an item can be SOTA-critical and post-1.0 (#185), or a release
 gate and SOTA-neutral (#297, #293). Neither list subsumes the other.
