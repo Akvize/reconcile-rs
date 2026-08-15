@@ -1700,7 +1700,7 @@ mod auth_attack {
         let config = Config::default()
             .with_port(port)
             .with_listen_addr(victim_addr.parse().unwrap())
-            .with_cluster_key(key);
+            .with_cluster_key(auth::ClusterKey::new(key));
         let store = ReplicatedMap::<i32, String>::new(config)
             .await
             .expect("bind failed");
@@ -1714,11 +1714,13 @@ mod auth_attack {
         // (a) forged update sent WITHOUT any authentication tag
         attacker.send_to(&forged, &target).await.unwrap();
         // (b) forged update sealed with the WRONG key
-        let wrong_key_sealed = auth::Authenticator::new(Some([0x99u8; auth::KEY_LEN]), false).seal(
-            gossip::replay::Seq::new(1),
-            gossip::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
-            &forged,
-        );
+        let wrong_key_sealed =
+            auth::Authenticator::new(Some(auth::ClusterKey::new([0x99u8; auth::KEY_LEN])), false)
+                .seal(
+                    gossip::replay::Seq::new(1),
+                    gossip::replay::Stamp::new(Utc::now().timestamp_millis().max(0) as u64),
+                    &forged,
+                );
         attacker.send_to(&wrong_key_sealed, &target).await.unwrap();
 
         // give the victim time to (not) process the forged datagrams

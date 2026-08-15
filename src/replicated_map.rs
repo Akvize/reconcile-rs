@@ -17,6 +17,7 @@ use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gossip::auth::ClusterKey;
 use ipnet::IpNet;
 use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
 use tracing::{debug, info, instrument, warn};
@@ -1315,7 +1316,7 @@ pub const MAX_NETS: usize = 8;
 /// `with_*` builders (e.g. [`with_port`](Config::with_port),
 /// [`with_listen_addr`](Config::with_listen_addr), [`with_net`](Config::with_net)); every field
 /// is `pub` for direct construction where that reads better.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Config {
     /// UDP port to bind. `0` (the default) asks the OS for an ephemeral port; read back the
     /// actual bound port from the running [`ReplicatedMap`] when it matters.
@@ -1349,7 +1350,7 @@ pub struct Config {
     /// [`insecure_no_key`](Self::insecure_no_key) is refused at construction time (see
     /// [`with_insecure_no_key`](Self::with_insecure_no_key)) rather than silently running that way.
     /// When set, every node needs the same key and the same MAC backend feature.
-    pub cluster_key: Option<[u8; 32]>,
+    pub cluster_key: Option<ClusterKey>,
     /// Explicit, loudly-named opt-in to run with [`cluster_key`](Self::cluster_key) unset. Default
     /// `false`. Set only through [`with_insecure_no_key`](Self::with_insecure_no_key) — see #325 and
     /// README "Security model" for exactly what a keyless prober receives.
@@ -1541,7 +1542,7 @@ impl Config {
         self
     }
 
-    /// Enable per-datagram MAC authentication with a shared 32-byte cluster secret, closing the
+    /// Enable per-datagram MAC authentication with a shared cluster secret, closing the
     /// unauthenticated LWW poisoning vector.
     ///
     /// Incoming datagrams are verified before deserialization and silently dropped on failure.
@@ -1549,7 +1550,7 @@ impl Config {
     /// without one, construction refuses to proceed unless
     /// [`with_insecure_no_key`](Self::with_insecure_no_key) opted in explicitly.
     #[must_use]
-    pub fn with_cluster_key(mut self, key: [u8; 32]) -> Self {
+    pub fn with_cluster_key(mut self, key: ClusterKey) -> Self {
         self.cluster_key = Some(key);
         self
     }
@@ -2779,7 +2780,7 @@ mod replicated_map_tests {
             .with_port(port)
             .with_listen_addr(target_addr)
             .with_net("127.0.0.192/30".parse().unwrap())
-            .with_cluster_key(cluster_key)
+            .with_cluster_key(gossip::auth::ClusterKey::new(cluster_key))
             .with_max_peers(2);
 
         let store = ReplicatedMap::<i32, i32>::new(config)
@@ -2794,11 +2795,11 @@ mod replicated_map_tests {
         // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
         let payload = dated_comparison_payload();
         let counter = gossip::replay::SenderCounter::new();
-        let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false).seal(
-            counter.next_seq(),
-            counter.next_stamp(),
-            &payload,
-        );
+        let sealed = gossip::auth::Authenticator::new(
+            Some(gossip::auth::ClusterKey::new(cluster_key)),
+            false,
+        )
+        .seal(counter.next_seq(), counter.next_stamp(), &payload);
 
         let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
             .await
