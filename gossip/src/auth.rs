@@ -37,6 +37,7 @@
 //! slot over a datagram this build cannot even interpret).
 
 use std::borrow::Cow;
+use std::fmt;
 use std::marker::PhantomData;
 use std::net::IpAddr;
 
@@ -81,6 +82,12 @@ compile_error!(
 /// A shared cluster secret. Constructing one is the only way to enable authentication.
 ///
 /// `Clone` but not `Copy`: the `zeroize` feature gives it a wiping `Drop`, which `Copy` forbids.
+/// The public boundary (`Config::cluster_key`, `Authenticator::new`) takes and returns
+/// `ClusterKey`, never a bare `[u8; 32]` — AGENTS.md §4: type-owned parsing, an invalid instance
+/// structurally impossible to hand to either.
+///
+/// `Debug` is redacting: it never prints the key material, so an accidental `{:?}` in a log
+/// statement cannot leak it.
 #[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
 #[derive(Clone)]
 pub struct ClusterKey([u8; KEY_LEN]);
@@ -91,10 +98,80 @@ impl ClusterKey {
         ClusterKey(bytes)
     }
 
+    /// Parse a cluster key from `2 * KEY_LEN` (64) hex characters, case-insensitive.
+    ///
+    /// The one parse this type exists to own — see AGENTS.md §4 — rather than every caller
+    /// hand-rolling `u8::from_str_radix` over byte pairs (as, until #286, `examples/k8s/main.rs`
+    /// did for `RECONCILE_CLUSTER_KEY`).
+    pub fn from_hex(hex: &str) -> Result<Self, ClusterKeyError> {
+        if hex.len() != KEY_LEN * 2 {
+            return Err(ClusterKeyError::WrongHexLength(hex.len()));
+        }
+        let mut bytes = [0u8; KEY_LEN];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                .map_err(|_| ClusterKeyError::InvalidHexDigit)?;
+        }
+        Ok(ClusterKey(bytes))
+    }
+
     fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
 }
+
+impl fmt::Debug for ClusterKey {
+    /// Redacted: never prints the key material, whatever the format flags.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ClusterKey").field(&"<redacted>").finish()
+    }
+}
+
+impl TryFrom<&[u8]> for ClusterKey {
+    type Error = ClusterKeyError;
+
+    /// `bytes` must be exactly `KEY_LEN` (32) bytes long.
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        <[u8; KEY_LEN]>::try_from(bytes)
+            .map(ClusterKey)
+            .map_err(|_| ClusterKeyError::WrongByteLength(bytes.len()))
+    }
+}
+
+/// Why constructing a [`ClusterKey`] from untrusted input failed.
+#[derive(Debug, Eq, PartialEq)]
+pub enum ClusterKeyError {
+    /// [`ClusterKey::from_hex`] got a string that was not exactly `2 * KEY_LEN` (64) characters.
+    WrongHexLength(usize),
+    /// [`ClusterKey::from_hex`] got a character outside `[0-9a-fA-F]`.
+    InvalidHexDigit,
+    /// [`TryFrom<&[u8]>`](ClusterKey#impl-TryFrom<%26[u8]>-for-ClusterKey) got a slice that was
+    /// not exactly `KEY_LEN` (32) bytes.
+    WrongByteLength(usize),
+}
+
+impl fmt::Display for ClusterKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClusterKeyError::WrongHexLength(got) => write!(
+                f,
+                "cluster key must be {} hex characters, got {got}",
+                KEY_LEN * 2
+            ),
+            ClusterKeyError::InvalidHexDigit => {
+                write!(
+                    f,
+                    "cluster key hex string contains a non-hex-digit character"
+                )
+            }
+            ClusterKeyError::WrongByteLength(got) => {
+                write!(f, "cluster key must be {KEY_LEN} bytes, got {got}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ClusterKeyError {}
 
 /// A MAC tag. Can only be produced by a [`Mac`] backend.
 pub struct Tag([u8; TAG_LEN]);
@@ -285,18 +362,18 @@ pub enum Authenticator {
 }
 
 impl Authenticator {
-    /// Build an authenticator from an optional raw cluster key and whether to encrypt.
+    /// Build an authenticator from an optional cluster key and whether to encrypt.
     ///
     /// # Panics
     ///
     /// If `encrypt` is `true` and the crate was built without the `encryption` feature — a loud
     /// failure rather than a silent downgrade.
-    pub fn new(key: Option<[u8; KEY_LEN]>, encrypt: bool) -> Self {
+    pub fn new(key: Option<ClusterKey>, encrypt: bool) -> Self {
         match (key, encrypt) {
             (None, _) => Authenticator::Disabled,
-            (Some(bytes), false) => Authenticator::Enabled(ClusterKey::new(bytes)),
+            (Some(key), false) => Authenticator::Enabled(key),
             #[cfg(feature = "encryption")]
-            (Some(bytes), true) => Authenticator::Encrypted(ClusterKey::new(bytes)),
+            (Some(key), true) => Authenticator::Encrypted(key),
             #[cfg(not(feature = "encryption"))]
             (Some(_), true) => panic!(
                 "reconcile: encryption requested but the crate was built without the \
@@ -449,6 +526,55 @@ mod tests {
         ClusterKey::new([byte; KEY_LEN])
     }
 
+    #[test]
+    fn from_hex_decodes_each_byte_pair_at_its_own_position() {
+        let expected: Vec<u8> = (0..KEY_LEN as u8).collect();
+        let hex: String = expected.iter().map(|b| format!("{b:02x}")).collect();
+        let decoded = ClusterKey::from_hex(&hex).expect("64 valid hex chars must parse");
+        assert_eq!(decoded.as_bytes().as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn from_hex_rejects_wrong_length() {
+        let too_short = "a".repeat(KEY_LEN * 2 - 1);
+        assert_eq!(
+            ClusterKey::from_hex(&too_short).unwrap_err(),
+            ClusterKeyError::WrongHexLength(KEY_LEN * 2 - 1)
+        );
+    }
+
+    #[test]
+    fn from_hex_rejects_a_non_hex_digit() {
+        let mut hex = "a".repeat(KEY_LEN * 2);
+        hex.replace_range(0..1, "g");
+        assert_eq!(
+            ClusterKey::from_hex(&hex).unwrap_err(),
+            ClusterKeyError::InvalidHexDigit
+        );
+    }
+
+    #[test]
+    fn debug_never_prints_key_material() {
+        let k = key(0xAB);
+        assert_eq!(format!("{k:?}"), "ClusterKey(\"<redacted>\")");
+    }
+
+    #[test]
+    fn cluster_key_error_display_messages() {
+        assert_eq!(
+            ClusterKeyError::WrongHexLength(10).to_string(),
+            "cluster key must be 64 hex characters, got 10"
+        );
+        assert_eq!(
+            ClusterKeyError::InvalidHexDigit.to_string(),
+            "cluster key hex string contains a non-hex-digit character"
+        );
+        assert_eq!(
+            ClusterKeyError::WrongByteLength(5).to_string(),
+            "cluster key must be 32 bytes, got 5"
+        );
+    }
+
     /// The full receive-side pipeline (`ARCHITECTURE.md` §5 invariant 5, module doc): check the
     /// wire version, then replay-check with a throwaway wide-open filter — these tests seal fixed
     /// near-epoch stamps, so the window must span the gap to real wall-clock time.
@@ -492,7 +618,7 @@ mod tests {
 
     #[test]
     fn seal_open_roundtrip() {
-        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
+        let auth = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false);
         let payload = b"some serialized message";
         let sealed = auth.seal(Seq::new(1), Stamp::new(12345), payload);
         assert_eq!(
@@ -507,7 +633,7 @@ mod tests {
 
     #[test]
     fn open_too_short() {
-        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
+        let auth = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false);
         assert!(auth.open(&[0u8; TAG_LEN + REPLAY_HEADER_LEN - 1]).is_none());
         assert!(auth.open(&[0u8; 10]).is_none());
         assert!(auth.open(&[]).is_none());
@@ -515,14 +641,16 @@ mod tests {
 
     #[test]
     fn open_wrong_key() {
-        let sealed = Authenticator::new(Some([0x11; KEY_LEN]), false).seal(
+        let sealed = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false).seal(
             Seq::new(1),
             Stamp::new(99),
             b"payload",
         );
-        assert!(Authenticator::new(Some([0x22; KEY_LEN]), false)
-            .open(&sealed)
-            .is_none());
+        assert!(
+            Authenticator::new(Some(ClusterKey::new([0x22; KEY_LEN])), false)
+                .open(&sealed)
+                .is_none()
+        );
     }
 
     /// Disabled still frames — the wire-version byte is present regardless of
@@ -543,7 +671,7 @@ mod tests {
     /// The auth gate does not replay-check: a resealed datagram opens, carrying seq/stamp.
     #[test]
     fn replay_header_round_trips_seq_and_stamp() {
-        let auth = Authenticator::new(Some([0xAB; KEY_LEN]), false);
+        let auth = Authenticator::new(Some(ClusterKey::new([0xAB; KEY_LEN])), false);
         let payload = b"hello";
         let sealed = auth.seal(Seq::new(42), Stamp::new(9999), payload);
         let p = verify(auth.open(&sealed).expect("valid tag"));
@@ -557,7 +685,7 @@ mod tests {
     /// `check_version` fails, and it reports the version actually received.
     #[test]
     fn version_mismatch_is_distinguishable_from_auth_failure() {
-        let auth = Authenticator::new(Some([0x11; KEY_LEN]), false);
+        let auth = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false);
         let sealed = auth.seal(Seq::new(1), Stamp::new(0), b"payload");
         // Flip the version byte in place: it sits right after the replay header, ahead of the
         // payload (module doc's wire-layout table).
@@ -604,7 +732,7 @@ mod tests {
         use super::*;
 
         fn encryptor(byte: u8) -> Authenticator {
-            Authenticator::new(Some([byte; KEY_LEN]), true)
+            Authenticator::new(Some(ClusterKey::new([byte; KEY_LEN])), true)
         }
 
         #[test]

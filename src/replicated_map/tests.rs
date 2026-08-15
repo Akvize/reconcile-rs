@@ -1158,7 +1158,7 @@ async fn peer_cap_no_replay_entry_for_capped_sender() {
         .with_port(port)
         .with_listen_addr(target_addr)
         .with_net("127.0.0.192/30".parse().unwrap())
-        .with_cluster_key(cluster_key)
+        .with_cluster_key(gossip::auth::ClusterKey::new(cluster_key))
         .with_max_peers(2);
 
     let store = ReplicatedMap::<i32, i32>::new(config)
@@ -1173,11 +1173,9 @@ async fn peer_cap_no_replay_entry_for_capped_sender() {
     // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
     let payload = dated_comparison_payload();
     let counter = gossip::replay::SenderCounter::new();
-    let sealed = gossip::auth::Authenticator::new(Some(cluster_key), false).seal(
-        counter.next_seq(),
-        counter.next_stamp(),
-        &payload,
-    );
+    let sealed =
+        gossip::auth::Authenticator::new(Some(gossip::auth::ClusterKey::new(cluster_key)), false)
+            .seal(counter.next_seq(), counter.next_stamp(), &payload);
 
     let sender = tokio::net::UdpSocket::bind(std::net::SocketAddr::new(newcomer, 0))
         .await

@@ -169,7 +169,8 @@ that.
 To close this vector, provide a shared 32-byte cluster secret on **every** node:
 
 ```rust
-let key: [u8; 32] = /* same secret on all nodes, e.g. loaded from your secret manager */;
+let secret_hex: String = /* same secret on all nodes, e.g. loaded from your secret manager */;
+let key = ClusterKey::from_hex(&secret_hex).expect("cluster key must be 64 hex characters");
 let config = Config::default().with_cluster_key(key);
 let store = ReplicatedMap::new(config).await.unwrap();
 ```
@@ -181,8 +182,19 @@ runs unauthenticated.
 
 The MAC primitive is selected at build time via Cargo features: `mac-blake3` (default, keyed
 BLAKE3) or `mac-hmac` (HMAC-SHA256). All nodes in a cluster must share the identical key **and** be
-built with the same backend. The optional `zeroize` feature wipes the cluster key from memory when
-it is dropped (defense in depth).
+built with the same backend. The key itself is a [`ClusterKey`], never a bare `[u8; 32]`, at every
+public boundary — `Config::cluster_key`, `Config::with_cluster_key`, `Authenticator::new` — so it
+cannot land in a stray unwrapped copy a caller forgot to protect.
+
+**What the `zeroize` feature covers, precisely.** It wipes the 32 key bytes on `Drop` for every
+`ClusterKey`: the one inside the running `Authenticator`, and every transient copy along the way
+(`Config::cluster_key`, a `with_cluster_key(key)` argument once moved in, `ClusterKey::from_hex`'s
+local buffer). `Config` is deliberately not `Clone`-and-forget `Copy` — a `Copy` type cannot carry
+the `Drop` this needs, so every `ClusterKey`-holding value is wiped exactly once, when it is
+actually dropped, not left as an orphaned stack copy. What it does **not** cover: the caller's own
+source of the key (an env var `String`, a file's contents, a `[u8; 32]` literal before it is wrapped
+in `ClusterKey::new`/`from_hex`) is the caller's to protect, and the **decrypted AEAD plaintext**
+(`encryption` feature) is never zeroized in either configuration — only the key that produced it.
 
 ### Confidentiality (encryption)
 
