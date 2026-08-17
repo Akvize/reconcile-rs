@@ -81,6 +81,22 @@ async fn stores_converge_over_an_injected_transport() {
     );
 }
 
+/// `Config::port == 0` ("let the OS pick") can never converge — gossip addresses every outbound
+/// datagram to this port, so there is no per-peer discovery to learn what the OS chose.
+/// `ReplicatedMap::new` must refuse this before ever touching a socket.
+#[tokio::test]
+async fn zero_port_is_rejected_before_binding() {
+    let config = Config::default().with_port(0).with_insecure_no_key();
+    let err = match ReplicatedMap::<i32, i32>::new(config).await {
+        Ok(_) => panic!("port 0 should be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("must be nonzero"),
+        "unexpected error: {err}"
+    );
+}
+
 /// `new` must return `Err`, not panic, when the port is already in use.
 #[tokio::test]
 async fn new_returns_err_on_bind_failure() {

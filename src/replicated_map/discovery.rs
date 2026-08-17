@@ -101,7 +101,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # async fn main() -> std::io::Result<()> {
     /// // Point at a Kubernetes headless Service (`clusterIP: None`): one DNS record per ready pod.
     /// let discovery = Arc::new(DnsDiscovery::new("my-service.my-namespace.svc.cluster.local", 4242));
-    /// let store = ReplicatedMap::<String, String>::new(Config::default().with_insecure_no_key())
+    /// let store = ReplicatedMap::<String, String>::new(Config::new(8080).with_insecure_no_key())
     ///     .await?
     ///     .with_discovery(discovery);
     /// # Ok(())

@@ -43,7 +43,9 @@ the cluster as an empty replica.
 In code, this would look like this:
 
 ```rust
-let mut store = ReplicatedMap::new(Config::default()).await.unwrap();
+let mut store = ReplicatedMap::new(Config::new(8080).with_insecure_no_key())
+    .await
+    .unwrap();
 tokio::spawn(store.clone().run());
 // use the reconciliation store as a key-value store in the API
 ```
@@ -177,7 +179,7 @@ To close this vector, provide a shared 32-byte cluster secret on **every** node:
 ```rust
 let secret_hex: String = /* same secret on all nodes, e.g. loaded from your secret manager */;
 let key = ClusterKey::from_hex(&secret_hex).expect("cluster key must be 64 hex characters");
-let config = Config::default().with_cluster_key(key);
+let config = Config::new(8080).with_cluster_key(key);
 let store = ReplicatedMap::new(config).await.unwrap();
 ```
 
@@ -211,7 +213,7 @@ and is decrypted-and-verified before deserialization.
 
 ```rust
 // requires the `encryption` feature
-let config = Config::default().with_cluster_key(key).with_encryption();
+let config = Config::new(8080).with_cluster_key(key).with_encryption();
 ```
 
 This reuses the cluster key as the AEAD key (so `with_cluster_key` is still required, and all nodes
@@ -282,7 +284,7 @@ not look like a fresh, empty replica:
 use std::sync::Arc;
 use reconcile::{replicated_map::Config, FileSnapshot, ReplicatedMap};
 
-let store = ReplicatedMap::new(Config::default())
+let store = ReplicatedMap::new(Config::new(8080).with_insecure_no_key())
     .await
     .unwrap()
     .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
@@ -379,7 +381,7 @@ never counted as a causal-stability member, so it cannot hold back a dated node'
 use reconcile::{replicated_map::Config, ReadReplicaMap};
 
 // Mirrors a dated cluster reachable at `dated_addr` on the same port.
-let read_replica = ReadReplicaMap::<String, String>::new(Config::default())
+let read_replica = ReadReplicaMap::<String, String>::new(Config::new(8080).with_insecure_no_key())
     .await
     .unwrap()
     .with_seed(dated_addr);
@@ -401,7 +403,8 @@ granularity. Declare every network with `with_net` — **including this node's o
 ```rust
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
-let config = Config::default()
+let config = Config::new(8080)
+    .with_insecure_no_key()
     .with_listen_addr("10.1.0.7".parse().unwrap())
     .with_net("10.1.0.0/16".parse().unwrap())  // this node's network (contains listen_addr)
     .with_net("10.2.0.0/16".parse().unwrap())  // another location
@@ -441,7 +444,7 @@ take effect on the running `run()` loop:
 ```rust
 let _: bool = store.add_net("10.4.0.0/16".parse().unwrap()); // start gossiping with a new location
 let _: bool = store.remove_net("10.3.0.0/16".parse().unwrap()); // stop probing a retired one
-store.set_nets(&nets);                          // replace the whole topology at once
+store.set_nets(&nets).unwrap();                 // replace the whole topology at once
 store.set_remote_interval(3);                   // retune cross-network cadence
 store.set_remote_fanout(4);                     //   and fan-out
 store.set_reconcile_interval(Duration::from_millis(500)); // retune the gossip cadence
@@ -469,7 +472,8 @@ a single lookup — the canonical StatefulSet pattern, with **no Kubernetes API 
 ```rust
 use reconcile::{replicated_map::Config, NodeId, ReplicatedMap};
 
-let config = Config::default()
+let config = Config::new(8080)
+    .with_insecure_no_key()
     .with_listen_addr(pod_ip)         // bind to the pod IP (downward API: status.podIP)
     .with_node_id(NodeId::new(id));   // stable id derived from the pod name
 // Note: no `with_net` — discovery is purely DNS-driven in Kubernetes.

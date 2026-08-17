@@ -252,12 +252,33 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
+/// Reject `config.port == 0`: gossip does no per-peer port discovery, so every outbound
+/// datagram to a peer is addressed to `config.port` literally. Port `0` binds an OS-assigned
+/// ephemeral port for receiving, but that assigned port is never read back into the value peers
+/// are addressed on — a node configured this way sends every peer datagram to port `0` and can
+/// never converge with anything. Shared by [`Replica::bind_udp`] and
+/// [`ReadReplicaMap::new`](crate::ReadReplicaMap::new), the two entry points that bind a real
+/// socket; the in-memory-transport constructors are unaffected since their caller chooses the
+/// port directly.
+pub(crate) fn check_port_is_nonzero(config: &Config) -> io::Result<()> {
+    if config.port == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config::port must be nonzero: gossip addresses every outbound datagram to this \
+             port, so 0 (\"OS picks one\") can never converge — see Config::port's docs and \
+             Config::new",
+        ));
+    }
+    Ok(())
+}
+
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Create an engine over the default [`UdpTransport`].
     ///
     /// # Errors
     ///
-    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -283,6 +304,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// The engine trusts `clock` completely, with no way to check it at the type level; see
     /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
     /// through) for the full risk writeup and a worked example.
+    ///
+    /// # Errors
+    ///
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -323,6 +349,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// Bind the default [`UdpTransport`] for `config` and log the bound address.
     async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+        check_port_is_nonzero(config)?;
         let transport = UdpTransport::bind(
             SocketAddr::new(config.listen_addr, config.port),
             config.recv_buffer_size,
@@ -443,5 +470,11 @@ mod write;
 pub(crate) use pacing::send_messages_paced;
 pub(crate) use pacing::{send_messages_to, send_to_retry, SendPorts};
 
+// `pub(crate)` (not private): `tests::next_ephemeral_test_port` is reused by other files' own
+// test modules (replicated_set.rs, read_replica_set.rs, read_replica_map.rs,
+// replicated_map's own test modules), which reach it as
+// `crate::replica::tests::next_ephemeral_test_port`. This is the only test-only content this
+// production file carries — a visibility marker on its own test submodule, no test code or
+// symbol imported into it.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

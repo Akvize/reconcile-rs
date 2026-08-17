@@ -8,7 +8,12 @@
 
 use std::time::Duration;
 
-use crate::{replicated_map::Config, ReplicatedMap};
+use crate::{
+    replicated_map::{Config, ConfigError, MAX_NETS},
+    ReplicatedMap,
+};
+
+use super::ephemeral_config;
 
 /// #325: a `Config` with neither a cluster key nor the explicit insecure opt-in must refuse to
 /// build at all, rather than silently running unauthenticated — the whole point of the guard.
@@ -37,6 +42,40 @@ fn byte_rate_defaults_match_their_documented_values() {
     assert_eq!(
         super::super::config::DEFAULT_SOCKET_BUFFER_SIZE,
         8 * 1024 * 1024
+    );
+}
+
+/// `ConfigError::TooManyNets`'s `Display` text is user-facing — assert its actual content, not
+/// merely that formatting it doesn't panic.
+#[test]
+fn config_error_too_many_nets_display_names_the_limit() {
+    assert_eq!(
+        ConfigError::TooManyNets.to_string(),
+        format!("at most {MAX_NETS} networks are supported")
+    );
+}
+
+/// `Config`'s hand-written `Debug` impl exists to redact `cluster_key` — assert it actually
+/// hides the key material and still reports `Some`/`None` correctly either way.
+#[test]
+fn config_debug_redacts_cluster_key_but_not_its_presence() {
+    let key_bytes = [0xABu8; 32];
+    let with_key = ephemeral_config().with_cluster_key(gossip::auth::ClusterKey::new(key_bytes));
+    let debug = format!("{with_key:?}");
+    assert!(
+        debug.contains("<redacted>"),
+        "expected the key material to be redacted: {debug}"
+    );
+    assert!(
+        !debug.contains("ab, ab, ab") && !debug.contains("171, 171, 171"),
+        "raw key bytes must not appear in Debug output: {debug}"
+    );
+
+    let without_key = ephemeral_config();
+    let debug = format!("{without_key:?}");
+    assert!(
+        debug.contains("cluster_key: None"),
+        "expected an explicit None, got: {debug}"
     );
 }
 

@@ -37,7 +37,7 @@ use rsos::Fingerprint;
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {
-/// let set = ReadReplicaSet::<String>::new(Config::default().with_insecure_no_key()).await?;
+/// let set = ReadReplicaSet::<String>::new(Config::new(8080).with_insecure_no_key()).await?;
 ///
 /// // Read-only: nothing arrives until it reconciles with a dated peer (module docs).
 /// assert!(!set.contains(&"a".to_string()));
@@ -137,7 +137,7 @@ mod read_replica_set_tests {
 
     fn ephemeral_config() -> Config {
         Config {
-            port: 0,
+            port: crate::replica::tests::next_ephemeral_test_port(),
             listen_addr: "127.0.0.1".parse().unwrap(),
             nets: [None; MAX_NETS],
             remote_interval: 6,

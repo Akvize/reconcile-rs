@@ -91,7 +91,7 @@ fn discovery_config() -> Config {
     // A real, bindable loopback address (the engine binds a socket in `new`) on an ephemeral
     // port. No `with_net`, mirroring the Kubernetes setup where discovery is purely DNS-driven.
     Config::default()
-        .with_port(0)
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_insecure_no_key()
 }
