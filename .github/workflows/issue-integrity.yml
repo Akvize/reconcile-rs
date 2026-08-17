@@ -36,6 +36,7 @@ jobs:
     outputs:
       shas: ${{ steps.filter.outputs.shas }}
       claims: ${{ steps.filter.outputs.claims }}
+      rustdoc: ${{ steps.filter.outputs.rustdoc }}
       triage: ${{ steps.filter.outputs.triage }}
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +54,11 @@ jobs:
             claims:
               - 'scripts/check-doc-issue-claims.sh'
               - '*.md'
+              - '.github/workflows/issue-integrity.yml'
+            rustdoc:
+              - 'scripts/check-closed-issue-rustdoc-refs.sh'
+              - 'scripts/lib-rustdoc-issue-refs.sh'
+              - '**/*.rs'
               - '.github/workflows/issue-integrity.yml'
             triage:
               - 'scripts/check-issue-triage.sh'
@@ -88,6 +94,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/check-doc-issue-claims.sh
+
+  # The mirror image of `doc-issue-claims`: that one checks an annotated *claim* in `.md` files
+  # against reality, this one checks that rustdoc cites no closed issue at all -- `rustdoc` is
+  # published, third-party documentation (docs.rs), where a closed-issue citation is a vestige, not
+  # a claim; `.md` docs like PROGRESS.md/SOTA.md are living-status/durable-reference records where
+  # citing a closed issue is the point. Same reason for widening the filter no further than the
+  # script's own reach: `check-closed-issue-rustdoc-refs.sh` reads `.rs` files via `git ls-files`.
+  closed-issue-rustdoc-refs:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rustdoc == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustdoc must not cite a closed issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/check-closed-issue-rustdoc-refs.sh
 
   # Needs no history, hence the default shallow checkout.
   open-issue-labels:

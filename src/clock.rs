@@ -16,7 +16,7 @@
 //!
 //! `HlcClock` is the default [`Clock`] adapter, not the only one that can be plugged in:
 //! [`ReplicatedMap::new_with_clock`](crate::ReplicatedMap::new_with_clock) accepts any `Arc<dyn
-//! Clock>` (`#288`). [`assert_conformance`] is what an implementor runs before trusting a
+//! Clock>`. [`assert_conformance`] is what an implementor runs before trusting a
 //! substitute clock — see its docs, linked from
 //! [`ReplicatedMap::new_with_clock`](crate::ReplicatedMap::new_with_clock), for exactly what a
 //! non-conformant one silently breaks.

@@ -7,7 +7,7 @@
 // except according to those terms.
 
 //! Tests for `benches/netem/mod.rs`, the seeded delay/loss/reordering `Transport` decorator the
-//! `*_rtt` benchmark lanes are built on ([#280]).
+//! `*_rtt` benchmark lanes are built on.
 //!
 //! A benchmark's own instrument earns the same tests as the code it measures: a decorator that
 //! quietly injected the wrong delay, or lost a datagram it claimed to deliver, would publish a
@@ -16,8 +16,6 @@
 //!
 //! The last test is the one `ReplicatedMap::new_with_transport`'s rustdoc has been promising: "a
 //! lossy [transport], to test convergence under adversity".
-//!
-//! [#280]: https://github.com/Akvize/reconcile-rs/issues/280
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};

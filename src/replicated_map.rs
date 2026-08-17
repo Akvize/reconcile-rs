@@ -264,7 +264,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// None of this panics, errors, or logs by default — it surfaces as writes that mysteriously
     /// do not stick, or a cluster that never converges. There is no way to gate this at the type
     /// level: monotonicity is a runtime property of an arbitrary implementation, not something
-    /// expressible in [`Clock`](crate::Clock)'s signature (`#288`). **Run
+    /// expressible in [`Clock`](crate::Clock)'s signature. **Run
     /// [`assert_conformance`](crate::clock::assert_conformance) over `clock` before passing it
     /// here** — its own documentation goes through each failure mode in more detail.
     ///
