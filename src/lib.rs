@@ -45,11 +45,24 @@ pub mod read_replica_set;
 pub mod replicated_map;
 pub mod replicated_set;
 pub(crate) mod snapshot;
+pub mod value_ref;
 
 // Sibling crates re-exported under their historical paths (`ARCHITECTURE.md` §2).
 pub use gossip::auth::{ClusterKey, ClusterKeyError};
 pub use gossip::{discovery, transport};
 pub use lww_register::{bounds, entry};
+
+// #297: re-exported so no public signature that names one of these types — `Config::nets`'
+// `ipnet::IpNet`, `UdpTransport::new`/`socket`'s `tokio::net::UdpSocket`, `RandomProbe::new`'s
+// `parking_lot`/`rand` parameters, `Transport`'s `#[async_trait]` — forces a dependent onto an
+// independently-versioned copy of that crate. `bincode` and `metrics-exporter-prometheus` are
+// deliberately not re-exported this way: their errors are wrapped instead (`gossip::bincode`,
+// `prometheus.rs`) because they are an implementation choice, not part of the contract.
+pub use gossip::async_trait;
+pub use ipnet;
+pub use parking_lot;
+pub use rand;
+pub use tokio;
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
 #[cfg(feature = "metrics-prometheus")]
@@ -65,6 +78,7 @@ pub use clock::{Clock, Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use entry::{Entry, State};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
+pub use value_ref::ValueRef;
 // `IterMut`/`ValuesMut` are deliberately not re-exported: they leave fingerprints stale.
 // `FingerprintTreeMap::with_mut` is the supported mutation path.
 pub use rsos::{

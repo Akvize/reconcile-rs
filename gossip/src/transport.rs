@@ -21,6 +21,40 @@ use tracing::{debug, warn};
 
 /// Connectionless datagram I/O. The engine is written against `Addr = SocketAddr`, so every
 /// adapter reuses that address type.
+///
+/// # Implementing your own
+///
+/// #297: every type this trait's signature names — `Self::Addr`'s bounds, `io::Result`, the
+/// `#[async_trait]` macro itself — is either `std` or re-exported from this crate (or
+/// `reconcile`), so an external implementation never has to independently depend on
+/// `async-trait` and match its version to this crate's:
+///
+/// ```
+/// use std::io;
+/// use std::net::SocketAddr;
+///
+/// use reconcile_gossip::async_trait;
+/// use reconcile_gossip::transport::Transport;
+///
+/// struct NullTransport;
+///
+/// #[async_trait]
+/// impl Transport for NullTransport {
+///     type Addr = SocketAddr;
+///
+///     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, Self::Addr)> {
+///         Ok((buf.len(), self.local_addr()?))
+///     }
+///
+///     async fn send_to(&self, buf: &[u8], _dst: &Self::Addr) -> io::Result<usize> {
+///         Ok(buf.len())
+///     }
+///
+///     fn local_addr(&self) -> io::Result<Self::Addr> {
+///         Ok("0.0.0.0:0".parse().unwrap())
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
     /// The peer-address type carried by [`recv_from`](Transport::recv_from) /

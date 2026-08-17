@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
+use parking_lot::{RwLock, RwLockReadGuard};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tokio::time::timeout;
@@ -44,6 +44,7 @@ use crate::replica::{
 };
 use crate::replicated_map::Config;
 use crate::transport::{Transport, UdpTransport};
+use crate::value_ref::ValueRef;
 use crate::FingerprintTreeMap;
 use gossip::auth;
 use gossip::gen_ip::{gen_ip, net_of};
@@ -223,9 +224,18 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     }
 
     /// Get the live value for a key, or `None` if the key is absent or holds a replicated tombstone.
-    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+    pub fn get(&self, k: &K) -> Option<ValueRef<'_, V>> {
         let guard = self.tree.read();
-        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|state| state.as_value())).ok()
+        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|state| state.as_value()))
+            .ok()
+            .map(ValueRef)
+    }
+
+    /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
+    /// released before this returns — the default read when the value will be compared against or
+    /// fed into a subsequent write, mirroring [`ReplicatedMap::get_cloned`](crate::ReplicatedMap::get_cloned).
+    pub fn get_cloned(&self, k: &K) -> Option<V> {
+        self.get(k).map(|v| v.clone())
     }
 
     /// Whether the read replica currently holds a live value for the key (a tombstone counts as

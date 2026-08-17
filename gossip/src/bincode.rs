@@ -13,8 +13,48 @@
 //! codec, so a forged datagram never reaches [`decode_stream`] (`ARCHITECTURE.md` §5 invariant 5).
 //! `::bincode::…` names the external crate.
 
+use std::error::Error as StdError;
+use std::fmt;
+
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+
+/// Why [`encode`] failed. Opaque wrapper over the external `bincode` crate's error (#297): a
+/// public signature naming `::bincode::Error` directly would force every dependent onto this
+/// crate's exact `bincode` version for a type they never construct or match on — `encode` only
+/// fails when `T`'s `Serialize` implementation does, so callers observe this as `Debug`/`Display`
+/// or via [`std::error::Error::source`], never by matching a variant.
+#[derive(Debug)]
+pub struct EncodeError(::bincode::Error);
+
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bincode encode failed: {}", self.0)
+    }
+}
+
+impl StdError for EncodeError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+/// Why [`decode_stream`] failed: a message failed to deserialize before a clean end-of-input.
+/// Opaque for the same reason as [`EncodeError`].
+#[derive(Debug)]
+pub struct DecodeError(::bincode::Error);
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bincode decode failed: {}", self.0)
+    }
+}
+
+impl StdError for DecodeError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&*self.0)
+    }
+}
 
 /// Append the encoding of `value` to a caller-owned buffer, so a batch frames into one datagram
 /// without per-message allocation.
@@ -22,9 +62,11 @@ use serde::Serialize;
 /// # Errors
 ///
 /// Only if `T`'s `Serialize` implementation fails.
-pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<()> {
+pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> Result<(), EncodeError> {
     use ::bincode::{DefaultOptions, Serializer};
-    value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
+    value
+        .serialize(&mut Serializer::new(out, DefaultOptions::new()))
+        .map_err(EncodeError)
 }
 
 /// Decode a stream of `T` from `bytes`, stopping at a clean end-of-input or at `max_items` —
@@ -37,7 +79,7 @@ pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<(
 pub fn decode_stream<T: DeserializeOwned>(
     bytes: &[u8],
     max_items: usize,
-) -> ::bincode::Result<Vec<T>> {
+) -> Result<Vec<T>, DecodeError> {
     use ::bincode::{DefaultOptions, Deserializer};
     let mut deserializer = Deserializer::from_slice(bytes, DefaultOptions::new());
     let mut out = Vec::new();
@@ -51,7 +93,7 @@ pub fn decode_stream<T: DeserializeOwned>(
                         break;
                     }
                 }
-                return Err(err);
+                return Err(DecodeError(err));
             }
         }
     }

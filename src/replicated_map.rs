@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use gossip::auth::ClusterKey;
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
+use parking_lot::RwLockReadGuard;
 use tracing::{debug, info, instrument, warn};
 
 use crate::bounds::{Key, Value};
@@ -30,6 +30,7 @@ use crate::persistence::{DatedEntries, InMemoryPersistence, PersistedState, Pers
 use crate::replica::{version_hash, Replica};
 use crate::timeout_wheel::TimeoutWheel;
 use crate::transport::Transport;
+use crate::value_ref::ValueRef;
 use rsos::Fingerprint;
 
 const TOMBSTONE_CLEARING: Duration = Duration::from_secs(1);
@@ -622,9 +623,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Prefer [`get_cloned`](Self::get_cloned), which drops the lock before returning, as the
     /// default read when the value will be compared against or fed into a subsequent write.
-    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+    pub fn get(&self, k: &K) -> Option<ValueRef<'_, V>> {
         let guard = self.engine.map.read();
-        RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
+        RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value()))
+            .ok()
+            .map(ValueRef)
     }
 
     /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
