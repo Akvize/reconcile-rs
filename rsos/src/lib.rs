@@ -55,6 +55,6 @@ mod rsos_trait;
 
 pub use aggregate::Aggregate;
 pub use fingerprint::{digest, lift, Fingerprint};
-pub use fingerprint_tree_map::FingerprintTreeMap;
+pub use fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
 pub use fingerprint_tree_map_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use rsos_trait::Rsos;
