@@ -27,12 +27,14 @@ tracing = "0.1.40"
 # that module's docs.
 rand = "0.8.5"
 
-[features]
-# Exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
-# vector is built through. Same role and same name as `reconcile`'s own `internal-testing`: a
-# test-only door, never reachable from non-test code, and not public API. `reconcile` turns it on
-# via its own `internal-testing = ["rbsr/internal-testing"]` unification entry.
+
+# #330: exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
+# vector is built through. Same role and same name as `reconcile`'s own `reconcile_internal_testing`
+# — a `--cfg`, not a Cargo feature, so no dependent's manifest can turn it on (see `reconcile`'s
+# `Cargo.toml` for the full rationale); test-only, never reachable from non-test code, not public
+# API.
 #
 # This is what keeps `rbsr` free of a codec dependency: the crate owns no encoding, so the
 # byte-level test lives where the codec is actually chosen (the adapter layer) rather than here.
-internal-testing = []
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(reconcile_internal_testing)"] }

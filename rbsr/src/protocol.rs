@@ -97,12 +97,12 @@ pub struct RangeAggregate<K> {
     aggregate: Aggregate,
 }
 
-/// Test-only seam for out-of-crate wire-format oracles, behind `internal-testing`: builds a
-/// segment with *chosen* bounds, which [`initial_ranges`] alone never produces.
+/// Test-only seam for out-of-crate wire-format oracles, behind `--cfg reconcile_internal_testing`
+/// (#330): builds a segment with *chosen* bounds, which [`initial_ranges`] alone never produces.
 ///
 /// `None` is unbounded, `Some(k)` is `Included(k)` on the start and `Excluded(k)` on the end —
 /// an excluded start or included end stays unspellable.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 impl<K> RangeAggregate<K> {
     /// Build a `RangeAggregate` with chosen bounds and aggregate, bypassing [`initial_ranges`] /
     /// [`protocol_round`]. See the impl-level docs above for the bound encoding.
