@@ -88,9 +88,10 @@ clippy. Measured on this workspace with one planted `clippy::clone_on_copy` in `
 | `cargo clippy --workspace --all-features --all-targets` | exit 101 — caught |
 | `cargo test --workspace --all-features --no-run` | exit 0 — undetected |
 
-`--all-targets` pulls in the benches, which use the `internal-testing` seams (`just_insert` and
-friends), so it only works alongside `--features internal-testing`. That pairing is why `./pre-push`
-carries both flags rather than just the one.
+`--all-targets` pulls in the benches, which use the `reconcile_internal_testing`-gated seams
+(`just_insert` and friends), so it only works with `RUSTFLAGS` carrying `--cfg
+reconcile_internal_testing` (AGENTS.md §6 — a `--cfg`, not a Cargo feature, since #330). That
+pairing is why `./pre-push` sets the `RUSTFLAGS` override on both commands rather than just one.
 
 ### Why §3's list starts with an `export`
 

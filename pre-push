@@ -41,8 +41,8 @@ for commit in ${commits[@]+"${commits[@]}"}; do
   git archive "$commit" | tar -x -C "$tree"
 
   echo "Running cargo clippy on $commit"
-  (cd "$tree"; cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings)
+  (cd "$tree"; RUSTFLAGS='--cfg reconcile_internal_testing' cargo clippy --workspace --all-targets -- --deny warnings)
 
   echo "Running cargo test on $commit"
-  (cd "$tree"; cargo test --workspace --features internal-testing)
+  (cd "$tree"; RUSTFLAGS='--cfg reconcile_internal_testing' cargo test --workspace)
 done
