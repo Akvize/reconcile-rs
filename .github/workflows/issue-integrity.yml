@@ -1,20 +1,67 @@
 name: issue-integrity
 
-# Runs on a schedule, not per-push: this audits the *existing* state of the issue tracker (every
-# closed issue's cited SHAs), not the diff of any one commit, so there is no single push it
-# belongs to. `workflow_dispatch` lets it be re-run on demand -- e.g. right after closing a batch
-# of issues, instead of waiting for the next scheduled tick.
+# Primarily a schedule, because what these three audit is the *existing* state of the issue tracker
+# rather than the diff of any one commit -- a doc's claim about an issue goes stale when the
+# **issue** moves, which is nobody's push. Failing a commit for that would punish the wrong person
+# at the wrong time; failing a weekly run produces work, which is what this is. `workflow_dispatch`
+# re-runs it on demand, e.g. right after closing a batch of issues.
+#
+# The `pull_request` trigger does not revisit that. It is the *converse* case: when a PR edits one
+# of these scripts, or the file a script reads, the verdict becomes attributable to the diff again,
+# and a gate that changes without ever running is a gate nobody has tested. Each job below is gated
+# on its own inputs, so a PR only ever sees the check it could have broken -- and a change to
+# `check-issue-triage.sh` now self-tests against the live tracker in the PR that makes it, instead
+# of first executing days later on a Monday.
+#
+# Tracker drift alone still reaches only the schedule, which is the half of the original reasoning
+# that was always right.
 on:
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:
+  pull_request:
 
 permissions:
   issues: read
   contents: read
+  pull-requests: read
 
 jobs:
+  # Same two rules as `main.yml`'s `changes` job: the filter lives in `if:` (a skipped job passes a
+  # required check, an `on.*.paths`-filtered workflow hangs one), and it only ever narrows a
+  # `pull_request` run -- `schedule` and `workflow_dispatch` always run everything, which is the
+  # audit this workflow exists for.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      shas: ${{ steps.filter.outputs.shas }}
+      claims: ${{ steps.filter.outputs.claims }}
+      triage: ${{ steps.filter.outputs.triage }}
+    steps:
+      - uses: actions/checkout@v4
+      # Pull-request-only, for the reason spelled out in `main.yml`'s `changes` job: a throw here
+      # would fail this job, skip every job that `needs:` it, and report green having audited
+      # nothing.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            shas:
+              - 'scripts/check-closed-issue-shas.sh'
+              - '.github/workflows/issue-integrity.yml'
+            claims:
+              - 'scripts/check-doc-issue-claims.sh'
+              - '*.md'
+              - '.github/workflows/issue-integrity.yml'
+            triage:
+              - 'scripts/check-issue-triage.sh'
+              - '.github/labels.tsv'
+              - '.github/workflows/issue-integrity.yml'
+
   closed-issue-shas:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.shas == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,12 +74,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/check-closed-issue-shas.sh
 
-  # Third job on the same subject, and the reason it is here rather than in `main.yml`: a doc's
-  # claim about an issue goes stale when the *issue* moves, which is not any committer's diff.
-  # Failing a commit for it would punish the wrong person at the wrong time; failing a weekly run
-  # produces work, which is what this is. Checks only the annotated `[#N](…) (closed)` form -- see
-  # the script header for the measured reason free prose is out of scope.
+  # Checks only the annotated `[#N](…) (closed)` form -- see the script header for the measured
+  # reason free prose is out of scope. Its filter is root-level `*.md` and not `**/*.md` because
+  # that is precisely what the script scans (`grep -ronE … -- *.md`); widening the filter past the
+  # script's own reach would run it on changes it cannot see.
   doc-issue-claims:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.claims == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,10 +89,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/check-doc-issue-claims.sh
 
-  # Same subject as the jobs above -- the tracker's existing state rather than any one diff -- so
-  # it belongs on this schedule rather than in a second weekly workflow of its own. It needs no
-  # history, hence the default shallow checkout.
+  # Needs no history, hence the default shallow checkout.
   open-issue-labels:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.triage == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
