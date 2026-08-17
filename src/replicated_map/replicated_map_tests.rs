@@ -6,15 +6,16 @@ use std::time::Duration;
 use crate::persistence::{PersistedState, Persistence};
 use crate::replica::version_hash;
 use crate::{
-    replicated_map::{Config, MemberPresence, MAX_NETS},
+    replicated_map::{Config, ConfigError, MemberPresence, MAX_NETS},
     FileSnapshot, ReplicatedMap,
 };
 
-/// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
-/// stores without colliding on a fixed port.
+/// A config bound to a fresh port on loopback (#293: port `0` is refused, so
+/// [`next_ephemeral_test_port`](crate::replica::next_ephemeral_test_port) stands in for it),
+/// so persistence tests can construct stores without colliding on a fixed port.
 fn ephemeral_config() -> Config {
     Config {
-        port: 0,
+        port: crate::replica::next_ephemeral_test_port(),
         listen_addr: "127.0.0.1".parse().unwrap(),
         nets: [None; MAX_NETS],
         remote_interval: 6,
@@ -45,6 +46,81 @@ async fn missing_key_and_no_insecure_opt_in_panics_at_construction() {
         .port();
     let config = Config::default().with_port(port);
     let _ = ReplicatedMap::<i32, i32>::new(config).await;
+}
+
+/// #293: `Config::port == 0` ("let the OS pick") can never converge — gossip addresses every
+/// outbound datagram to this port, so there is no per-peer discovery to learn what the OS chose.
+/// `ReplicatedMap::new` must refuse this before ever touching a socket.
+#[tokio::test]
+async fn zero_port_is_rejected_before_binding() {
+    let config = Config::default().with_port(0).with_insecure_no_key();
+    let err = match ReplicatedMap::<i32, i32>::new(config).await {
+        Ok(_) => panic!("port 0 should be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("must be nonzero"),
+        "unexpected error: {err}"
+    );
+}
+
+/// `ConfigError::TooManyNets`'s `Display` text is user-facing — assert its actual content, not
+/// merely that formatting it doesn't panic.
+#[test]
+fn config_error_too_many_nets_display_names_the_limit() {
+    assert_eq!(
+        ConfigError::TooManyNets.to_string(),
+        format!("at most {MAX_NETS} networks are supported")
+    );
+}
+
+/// `Config`'s hand-written `Debug` impl exists to redact `cluster_key` — assert it actually
+/// hides the key material and still reports `Some`/`None` correctly either way.
+#[test]
+fn config_debug_redacts_cluster_key_but_not_its_presence() {
+    let key_bytes = [0xABu8; 32];
+    let with_key = ephemeral_config().with_cluster_key(gossip::auth::ClusterKey::new(key_bytes));
+    let debug = format!("{with_key:?}");
+    assert!(
+        debug.contains("<redacted>"),
+        "expected the key material to be redacted: {debug}"
+    );
+    assert!(
+        !debug.contains("ab, ab, ab") && !debug.contains("171, 171, 171"),
+        "raw key bytes must not appear in Debug output: {debug}"
+    );
+
+    let without_key = ephemeral_config();
+    let debug = format!("{without_key:?}");
+    assert!(
+        debug.contains("cluster_key: None"),
+        "expected an explicit None, got: {debug}"
+    );
+}
+
+/// #293: `set_nets` enforces the same [`MAX_NETS`] cap `Config::with_net`/`try_with_net` do at
+/// construction time, just at runtime — both the accepting and the rejecting side need coverage.
+#[tokio::test]
+async fn set_nets_enforces_max_nets_at_runtime() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+
+    let within_cap: Vec<_> = (0..MAX_NETS)
+        .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+        .collect();
+    store
+        .set_nets(&within_cap)
+        .expect("exactly MAX_NETS networks should be accepted");
+
+    let over_cap: Vec<_> = (0..=MAX_NETS)
+        .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+        .collect();
+    assert_eq!(
+        store.set_nets(&over_cap),
+        Err(ConfigError::TooManyNets),
+        "MAX_NETS + 1 networks should be rejected"
+    );
 }
 
 /// D4: the node id is settable through `Config` and readable back off the store, and the
@@ -580,7 +656,7 @@ fn discovery_config() -> Config {
     // A real, bindable loopback address (the engine binds a socket in `new`) on an ephemeral
     // port. No `with_net`, mirroring the Kubernetes setup where discovery is purely DNS-driven.
     Config::default()
-        .with_port(0)
+        .with_port(crate::replica::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_insecure_no_key()
 }
@@ -1091,7 +1167,7 @@ async fn decommission_frees_peer_cap_slot() {
     let newcomer: std::net::IpAddr = "127.1.0.3".parse().unwrap();
 
     let config = Config::default()
-        .with_port(0)
+        .with_port(crate::replica::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_max_peers(2)
         .with_insecure_no_key();

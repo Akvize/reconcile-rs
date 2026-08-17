@@ -16,15 +16,30 @@
 
 use std::sync::{Arc, Mutex};
 
-use reconcile::{replicated_map::Config, ClusterKey, ReplicatedMap};
+use reconcile::{
+    replicated_map::Config, ClusterKey, InMemoryNetwork, ReadReplicaMap, ReplicatedMap,
+};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::Registry;
 
+/// A fresh, real bindable port per call (#293: `Config::port` must be nonzero), so the several
+/// tests in this file calling `local_config()` never collide with each other. `cargo nextest`
+/// runs each `#[test]` in its own process, so a process-local counter restarts at the same value
+/// in every one of them — probing the OS for a genuinely free port is what stays collision-free
+/// across process boundaries, not just across threads.
+fn next_test_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0")
+        .expect("OS should hand out an ephemeral port")
+        .local_addr()
+        .expect("a bound socket reports its own address")
+        .port()
+}
+
 fn local_config() -> Config {
     Config::default()
-        .with_port(0) // ephemeral port: avoids clashing with the other integration tests
+        .with_port(next_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_net("127.0.0.1/8".parse().unwrap())
         .with_insecure_no_key()
@@ -164,4 +179,100 @@ async fn local_mutations_increment_metric_counters() {
 
     assert_eq!(inserts, 2, "expected two inserts to be counted");
     assert_eq!(removes, 1, "expected one removal to be counted");
+}
+
+/// #293/#294: a `Config` field a `ReadReplicaMap` cannot act on (it mints no timestamps and
+/// runs no bulk-transfer machinery) must not silently do nothing — a WARN naming the field is
+/// the only observable trace `warn_on_ignored_config_fields` leaves, so assert on it directly
+/// rather than only on the function having run.
+#[tokio::test(flavor = "current_thread")]
+async fn read_replica_warns_about_config_fields_it_cannot_honour() {
+    keep_callsites_hot();
+    let layer = CapturingLayer::default();
+    let events = layer.0.clone();
+    let subscriber = Registry::default().with(layer);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let network = InMemoryNetwork::new();
+    let transport = std::sync::Arc::new(network.bind("127.0.0.1:1".parse().unwrap()));
+    let config = local_config().with_remote_fanout(9);
+    let _replica = ReadReplicaMap::<String, String>::new_with_transport(config, transport);
+
+    let events = events.lock().unwrap();
+    let ignored_warning = events.iter().find(|(level, msg)| {
+        *level == Level::WARN && msg.contains("ReadReplicaMap ignores these Config fields")
+    });
+    assert!(
+        ignored_warning.is_some_and(|(_, msg)| msg.contains("remote_fanout")),
+        "expected a WARN naming remote_fanout as ignored, captured: {events:?}"
+    );
+}
+
+/// The converse of the above: a `Config` that never sets a field `ReadReplicaMap` ignores must
+/// not fire that WARN at all — otherwise the warning is noise, not a signal.
+#[tokio::test(flavor = "current_thread")]
+async fn read_replica_stays_quiet_when_no_ignored_field_is_set() {
+    keep_callsites_hot();
+    let layer = CapturingLayer::default();
+    let events = layer.0.clone();
+    let subscriber = Registry::default().with(layer);
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let network = InMemoryNetwork::new();
+    let transport = std::sync::Arc::new(network.bind("127.0.0.1:2".parse().unwrap()));
+    let _replica = ReadReplicaMap::<String, String>::new_with_transport(local_config(), transport);
+
+    let events = events.lock().unwrap();
+    let has_ignored_warning = events.iter().any(|(level, msg)| {
+        *level == Level::WARN && msg.contains("ReadReplicaMap ignores these Config fields")
+    });
+    assert!(
+        !has_ignored_warning,
+        "no non-default ignored field was set, so no such WARN should fire, captured: {events:?}"
+    );
+}
+
+/// #293/#294: `warn_on_ignored_config_fields` warns about `nets` specifically when more than one
+/// network is declared (a `ReadReplicaMap` only ever tracks one) — the `local_config()`-based
+/// tests above all use exactly one net, which cannot distinguish "more than one" from "fewer than
+/// one", so this asserts the boundary directly on both sides.
+#[tokio::test(flavor = "current_thread")]
+async fn read_replica_warns_about_more_than_one_net_but_not_zero_or_one() {
+    keep_callsites_hot();
+
+    let nets_warning_fires = |config: Config, port: &str| {
+        let layer = CapturingLayer::default();
+        let events = layer.0.clone();
+        let subscriber = Registry::default().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let network = InMemoryNetwork::new();
+        let transport = std::sync::Arc::new(network.bind(port.parse().unwrap()));
+        let _replica = ReadReplicaMap::<String, String>::new_with_transport(config, transport);
+
+        let events = events.lock().unwrap();
+        events.iter().any(|(level, msg)| {
+            *level == Level::WARN
+                && msg.contains("ReadReplicaMap ignores these Config fields")
+                && msg.contains("nets")
+        })
+    };
+
+    let zero_nets = Config::default()
+        .with_port(next_test_port())
+        .with_listen_addr("127.0.0.1".parse().unwrap())
+        .with_insecure_no_key();
+    assert!(
+        !nets_warning_fires(zero_nets, "127.0.0.1:3"),
+        "zero declared networks should not warn about nets"
+    );
+
+    let two_nets = local_config().with_nets(&[
+        "127.0.0.1/8".parse().unwrap(),
+        "10.0.0.0/8".parse().unwrap(),
+    ]);
+    assert!(
+        nets_warning_fires(two_nets, "127.0.0.1:4"),
+        "more than one declared network should warn about nets"
+    );
 }

@@ -29,7 +29,7 @@ use crate::bounds::Key;
 use crate::clock::{NodeId, Timestamp};
 use crate::entry::Entry;
 use crate::persistence::Persistence;
-use crate::replicated_map::Config;
+use crate::replicated_map::{Config, ConfigError};
 use crate::{Discovery, ReplicatedMap};
 use rsos::Fingerprint;
 
@@ -219,8 +219,12 @@ impl<K: Key + Hash> ReplicatedSet<K> {
     }
 
     /// (runtime) Replace the declared networks. See [`ReplicatedMap::set_nets`].
-    pub fn set_nets(&self, nets: &[IpNet]) {
-        self.0.set_nets(nets);
+    ///
+    /// # Errors
+    ///
+    /// If `nets` exceeds `MAX_NETS`.
+    pub fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        self.0.set_nets(nets)
     }
 
     /// (runtime) Declare an additional network. See [`ReplicatedMap::add_net`].
@@ -285,7 +289,7 @@ mod replicated_set_tests {
 
     fn ephemeral_config() -> Config {
         Config {
-            port: 0,
+            port: crate::replica::next_ephemeral_test_port(),
             listen_addr: "127.0.0.1".parse().unwrap(),
             nets: [None; MAX_NETS],
             remote_interval: 6,
@@ -327,5 +331,28 @@ mod replicated_set_tests {
 
         set.remove_bulk(&[2, 3]);
         assert!(set.is_empty());
+    }
+
+    /// #293: `ReplicatedSet::set_nets` is a thin delegate to `ReplicatedMap::set_nets` — assert
+    /// the delegation actually happens (the `MAX_NETS` cap is enforced through it), not just that
+    /// calling it doesn't panic.
+    #[tokio::test]
+    async fn set_nets_enforces_max_nets_at_runtime() {
+        let set = ReplicatedSet::<i32>::new(ephemeral_config()).await.unwrap();
+
+        let within_cap: Vec<_> = (0..MAX_NETS)
+            .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+            .collect();
+        set.set_nets(&within_cap)
+            .expect("exactly MAX_NETS networks should be accepted");
+
+        let over_cap: Vec<_> = (0..=MAX_NETS)
+            .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+            .collect();
+        assert_eq!(
+            set.set_nets(&over_cap),
+            Err(crate::replicated_map::ConfigError::TooManyNets),
+            "MAX_NETS + 1 networks should be rejected"
+        );
     }
 }
