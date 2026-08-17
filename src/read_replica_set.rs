@@ -67,10 +67,10 @@ impl<K: Key> ReadReplicaSet<K> {
         self.0.net()
     }
 
-    /// Register a hook invoked before each inbound membership change. See
-    /// [`ReadReplicaMap::add_on_update`].
-    pub fn add_on_update<F: Send + Sync + Fn(&K, &State<()>) + 'static>(&self, on_update: F) {
-        self.0.add_on_update(on_update);
+    /// Set the hook invoked before each inbound membership change. See
+    /// [`ReadReplicaMap::set_on_update`].
+    pub fn set_on_update<F: Send + Sync + Fn(&K, &State<()>) + 'static>(&self, on_update: F) {
+        self.0.set_on_update(on_update);
     }
 
     /// Whether `key` is currently a member, as observed from the dated peer.

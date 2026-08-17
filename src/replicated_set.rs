@@ -114,13 +114,13 @@ impl<K: Key + Hash> ReplicatedSet<K> {
         ReplicatedSet(self.0.with_tombstone_timeout(tombstone_timeout))
     }
 
-    /// Register a pre-insert hook, invoked before each key reaches the set. See
-    /// [`ReplicatedMap::add_pre_insert`].
-    pub fn add_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, ()>) + 'static>(
+    /// Set the pre-insert hook, invoked before each key reaches the set. See
+    /// [`ReplicatedMap::set_pre_insert`].
+    pub fn set_pre_insert<F: Send + Sync + Fn(&K, &Entry<Timestamp, ()>) + 'static>(
         &self,
         pre_insert: F,
     ) {
-        self.0.add_pre_insert(pre_insert);
+        self.0.set_pre_insert(pre_insert);
     }
 
     /// Fingerprint of a key range. See [`ReplicatedMap::fingerprint`].
