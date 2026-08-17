@@ -33,7 +33,7 @@ use crate::clock::{Clock, HlcClock, NodeId, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::observability;
-use crate::replicated_map::{Config, MAX_NETS, MIN_BULK_SEND_RATE};
+use crate::replicated_map::{Config, ConfigError, MAX_NETS, MIN_BULK_SEND_RATE};
 use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
 use gossip::auth;
@@ -257,12 +257,33 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
+/// Reject `config.port == 0` (#293): gossip does no per-peer port discovery, so every outbound
+/// datagram to a peer is addressed to `config.port` literally. Port `0` binds an OS-assigned
+/// ephemeral port for receiving, but that assigned port is never read back into the value peers
+/// are addressed on — a node configured this way sends every peer datagram to port `0` and can
+/// never converge with anything. Shared by [`Replica::bind_udp`] and
+/// [`ReadReplicaMap::new`](crate::ReadReplicaMap::new), the two entry points that bind a real
+/// socket; the in-memory-transport constructors are unaffected since their caller chooses the
+/// port directly.
+pub(crate) fn check_port_is_nonzero(config: &Config) -> io::Result<()> {
+    if config.port == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config::port must be nonzero: gossip addresses every outbound datagram to this \
+             port, so 0 (\"OS picks one\") can never converge — see Config::port's docs and \
+             Config::new",
+        ));
+    }
+    Ok(())
+}
+
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Create an engine over the default [`UdpTransport`].
     ///
     /// # Errors
     ///
-    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -288,6 +309,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// The engine trusts `clock` completely, with no way to check it at the type level; see
     /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
     /// through) for the full risk writeup and a worked example.
+    ///
+    /// # Errors
+    ///
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -328,6 +354,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// Bind the default [`UdpTransport`] for `config` and log the bound address.
     async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+        check_port_is_nonzero(config)?;
         let transport = UdpTransport::bind(
             SocketAddr::new(config.listen_addr, config.port),
             config.recv_buffer_size,
@@ -508,13 +535,22 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
-    pub(crate) fn set_nets(&self, nets: &[IpNet]) {
+    ///
+    /// # Errors
+    ///
+    /// If `nets` exceeds [`MAX_NETS`] — the same cap [`Config::with_net`]/`try_with_net` enforce
+    /// at construction time and [`add_net`](Self::add_net) enforces at runtime (#293).
+    pub(crate) fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        if nets.len() > MAX_NETS {
+            return Err(ConfigError::TooManyNets);
+        }
         let nets = nets.to_vec();
         let local = derive_local_net(&nets, self.listen_addr);
         // local_net is always derived from nets; update it together so a reader never observes a
         // local net that is inconsistent with the freshly-installed nets for long.
         *self.local_net.write() = local;
         *self.nets.write() = nets;
+        Ok(())
     }
 
     /// (runtime) Declare an additional network. Idempotent; returns `false` (and logs) if the
@@ -1501,6 +1537,26 @@ impl Drop for BulkDumpCountGuard {
     fn drop(&mut self) {
         self.counter.fetch_sub(1, Ordering::Release);
     }
+}
+
+/// A fresh, real bindable port for a test that needs one but does not care which (#293:
+/// `Config::port` must be nonzero — gossip has no per-peer port discovery, so `0` can never
+/// converge — but many single-node/no-real-peer tests only used `0` for its other property, an
+/// OS-assigned port that never collides with a concurrently running test).
+///
+/// A process-local counter cannot reproduce that collision-freedom: `cargo nextest` runs every
+/// test in its own process, so a `static` counter starts fresh in each one, and two tests in
+/// different processes can compute the identical "next" port and race to bind it. Probing the OS
+/// for a genuinely free port instead — bind `:0`, read back what the kernel picked, drop the
+/// socket — is what `cargo test`'s thread model and `nextest`'s process model both leave free at
+/// the moment this returns.
+#[cfg(test)]
+pub(crate) fn next_ephemeral_test_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0")
+        .expect("OS should hand out an ephemeral port")
+        .local_addr()
+        .expect("a bound socket reports its own address")
+        .port()
 }
 
 #[cfg(test)]

@@ -109,6 +109,46 @@ impl<K, V> Clone for ReadReplicaMap<K, V> {
     }
 }
 
+/// #293/#294: `ReadReplicaMap` mints no timestamps and runs no bulk-transfer/cross-net-throttle
+/// machinery, so several `Config` fields that matter to a dated [`ReplicatedMap`] have no effect
+/// here. A non-default value silently doing nothing is exactly the trap #293 exists to close —
+/// warn once, at construction, rather than leave it silent.
+fn warn_on_ignored_config_fields(config: &Config) {
+    let default = Config::default();
+    let mut ignored = Vec::new();
+    if config.remote_interval != default.remote_interval {
+        ignored.push("remote_interval");
+    }
+    if config.remote_fanout != default.remote_fanout {
+        ignored.push("remote_fanout");
+    }
+    if config.node_id != default.node_id {
+        ignored.push("node_id");
+    }
+    if config.bulk_send_rate != default.bulk_send_rate {
+        ignored.push("bulk_send_rate");
+    }
+    if config.recv_buffer_size != default.recv_buffer_size {
+        ignored.push("recv_buffer_size");
+    }
+    if config.send_buffer_size != default.send_buffer_size {
+        ignored.push("send_buffer_size");
+    }
+    if config.max_concurrent_bulk_dumps != default.max_concurrent_bulk_dumps {
+        ignored.push("max_concurrent_bulk_dumps");
+    }
+    if config.nets.iter().flatten().count() > 1 {
+        ignored.push("nets (only the one matching listen_addr, or the first declared, is used)");
+    }
+    if !ignored.is_empty() {
+        warn!(
+            "ReadReplicaMap ignores these Config fields, set here to a non-default value: {}. \
+             See #293/#294.",
+            ignored.join(", ")
+        );
+    }
+}
+
 impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// Create a read replica bound to the configured UDP socket.
     ///
@@ -118,13 +158,15 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     ///
     /// # Errors
     ///
-    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
     /// If `config.cluster_key` is `None` without also setting
     /// [`Config::with_insecure_no_key`] — see #325.
     pub async fn new(config: Config) -> io::Result<Self> {
+        crate::replica::check_port_is_nonzero(&config)?;
         // The read replica keeps the OS default socket buffer sizes (`None`/`None`) rather than
         // reading `Config::recv_buffer_size`/`send_buffer_size`: it never bound a tuned socket, and
         // a port refactor is not the place to change how much kernel memory it claims.
@@ -168,6 +210,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// The fallible socket bind lives in [`new`](Self::new).
     fn build(config: Config, transport: Arc<dyn Transport<Addr = SocketAddr>>) -> Self {
         config.check_key_or_insecure_opt_in();
+        warn_on_ignored_config_fields(&config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
         if matches!(authenticator, auth::Authenticator::Disabled) {
             warn!(
@@ -584,8 +627,11 @@ mod tests {
     use crate::replicated_map::Config;
 
     fn ephemeral_config() -> Config {
-        // Port 0 (ephemeral) on the loopback default network.
-        Config::default().with_insecure_no_key()
+        // A fresh port per call (#293: Config::port must be nonzero) on the loopback default
+        // network.
+        Config::default()
+            .with_port(crate::replica::next_ephemeral_test_port())
+            .with_insecure_no_key()
     }
 
     /// `get` returns the live value, and absent keys are `None`.
