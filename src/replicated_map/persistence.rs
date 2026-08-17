@@ -85,7 +85,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// // A fresh store, pointed at that same backend, recovers the entry immediately -- loading
     /// // happens synchronously in `with_persistence` itself, not on the periodic save timer.
-    /// let store = ReplicatedMap::<String, i32>::new(Config::default().with_insecure_no_key())
+    /// let store = ReplicatedMap::<String, i32>::new(Config::new(8085).with_insecure_no_key())
     ///     .await?
     ///     .with_persistence(Arc::new(backend));
     /// assert_eq!(store.get_cloned(&"a".to_string()), Some(1));

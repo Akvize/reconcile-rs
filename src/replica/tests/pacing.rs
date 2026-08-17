@@ -100,6 +100,7 @@ async fn tiny_bulk_send_rate_is_clamped_to_the_floor() {
         let config = Config {
             bulk_send_rate,
             ..Config::default()
+                .with_port(crate::replica::tests::next_ephemeral_test_port())
                 .with_listen_addr(addr.parse().unwrap())
                 .with_insecure_no_key()
         };
