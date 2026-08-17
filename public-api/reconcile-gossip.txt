@@ -2,12 +2,13 @@ pub mod reconcile_gossip
 pub mod reconcile_gossip::auth
 pub enum reconcile_gossip::auth::Authenticator
 pub reconcile_gossip::auth::Authenticator::Disabled
-pub reconcile_gossip::auth::Authenticator::Enabled(reconcile_gossip::auth::ClusterKey)
+pub reconcile_gossip::auth::Authenticator::Enabled(reconcile_gossip::auth::Keys)
 impl reconcile_gossip::auth::Authenticator
 pub fn reconcile_gossip::auth::Authenticator::new(core::option::Option<reconcile_gossip::auth::ClusterKey>, bool) -> Self
 pub fn reconcile_gossip::auth::Authenticator::open<'a>(&self, &'a [u8]) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>>
 pub fn reconcile_gossip::auth::Authenticator::overhead(&self) -> usize
 pub fn reconcile_gossip::auth::Authenticator::seal(&self, reconcile_gossip::replay::Seq, reconcile_gossip::replay::Stamp, &[u8]) -> alloc::vec::Vec<u8>
+pub fn reconcile_gossip::auth::Authenticator::with_rotation(core::option::Option<reconcile_gossip::auth::Keys>, bool) -> Self
 impl core::clone::Clone for reconcile_gossip::auth::Authenticator
 pub fn reconcile_gossip::auth::Authenticator::clone(&self) -> reconcile_gossip::auth::Authenticator
 impl core::marker::Freeze for reconcile_gossip::auth::Authenticator
@@ -45,17 +46,6 @@ impl core::marker::Unpin for reconcile_gossip::auth::Authenticated
 impl core::marker::UnsafeUnpin for reconcile_gossip::auth::Authenticated
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Authenticated
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Authenticated
-pub struct reconcile_gossip::auth::Blake3Mac
-impl reconcile_gossip::auth::Mac for reconcile_gossip::auth::Blake3Mac
-pub fn reconcile_gossip::auth::Blake3Mac::tag(&reconcile_gossip::auth::ClusterKey, &[u8]) -> reconcile_gossip::auth::Tag
-pub fn reconcile_gossip::auth::Blake3Mac::verify(&reconcile_gossip::auth::ClusterKey, &[u8], &[u8]) -> bool
-impl core::marker::Freeze for reconcile_gossip::auth::Blake3Mac
-impl core::marker::Send for reconcile_gossip::auth::Blake3Mac
-impl core::marker::Sync for reconcile_gossip::auth::Blake3Mac
-impl core::marker::Unpin for reconcile_gossip::auth::Blake3Mac
-impl core::marker::UnsafeUnpin for reconcile_gossip::auth::Blake3Mac
-impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Blake3Mac
-impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Blake3Mac
 pub struct reconcile_gossip::auth::ClusterKey(_)
 impl reconcile_gossip::auth::ClusterKey
 pub fn reconcile_gossip::auth::ClusterKey::from_hex(&str) -> core::result::Result<Self, reconcile_gossip::auth::ClusterKeyError>
@@ -74,6 +64,20 @@ impl core::marker::Unpin for reconcile_gossip::auth::ClusterKey
 impl core::marker::UnsafeUnpin for reconcile_gossip::auth::ClusterKey
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::ClusterKey
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::ClusterKey
+pub struct reconcile_gossip::auth::Keys
+pub reconcile_gossip::auth::Keys::also_accept: alloc::vec::Vec<reconcile_gossip::auth::ClusterKey>
+pub reconcile_gossip::auth::Keys::primary: reconcile_gossip::auth::ClusterKey
+impl reconcile_gossip::auth::Keys
+pub fn reconcile_gossip::auth::Keys::single(reconcile_gossip::auth::ClusterKey) -> reconcile_gossip::auth::Keys
+impl core::clone::Clone for reconcile_gossip::auth::Keys
+pub fn reconcile_gossip::auth::Keys::clone(&self) -> reconcile_gossip::auth::Keys
+impl core::marker::Freeze for reconcile_gossip::auth::Keys
+impl core::marker::Send for reconcile_gossip::auth::Keys
+impl core::marker::Sync for reconcile_gossip::auth::Keys
+impl core::marker::Unpin for reconcile_gossip::auth::Keys
+impl core::marker::UnsafeUnpin for reconcile_gossip::auth::Keys
+impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Keys
+impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Keys
 pub struct reconcile_gossip::auth::Payload<'a, State>
 pub reconcile_gossip::auth::Payload::seq: reconcile_gossip::replay::Seq
 pub reconcile_gossip::auth::Payload::stamp: reconcile_gossip::replay::Stamp
@@ -89,14 +93,6 @@ impl<'a, State> core::marker::Unpin for reconcile_gossip::auth::Payload<'a, Stat
 impl<'a, State> core::marker::UnsafeUnpin for reconcile_gossip::auth::Payload<'a, State>
 impl<'a, State> core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Payload<'a, State> where State: core::panic::unwind_safe::RefUnwindSafe
 impl<'a, State> core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Payload<'a, State> where State: core::panic::unwind_safe::UnwindSafe
-pub struct reconcile_gossip::auth::Tag(_)
-impl core::marker::Freeze for reconcile_gossip::auth::Tag
-impl core::marker::Send for reconcile_gossip::auth::Tag
-impl core::marker::Sync for reconcile_gossip::auth::Tag
-impl core::marker::Unpin for reconcile_gossip::auth::Tag
-impl core::marker::UnsafeUnpin for reconcile_gossip::auth::Tag
-impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Tag
-impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Tag
 pub struct reconcile_gossip::auth::Verified
 impl core::marker::Freeze for reconcile_gossip::auth::Verified
 impl core::marker::Send for reconcile_gossip::auth::Verified
@@ -109,13 +105,6 @@ pub const reconcile_gossip::auth::KEY_LEN: usize
 pub const reconcile_gossip::auth::TAG_LEN: usize
 pub const reconcile_gossip::auth::VERSION_LEN: usize
 pub const reconcile_gossip::auth::WIRE_VERSION: u8
-pub trait reconcile_gossip::auth::Mac
-pub fn reconcile_gossip::auth::Mac::tag(&reconcile_gossip::auth::ClusterKey, &[u8]) -> reconcile_gossip::auth::Tag
-pub fn reconcile_gossip::auth::Mac::verify(&reconcile_gossip::auth::ClusterKey, &[u8], &[u8]) -> bool
-impl reconcile_gossip::auth::Mac for reconcile_gossip::auth::Blake3Mac
-pub fn reconcile_gossip::auth::Blake3Mac::tag(&reconcile_gossip::auth::ClusterKey, &[u8]) -> reconcile_gossip::auth::Tag
-pub fn reconcile_gossip::auth::Blake3Mac::verify(&reconcile_gossip::auth::ClusterKey, &[u8], &[u8]) -> bool
-pub type reconcile_gossip::auth::ClusterMac = reconcile_gossip::auth::Blake3Mac
 pub mod reconcile_gossip::bincode
 pub fn reconcile_gossip::bincode::decode_stream<T: serde::de::DeserializeOwned>(&[u8], usize) -> bincode::error::Result<alloc::vec::Vec<T>>
 pub fn reconcile_gossip::bincode::encode<T: serde::ser::Serialize>(&T, &mut alloc::vec::Vec<u8>) -> bincode::error::Result<()>
