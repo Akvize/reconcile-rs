@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Arms A and B of #355 — a *measured* (not merely predicted) false-convergence rate for each of
+//! Arms A and B of [#355] — a *measured* (not merely predicted) false-convergence rate for each of
 //! the two layers `wagner_false_convergence.rs`'s module docs and
 //! `pure_deletion_is_never_falsely_skipped.rs` separate: L1 (aggregate collision, width `w`) and L2
 //! (comparison-map collision, only nonzero for a hypothetical truncating map — `f_p = id`, the
@@ -16,12 +16,12 @@
 //!
 //! | | swept over | why it stops there |
 //! |---|---|---|
-//! | Arm A rate (L1) | `w ∈ {16, 24}` | `w = 32` needs ≈`4·10⁹` lift evals for one event (#355's cost formula) — a cluster job |
+//! | Arm A rate (L1) | `w ∈ {16, 24}` | `w = 32` needs ≈`4·10⁹` lift evals for one event ([#355]'s cost formula) — a cluster job |
 //! | Arm B rate (L2) | `τ ∈ {16, 24}`, real unreduced `w = 256` | same formula, `τ = 32` |
 //! | `n`-scaling discriminator | `n ∈ {20, 200, 2 000}` at the shipped width/`τ` of 16 | the issue's `{10⁴,10⁶,10⁸}` scales the *content size of every trial*, not just the trial count — a `10⁸`-element store is cluster-scale on its own, independent of how many trials sample it |
 //!
 //! `w = 32`, `τ = 32`, and the issue's literal `n` values remain open — this module narrows scope,
-//! it does not close #355.
+//! it does not close [#355].
 //!
 //! **The `n`-scaling sweep here is necessarily inconclusive on the one thing it is meant to
 //! discriminate.** Both arms measure a *single* top-level comparison, so `n` only changes what one
@@ -63,6 +63,8 @@
 //! wide interval, and gating a security-relevant measurement on a noisy count would make this module
 //! flaky rather than informative. Run with:
 //! `cargo test --release -p rbsr --test aggregate_and_truncation_collision_rates -- --ignored --nocapture`
+//!
+//! [#355]: https://github.com/Akvize/reconcile-rs/issues/355
 
 #![forbid(unsafe_code)]
 
