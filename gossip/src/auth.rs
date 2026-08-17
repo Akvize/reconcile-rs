@@ -174,7 +174,9 @@ impl fmt::Display for ClusterKeyError {
 impl std::error::Error for ClusterKeyError {}
 
 /// A MAC tag. Can only be produced by a [`Mac`] backend.
-pub struct Tag([u8; TAG_LEN]);
+///
+/// Crate-private, along with [`Mac`] itself — see [`Mac`]'s docs for why (#285).
+pub(crate) struct Tag([u8; TAG_LEN]);
 
 impl Tag {
     fn as_bytes(&self) -> &[u8; TAG_LEN] {
@@ -286,7 +288,13 @@ fn decode_replay_header(data: &[u8]) -> Option<(Seq, Stamp, &[u8])> {
 }
 
 /// The keyed MAC primitive: one backend per `mac-*` feature, aliased as [`ClusterMac`].
-pub trait Mac {
+///
+/// Crate-private (#285): `Tag`'s field and `ClusterKey`'s bytes are both unreachable outside this
+/// crate, so an external implementation could only ever be `todo!()` — a trait that looks
+/// implementable and is not is worse than one that is honestly closed. Third-party MAC backends
+/// are not a supported extension point; open this (and `Tag`/`ClusterKey::as_bytes`) deliberately,
+/// with a compiling external example, if that changes.
+pub(crate) trait Mac {
     /// Compute the authentication tag of `message` under `key`.
     fn tag(key: &ClusterKey, message: &[u8]) -> Tag;
 
@@ -298,7 +306,7 @@ pub trait Mac {
 
 /// [`Mac`] backend keyed on BLAKE3, the default (`mac-blake3` feature).
 #[cfg(feature = "mac-blake3")]
-pub struct Blake3Mac;
+pub(crate) struct Blake3Mac;
 
 #[cfg(feature = "mac-blake3")]
 impl Mac for Blake3Mac {
@@ -317,7 +325,7 @@ impl Mac for Blake3Mac {
 
 /// [`Mac`] backend keyed on HMAC-SHA256 (`mac-hmac` feature).
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
-pub struct HmacSha256Mac;
+pub(crate) struct HmacSha256Mac;
 
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
 impl Mac for HmacSha256Mac {
@@ -343,10 +351,38 @@ impl Mac for HmacSha256Mac {
 // `mac-blake3` wins when both are enabled, so `--all-features` still compiles.
 /// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(feature = "mac-blake3")]
-pub type ClusterMac = Blake3Mac;
+pub(crate) type ClusterMac = Blake3Mac;
 /// The [`Mac`] backend selected at compile time by the `mac-*` Cargo features.
 #[cfg(all(feature = "mac-hmac", not(feature = "mac-blake3")))]
-pub type ClusterMac = HmacSha256Mac;
+pub(crate) type ClusterMac = HmacSha256Mac;
+
+/// A [`ClusterKey`] this node seals outgoing datagrams with, plus zero or more additional keys it
+/// still accepts on the verify path (#285) — the shape a rotation needs: roll out `also_accept:
+/// [old_key]` cluster-wide, then once every peer has it, roll `primary` to the new key with the
+/// old one demoted to `also_accept`, then finally drop it once every peer is on the new primary.
+#[derive(Clone)]
+pub struct Keys {
+    /// The key `seal` always uses.
+    pub primary: ClusterKey,
+    /// Additional keys `open` accepts, tried in order after `primary` fails. Empty outside a
+    /// rotation.
+    pub also_accept: Vec<ClusterKey>,
+}
+
+impl Keys {
+    /// A single key, accepting nothing else — the common, non-rotating case.
+    pub fn single(key: ClusterKey) -> Keys {
+        Keys {
+            primary: key,
+            also_accept: Vec::new(),
+        }
+    }
+
+    /// `primary`, then each `also_accept` key in order.
+    fn iter(&self) -> impl Iterator<Item = &ClusterKey> {
+        std::iter::once(&self.primary).chain(self.also_accept.iter())
+    }
+}
 
 /// Authentication policy and datagram framing for one node: the sole producer of [`Payload`].
 #[derive(Clone)]
@@ -354,26 +390,38 @@ pub enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
     Disabled,
     /// A cluster key is configured: datagrams are MAC-sealed and verified (plaintext payload).
-    Enabled(ClusterKey),
+    Enabled(Keys),
     /// A cluster key is configured and the `encryption` feature is active: datagrams are
     /// authenticated *and* encrypted with XChaCha20-Poly1305 over the cluster key.
     #[cfg(feature = "encryption")]
-    Encrypted(ClusterKey),
+    Encrypted(Keys),
 }
 
 impl Authenticator {
-    /// Build an authenticator from an optional cluster key and whether to encrypt.
+    /// Build an authenticator from an optional cluster key and whether to encrypt. No rotation:
+    /// see [`with_rotation`](Self::with_rotation) to also accept prior keys on the verify path.
     ///
     /// # Panics
     ///
     /// If `encrypt` is `true` and the crate was built without the `encryption` feature — a loud
     /// failure rather than a silent downgrade.
     pub fn new(key: Option<ClusterKey>, encrypt: bool) -> Self {
-        match (key, encrypt) {
+        Self::with_rotation(key.map(Keys::single), encrypt)
+    }
+
+    /// Build an authenticator from an optional [`Keys`] (a primary key to seal with, plus
+    /// prior keys still accepted on the verify path — #285/#137) and whether to encrypt.
+    ///
+    /// # Panics
+    ///
+    /// If `encrypt` is `true` and the crate was built without the `encryption` feature — a loud
+    /// failure rather than a silent downgrade.
+    pub fn with_rotation(keys: Option<Keys>, encrypt: bool) -> Self {
+        match (keys, encrypt) {
             (None, _) => Authenticator::Disabled,
-            (Some(key), false) => Authenticator::Enabled(key),
+            (Some(keys), false) => Authenticator::Enabled(keys),
             #[cfg(feature = "encryption")]
-            (Some(key), true) => Authenticator::Encrypted(key),
+            (Some(keys), true) => Authenticator::Encrypted(keys),
             #[cfg(not(feature = "encryption"))]
             (Some(_), true) => panic!(
                 "reconcile: encryption requested but the crate was built without the \
@@ -396,7 +444,8 @@ impl Authenticator {
     }
 
     /// Frame an outgoing datagram: inject the wire-version byte (every mode) and, when
-    /// enabled, the replay header.
+    /// enabled, the replay header. Always seals with [`Keys::primary`], never an `also_accept`
+    /// key — a rotation moves senders once every peer's verify path already accepts the new key.
     pub fn seal(&self, seq: Seq, stamp: Stamp, payload: &[u8]) -> Vec<u8> {
         match self {
             Authenticator::Disabled => {
@@ -405,33 +454,37 @@ impl Authenticator {
                 framed.extend_from_slice(payload);
                 framed
             }
-            Authenticator::Enabled(key) => {
+            Authenticator::Enabled(keys) => {
                 let header = encode_replay_header(seq, stamp);
                 let mut protected =
                     Vec::with_capacity(REPLAY_HEADER_LEN + VERSION_LEN + payload.len());
                 protected.extend_from_slice(&header);
                 protected.push(WIRE_VERSION);
                 protected.extend_from_slice(payload);
-                let tag = ClusterMac::tag(key, &protected);
+                let tag = ClusterMac::tag(&keys.primary, &protected);
                 let mut framed = Vec::with_capacity(TAG_LEN + protected.len());
                 framed.extend_from_slice(tag.as_bytes());
                 framed.extend_from_slice(&protected);
                 framed
             }
             #[cfg(feature = "encryption")]
-            Authenticator::Encrypted(key) => {
+            Authenticator::Encrypted(keys) => {
                 let header = encode_replay_header(seq, stamp);
                 let mut plaintext =
                     Vec::with_capacity(REPLAY_HEADER_LEN + VERSION_LEN + payload.len());
                 plaintext.extend_from_slice(&header);
                 plaintext.push(WIRE_VERSION);
                 plaintext.extend_from_slice(payload);
-                encryption::seal(key, &plaintext)
+                encryption::seal(&keys.primary, &plaintext)
             }
         }
     }
 
     /// Authenticate (and in encrypted mode decrypt) an incoming datagram.
+    ///
+    /// Tries [`Keys::primary`] then each `also_accept` key in order, so a mid-rotation cluster —
+    /// some peers still sealing with the outgoing key — keeps verifying until every sender has
+    /// moved (#137).
     ///
     /// Produces [`Authenticated`], never [`Verified`]: the caller must still
     /// [`Payload::check_version`] then [`Payload::verify_replay`]. `None` on any authentication
@@ -445,12 +498,15 @@ impl Authenticator {
                 stamp: Stamp::NONE,
                 _state: PhantomData,
             }),
-            Authenticator::Enabled(key) => {
+            Authenticator::Enabled(keys) => {
                 if datagram.len() < TAG_LEN + REPLAY_HEADER_LEN {
                     return None;
                 }
                 let (tag, protected) = datagram.split_at(TAG_LEN);
-                if !ClusterMac::verify(key, protected, tag) {
+                if !keys
+                    .iter()
+                    .any(|key| ClusterMac::verify(key, protected, tag))
+                {
                     return None;
                 }
                 let (seq, stamp, messages) = decode_replay_header(protected)?;
@@ -462,8 +518,10 @@ impl Authenticator {
                 })
             }
             #[cfg(feature = "encryption")]
-            Authenticator::Encrypted(key) => {
-                let plaintext = encryption::open(key, datagram)?;
+            Authenticator::Encrypted(keys) => {
+                let plaintext = keys
+                    .iter()
+                    .find_map(|key| encryption::open(key, datagram))?;
                 let (seq, stamp, messages) = decode_replay_header(&plaintext)?;
                 Some(Payload {
                     bytes: Cow::Owned(messages.to_vec()),
@@ -580,6 +638,53 @@ mod tests {
         assert_eq!(p.as_bytes(), payload);
         assert_eq!(p.seq, Seq::new(1));
         assert_eq!(p.stamp, Stamp::new(12345));
+    }
+
+    /// #285/#137's rollout: a receiver mid-rotation (`primary` = new key, `also_accept` = [old
+    /// key]) still verifies a sender that has not yet moved off the old key, and still seals with
+    /// the new one. Once `also_accept` is empty again, the old key is rejected.
+    #[test]
+    fn also_accept_verifies_a_sender_still_on_the_old_key() {
+        let old_key = key(0x11);
+        let new_key = key(0x22);
+
+        let old_sender = Authenticator::new(Some(old_key.clone()), false);
+        let rotating_receiver = Authenticator::with_rotation(
+            Some(Keys {
+                primary: new_key.clone(),
+                also_accept: vec![old_key.clone()],
+            }),
+            false,
+        );
+
+        let payload = b"mid-rotation message";
+        let sealed_with_old_key = old_sender.seal(Seq::new(1), Stamp::new(1), payload);
+        let p = verify(
+            rotating_receiver
+                .open(&sealed_with_old_key)
+                .expect("also_accept must still verify the old key"),
+        );
+        assert_eq!(p.as_bytes(), payload);
+
+        // The receiver still seals with `primary`, the new key, not an `also_accept` one.
+        let sealed_by_receiver = rotating_receiver.seal(Seq::new(2), Stamp::new(2), payload);
+        assert!(
+            !ClusterMac::verify(
+                &old_key,
+                &sealed_by_receiver[TAG_LEN..],
+                &sealed_by_receiver[..TAG_LEN]
+            ),
+            "seal() must never use an also_accept key"
+        );
+        assert!(ClusterMac::verify(
+            &new_key,
+            &sealed_by_receiver[TAG_LEN..],
+            &sealed_by_receiver[..TAG_LEN]
+        ));
+
+        // Rotation complete: the old key is no longer accepted.
+        let settled_receiver = Authenticator::new(Some(new_key), false);
+        assert!(settled_receiver.open(&sealed_with_old_key).is_none());
     }
 
     #[test]
@@ -766,6 +871,32 @@ mod tests {
             assert_eq!(p.seq, Seq::new(77));
             assert_eq!(p.stamp, Stamp::new(888888));
             assert_eq!(p.as_bytes(), b"data");
+        }
+
+        /// As `also_accept_verifies_a_sender_still_on_the_old_key`, over the encrypted path
+        /// (#285/#137).
+        #[test]
+        fn also_accept_decrypts_a_sender_still_on_the_old_key() {
+            let old_key = key(0x11);
+            let new_key = key(0x22);
+
+            let old_sender = Authenticator::new(Some(old_key.clone()), true);
+            let rotating_receiver = Authenticator::with_rotation(
+                Some(Keys {
+                    primary: new_key,
+                    also_accept: vec![old_key],
+                }),
+                true,
+            );
+
+            let payload = b"mid-rotation encrypted message";
+            let sealed = old_sender.seal(Seq::new(1), Stamp::new(1), payload);
+            let p = verify(
+                rotating_receiver
+                    .open(&sealed)
+                    .expect("also_accept must still decrypt under the old key"),
+            );
+            assert_eq!(p.as_bytes(), payload);
         }
     }
 }
