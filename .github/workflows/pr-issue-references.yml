@@ -35,12 +35,17 @@ jobs:
   # PR description to say which issues it closes, so nothing caught the mismatch. This job:
   # every *open* issue mentioned bare in this PR's own body must state its intent, either
   # `Closes #N` (closes it at merge time, via GitHub's own keyword parsing) or an explicit
-  # non-closing lead-in (`relates to #N`, `see #N`, ...). See `scripts/check-pr-closes-issues.sh`.
+  # non-closing lead-in (`relates to #N`, `see #N`, ...).
+  #
+  # And the converse: an open issue this PR *closes* must have nothing left unticked in it. That
+  # is `check-issue-triage.sh`'s rule 7 asked before the close instead of after, of the person who
+  # has the context instead of whoever inherits the weekly run. See
+  # `scripts/check-pr-closes-issues.sh`, whose header carries the measurement behind it.
   pr-issue-references:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Every open issue mentioned in this PR's body must state its intent
+    - name: State the intent for every issue named, and settle every issue closed
       env:
         GH_TOKEN: ${{ github.token }}
         # An env var, not `${{ github.event.pull_request.body }}` interpolated straight into

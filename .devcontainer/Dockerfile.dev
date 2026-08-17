@@ -28,6 +28,11 @@ RUN npm install -g dockerfile-language-server-nodejs markdownlint-cli bash-langu
 
 RUN cargo install taplo-cli --locked --features lsp
 
+# AGENTS.md §3's last gate line, `cargo deny check`. Every other line on that list is plain `cargo`,
+# which is why this is the only one that needs installing. Unpinned to match CI, which resolves its
+# own version inside `EmbarkStudios/cargo-deny-action@v2` rather than at a fixed one.
+RUN cargo install cargo-deny --locked
+
 RUN curl -L \
      https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux \
      -o /usr/local/bin/marksman \
