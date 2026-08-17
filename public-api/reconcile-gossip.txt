@@ -1,4 +1,9 @@
 pub mod reconcile_gossip
+pub use reconcile_gossip::async_trait
+pub use reconcile_gossip::ipnet
+pub use reconcile_gossip::parking_lot
+pub use reconcile_gossip::rand
+pub use reconcile_gossip::tokio
 pub mod reconcile_gossip::auth
 pub enum reconcile_gossip::auth::Authenticator
 pub reconcile_gossip::auth::Authenticator::Disabled
@@ -106,8 +111,36 @@ pub const reconcile_gossip::auth::TAG_LEN: usize
 pub const reconcile_gossip::auth::VERSION_LEN: usize
 pub const reconcile_gossip::auth::WIRE_VERSION: u8
 pub mod reconcile_gossip::bincode
-pub fn reconcile_gossip::bincode::decode_stream<T: serde::de::DeserializeOwned>(&[u8], usize) -> bincode::error::Result<alloc::vec::Vec<T>>
-pub fn reconcile_gossip::bincode::encode<T: serde::ser::Serialize>(&T, &mut alloc::vec::Vec<u8>) -> bincode::error::Result<()>
+pub struct reconcile_gossip::bincode::DecodeError(_)
+impl core::error::Error for reconcile_gossip::bincode::DecodeError
+pub fn reconcile_gossip::bincode::DecodeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for reconcile_gossip::bincode::DecodeError
+pub fn reconcile_gossip::bincode::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for reconcile_gossip::bincode::DecodeError
+pub fn reconcile_gossip::bincode::DecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for reconcile_gossip::bincode::DecodeError
+impl core::marker::Send for reconcile_gossip::bincode::DecodeError
+impl core::marker::Sync for reconcile_gossip::bincode::DecodeError
+impl core::marker::Unpin for reconcile_gossip::bincode::DecodeError
+impl core::marker::UnsafeUnpin for reconcile_gossip::bincode::DecodeError
+impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::bincode::DecodeError
+impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::bincode::DecodeError
+pub struct reconcile_gossip::bincode::EncodeError(_)
+impl core::error::Error for reconcile_gossip::bincode::EncodeError
+pub fn reconcile_gossip::bincode::EncodeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for reconcile_gossip::bincode::EncodeError
+pub fn reconcile_gossip::bincode::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for reconcile_gossip::bincode::EncodeError
+pub fn reconcile_gossip::bincode::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for reconcile_gossip::bincode::EncodeError
+impl core::marker::Send for reconcile_gossip::bincode::EncodeError
+impl core::marker::Sync for reconcile_gossip::bincode::EncodeError
+impl core::marker::Unpin for reconcile_gossip::bincode::EncodeError
+impl core::marker::UnsafeUnpin for reconcile_gossip::bincode::EncodeError
+impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::bincode::EncodeError
+impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::bincode::EncodeError
+pub fn reconcile_gossip::bincode::decode_stream<T: serde::de::DeserializeOwned>(&[u8], usize) -> core::result::Result<alloc::vec::Vec<T>, reconcile_gossip::bincode::DecodeError>
+pub fn reconcile_gossip::bincode::encode<T: serde::ser::Serialize>(&T, &mut alloc::vec::Vec<u8>) -> core::result::Result<(), reconcile_gossip::bincode::EncodeError>
 pub mod reconcile_gossip::discovery
 pub enum reconcile_gossip::discovery::DiscoveryKind
 pub reconcile_gossip::discovery::DiscoveryKind::Authoritative
