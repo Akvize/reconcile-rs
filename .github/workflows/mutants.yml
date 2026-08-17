@@ -15,6 +15,11 @@ env:
   # Hermeticity: proptest picks a random seed per run unless pinned, which makes
   # mutation outcomes non-deterministic. See scripts/check-mutation-gate.sh.
   PROPTEST_RNG_SEED: "20260817"
+  # #330: `reconcile_internal_testing` gates the `reconcile::testing`/test-only seams
+  # (`just_insert`/`just_remove`/...) via a `--cfg`, not a Cargo feature, so mutants.toml's
+  # `all_features = true` alone can no longer reach them — every integration test in tests/
+  # that calls one needs this set, the same way main.yml sets it globally (AGENTS.md §6).
+  RUSTFLAGS: --cfg reconcile_internal_testing
 
 jobs:
   # Same rationale as main.yml's `changes` job: a doc-only or workflow-only PR

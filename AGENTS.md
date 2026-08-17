@@ -34,20 +34,20 @@ ln -sf ../../pre-push .git/hooks/pre-push
 In CI's order (`.github/workflows/main.yml`):
 
 ```bash
-export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint
-                                                             # is a warning locally and an error
-                                                             # in CI — run the list as CI runs it
+export RUSTFLAGS='-Dwarnings --cfg reconcile_internal_testing' RUSTDOCFLAGS=-Dwarnings  # what CI
+                                                    # sets (§6: the cfg); without it a lint is a
+                                                    # warning locally and an error in CI
 cargo fmt --check
 ./scripts/check-doc-budget.sh                                # AGENTS.md + CLAUDE.md ≤ 200 lines
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
 ./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
-cargo clippy --workspace --features internal-testing --all-targets
+cargo clippy --workspace --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
-cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
+cargo nextest run --workspace --retries 4 --flaky-result fail
 cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
-cargo test --doc --workspace --features internal-testing  # nextest doesn't run doctests
-cargo bench --no-run --features internal-testing              # benches must compile
+cargo test --doc --workspace  # nextest doesn't run doctests
+cargo bench --no-run                                          # benches must compile
 cargo doc --workspace                                         # both matter: an intra-doc link to a
 cargo doc --workspace --all-features                          # feature-gated item dangles in only one
 cargo package --workspace --allow-dirty                       # release packaging, §11
@@ -62,7 +62,7 @@ whose budget it fits, and if it fits none of them it is CI-only by design:
 | tier | what runs | cost |
 |---|---|---|
 | [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the three `./scripts/check-doc-*.sh`/`check-domain-purity.sh` gates above | 0.4 s |
-| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s |
+| [`./pre-push`](./pre-push) | the two `cargo test`/`clippy` lines above, `clippy` first | ~20 s |
 | [`main.yml`](./.github/workflows/main.yml) | everything above | minutes |
 
 So a commit may be lint-dirty and a push should not be: `git commit` is a save point, `git push` a
@@ -89,20 +89,19 @@ Worked examples and the reasoning behind them: [`ARCHITECTURE.md`](./ARCHITECTUR
   it onto any new crate root.
 - `cargo fmt` and `cargo clippy --deny warnings` (§3) are gated, not suggestions.
 - §4's strong-typing convention is not yet mechanically gated — hold the line in review.
-- `internal-testing`-gated `crate::testing` is test-only, never reachable from non-test code.
+- `reconcile_internal_testing`-gated `crate::testing` is test-only, unreachable from non-test code or a dependent's manifest (§6).
 
 ## 6. Feature flags
 
 `mac-blake3` (default) vs `mac-hmac` — exactly one wins, build fails if neither. `zeroize`,
-`encryption`, `metrics`, `metrics-prometheus`, `dns-hickory` are opt-in. `internal-testing` exposes
-test-only seams (`reconcile::testing`, `rbsr::RangeAggregate::for_testing`) — not public API.
+`encryption`, `metrics`, `metrics-prometheus`, `dns-hickory` are opt-in Cargo features.
+`reconcile_internal_testing` gates the test-only `reconcile::testing`/`rbsr::RangeAggregate::for_testing` seams (not public API) via a `--cfg`, not a feature (#330) — settable only via `RUSTFLAGS` (§3), never a dependent's manifest; each crate's `[lints.rust.unexpected_cfgs] check-cfg` registers the name for `-D warnings`.
 
 `mac-blake3`/`mac-hmac`/`zeroize`/`encryption`/`dns-hickory` are declared on `gossip` (owns
 `auth.rs`/`discovery.rs`) and re-exposed from `reconcile` as unification entries
 (`mac-blake3 = ["gossip/mac-blake3"]`); `metrics`/`metrics-prometheus` stay on `reconcile`
-(`observability.rs`/`prometheus.rs`); `internal-testing` is declared on both `reconcile` and `rbsr`,
-forwarded the same way. `reconcile` depends on `gossip` with `default-features = false`, so its own
-`default = ["mac-blake3"]` is the single place the MAC backend gets chosen.
+(`observability.rs`/`prometheus.rs`). `reconcile` depends on `gossip` with `default-features =
+false`, so its own `default = ["mac-blake3"]` is the single place the MAC backend gets chosen.
 
 Touching feature-gated code: run **both** clippy/test variants (§3) — CI gates them separately
 because feature interactions hide bugs.

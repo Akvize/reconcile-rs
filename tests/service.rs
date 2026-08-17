@@ -873,7 +873,7 @@ async fn runtime_config_setters() {
 
 /// A legitimately-sealed datagram stamped an hour in the past — well outside the default
 /// freshness window — must be dropped silently, leaving the engine running.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_datagram_outside_freshness_window_is_rejected() {
     use reconcile::testing::seal_datagram;
@@ -934,7 +934,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
 
 /// Redelivering identical sealed bytes must be dropped silently: the sequence number is already
 /// recorded in the per-peer replay filter.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn replayed_sealed_datagram_is_rejected() {
     use reconcile::testing::seal_datagram;
@@ -996,7 +996,7 @@ async fn replayed_sealed_datagram_is_rejected() {
 /// must not re-add the peer to membership (AGENTS.md §8).
 ///
 /// Evicting the peer's replay state would make the replay read as first contact.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[tokio::test(flavor = "multi_thread")]
 async fn decommissioned_peer_replay_is_rejected() {
     use reconcile::testing::{members_snapshot, seal_datagram};
