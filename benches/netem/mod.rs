@@ -7,7 +7,7 @@
 // except according to those terms.
 
 //! A seeded network-emulation decorator over the [`Transport`] port: injected one-way delay,
-//! jitter, loss and reordering, configurable per directed link ([#280]).
+//! jitter, loss and reordering, configurable per directed link.
 //!
 //! Every other benchmark in this repository runs at RTT ≈ 0, which prices the axis RBSR is good at
 //! (bytes) and zeroes the axis it is worst at (`SOTA.md` §1.3: sequential round-trips). This module
@@ -15,7 +15,8 @@
 //!
 //! # Why not `turmoil`
 //!
-//! [#280] asks for `turmoil` to be evaluated first. It is the right tool for a different job:
+//! Whether `turmoil` fits was the natural question before building this. It is the right tool for
+//! a different job:
 //!
 //! | `turmoil` ([tokio-rs/turmoil]) | what that costs here |
 //! |---|---|
@@ -49,7 +50,6 @@
 //! on a multi-threaded runtime — record the seed (the benchmarks print it) and read the results as
 //! reproducible to within the usual benchmark noise.
 //!
-//! [#280]: https://github.com/Akvize/reconcile-rs/issues/280
 //! [tokio-rs/turmoil]: https://github.com/tokio-rs/turmoil
 
 // This module has two including targets — `benches/system.rs` and `tests/netem.rs` — and each

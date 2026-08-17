@@ -53,3 +53,12 @@ jobs:
         # text). The script only ever reads $PR_BODY, never evaluates it.
         PR_BODY: ${{ github.event.pull_request.body }}
       run: ./scripts/check-pr-closes-issues.sh
+    # The converse race: an issue this PR closes must not still be cited from rustdoc anywhere in
+    # the tree, or main breaks the instant the merge flips that issue to CLOSED --
+    # `check-closed-issue-rustdoc-refs.sh` (issue-integrity.yml) would not catch it until its next
+    # scheduled run. No GH_TOKEN: this step never calls `gh`, only reads $PR_BODY and the checked-
+    # out tree, same non-interpolation reason as the step above.
+    - name: An issue this PR closes must not still be cited from rustdoc
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: ./scripts/check-pr-closing-issue-rustdoc-refs.sh

@@ -12,15 +12,13 @@
 //! node count grows, convergence under injected RTT and loss, and durable-snapshot reload). Unlike
 //! the `bench` target, these reach no crate internals, so they need no feature gate.
 //!
-//! The `*_rtt` lanes are the answer to [#280]: every other benchmark here runs at RTT ≈ 0, which
-//! prices bytes and zeroes round-trips — the axis RBSR is worst on. They run over the seeded
+//! The `*_rtt` lanes answer the round-trip question: every other benchmark here runs at RTT ≈ 0,
+//! which prices bytes and zeroes round-trips — the axis RBSR is worst on. They run over the seeded
 //! delay/loss decorator in `benches/netem/mod.rs`, whose module docs carry the model and the
 //! `turmoil` evaluation.
 //!
 //! Reproduction and interpretation are documented in `benches/README.md`. Not run in CI (only
 //! compile-checked); run locally with `cargo bench --bench system`.
-//!
-//! [#280]: https://github.com/Akvize/reconcile-rs/issues/280
 
 use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;

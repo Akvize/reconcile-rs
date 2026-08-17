@@ -21,7 +21,7 @@
 //! `BoundedInstant`, `ARCHITECTURE.md` §5 invariant 6).
 //!
 //! [`Clock`] is a public, injectable port (`reconcile::Replica::new_with_clock`,
-//! `reconcile::ReplicatedMap::new_with_clock`, `#288`): nothing about it is enforced by the type
+//! `reconcile::ReplicatedMap::new_with_clock`): nothing about it is enforced by the type
 //! system beyond the method signatures, so a monotonicity bug in a third-party adapter compiles
 //! clean and fails only at runtime, silently, as writes that never converge. [`assert_conformance`]
 //! is the gate — run it over any [`Clock`] before trusting it, including [`Clock::observe_trusted`],
@@ -358,7 +358,7 @@ pub trait Clock: Send + Sync + 'static {
     /// default body: delegating to [`observe`](Clock::observe) is only sound for a clamp-free
     /// adapter, and a default silently makes that the fallback for every adapter that clamps,
     /// including one written after this trait. Stating the clamp policy explicitly, every time, is
-    /// the point (`#288`). [`assert_conformance`] checks it holds.
+    /// the point. [`assert_conformance`] checks it holds.
     fn observe_trusted(&self, remote: Timestamp);
 }
 
@@ -689,9 +689,9 @@ mod tests {
         });
     }
 
-    /// The shape `#288` flags independently of the open/close decision: an `observe_trusted` that
-    /// clamps like `observe`. Reintroduces own-write shadowing after a backward clock step, and
-    /// used to type-check silently under the old default body.
+    /// The bug shape this test targets, independent of the open/close decision above: an
+    /// `observe_trusted` that clamps like `observe`. Reintroduces own-write shadowing after a
+    /// backward clock step, and used to type-check silently under the old default body.
     struct ClampingTrustedClock {
         node_id: NodeId,
         last: std::sync::Mutex<Hlc>,

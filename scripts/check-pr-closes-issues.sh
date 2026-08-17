@@ -27,24 +27,16 @@
 # caller already has from the `pull_request` event payload.
 set -Eeuo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/lib-closing-refs.sh
+source "$SCRIPT_DIR/lib-closing-refs.sh"
+
 REPO="${GITHUB_REPOSITORY:-Akvize/reconcile-rs}"
 BODY="${PR_BODY:-}"
-
-CLOSING_RE='(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b:?[[:space:]]*#([0-9]+)'
-NONCLOSING_RE='(?i)\b(relates?\s+to|see|tracks?|blocked\s+by|part\s+of|ref(erences?)?)\b:?[[:space:]]*#([0-9]+)'
 
 mapfile -t all_refs < <(grep -oE '#[0-9]+' <<<"$BODY" | tr -d '#' | sort -u)
 mapfile -t closing_refs < <(grep -oPi "$CLOSING_RE" <<<"$BODY" | grep -oE '[0-9]+' | sort -u)
 mapfile -t nonclosing_refs < <(grep -oPi "$NONCLOSING_RE" <<<"$BODY" | grep -oE '[0-9]+' | sort -u)
-
-is_in() {
-    local needle="$1"
-    shift
-    for x in "$@"; do
-        [ "$x" = "$needle" ] && return 0
-    done
-    return 1
-}
 
 status=0
 for n in "${all_refs[@]:-}"; do
