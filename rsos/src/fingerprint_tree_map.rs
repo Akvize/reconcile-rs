@@ -141,6 +141,13 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// `|S|` over this node's whole subtree — `O(1)`, cached in [`subtree`](Node::subtree).
+    /// Crate-visible so the iterators in `fingerprint_tree_map_iter` can seed an exact
+    /// `remaining` count without an unconstrained-generic `FingerprintTreeMap::len` call.
+    pub(crate) fn subtree_size(&self) -> usize {
+        self.subtree.size()
+    }
+
     /// Recompute [`subtree`](Node::subtree) by composing own separators with each child's
     /// aggregate.
     fn refresh_aggregate(&mut self) {

@@ -12,6 +12,13 @@
 //! `IterMut`/`ValuesMut` are `#[cfg(test)]`-only: they hand out `&mut V` without updating the
 //! element fingerprint or the cached subtree aggregate. [`FingerprintTreeMap::with_mut`] is the
 //! supported mutation path.
+//!
+//! `Iter`, `IntoIter`, `Keys`, `Values`, `IntoKeys`, `IntoValues` all implement `ExactSizeIterator`
+//! (`len()`/`size_hint()` are `O(1)`, seeded once from the tree's cached subtree size) and
+//! `FusedIterator`, plus `Clone` and `Debug`.
+
+use std::fmt;
+use std::iter::FusedIterator;
 
 use serde::Serialize;
 
@@ -33,19 +40,23 @@ impl<K: Serialize + Ord, V: Serialize> FromIterator<(K, V)> for FingerprintTreeM
     }
 }
 
+#[derive(Clone, Debug)]
 enum IntoIterLayer<K, V> {
     Node(Box<Node<K, V>>),
     Element(K, V),
 }
 
 /// Consumes the tree, yielding `(K, V)` in ascending key order.
+#[derive(Clone)]
 pub struct IntoIter<K, V> {
     stack: Vec<IntoIterLayer<K, V>>,
+    remaining: usize,
 }
 
-impl<K, V> Iterator for IntoIter<K, V> {
-    type Item = (K, V);
-    fn next(&mut self) -> Option<Self::Item> {
+impl<K, V> IntoIter<K, V> {
+    /// One pop-and-possibly-expand step; recurses past `Node` frames without touching
+    /// `remaining`, which `next()` adjusts exactly once per yielded element.
+    fn advance(&mut self) -> Option<(K, V)> {
         match self.stack.pop() {
             Some(IntoIterLayer::Node(mut node)) => {
                 if let Some(mut children) = node.children {
@@ -65,11 +76,39 @@ impl<K, V> Iterator for IntoIter<K, V> {
                         self.stack.push(IntoIterLayer::Element(k, v));
                     }
                 }
-                self.next()
+                self.advance()
             }
             Some(IntoIterLayer::Element(k, v)) => Some((k, v)),
             None => None,
         }
+    }
+}
+
+impl<K, V> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.advance();
+        if item.is_some() {
+            self.remaining -= 1;
+        }
+        item
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<K, V> ExactSizeIterator for IntoIter<K, V> {
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+impl<K, V> FusedIterator for IntoIter<K, V> {}
+
+impl<K: fmt::Debug + Clone, V: fmt::Debug + Clone> fmt::Debug for IntoIter<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -87,8 +126,10 @@ impl<K, V> IntoIterator for FingerprintTreeMap<K, V> {
     /// assert_eq!(pairs, vec![(1, "a"), (2, "b")]);
     /// ```
     fn into_iter(self) -> Self::IntoIter {
+        let remaining = self.root.subtree_size();
         IntoIter {
             stack: vec![IntoIterLayer::Node(self.root)],
+            remaining,
         }
     }
 }
@@ -96,11 +137,13 @@ impl<K, V> IntoIterator for FingerprintTreeMap<K, V> {
 /// Yields `(&K, &V)` in ascending key order.
 pub struct Iter<'a, K, V> {
     stack: Vec<(&'a Node<K, V>, usize)>,
+    remaining: usize,
 }
 
-impl<'a, K, V> Iterator for Iter<'a, K, V> {
-    type Item = (&'a K, &'a V);
-    fn next(&mut self) -> Option<Self::Item> {
+impl<'a, K, V> Iter<'a, K, V> {
+    /// One pop-and-possibly-descend step; recurses past frames it has already fully visited
+    /// without touching `remaining`, which `next()` adjusts exactly once per yielded element.
+    fn advance(&mut self) -> Option<(&'a K, &'a V)> {
         if let Some((node, children_passed)) = self.stack.pop() {
             if children_passed < node.keys.len() {
                 self.stack.push((node, children_passed + 1));
@@ -114,11 +157,51 @@ impl<'a, K, V> Iterator for Iter<'a, K, V> {
                     &node.values[children_passed - 1],
                 ))
             } else {
-                self.next()
+                self.advance()
             }
         } else {
             None
         }
+    }
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.advance();
+        if item.is_some() {
+            self.remaining -= 1;
+        }
+        item
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<K, V> ExactSizeIterator for Iter<'_, K, V> {
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+impl<K, V> FusedIterator for Iter<'_, K, V> {}
+
+// Hand-written, not `#[derive(Clone)]`: the stack holds `&'a Node<K, V>`, always `Clone`
+// regardless of `K`/`V`, so deriving would add a `K: Clone, V: Clone` bound this impl doesn't
+// need.
+impl<K, V> Clone for Iter<'_, K, V> {
+    fn clone(&self) -> Self {
+        Iter {
+            stack: self.stack.clone(),
+            remaining: self.remaining,
+        }
+    }
+}
+
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Iter<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -128,6 +211,7 @@ impl<'a, K, V> IntoIterator for &'a FingerprintTreeMap<K, V> {
     fn into_iter(self) -> Self::IntoIter {
         Iter {
             stack: vec![(&self.root, 0)],
+            remaining: self.root.subtree_size(),
         }
     }
 }
@@ -229,6 +313,7 @@ impl<'a, K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 }
 
 /// Consumes the tree, yielding `V` in ascending key order.
+#[derive(Clone)]
 pub struct IntoValues<K, V> {
     inner: IntoIter<K, V>,
 }
@@ -237,6 +322,23 @@ impl<K, V> Iterator for IntoValues<K, V> {
     type Item = V;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(_, v)| v)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for IntoValues<K, V> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<K, V> FusedIterator for IntoValues<K, V> {}
+
+impl<K: Clone, V: fmt::Debug + Clone> fmt::Debug for IntoValues<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -268,6 +370,33 @@ impl<'a, K, V> Iterator for Values<'a, K, V> {
     type Item = &'a V;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(_, v)| v)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for Values<'_, K, V> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<K, V> FusedIterator for Values<'_, K, V> {}
+
+// Hand-written, not `#[derive(Clone)]`: `Iter`'s own `Clone` needs no `K: Clone, V: Clone` bound
+// (see there), and deriving here would add one anyway.
+impl<K, V> Clone for Values<'_, K, V> {
+    fn clone(&self) -> Self {
+        Values {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<K, V: fmt::Debug> fmt::Debug for Values<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -314,6 +443,7 @@ impl<'a, K: 'a + Serialize + Ord, V: Serialize> Iterator for ValuesMut<'a, K, V>
 }
 
 /// Consumes the tree, yielding `K` in ascending key order.
+#[derive(Clone)]
 pub struct IntoKeys<K, V> {
     inner: IntoIter<K, V>,
 }
@@ -322,6 +452,23 @@ impl<K, V> Iterator for IntoKeys<K, V> {
     type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(k, _)| k)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for IntoKeys<K, V> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<K, V> FusedIterator for IntoKeys<K, V> {}
+
+impl<K: fmt::Debug + Clone, V: Clone> fmt::Debug for IntoKeys<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -353,6 +500,33 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
     type Item = &'a K;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(k, _)| k)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for Keys<'_, K, V> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<K, V> FusedIterator for Keys<'_, K, V> {}
+
+// Hand-written, not `#[derive(Clone)]`: `Iter`'s own `Clone` needs no `K: Clone, V: Clone` bound
+// (see there), and deriving here would add one anyway.
+impl<K, V> Clone for Keys<'_, K, V> {
+    fn clone(&self) -> Self {
+        Keys {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<K: fmt::Debug, V> fmt::Debug for Keys<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -572,5 +746,162 @@ mod tests {
         single.with_mut(&42, |v| *v.unwrap() *= 2);
         single.check_invariants();
         assert_eq!(single.values().copied().collect::<Vec<_>>(), vec![200]);
+    }
+
+    #[test]
+    fn test_len_and_size_hint_exact() {
+        let tree = make_tree();
+        macro_rules! assert_exact_len {
+            ($mk:expr) => {{
+                let mut it = $mk;
+                let mut remaining = TREE_SIZE;
+                assert_eq!(it.len(), remaining);
+                assert_eq!(it.size_hint(), (remaining, Some(remaining)));
+                while it.next().is_some() {
+                    remaining -= 1;
+                    assert_eq!(it.len(), remaining);
+                    assert_eq!(it.size_hint(), (remaining, Some(remaining)));
+                }
+                assert_eq!(it.len(), 0);
+            }};
+        }
+        assert_exact_len!(tree.iter());
+        assert_exact_len!(tree.keys());
+        assert_exact_len!(tree.values());
+        assert_exact_len!(tree.clone().into_iter());
+        assert_exact_len!(tree.clone().into_keys());
+        assert_exact_len!(tree.clone().into_values());
+    }
+
+    #[test]
+    fn test_len_and_size_hint_exact_empty() {
+        let empty: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+        assert_eq!(empty.iter().len(), 0);
+        assert_eq!(empty.iter().size_hint(), (0, Some(0)));
+        assert_eq!(empty.keys().len(), 0);
+        assert_eq!(empty.values().len(), 0);
+        assert_eq!(empty.clone().into_iter().len(), 0);
+        assert_eq!(empty.clone().into_keys().len(), 0);
+        assert_eq!(empty.into_values().len(), 0);
+    }
+
+    #[test]
+    fn test_fused_after_exhaustion() {
+        let tree = make_tree();
+        macro_rules! assert_fused {
+            ($mk:expr) => {{
+                let mut it = $mk;
+                while it.next().is_some() {}
+                assert!(it.next().is_none());
+                assert!(it.next().is_none());
+                assert!(it.next().is_none());
+            }};
+        }
+        assert_fused!(tree.iter());
+        assert_fused!(tree.keys());
+        assert_fused!(tree.values());
+        assert_fused!(tree.clone().into_iter());
+        assert_fused!(tree.clone().into_keys());
+        assert_fused!(tree.clone().into_values());
+
+        let empty: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+        assert_fused!(empty.iter());
+        assert_fused!(empty.clone().into_iter());
+    }
+
+    #[test]
+    fn test_clone_and_debug() {
+        let tree = make_tree();
+
+        let iter = tree.iter();
+        let cloned: Vec<_> = iter.clone().collect();
+        assert_eq!(cloned, iter.collect::<Vec<_>>());
+
+        let into_iter = tree.clone().into_iter();
+        let cloned_into: Vec<_> = into_iter.clone().collect();
+        assert_eq!(cloned_into, into_iter.collect::<Vec<_>>());
+
+        assert_eq!(
+            format!("{:?}", tree.iter()),
+            format!(
+                "{:?}",
+                BASE_ITEMS.iter().map(|(k, v)| (k, v)).collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            format!("{:?}", tree.keys()),
+            format!(
+                "{:?}",
+                BASE_ITEMS.iter().map(|(k, _)| k).collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            format!("{:?}", tree.values()),
+            format!(
+                "{:?}",
+                BASE_ITEMS.iter().map(|(_, v)| v).collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            format!("{:?}", tree.clone().into_iter()),
+            format!("{:?}", BASE_ITEMS.clone())
+        );
+        assert_eq!(
+            format!("{:?}", tree.clone().into_keys()),
+            format!(
+                "{:?}",
+                BASE_ITEMS.iter().map(|&(k, _)| k).collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            format!("{:?}", tree.into_values()),
+            format!(
+                "{:?}",
+                BASE_ITEMS.iter().map(|&(_, v)| v).collect::<Vec<_>>()
+            )
+        );
+    }
+
+    #[test]
+    fn test_standard_adapters() {
+        let tree = make_tree();
+
+        let peeked: Vec<_> = {
+            let mut it = tree.iter().peekable();
+            let mut out = Vec::new();
+            while let Some(&(&k, &v)) = it.peek() {
+                out.push((k, v));
+                it.next();
+            }
+            out
+        };
+        assert_eq!(peeked, BASE_ITEMS.clone());
+
+        let taken: Vec<_> = tree
+            .iter()
+            .take(10)
+            .map(|(&k, &v)| (k, v))
+            .collect::<Vec<_>>();
+        assert_eq!(taken, BASE_ITEMS[..10].to_vec());
+
+        let skipped: Vec<_> = tree
+            .iter()
+            .skip(TREE_SIZE - 10)
+            .map(|(&k, &v)| (k, v))
+            .collect::<Vec<_>>();
+        assert_eq!(skipped, BASE_ITEMS[TREE_SIZE - 10..].to_vec());
+
+        let mid = tree
+            .iter()
+            .skip(100)
+            .take(10)
+            .map(|(&k, &v)| (k, v))
+            .collect::<Vec<_>>();
+        assert_eq!(mid, BASE_ITEMS[100..110].to_vec());
+
+        assert_eq!(tree.iter().count(), TREE_SIZE);
+        let mut preallocated: Vec<_> = Vec::with_capacity(tree.iter().len());
+        preallocated.extend(tree.iter().map(|(&k, &v)| (k, v)));
+        assert_eq!(preallocated, BASE_ITEMS.clone());
     }
 }
