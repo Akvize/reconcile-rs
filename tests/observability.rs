@@ -22,9 +22,17 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::Registry;
 
+/// A fresh port per call (#293: `Config::port` must be nonzero), so the several tests in this
+/// file calling `local_config()` never collide with each other.
+fn next_test_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(21_000);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 fn local_config() -> Config {
     Config::default()
-        .with_port(0) // ephemeral port: avoids clashing with the other integration tests
+        .with_port(next_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_net("127.0.0.1/8".parse().unwrap())
         .with_insecure_no_key()

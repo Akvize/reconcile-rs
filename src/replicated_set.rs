@@ -29,7 +29,7 @@ use crate::bounds::Key;
 use crate::clock::{NodeId, Timestamp};
 use crate::entry::Entry;
 use crate::persistence::Persistence;
-use crate::replicated_map::Config;
+use crate::replicated_map::{Config, ConfigError};
 use crate::{Discovery, ReplicatedMap};
 use rsos::Fingerprint;
 
@@ -219,8 +219,12 @@ impl<K: Key + Hash> ReplicatedSet<K> {
     }
 
     /// (runtime) Replace the declared networks. See [`ReplicatedMap::set_nets`].
-    pub fn set_nets(&self, nets: &[IpNet]) {
-        self.0.set_nets(nets);
+    ///
+    /// # Errors
+    ///
+    /// If `nets` exceeds `MAX_NETS`.
+    pub fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        self.0.set_nets(nets)
     }
 
     /// (runtime) Declare an additional network. See [`ReplicatedMap::add_net`].
@@ -285,7 +289,7 @@ mod replicated_set_tests {
 
     fn ephemeral_config() -> Config {
         Config {
-            port: 0,
+            port: crate::replica::next_ephemeral_test_port(),
             listen_addr: "127.0.0.1".parse().unwrap(),
             nets: [None; MAX_NETS],
             remote_interval: 6,

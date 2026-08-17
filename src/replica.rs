@@ -33,7 +33,7 @@ use crate::clock::{Clock, HlcClock, NodeId, Timestamp};
 use crate::discovery::{Discovery, RandomProbe};
 use crate::entry::{Entry, State};
 use crate::observability;
-use crate::replicated_map::{Config, MAX_NETS, MIN_BULK_SEND_RATE};
+use crate::replicated_map::{Config, ConfigError, MAX_NETS, MIN_BULK_SEND_RATE};
 use crate::transport::{Transport, UdpTransport};
 use crate::FingerprintTreeMap;
 use gossip::auth;
@@ -257,12 +257,33 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
+/// Reject `config.port == 0` (#293): gossip does no per-peer port discovery, so every outbound
+/// datagram to a peer is addressed to `config.port` literally. Port `0` binds an OS-assigned
+/// ephemeral port for receiving, but that assigned port is never read back into the value peers
+/// are addressed on — a node configured this way sends every peer datagram to port `0` and can
+/// never converge with anything. Shared by [`Replica::bind_udp`] and
+/// [`ReadReplicaMap::new`](crate::ReadReplicaMap::new), the two entry points that bind a real
+/// socket; the in-memory-transport constructors are unaffected since their caller chooses the
+/// port directly.
+pub(crate) fn check_port_is_nonzero(config: &Config) -> io::Result<()> {
+    if config.port == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Config::port must be nonzero: gossip addresses every outbound datagram to this \
+             port, so 0 (\"OS picks one\") can never converge — see Config::port's docs and \
+             Config::new",
+        ));
+    }
+    Ok(())
+}
+
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Create an engine over the default [`UdpTransport`].
     ///
     /// # Errors
     ///
-    /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -288,6 +309,11 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// The engine trusts `clock` completely, with no way to check it at the type level; see
     /// `ReplicatedMap::new_with_clock`'s docs (the public entry point this seam is reached
     /// through) for the full risk writeup and a worked example.
+    ///
+    /// # Errors
+    ///
+    /// If the socket cannot be bound to `(config.listen_addr, config.port)`, or if
+    /// `config.port == 0` — see [`Config::port`]'s docs.
     ///
     /// # Panics
     ///
@@ -328,6 +354,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// Bind the default [`UdpTransport`] for `config` and log the bound address.
     async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+        check_port_is_nonzero(config)?;
         let transport = UdpTransport::bind(
             SocketAddr::new(config.listen_addr, config.port),
             config.recv_buffer_size,
@@ -508,13 +535,22 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
-    pub(crate) fn set_nets(&self, nets: &[IpNet]) {
+    ///
+    /// # Errors
+    ///
+    /// If `nets` exceeds [`MAX_NETS`] — the same cap [`Config::with_net`]/`try_with_net` enforce
+    /// at construction time and [`add_net`](Self::add_net) enforces at runtime (#293).
+    pub(crate) fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        if nets.len() > MAX_NETS {
+            return Err(ConfigError::TooManyNets);
+        }
         let nets = nets.to_vec();
         let local = derive_local_net(&nets, self.listen_addr);
         // local_net is always derived from nets; update it together so a reader never observes a
         // local net that is inconsistent with the freshly-installed nets for long.
         *self.local_net.write() = local;
         *self.nets.write() = nets;
+        Ok(())
     }
 
     /// (runtime) Declare an additional network. Idempotent; returns `false` (and logs) if the
@@ -1503,6 +1539,19 @@ impl Drop for BulkDumpCountGuard {
     }
 }
 
+/// A fresh, never-repeated port for a test that needs a real bindable port but does not care
+/// which one (#293: `Config::port` must be nonzero — gossip has no per-peer port discovery, so
+/// `0` can never converge — but many single-node/no-real-peer tests only used `0` for its other
+/// property, an OS-assigned port that never collides with a concurrently running test). A shared
+/// process-wide counter reproduces that same collision-freedom across every test file, since
+/// `cargo test` runs this crate's unit tests as threads in one process.
+#[cfg(test)]
+pub(crate) fn next_ephemeral_test_port() -> u16 {
+    use std::sync::atomic::AtomicU16;
+    static NEXT: AtomicU16 = AtomicU16::new(20_000);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod deadlock_regressions {
 
@@ -2079,6 +2128,7 @@ mod pacing {
             let config = Config {
                 bulk_send_rate,
                 ..Config::default()
+                    .with_port(crate::replica::next_ephemeral_test_port())
                     .with_listen_addr(addr.parse().unwrap())
                     .with_insecure_no_key()
             };
@@ -2233,7 +2283,7 @@ mod tombstone_ack_bounds {
     async fn engine(addr: &str) -> Replica<i32, i32> {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
-            .with_port(0)
+            .with_port(crate::replica::next_ephemeral_test_port())
             .with_listen_addr(addr.parse().unwrap())
             .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
@@ -2383,7 +2433,7 @@ mod dump_budget {
         use crate::replica::Replica;
 
         let config = Config::default()
-            .with_port(0)
+            .with_port(crate::replica::next_ephemeral_test_port())
             .with_listen_addr("127.0.0.99".parse().unwrap())
             .with_max_concurrent_bulk_dumps(1)
             .with_insecure_no_key();

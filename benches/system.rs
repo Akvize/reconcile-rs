@@ -69,12 +69,20 @@ fn log_group<'a>(
     group
 }
 
-/// An in-process, peerless store loaded with `kvs` (ephemeral port, so many can coexist).
+/// A fresh port per call (#293: `Config::port` must be nonzero), so many [`loaded_store`]s can
+/// coexist.
+fn next_bench_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(22_000);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// An in-process, peerless store loaded with `kvs`.
 fn loaded_store(rt: &Runtime, kvs: &[(u32, u32)]) -> ReplicatedMap<u32, u32> {
     rt.block_on(async {
         let store = ReplicatedMap::<u32, u32>::new(
             Config::default()
-                .with_port(0)
+                .with_port(next_bench_port())
                 .with_listen_addr("127.0.0.1".parse().unwrap())
                 .with_net("127.0.0.1/8".parse().unwrap())
                 .with_insecure_no_key(),

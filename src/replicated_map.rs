@@ -10,6 +10,7 @@
 //! to enable reconciliation between different instances over a network.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -1020,10 +1021,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// (runtime) Replace the declared geographical networks, re-deriving the local one. See
     /// [`Config::nets`].
     ///
-    /// Safe live: topology is per-node and carries no wire tag, and repair of known peers is not
-    /// gated on net membership, so the worst case is suboptimal WAN traffic, never divergence.
-    pub fn set_nets(&self, nets: &[IpNet]) {
-        self.engine.set_nets(nets);
+    /// # Errors
+    ///
+    /// If `nets` exceeds [`MAX_NETS`] — the same cap `Config::with_net`/`try_with_net` enforce at
+    /// construction time (#293).
+    ///
+    /// Safe live otherwise: topology is per-node and carries no wire tag, and repair of known
+    /// peers is not gated on net membership, so the worst case is suboptimal WAN traffic, never
+    /// divergence.
+    pub fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        self.engine.set_nets(nets)
     }
 
     /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns
@@ -1311,18 +1318,46 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 }
 
-/// Maximum number of geographical networks (CIDRs) a [`Config`] can declare. A fixed-size array
-/// keeps [`Config`] `Copy`; eight networks is generous for real geographical deployments.
+/// Maximum number of geographical networks (CIDRs) a [`Config`] can declare, or a running node
+/// can hold via [`ReplicatedMap::set_nets`]/[`add_net`](ReplicatedMap::add_net) — one behavior for
+/// the cap everywhere it is enforced (#293). Eight networks is generous for real geographical
+/// deployments.
 pub const MAX_NETS: usize = 8;
 
-/// Construction parameters for a [`ReplicatedMap`]. Build with [`Config::default`] and the
-/// `with_*` builders (e.g. [`with_port`](Config::with_port),
-/// [`with_listen_addr`](Config::with_listen_addr), [`with_net`](Config::with_net)); every field
-/// is `pub` for direct construction where that reads better.
+/// Why a [`Config`] operation was rejected.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// The operation would exceed [`MAX_NETS`] declared networks.
+    TooManyNets,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::TooManyNets => write!(f, "at most {MAX_NETS} networks are supported"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// Construction parameters for a [`ReplicatedMap`]. Build with [`Config::new`] (or
+/// [`Config::default`]) and the `with_*` builders (e.g. [`with_net`](Config::with_net)); every
+/// field is `pub` for direct construction and reading within this crate, but `#[non_exhaustive]`
+/// means an external crate must go through a constructor and builders — one construction path,
+/// not two with different guarantees (#293).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Config {
-    /// UDP port to bind. `0` (the default) asks the OS for an ephemeral port; read back the
-    /// actual bound port from the running [`ReplicatedMap`] when it matters.
+    /// UDP port to bind, **and** the port this node assumes every peer listens on — gossip does
+    /// no per-peer port discovery, so every node in a cluster must share one port.
+    ///
+    /// `0` binds to an OS-assigned ephemeral port, which is fine for receiving, but every
+    /// outbound datagram to a peer is still addressed to port `0` literally (the OS-assigned port
+    /// is never read back) — a node configured this way can never converge with anything, only
+    /// receive nothing back. [`ReplicatedMap::new`]/[`ReadReplicaMap::new`](crate::ReadReplicaMap::new)
+    /// both refuse `port == 0` for exactly this reason; use [`Config::new`] to set a real one.
     pub port: u16,
     /// Local address to bind the UDP socket to (default `127.0.0.1`). Also determines which
     /// declared [`nets`](Self::nets) entry, if any, is this node's local network.
@@ -1428,6 +1463,35 @@ pub struct Config {
     /// allocating; the peer's next diff round retries.
     pub max_concurrent_bulk_dumps: usize,
 }
+
+impl fmt::Debug for Config {
+    /// Redacts [`cluster_key`](Self::cluster_key): prints `Some(<redacted>)`/`None`, never the
+    /// key material, so an accidental `{:?}` in a log statement cannot leak it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("port", &self.port)
+            .field("listen_addr", &self.listen_addr)
+            .field("nets", &self.nets)
+            .field("remote_interval", &self.remote_interval)
+            .field("remote_fanout", &self.remote_fanout)
+            .field(
+                "cluster_key",
+                &self.cluster_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("insecure_no_key", &self.insecure_no_key)
+            .field("node_id", &self.node_id)
+            .field("encrypt", &self.encrypt)
+            .field("reconcile_interval", &self.reconcile_interval)
+            .field("bulk_send_rate", &self.bulk_send_rate)
+            .field("recv_buffer_size", &self.recv_buffer_size)
+            .field("send_buffer_size", &self.send_buffer_size)
+            .field("freshness_window", &self.freshness_window)
+            .field("max_peers", &self.max_peers)
+            .field("max_concurrent_bulk_dumps", &self.max_concurrent_bulk_dumps)
+            .finish()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -1451,6 +1515,14 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// The documented default constructor (#293): `port` is the one setting every node in a
+    /// cluster must agree on (see [`port`](Self::port)'s docs for why `0` can never converge).
+    /// Equivalent to `Config::default().with_port(port)`.
+    #[must_use]
+    pub fn new(port: u16) -> Self {
+        Config::default().with_port(port)
+    }
+
     /// Set [`port`](Self::port).
     #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
@@ -1468,16 +1540,31 @@ impl Config {
     ///
     /// # Panics
     ///
-    /// If more than [`MAX_NETS`] networks are declared.
+    /// If more than [`MAX_NETS`] networks are declared. See [`try_with_net`](Self::try_with_net)
+    /// for a non-panicking alternative — the same [`MAX_NETS`] cap
+    /// [`ReplicatedMap::set_nets`]/[`add_net`](ReplicatedMap::add_net) enforce at runtime (#293).
     #[must_use]
-    pub fn with_net(mut self, net: IpNet) -> Self {
+    pub fn with_net(self, net: IpNet) -> Self {
+        match self.try_with_net(net) {
+            Ok(config) => config,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
+    /// As [`with_net`](Self::with_net), but returns a [`ConfigError`] instead of panicking past
+    /// [`MAX_NETS`].
+    ///
+    /// # Errors
+    ///
+    /// If more than [`MAX_NETS`] networks are declared.
+    pub fn try_with_net(mut self, net: IpNet) -> Result<Self, ConfigError> {
         let slot = self
             .nets
             .iter_mut()
             .find(|slot| slot.is_none())
-            .unwrap_or_else(|| panic!("at most {MAX_NETS} networks are supported"));
+            .ok_or(ConfigError::TooManyNets)?;
         *slot = Some(net);
-        self
+        Ok(self)
     }
 
     /// Declare several networks at once (see [`with_net`](Config::with_net)).
@@ -1649,11 +1736,12 @@ mod replicated_map_tests {
         FileSnapshot, ReplicatedMap,
     };
 
-    /// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
-    /// stores without colliding on a fixed port.
+    /// A config bound to a fresh port on loopback (#293: port `0` is refused, so
+    /// [`next_ephemeral_test_port`](crate::replica::next_ephemeral_test_port) stands in for it),
+    /// so persistence tests can construct stores without colliding on a fixed port.
     fn ephemeral_config() -> Config {
         Config {
-            port: 0,
+            port: crate::replica::next_ephemeral_test_port(),
             listen_addr: "127.0.0.1".parse().unwrap(),
             nets: [None; MAX_NETS],
             remote_interval: 6,
@@ -2205,7 +2293,7 @@ mod replicated_map_tests {
         // A real, bindable loopback address (the engine binds a socket in `new`) on an ephemeral
         // port. No `with_net`, mirroring the Kubernetes setup where discovery is purely DNS-driven.
         Config::default()
-            .with_port(0)
+            .with_port(crate::replica::next_ephemeral_test_port())
             .with_listen_addr("127.0.0.1".parse().unwrap())
             .with_insecure_no_key()
     }
@@ -2716,7 +2804,7 @@ mod replicated_map_tests {
         let newcomer: std::net::IpAddr = "127.1.0.3".parse().unwrap();
 
         let config = Config::default()
-            .with_port(0)
+            .with_port(crate::replica::next_ephemeral_test_port())
             .with_listen_addr("127.0.0.1".parse().unwrap())
             .with_max_peers(2)
             .with_insecure_no_key();
