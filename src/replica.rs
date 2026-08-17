@@ -131,7 +131,7 @@ pub(crate) struct Inner<K, V> {
     port: u16,
     /// The datagram-I/O port (default adapter: [`UdpTransport`]). The engine sends and receives
     /// only through this, so it never names a concrete socket type.
-    transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    transport: Arc<dyn Transport>,
     /// The geographical networks the cluster spans. One random probe per network per round; a
     /// peer's net comes from its IP. Mutable at runtime, snapshotted per round.
     nets: Arc<RwLock<Vec<IpNet>>>,
@@ -328,10 +328,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     ///
     /// Infallible: the only fallible step in [`new`](Self::new) is binding the UDP socket, which
     /// the caller has already done (or does not need to do at all).
-    pub(crate) fn with_transport(
-        config: Config,
-        transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    ) -> Self {
+    pub(crate) fn with_transport(config: Config, transport: Arc<dyn Transport>) -> Self {
         let node_id_is_random = config.node_id.is_none();
         let node_id = config
             .node_id
@@ -346,14 +343,14 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     #[cfg(test)]
     pub(crate) fn new_with_transport(
         config: Config,
-        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+        transport: Arc<dyn Transport>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self::build(config, transport, clock, false)
     }
 
     /// Bind the default [`UdpTransport`] for `config` and log the bound address.
-    async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport<Addr = SocketAddr>>> {
+    async fn bind_udp(config: &Config) -> io::Result<Arc<dyn Transport>> {
         check_port_is_nonzero(config)?;
         let transport = UdpTransport::bind(
             SocketAddr::new(config.listen_addr, config.port),
@@ -371,7 +368,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// I/O — so it is infallible; the fallible socket bind lives in [`new`](Self::new).
     fn build(
         config: Config,
-        transport: Arc<dyn Transport<Addr = SocketAddr>>,
+        transport: Arc<dyn Transport>,
         clock: Arc<dyn Clock>,
         node_id_is_random: bool,
     ) -> Self {
@@ -612,7 +609,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// Bundle this engine's outbound ports and send state for the batched-message helpers
     /// ([`send_messages_to`] / [`send_messages_paced`]). See [`SendPorts`].
-    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport> {
         SendPorts {
             transport: &*self.transport,
             authenticator: &self.authenticator,
@@ -1366,7 +1363,7 @@ pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) sender_counter: &'a replay::SenderCounter,
 }
 
-pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
+pub(crate) async fn send_to_retry<T: Transport + ?Sized>(
     transport: &T,
     authenticator: &auth::Authenticator,
     sender_counter: &replay::SenderCounter,
@@ -1407,7 +1404,7 @@ pub(crate) async fn send_messages_to<K, V, P, T>(
     K: Serialize,
     V: Serialize,
     P: Serialize,
-    T: Transport<Addr = SocketAddr> + ?Sized,
+    T: Transport + ?Sized,
 {
     send_messages_paced(messages, ports, peer, send_buf, None).await
 }
@@ -1427,7 +1424,7 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
     K: Serialize,
     V: Serialize,
     P: Serialize,
-    T: Transport<Addr = SocketAddr> + ?Sized,
+    T: Transport + ?Sized,
 {
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.
