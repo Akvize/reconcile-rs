@@ -401,7 +401,7 @@ pub struct NetemTransport<T> {
     pump: JoinHandle<()>,
 }
 
-impl<T: Transport<Addr = SocketAddr>> NetemTransport<T> {
+impl<T: Transport> NetemTransport<T> {
     /// Wrap `inner` in `netem`.
     ///
     /// # Panics
@@ -442,9 +442,7 @@ impl<T> Drop for NetemTransport<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Transport<Addr = SocketAddr>> Transport for NetemTransport<T> {
-    type Addr = SocketAddr;
-
+impl<T: Transport> Transport for NetemTransport<T> {
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         // Reception is untouched: impairment is applied once per datagram, on the sending side,
         // where the link's direction is known from the destination.
@@ -494,7 +492,7 @@ enum Step {
 }
 
 /// Deliver queued datagrams in due order, one node's worth.
-async fn pump<T: Transport<Addr = SocketAddr>>(inner: Arc<T>, in_flight: Arc<InFlight>) {
+async fn pump<T: Transport>(inner: Arc<T>, in_flight: Arc<InFlight>) {
     loop {
         let step = {
             let mut queue = in_flight.queue.lock();

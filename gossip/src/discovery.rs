@@ -17,10 +17,13 @@
 //! Either way discovery feeds the gossip-target set only, never causal-stability membership
 //! (`ARCHITECTURE.md` §5 invariant 6).
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ipnet::IpNet;
 use parking_lot::RwLock;
@@ -28,10 +31,16 @@ use rand::rngs::StdRng;
 
 use crate::gen_ip::probe_targets;
 
+/// A [`Discovery::discover`] failure. Boxed rather than an associated type on [`Discovery`], so
+/// `Arc<dyn Discovery>` (`src/replica.rs`, `src/replicated_map.rs`) stays a single concrete type
+/// across implementors with unrelated failure modes (`DnsDiscoveryError` vs. `Infallible`) — the
+/// erasure #287 asked for, without giving up the trait object every call site relies on.
+pub type DiscoveryError = Box<dyn StdError + Send + Sync>;
+
 /// The future returned by [`Discovery::discover`]. Boxed rather than `async_trait`, so the port
 /// stays object-safe with no extra dependency.
 pub type DiscoverFuture<'a> =
-    Pin<Box<dyn Future<Output = std::io::Result<Vec<IpAddr>>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DiscoveryError>> + Send + 'a>>;
 
 /// Whether a [`Discovery`] source's result is the current truth or merely a hint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +75,7 @@ pub trait Discovery: Send + Sync + 'static {
 /// The default, **speculative** discovery: one random address per declared network each round,
 /// never seeded as a known peer. Shares the engine's live `nets`/`rng`, so retuning the topology
 /// changes what is probed.
+#[derive(Debug)]
 pub struct RandomProbe {
     nets: Arc<RwLock<Vec<IpNet>>>,
     rng: Arc<RwLock<StdRng>>,
@@ -91,22 +101,66 @@ impl Discovery for RandomProbe {
     }
 }
 
+/// Why a [`DnsDiscovery::discover`] round failed.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum DnsDiscoveryError {
+    /// The system resolver returned an error (e.g. NXDOMAIN, or the resolver is unreachable).
+    Resolve(std::io::Error),
+    /// The lookup did not complete within [`DnsDiscovery::with_timeout`]'s budget.
+    Timeout(tokio::time::error::Elapsed),
+}
+
+impl fmt::Display for DnsDiscoveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DnsDiscoveryError::Resolve(e) => write!(f, "DNS resolution failed: {e}"),
+            DnsDiscoveryError::Timeout(_) => write!(f, "DNS resolution timed out"),
+        }
+    }
+}
+
+impl StdError for DnsDiscoveryError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            DnsDiscoveryError::Resolve(e) => Some(e),
+            DnsDiscoveryError::Timeout(e) => Some(e),
+        }
+    }
+}
+
+/// The default budget [`DnsDiscovery`] allows a single lookup before treating it as a transient
+/// failure (skip the round) rather than hanging indefinitely.
+pub const DEFAULT_DNS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Discovers peers by resolving a DNS name to its address records, through the system resolver.
 ///
 /// Point it at a Kubernetes **headless** `Service` (`clusterIP: None`): one record per ready pod.
+#[derive(Debug)]
 pub struct DnsDiscovery {
     name: String,
     port: u16,
+    timeout: Duration,
 }
 
 impl DnsDiscovery {
     /// A DNS discovery source for `name`, typically a headless Service FQDN. `port` only forms
-    /// the `host:port` string `lookup_host` expects and is discarded from the results.
+    /// the `host:port` string `lookup_host` expects and is discarded from the results. Each
+    /// lookup is bounded by [`DEFAULT_DNS_DISCOVERY_TIMEOUT`]; tune it with
+    /// [`with_timeout`](Self::with_timeout).
     pub fn new(name: impl Into<String>, port: u16) -> Self {
         DnsDiscovery {
             name: name.into(),
             port,
+            timeout: DEFAULT_DNS_DISCOVERY_TIMEOUT,
         }
+    }
+
+    /// Bound how long a single [`discover`](Discovery::discover) round waits for the system
+    /// resolver before giving up and treating the round as a transient failure.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
@@ -114,7 +168,10 @@ impl Discovery for DnsDiscovery {
     fn discover(&self) -> DiscoverFuture<'_> {
         let host = format!("{}:{}", self.name, self.port);
         Box::pin(async move {
-            let addrs = tokio::net::lookup_host(host).await?;
+            let addrs = tokio::time::timeout(self.timeout, tokio::net::lookup_host(host))
+                .await
+                .map_err(DnsDiscoveryError::Timeout)?
+                .map_err(DnsDiscoveryError::Resolve)?;
             Ok(addrs.map(|sock_addr| sock_addr.ip()).collect())
         })
     }
@@ -145,6 +202,18 @@ mod tests {
     async fn dns_discovery_errors_on_unresolvable_name() {
         let discovery = DnsDiscovery::new("this-name-should-not-resolve.invalid", 0);
         assert!(discovery.discover().await.is_err());
+    }
+
+    /// `tokio::time::timeout` polls the wrapped future before it ever checks the deadline, so a
+    /// future that can resolve synchronously on its first poll (as `lookup_host("localhost")`
+    /// does on this host) always wins the race regardless of how small a budget is passed — no
+    /// duration can deterministically force a `Timeout` here without also mocking the resolver.
+    /// `with_timeout` itself, and the `Elapsed` → `DnsDiscoveryError::Timeout` mapping in
+    /// `discover`, stay covered by inspection and by `tokio::time::timeout`'s own test suite.
+    #[test]
+    fn dns_discovery_with_timeout_is_a_builder() {
+        let discovery = DnsDiscovery::new("svc", 0).with_timeout(Duration::from_millis(1));
+        assert_eq!(discovery.timeout, Duration::from_millis(1));
     }
 
     #[test]

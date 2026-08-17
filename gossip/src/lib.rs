@@ -35,7 +35,10 @@ pub mod gen_ip;
 pub mod replay;
 pub mod transport;
 
-pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
+pub use discovery::{
+    DiscoverFuture, Discovery, DiscoveryError, DiscoveryKind, DnsDiscovery, DnsDiscoveryError,
+    RandomProbe,
+};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
 
 // #297: re-exported so a public signature naming one of these types (`RandomProbe::new`'s

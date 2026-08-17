@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -238,10 +238,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///     transport,
     /// );
     /// ```
-    pub fn new_with_transport(
-        config: Config,
-        transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    ) -> Self {
+    pub fn new_with_transport(config: Config, transport: Arc<dyn Transport>) -> Self {
         Self::from_engine(Replica::<K, V>::with_transport(config, transport))
     }
 
@@ -2253,7 +2250,7 @@ mod replicated_map_tests {
             Box::pin(async move {
                 match resp {
                     FakeResp::Present(addrs) => Ok(addrs),
-                    FakeResp::Blip => Err(std::io::Error::other("blip")),
+                    FakeResp::Blip => Err(Box::new(std::io::Error::other("blip")) as _),
                 }
             })
         }

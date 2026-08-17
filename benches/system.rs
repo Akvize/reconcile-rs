@@ -243,8 +243,6 @@ struct CountingTransport {
 
 #[async_trait::async_trait]
 impl Transport for CountingTransport {
-    type Addr = SocketAddr;
-
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.inner.recv_from(buf).await
     }
@@ -286,7 +284,7 @@ fn mesh_addrs(n: usize) -> Vec<IpAddr> {
 /// `n` in-process nodes on a fresh [`InMemoryNetwork`], each endpoint handed to `wrap` before it
 /// reaches the store. **Unseeded**: who knows whom is the caller's decision, and the two families
 /// of benchmark built on this differ on exactly that (see [`full_mesh_seed`]).
-fn mesh_with<T: Transport<Addr = SocketAddr>>(
+fn mesh_with<T: Transport>(
     n: usize,
     port: u16,
     mut wrap: impl FnMut(InMemoryTransport) -> T,
