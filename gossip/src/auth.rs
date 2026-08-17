@@ -200,6 +200,7 @@ pub struct Verified;
 /// `State` is [`Authenticated`] or [`Verified`], so the order of the two checks is a compile-time
 /// property. `seq`/`stamp` are [`Seq::NONE`]/[`Stamp::NONE`] in unauthenticated mode. [`Cow`]
 /// because the MAC path borrows the receive buffer and the encrypted path owns a plaintext.
+#[derive(Debug)]
 pub struct Payload<'a, State = Authenticated> {
     bytes: Cow<'a, [u8]>,
     /// Sender sequence number extracted from the replay header, or [`Seq::NONE`] in
@@ -360,7 +361,7 @@ pub(crate) type ClusterMac = HmacSha256Mac;
 /// still accepts on the verify path (#285) — the shape a rotation needs: roll out `also_accept:
 /// [old_key]` cluster-wide, then once every peer has it, roll `primary` to the new key with the
 /// old one demoted to `also_accept`, then finally drop it once every peer is on the new primary.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Keys {
     /// The key `seal` always uses.
     pub primary: ClusterKey,
@@ -385,7 +386,7 @@ impl Keys {
 }
 
 /// Authentication policy and datagram framing for one node: the sole producer of [`Payload`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Authenticator {
     /// No cluster key configured: the protocol runs unauthenticated.
     Disabled,

@@ -616,7 +616,7 @@ impl Discovery for FakeDiscovery {
         Box::pin(async move {
             match resp {
                 FakeResp::Present(addrs) => Ok(addrs),
-                FakeResp::Blip => Err(std::io::Error::other("blip")),
+                FakeResp::Blip => Err(Box::new(std::io::Error::other("blip")) as _),
             }
         })
     }

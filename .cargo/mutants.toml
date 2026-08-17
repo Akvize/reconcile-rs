@@ -31,10 +31,13 @@ exclude_globs = ["benches/**", "examples/**"]
 
 # `testing::` accessors exist only under the internal-testing feature: they are test
 # seams, not behaviour. Mutating them yields MISSED results that are noise, not gaps.
+# `impl Debug`/`impl Display` alone never match here: every hand-written impl in this workspace
+# qualifies the trait path (`impl fmt::Debug for X`, never bare `impl Debug for X`), so the
+# pattern needs the qualifier too or it silently excludes nothing.
 exclude_re = [
     "testing::",
-    "impl Debug",
-    "impl Display",
+    "impl fmt::Debug",
+    "impl fmt::Display",
 ]
 
 skip_calls = ["with_capacity", "reserve"]

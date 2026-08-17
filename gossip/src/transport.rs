@@ -9,7 +9,6 @@
 //! The [`Transport`] port and its [`UdpTransport`]/[`InMemoryTransport`] adapters
 //! (`ARCHITECTURE.md` §3.2).
 
-use std::hash::Hash;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,12 +18,11 @@ use socket2::SockRef;
 use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
-/// Connectionless datagram I/O. The engine is written against `Addr = SocketAddr`, so every
-/// adapter reuses that address type.
+/// Connectionless datagram I/O over [`SocketAddr`].
 ///
 /// # Implementing your own
 ///
-/// #297: every type this trait's signature names — `Self::Addr`'s bounds, `io::Result`, the
+/// #297: every type this trait's signature names — `io::Result`, `SocketAddr`, the
 /// `#[async_trait]` macro itself — is either `std` or re-exported from this crate (or
 /// `reconcile`), so an external implementation never has to independently depend on
 /// `async-trait` and match its version to this crate's:
@@ -40,35 +38,29 @@ use tracing::{debug, warn};
 ///
 /// #[async_trait]
 /// impl Transport for NullTransport {
-///     type Addr = SocketAddr;
-///
-///     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, Self::Addr)> {
+///     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
 ///         Ok((buf.len(), self.local_addr()?))
 ///     }
 ///
-///     async fn send_to(&self, buf: &[u8], _dst: &Self::Addr) -> io::Result<usize> {
+///     async fn send_to(&self, buf: &[u8], _dst: &SocketAddr) -> io::Result<usize> {
 ///         Ok(buf.len())
 ///     }
 ///
-///     fn local_addr(&self) -> io::Result<Self::Addr> {
+///     fn local_addr(&self) -> io::Result<SocketAddr> {
 ///         Ok("0.0.0.0:0".parse().unwrap())
 ///     }
 /// }
 /// ```
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
-    /// The peer-address type carried by [`recv_from`](Transport::recv_from) /
-    /// [`send_to`](Transport::send_to).
-    type Addr: Clone + Eq + Hash + Send + Sync;
-
     /// Receive one datagram into `buf`, returning the number of bytes read and the sender address.
-    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, Self::Addr)>;
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
 
     /// Send one datagram to `dst`, returning the number of bytes written.
-    async fn send_to(&self, buf: &[u8], dst: &Self::Addr) -> io::Result<usize>;
+    async fn send_to(&self, buf: &[u8], dst: &SocketAddr) -> io::Result<usize>;
 
     /// The local address this transport is bound to.
-    fn local_addr(&self) -> io::Result<Self::Addr>;
+    fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
 /// The default [`Transport`] adapter: a tokio UDP socket.
@@ -143,8 +135,6 @@ fn set_socket_buffers(
 
 #[async_trait]
 impl Transport for UdpTransport {
-    type Addr = SocketAddr;
-
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.0.recv_from(buf).await
     }
@@ -177,7 +167,7 @@ mod in_memory {
 
     /// A shared in-process datagram fabric. [`bind`](InMemoryNetwork::bind) a
     /// [`InMemoryTransport`] per node onto the same network and they can exchange datagrams.
-    #[derive(Clone, Default)]
+    #[derive(Clone, Default, Debug)]
     pub struct InMemoryNetwork {
         routes: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Datagram>>>>,
     }
@@ -202,6 +192,7 @@ mod in_memory {
     }
 
     /// One endpoint on an [`InMemoryNetwork`].
+    #[derive(Debug)]
     pub struct InMemoryTransport {
         network: InMemoryNetwork,
         addr: SocketAddr,
@@ -210,8 +201,6 @@ mod in_memory {
 
     #[async_trait]
     impl Transport for InMemoryTransport {
-        type Addr = SocketAddr;
-
         async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
             let (src, bytes) = self.rx.lock().await.recv().await.ok_or_else(|| {
                 io::Error::new(io::ErrorKind::BrokenPipe, "in-memory network closed")
