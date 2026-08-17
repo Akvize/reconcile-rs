@@ -10,7 +10,9 @@
 >   read in full against its four published repositories; §1.3/§2.1/§2.2/§2.3 revised and eight
 >   references added — sources cited inline and in the [bibliography (§4)](#4-bibliography)) and a
 >   cross-community pass on 2026-08-14 ([§4.1](#41-cross-community-vocabulary) — the `cs.IT`/`cs.NI`
->   dialect this document had never searched; §2.2 revised, [§4.3](#43-search-log) opened).
+>   dialect this document had never searched; §2.2 revised, [§4.3](#43-search-log) opened), and a
+>   weekly sweep on 2026-08-17 (§2.1's prolly-tree entry revised, one reference added — everything
+>   else re-checked and unchanged, [§4.3](#43-search-log)).
 > - **Scope:** the FingerprintTreeMap as a *data structure* and RBSR as an *algorithm*, compared to the published
 >   state of the art — not an audit of any particular commit.
 > - **Navigation:** a [glossary (§3)](#3-glossary) defines ~120 terms and an
@@ -219,7 +221,12 @@ identical chunks across versions.
   foundation of Dolt, "the first version-controlled relational database"). Dolt hashes **keys only**
   → a value update does not move boundaries. Resists the leading-zeros attack.
 - ❌ Heavy machinery (rolling hash, chunks, CAS); higher latency than an in-mem B-tree; designed for
-  **persistence**.
+  **persistence**. The classic rolling-hash chunker also pays **cascading rechunking**: one
+  insertion can shift a chunk boundary, which shifts the next, up to O(N) restructured chunks
+  worst case. Rawat et al. 2026 bound this to one chunk plus an O(H) anchor-path update per
+  insertion (≤2H hashes, expected height still O(log n)) — narrows this ❌, does not remove it
+  (still more machinery than an in-mem B-tree write), and has no bearing on FingerprintTreeMap's
+  history-independence-free diff (§2.3 #1), which is a different axis.
 - **vs FingerprintTreeMap:** prolly = SOTA if you want **versioning + persistence + branch/merge**. FingerprintTreeMap is
   simpler/faster in memory but offers **none** of those. Central trade-off "simplicity/speed vs
   versioning/durability".
@@ -760,6 +767,7 @@ pass had already ruled out. Record negative results too.
 | 2026-08-10 | arXiv:2603.19820 + its four repositories | targeted | §1.3/§2.1/§2.2/§2.3 revised, 8 references added |
 | 2026-08-14 | "partitioned set reconciliation"; reference lists of arXiv:2509.02373 (25) and arXiv:2603.19820 (27), walked one level | `cs.IT` / `cs.NI` | **§4.4's `cs.IT` group** — EPSR, GenSync, the tree-algorithm arity lineage, multi-party, MET-IBLT. §2.2 revised |
 | 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not found, and not needed.** The search assumed the law had to be borrowed; it derives in four lines from the protocol itself (§2.2), so this row is closed by derivation rather than by citation |
+| 2026-08-17 | post-2026-08-14 sweep: new arXiv/venue results on range-based/partitioned set reconciliation, rateless IBLT/CertainSync follow-ups, multi-party reconciliation, prolly/Merkle tree updates, Willow/Earthstar changes, GenSync follow-ups, PODC 2026 accepted-papers list | `cs.DC`/`cs.CR`/`cs.IT` + venue programs, via WebSearch (WebFetch could not reach `arxiv.org`, `dl.acm.org`, `ceur-ws.org`, `semanticscholar.org` or `podc.org` from this session — network egress proxy blocked all five; findings below are WebSearch-summary-sourced, not read from the primer PDF) | One finding, §2.1: Rawat et al. 2026 (§4.4) bounds prolly trees' cascading-rechunking cost. Nothing new found on the other axes — RIBLT/CertainSync/ConflictSync/Rateless-Bloom-Filters lineage, multi-party reconciliation (still 2013–2021), and Willow/Earthstar are unchanged since the last pass over each |
 
 ### 4.4 Bibliography
 
@@ -857,6 +865,14 @@ sourced from abstracts and search summaries — read before quoting a number fro
 - Cassandra repair / over-streaming — https://www.pythian.com/blog/effective-anti-entropy-repair-cassandra
 - Willow 3d-RBSR (fingerprint security) — https://willowprotocol.org/specs/3d-range-based-set-reconciliation/index.html ; Negentropy — https://github.com/hoytech/negentropy
 - Demers et al., *Epidemic Algorithms*, PODC 1987 ; SWIM — https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf ; memberlist — https://github.com/hashicorp/memberlist
+- A. Rawat, T. K. Vangani, H. Cornelius, V. Daza, *Accelerating Prolly Trees: Simplified Chunking for
+  Rapid Updates*, DLT 2024 workshop (CEUR-WS Vol-3791, paper 8) — https://ceur-ws.org/Vol-3791/paper8.pdf
+  ; journal version `doi:10.1145/3785142` (ACM Distributed Ledger Technologies: Research and
+  Practice, online 2026-01-06)
+  **Bears on:** replaces the classic rolling-hash chunker's O(N)-worst-case cascading rechunking
+  with an anchor-node design bounding each insertion to one chunk plus an O(H) anchor-path update
+  (≤2H hashes), height staying O(log n) — narrows but does not remove §2.1's "heavy machinery /
+  higher latency" ❌ against FingerprintTreeMap. → §2.1
 
 **Aggregate-augmented and page-oriented trees** *(the structural ancestry of `FingerprintTreeMap`,
 surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271 all land here)*
