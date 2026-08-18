@@ -151,6 +151,13 @@ having gated nothing. `.claude/hooks/session-start.sh` now links both at session
 fix in the same place as the `cargo-deny` install it already did: a setup step a docs line asks an
 agent to remember is a setup step that eventually gets skipped.
 
+That still left the mandate itself: once the hooks are linked, `git commit`/`git push` already gate
+tiers 1–2 and `main.yml` gates tier 3 on push, so telling an agent to also run
+`./scripts/run-affected-checks.sh` before declaring work done was the same anti-pattern one layer
+up, just no longer path-blind. AGENTS.md §3 now says so directly — nothing on the list needs a
+manual run — and the script drops out of the recommended workflow. It stays available for the
+actual exception, documented above: tier-3 confidence without a CI round-trip.
+
 ### `cargo package` can fail on a stale sibling, and only locally
 
 Reproducible: pull a commit that adds a **public item to a workspace sibling**, run §3's list in a
