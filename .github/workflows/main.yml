@@ -76,6 +76,8 @@ jobs:
       run: ./scripts/check-domain-purity.sh
     - name: Doc structure (link/anchor/path resolution, SOTA.md §4.2 entry format)
       run: ./scripts/check-doc-structure.sh
+    - name: Test-file naming (split #[cfg(test)] modules are named tests.rs, not <name>_tests.rs)
+      run: ./scripts/check-test-file-naming.sh
 
   # Both feature axes in one job: they are 20 s and 11 s, and the second reuses the first's
   # dependency build. Splitting them would add a runner start to save nothing.

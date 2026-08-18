@@ -1637,4 +1637,4 @@ impl Config {
 }
 
 #[cfg(test)]
-mod replicated_map_tests;
+mod tests;

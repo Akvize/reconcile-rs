@@ -1,6 +1,6 @@
 ---
 description: Writing or modifying tests
-globs: ["tests/**/*.rs", "**/tests/**/*.rs", "**/src/**/tests.rs", "**/*_tests.rs"]
+globs: ["tests/**/*.rs", "**/tests/**/*.rs", "**/src/**/tests.rs"]
 ---
 
 A test that passes is not evidence the test is worth keeping. The gate is whether
