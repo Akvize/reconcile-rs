@@ -22,7 +22,7 @@ use crate::persistence::{DatedEntries, PersistedState, Persistence};
 use super::ReplicatedMap;
 
 /// How often the background task writes a full snapshot to the persistence backend.
-const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Attempts [`with_persistence`](ReplicatedMap::with_persistence) makes to load persisted state
 /// before giving up.

@@ -1232,3 +1232,603 @@ async fn get_cloned_does_not_hold_the_lock_across_a_following_write() {
     assert_eq!(store.get_cloned(&1), Some(20));
     assert_eq!(store.get_cloned(&2), None);
 }
+
+// The tests below close mutation-gate gaps #405's file split exposed: pure code motion, but the
+// first time this code has ever been diffed (and so mutation-tested) on its own — see the PR
+// description for the full survivor list this closes.
+
+/// The metering/buffer-size defaults are pinned to their documented values (32 MiB/s, 1 MiB
+/// floor, 8 MiB) — an accidental `*` → `+`/`/` typo in the byte-count arithmetic would silently
+/// shrink these by orders of magnitude without a type error to catch it.
+#[test]
+fn byte_rate_defaults_match_their_documented_values() {
+    assert_eq!(super::config::DEFAULT_BULK_SEND_RATE, 32 * 1024 * 1024);
+    assert_eq!(super::MIN_BULK_SEND_RATE, 1024 * 1024);
+    assert_eq!(super::config::DEFAULT_SOCKET_BUFFER_SIZE, 8 * 1024 * 1024);
+}
+
+/// Each `with_*` builder actually sets its field on `self`; a mutant collapsing any of them to
+/// `Default::default()` would silently discard both `self` and the argument.
+#[test]
+fn config_builders_actually_set_their_field() {
+    use ipnet::IpNet;
+
+    let net_a: IpNet = "10.0.0.0/8".parse().unwrap();
+    let net_b: IpNet = "10.1.0.0/16".parse().unwrap();
+    let cfg = Config::default().with_nets(&[net_a, net_b]);
+    assert_eq!(cfg.nets[0], Some(net_a));
+    assert_eq!(cfg.nets[1], Some(net_b));
+
+    let cfg = Config::default().with_bulk_send_rate(777_216);
+    assert_eq!(cfg.bulk_send_rate, Some(777_216));
+
+    let cfg = Config::default().with_recv_buffer_size(12_345);
+    assert_eq!(cfg.recv_buffer_size, Some(12_345));
+
+    let cfg = Config::default().with_send_buffer_size(54_321);
+    assert_eq!(cfg.send_buffer_size, Some(54_321));
+
+    let cfg = Config::default().with_freshness_window(Duration::from_secs(42));
+    assert_eq!(cfg.freshness_window, Duration::from_secs(42));
+}
+
+/// The grace-account loop's `member == own_addr || current.contains(&member)` guard must skip
+/// *any* currently-present member, not just this node's own address — a `&&` there would mark a
+/// live, continuously-discovered peer missed on every round and eventually decommission it.
+#[tokio::test]
+async fn a_continuously_present_member_is_never_decommissioned() {
+    use crate::discovery::{DiscoverFuture, Discovery, DiscoveryKind};
+
+    #[derive(Clone)]
+    struct AlwaysPresent(IpAddr);
+    impl Discovery for AlwaysPresent {
+        fn discover(&self) -> DiscoverFuture<'_> {
+            let addr = self.0;
+            Box::pin(async move { Ok(vec![addr]) })
+        }
+        fn kind(&self) -> DiscoveryKind {
+            DiscoveryKind::Authoritative
+        }
+    }
+
+    let peer: IpAddr = "127.0.0.201".parse().unwrap();
+    let store = ReplicatedMap::<i32, i32>::new(
+        ephemeral_config().with_listen_addr("127.0.0.200".parse().unwrap()),
+    )
+    .await
+    .expect("bind failed")
+    .with_discovery_interval(Duration::from_millis(5))
+    // As strict as possible: a single erroneous miss would trip this.
+    .with_discovery_miss_threshold(1)
+    .with_discovery(Arc::new(AlwaysPresent(peer)));
+    // Seed the peer as a known member directly, bypassing a real handshake, so it appears in
+    // `members_snapshot()` from round one.
+    store.engine.members.write().insert(peer);
+
+    let _ = tokio::time::timeout(Duration::from_millis(80), store.discover_periodically()).await;
+
+    assert!(
+        store.engine.members.read().contains(&peer),
+        "a continuously-present member must never be decommissioned"
+    );
+}
+
+/// `ReplicatedMap::start_reconciliation` must actually drive a round through the engine, not
+/// silently no-op: with the *automatic* background trigger disabled (an hour-long
+/// `reconcile_interval`), the only way two peers can converge here is by this method being
+/// called explicitly, proving the wrapper reaches the real engine call.
+#[tokio::test]
+async fn start_reconciliation_actually_drives_a_round() {
+    use std::net::SocketAddr;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net = InMemoryNetwork::new();
+    let port = 5101u16;
+    let a_ip: IpAddr = "127.0.3.5".parse().unwrap();
+    let b_ip: IpAddr = "127.0.3.6".parse().unwrap();
+    let cfg = |ip: IpAddr| {
+        ephemeral_config()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_secs(3600))
+    };
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+    );
+    // Inserted before either peer is known, so the live broadcast on `insert` reaches nobody —
+    // convergence below can only come from the round-based comparison `start_reconciliation`
+    // drives, not from the immediate push every `insert` also performs.
+    a.insert(99, 42);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    // `run()` fires an unconditional round-0 comparison the instant it starts, independent of
+    // `start_reconciliation` ever being called explicitly again — seed the peers only *after*
+    // that has already happened with nobody to reach, or it alone would converge this test
+    // regardless of whether the wrapper under test does anything at all. B never learns of A,
+    // so B can never independently initiate either.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+
+    let mut converged = false;
+    for _ in 0..300 {
+        if b.get(&99).as_deref() == Some(&42) {
+            converged = true;
+            break;
+        }
+        a.start_reconciliation().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        converged,
+        "explicit start_reconciliation calls never converged the peer"
+    );
+}
+
+/// `peers_map_len` must reflect the engine's actual peer count, not a fixed literal.
+#[tokio::test]
+async fn peers_map_len_reflects_the_engine_peers_map() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+    assert_eq!(store.peers_map_len(), 0);
+    store
+        .engine
+        .peers
+        .write()
+        .insert("127.0.0.222".parse().unwrap(), std::time::Instant::now());
+    assert_eq!(store.peers_map_len(), 1);
+}
+
+/// `tombstone_acks_len` must reflect the engine's actual tracked-key count, not a fixed literal.
+#[tokio::test]
+async fn tombstone_acks_len_reflects_the_engine_tombstone_acks_map() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+    assert_eq!(store.tombstone_acks_len(), 0);
+    store
+        .engine
+        .tombstone_acks
+        .write()
+        .insert(1, std::collections::HashMap::new());
+    assert_eq!(store.tombstone_acks_len(), 1);
+}
+
+/// `replay_filter_len` must reflect the engine's actual per-peer replay-filter count: 0 before
+/// any authenticated traffic, and registering the sender after a real authenticated exchange.
+#[tokio::test]
+async fn replay_filter_len_reflects_the_engine_replay_filter() {
+    use std::net::SocketAddr;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net = InMemoryNetwork::new();
+    let port = 5104u16;
+    let a_ip: IpAddr = "127.0.5.5".parse().unwrap();
+    let b_ip: IpAddr = "127.0.5.6".parse().unwrap();
+    let key = gossip::auth::ClusterKey::new([7u8; 32]);
+    let cfg = |ip: IpAddr| {
+        ephemeral_config()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_cluster_key(key.clone())
+            .with_reconcile_interval(Duration::from_millis(5))
+    };
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+    );
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+    b.engine
+        .peers
+        .write()
+        .insert(a_ip, std::time::Instant::now());
+    assert_eq!(b.replay_filter_len(), 0);
+    a.insert(1, 1);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    let mut seen = false;
+    for _ in 0..300 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if b.replay_filter_len() >= 1 {
+            seen = true;
+            break;
+        }
+    }
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        seen,
+        "receiving an authenticated datagram from A must register A in B's replay filter"
+    );
+}
+
+/// `bulk_dumps_in_flight_count` must reflect a real paced cold-sync dump actually in progress.
+#[tokio::test]
+async fn bulk_dumps_in_flight_count_reflects_a_dump_actually_in_progress() {
+    use std::net::SocketAddr;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net = InMemoryNetwork::new();
+    let port = 5105u16;
+    let a_ip: IpAddr = "127.0.6.5".parse().unwrap();
+    let b_ip: IpAddr = "127.0.6.6".parse().unwrap();
+    let cfg = |ip: IpAddr| {
+        ephemeral_config()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_millis(20))
+            // Slow enough that a few hundred KiB of cold-sync payload stays in flight for a
+            // window this test can reliably observe.
+            .with_bulk_send_rate(super::MIN_BULK_SEND_RATE)
+    };
+    let a = ReplicatedMap::<i32, Vec<u8>>::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, Vec<u8>>::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+    );
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+    b.engine
+        .peers
+        .write()
+        .insert(a_ip, std::time::Instant::now());
+    // ~8000 * 200B = ~1.6MB at the 1 MiB/s floor => a couple seconds of paced transfer, a wide
+    // enough window to reliably poll mid-flight even under heavy test-suite contention.
+    let payload = vec![0u8; 200];
+    let entries: Vec<(i32, Vec<u8>)> = (0..8000).map(|k| (k, payload.clone())).collect();
+    a.just_insert_bulk(&entries);
+    assert_eq!(a.bulk_dumps_in_flight_count(), 0);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    let mut seen_in_flight = false;
+    for _ in 0..400 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if a.bulk_dumps_in_flight_count() >= 1 {
+            seen_in_flight = true;
+            break;
+        }
+    }
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        seen_in_flight,
+        "sending a cold-sync bulk dump must register as in-flight"
+    );
+}
+
+/// `set_remote_interval` must actually retune the engine's cross-network cadence: with no nets
+/// declared every peer is remote by default, so this is the sole gate on contact here.
+#[tokio::test]
+async fn set_remote_interval_actually_retunes_the_cross_network_cadence() {
+    use std::net::SocketAddr;
+
+    use ipnet::IpNet;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net = InMemoryNetwork::new();
+    let port = 5102u16;
+    // With no net declared, `Replica` falls back to a flat `127.0.0.1/8` "historical loopback
+    // cluster" where every loopback peer is local (contacted every round, bypassing
+    // `remote_interval` entirely) — declaring A's own net is what actually makes B remote from
+    // A's perspective. B is deliberately left on that flat-loopback fallback rather than also
+    // declaring a narrow net for it: the default `RandomProbe` speculatively probes one random
+    // address per declared net every round, unthrottled by `remote_interval`/`remote_fanout` and
+    // answered unconditionally by whoever it reaches (a responder's own throttle only gates
+    // outbound-*initiated* targets, never inbound requests) — a narrow declared net for B would
+    // give B's own probe a real, if small, chance of finding A and leaking the value through a
+    // wholly different path than the one under test. Sampling out of all 16M `127.0.0.1/8`
+    // addresses instead makes that chance negligible.
+    let net_a: IpNet = "127.1.0.0/24".parse().unwrap();
+    let a_ip: IpAddr = "127.1.0.5".parse().unwrap();
+    let b_ip: IpAddr = "127.2.0.5".parse().unwrap();
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        ephemeral_config()
+            .with_listen_addr(a_ip)
+            .with_port(port)
+            .with_net(net_a)
+            .with_reconcile_interval(Duration::from_millis(5)),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        ephemeral_config()
+            .with_listen_addr(b_ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_millis(5)),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+    );
+    // Inserted before either peer is known, so the live broadcast on `insert` reaches nobody —
+    // only the round-based comparison can deliver it, which is what `remote_interval` gates.
+    a.insert(7, 42);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    // `run()` fires round 0 synchronously, before `reconcile_interval` is ever consulted — with
+    // no peer known yet, that round reaches nobody. Only *after* letting several rounds tick
+    // past (advancing the round counter well past 0, which `round % remote_interval == 0`
+    // would otherwise trivially satisfy) do we introduce the peer and the starved interval.
+    // B never learns of A as a peer (only A -> B is seeded): B must never independently pull
+    // from A, so the only way A's data can reach B is A pushing on its own initiated round —
+    // which is exactly what `remote_interval` gates.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+    a.set_remote_interval(100_000); // effectively never
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        b.get(&7).is_none(),
+        "remote_interval=100000 must starve cross-network contact"
+    );
+
+    a.set_remote_interval(1); // every round
+
+    let mut converged = false;
+    for _ in 0..300 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if b.get(&7).as_deref() == Some(&42) {
+            converged = true;
+            break;
+        }
+    }
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        converged,
+        "retuning remote_interval down must let cross-network contact resume"
+    );
+}
+
+/// `set_remote_fanout` must actually retune the engine's cross-network sample size; the interval
+/// is held fixed at 1 throughout so it can never be the blocker here.
+#[tokio::test]
+async fn set_remote_fanout_actually_retunes_the_cross_network_sample_size() {
+    use std::net::SocketAddr;
+
+    use ipnet::IpNet;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net = InMemoryNetwork::new();
+    let port = 5106u16;
+    // With no net declared, `Replica` falls back to a flat `127.0.0.1/8` "historical loopback
+    // cluster" where every loopback peer is local (contacted every round, bypassing
+    // `remote_fanout` entirely) — declaring A's own net is what actually makes B remote from A's
+    // perspective. B is deliberately left on that flat-loopback fallback rather than also
+    // declaring a narrow net for it: the default `RandomProbe` speculatively probes one random
+    // address per declared net every round, unthrottled by `remote_interval`/`remote_fanout` and
+    // answered unconditionally by whoever it reaches (a responder's own throttle only gates
+    // outbound-*initiated* targets, never inbound requests) — a narrow declared net for B would
+    // give B's own probe a real, if small, chance of finding A and leaking the value through a
+    // wholly different path than the one under test. Sampling out of all 16M `127.0.0.1/8`
+    // addresses instead makes that chance negligible.
+    let net_a: IpNet = "127.1.1.0/24".parse().unwrap();
+    let a_ip: IpAddr = "127.1.1.5".parse().unwrap();
+    let b_ip: IpAddr = "127.2.1.5".parse().unwrap();
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        ephemeral_config()
+            .with_listen_addr(a_ip)
+            .with_port(port)
+            .with_net(net_a)
+            .with_reconcile_interval(Duration::from_millis(5)),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        ephemeral_config()
+            .with_listen_addr(b_ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_millis(5)),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+    );
+    // Inserted before either peer is known, so the live broadcast on `insert` reaches nobody —
+    // only the round-based comparison can deliver it, which is what `remote_fanout` gates. B
+    // never learns of A as a peer (only A -> B is seeded): B must never independently pull from
+    // A, so the only way A's data can reach B is A pushing on its own initiated round.
+    a.insert(7, 42);
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+    a.set_remote_interval(1); // never the blocker here
+    a.set_remote_fanout(0);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        b.get(&7).is_none(),
+        "remote_fanout=0 must starve cross-network contact"
+    );
+
+    a.set_remote_fanout(1);
+
+    let mut converged = false;
+    for _ in 0..300 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if b.get(&7).as_deref() == Some(&42) {
+            converged = true;
+            break;
+        }
+    }
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        converged,
+        "retuning remote_fanout up must let cross-network contact resume"
+    );
+}
+
+/// `set_reconcile_interval` must actually retune the round cadence at runtime.
+#[tokio::test]
+async fn set_reconcile_interval_actually_retunes_the_round_cadence() {
+    use std::net::SocketAddr;
+
+    use ipnet::IpNet;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net_fabric = InMemoryNetwork::new();
+    let port = 5103u16;
+    let shared_net: IpNet = "127.0.4.0/24".parse().unwrap();
+    let a_ip: IpAddr = "127.0.4.5".parse().unwrap();
+    let b_ip: IpAddr = "127.0.4.6".parse().unwrap();
+    let cfg = |ip: IpAddr| {
+        ephemeral_config()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_net(shared_net)
+            // Deliberately far longer than this test's timeout: convergence below can only
+            // happen if the runtime `set_reconcile_interval` call actually overrides this
+            // before the loop's first real wait, proving the setter is not a no-op.
+            .with_reconcile_interval(Duration::from_secs(3600))
+    };
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net_fabric.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net_fabric.bind(SocketAddr::new(b_ip, port))),
+    );
+    // Retuned before `run()` ever starts, so it is already in effect the first time the round
+    // loop consults it (right after the unconditional round-0 call `run()` always makes, which
+    // never honors `reconcile_interval` at all — retuning *after* that first wait has already
+    // begun would not unstick it, since the interval is only re-read at the top of each
+    // iteration).
+    a.set_reconcile_interval(Duration::from_millis(5));
+    a.insert(7, 42);
+
+    let task_a = tokio::spawn(a.clone().run());
+    let task_b = tokio::spawn(b.clone().run());
+    // A only learns of B after round 0 (fires unconditionally and instantly on `run()` entry)
+    // has already happened with no peer to reach; B never learns of A at all, so B can never
+    // independently pull — the only path is A pushing on its own retuned cadence.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+
+    let mut converged = false;
+    for _ in 0..300 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if b.get(&7).as_deref() == Some(&42) {
+            converged = true;
+            break;
+        }
+    }
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        converged,
+        "retuning reconcile_interval before the loop's first wait must make it converge \
+         quickly, not wait out the original 3600s interval"
+    );
+}
+
+/// The periodic snapshot loop actually calls into the persistence backend after
+/// `SNAPSHOT_INTERVAL` elapses — a mutant collapsing the loop body to a no-op would leave the
+/// backend untouched no matter how long `run()` keeps going.
+#[tokio::test]
+async fn snapshot_periodically_actually_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("periodic.bin");
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .expect("bind failed")
+        .with_persistence(Arc::new(FileSnapshot::new(&path)));
+    store.just_insert(1, 10);
+
+    let _ = tokio::time::timeout(
+        super::persistence::SNAPSHOT_INTERVAL + Duration::from_secs(1),
+        store.snapshot_periodically(),
+    )
+    .await;
+
+    let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .expect("bind failed")
+        .with_persistence(Arc::new(FileSnapshot::new(&path)));
+    assert_eq!(
+        restarted.get(&1).as_deref(),
+        Some(&10),
+        "no snapshot was written after a full SNAPSHOT_INTERVAL"
+    );
+}
+
+/// `just_insert_bulk` must actually insert every pair, not silently no-op.
+#[tokio::test]
+async fn just_insert_bulk_actually_inserts_every_pair() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+    store.just_insert_bulk(&[(1, 10), (2, 20), (3, 30)]);
+    assert_eq!(store.get(&1).as_deref(), Some(&10));
+    assert_eq!(store.get(&2).as_deref(), Some(&20));
+    assert_eq!(store.get(&3).as_deref(), Some(&30));
+}
+
+/// `just_remove_bulk` must actually remove every key, not silently no-op.
+#[tokio::test]
+async fn just_remove_bulk_actually_removes_every_key() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+    store.just_insert_bulk(&[(1, 10), (2, 20)]);
+    store.just_remove_bulk(&[1, 2]);
+    assert_eq!(store.get(&1).as_deref(), None);
+    assert_eq!(store.get(&2).as_deref(), None);
+}
+
+/// `set_tombstone_timeout` must actually retune the wheel at runtime, not silently no-op.
+#[tokio::test]
+async fn set_tombstone_timeout_actually_retunes_the_wheel() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap()
+        .with_tombstone_timeout(Duration::from_secs(3600)); // won't expire on its own
+    store.remove(&0);
+    assert!(
+        store.tombstones.expired().is_empty(),
+        "must not be expired yet under the long initial timeout"
+    );
+
+    store.set_tombstone_timeout(Duration::from_millis(1));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(
+        store.tombstones.expired(),
+        vec![0],
+        "retuning the timeout down must make the tombstone expire promptly"
+    );
+}
