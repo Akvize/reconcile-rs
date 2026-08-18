@@ -117,6 +117,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 }
 
+/// The three things a batched send needs, which always travel together: the [`Transport`], the
+/// authenticator, and the per-sender replay counter.
 pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) transport: &'a T,
     pub(crate) authenticator: &'a auth::Authenticator,
