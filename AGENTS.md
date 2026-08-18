@@ -29,7 +29,7 @@ ln -sf ../../pre-commit .git/hooks/pre-commit
 ln -sf ../../pre-push .git/hooks/pre-push
 ```
 
-## 3. Build, lint, test — run all before declaring work done
+## 3. Build, lint, test — gated automatically, not hand-run
 
 In CI's order (`.github/workflows/main.yml`):
 
@@ -55,21 +55,27 @@ cargo deny check                                              # advisories/licen
 ./scripts/check-public-api.sh                                 # public-API snapshot + 0.x-leak gate, §11
 ```
 
-`--workspace`, never `--all`. This list is what CI runs and what "done" means. The two git hooks run
-tiered *subsets* of it and deliberately do not reproduce it; a check belongs in the earliest tier
-whose budget it fits, and if it fits none of them it is CI-only by design:
+`--workspace`, never `--all`. This list is what CI runs and what "done" means — gated automatically
+in tiers, never by hand, once the hooks are linked (§2); a check belongs in the earliest tier whose
+budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
 | [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the three `./scripts/check-doc-*.sh`/`check-domain-purity.sh` gates above | 0.4 s |
-| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s |
-| [`main.yml`](./.github/workflows/main.yml) | everything above | minutes |
+| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
+| [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 
-So a commit may be lint-dirty and a push should not be: `git commit` is a save point, `git push` a
-publication, and `git push --no-verify` skips tier 2 on purpose. Both hooks check a materialized
-tree — the index, then the commit being pushed — because what is recorded or published is what has
-to be green, whatever is half-finished on disk. `main.yml` and this list are kept in sync by hand —
-change one, change both.
+`git commit` triggers tier 1, `git push` triggers tier 2 and — via `main.yml` — tier 3: running any
+of this by hand ahead of that re-plays a check a gate already owns the result of. Both hooks check
+a materialized tree — the index, then the commit being pushed — so what gets recorded or published
+is what has to be green, not whatever is half-finished on disk. `git push --no-verify` skips tier 2
+on purpose; CI is not skippable that way and remains the authority. `main.yml` and this list are
+kept in sync by hand — change one, change both.
+
+A gate also never runs on a change nothing in it can affect, at any tier:
+[`./scripts/lib-changed-paths.sh`](./scripts/lib-changed-paths.sh) categorizes every changed path as
+`rust`/`deps`/neither — the categories `main.yml`'s `changes` job, `mutants.yml`'s copy of it, and
+`./pre-push` all read, hand-synced with `main.yml`'s filter for the same reason as above.
 
 Why `--all-targets` is load-bearing, why the export exists, and why each tier stops where it does:
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) "Why the gate looks like this" — measured, not asserted.

@@ -121,6 +121,43 @@ Measured on this workspace, four cores, warm `target/`.
   covered for the common case. Doc tests are *not* in that list — plain `cargo test` already runs
   them, which is why §3's separate `cargo test --doc` line is belt-and-braces, not extra coverage.
 
+### A gate never runs on a change it cannot affect
+
+`main.yml`'s `changes` job (and `mutants.yml`'s copy of it) already skip the compile-heavy CI jobs
+on a diff that cannot touch their category — that is what the `changes` job's own header comment
+in `main.yml` explains. Two things did not follow that logic until now: `./pre-push` ran its tier-2
+pair unconditionally regardless of what a push touched, and CLAUDE.md told an agent to run
+AGENTS.md §3's full list "not a subset" — overriding, on every agent-driven change, exactly the
+category-based skip CI itself already applies to the same commands.
+
+`./scripts/lib-changed-paths.sh` is the fix: one predicate (`affects_rust`/`affects_deps`), sourced
+by `./pre-push` and by `./scripts/run-affected-checks.sh` (an optional way to get tier-3 confidence
+locally before a push, narrowed the same way). Its categories are hand-copied from `main.yml`'s
+`rust`/`deps` filters (bash `case` arms mirroring `dorny/paths-filter`'s globs one for one) rather
+than shared as data, for the same reason `main.yml` and AGENTS.md §3's command list are themselves
+kept in sync by hand: a YAML `filters:` block and a bash predicate cannot both read one file
+without a third tool to parse YAML inside pre-commit's 0.4 s budget.
+
+Both callers fail open, not closed: an unresolvable `origin/main` (not fetched, no such remote)
+runs everything rather than silently skipping on a base it cannot compute — the one failure mode a
+structural-relevance mechanism must never have, since a false "unaffected" verdict is
+indistinguishable from a bug that shipped without the gate that would have caught it.
+
+A filtered `./pre-push` is only as good as `./pre-push` actually running, and on Claude Code's web
+sessions it never had: `.git/hooks/pre-commit`/`pre-push` are per-checkout symlinks (AGENTS.md §2),
+and a fresh container starts without them, same as it starts without `cargo-deny` (below). An agent
+that doesn't know to link them gets neither hook, silently -- `git commit`/`git push` just succeed,
+having gated nothing. `.claude/hooks/session-start.sh` now links both at session start, the same
+fix in the same place as the `cargo-deny` install it already did: a setup step a docs line asks an
+agent to remember is a setup step that eventually gets skipped.
+
+That still left the mandate itself: once the hooks are linked, `git commit`/`git push` already gate
+tiers 1–2 and `main.yml` gates tier 3 on push, so telling an agent to also run
+`./scripts/run-affected-checks.sh` before declaring work done was the same anti-pattern one layer
+up, just no longer path-blind. AGENTS.md §3 now says so directly — nothing on the list needs a
+manual run — and the script drops out of the recommended workflow. It stays available for the
+actual exception, documented above: tier-3 confidence without a CI round-trip.
+
 ### `cargo package` can fail on a stale sibling, and only locally
 
 Reproducible: pull a commit that adds a **public item to a workspace sibling**, run §3's list in a

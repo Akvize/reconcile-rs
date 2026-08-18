@@ -50,7 +50,12 @@ jobs:
             - 'deny.toml'
             - '.github/workflows/main.yml'
 
+  # `cargo fmt --check` only ever inspects `**/*.rs`, so it can't produce a different verdict on
+  # a change the `rust` filter doesn't cover -- same reasoning as the compile jobs below, gated
+  # the same way for the first time here (`changes` job's header comment).
   fmt:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
