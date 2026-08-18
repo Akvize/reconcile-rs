@@ -15,6 +15,7 @@ pub use reconcile::InMemoryTransport
 pub use reconcile::IntoIter
 pub use reconcile::IntoKeys
 pub use reconcile::IntoValues
+pub use reconcile::ItemRange
 pub use reconcile::Iter
 pub use reconcile::Key
 pub use reconcile::Keys
@@ -71,7 +72,6 @@ impl core::panic::unwind_safe::UnwindSafe for reconcile::FileSnapshot
 pub mod reconcile::read_replica_map
 pub struct reconcile::read_replica_map::ReadReplicaMap<K, V>
 impl<K: lww_register::bounds::Key, V: lww_register::bounds::Value> reconcile::read_replica_map::ReadReplicaMap<K, V>
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::add_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::contains_key(&self, &K) -> bool
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
@@ -88,6 +88,7 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(rec
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::ops::range::RangeBounds<K>>(&self, R) -> alloc::vec::Vec<(K, V)>
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::to_vec(&self) -> alloc::vec::Vec<(K, V)>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::values(&self) -> alloc::vec::Vec<V>
@@ -104,7 +105,6 @@ impl<K, V> !core::panic::unwind_safe::UnwindSafe for reconcile::read_replica_map
 pub mod reconcile::read_replica_set
 pub struct reconcile::read_replica_set::ReadReplicaSet<K>(_)
 impl<K: lww_register::bounds::Key> reconcile::read_replica_set::ReadReplicaSet<K>
-pub fn reconcile::read_replica_set::ReadReplicaSet<K>::add_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::contains(&self, &K) -> bool
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::is_empty(&self) -> bool
@@ -114,6 +114,7 @@ pub fn reconcile::read_replica_set::ReadReplicaSet<K>::net(&self) -> ipnet::ipne
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::run(self)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_net(&self, ipnet::ipnet::IpNet)
+pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K> core::clone::Clone for reconcile::read_replica_set::ReadReplicaSet<K>
@@ -173,7 +174,6 @@ impl core::panic::unwind_safe::UnwindSafe for reconcile::replicated_map::Config
 pub struct reconcile::replicated_map::ReplicatedMap<K, V> where K: core::clone::Clone + core::hash::Hash + core::cmp::Eq + core::marker::Send + core::marker::Sync
 impl<K: lww_register::bounds::Key + core::hash::Hash, V: lww_register::bounds::Value> reconcile::replicated_map::ReplicatedMap<K, V>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::add_net(&self, ipnet::ipnet::IpNet) -> bool
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::add_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, V>) + 'static>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::clear(&self)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::contains_key(&self, &K) -> bool
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::delete_range<R: core::ops::range::RangeBounds<K>>(&self, R)
@@ -205,6 +205,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::retain<P: core::ops::func
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::run(self)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_nets(&self, &[ipnet::ipnet::IpNet])
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, V>) + 'static>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_reconcile_interval(&self, core::time::Duration)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_remote_fanout(&self, usize)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_remote_interval(&self, u32)
@@ -240,7 +241,6 @@ pub mod reconcile::replicated_set
 pub struct reconcile::replicated_set::ReplicatedSet<K> where K: core::clone::Clone + core::hash::Hash + core::cmp::Eq + core::marker::Send + core::marker::Sync(_)
 impl<K: lww_register::bounds::Key + core::hash::Hash> reconcile::replicated_set::ReplicatedSet<K>
 pub fn reconcile::replicated_set::ReplicatedSet<K>::add_net(&self, ipnet::ipnet::IpNet) -> bool
-pub fn reconcile::replicated_set::ReplicatedSet<K>::add_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, ()>) + 'static>(&self, F)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::clear(&self)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::contains(&self, &K) -> bool
 pub fn reconcile::replicated_set::ReplicatedSet<K>::delete_range<R: core::ops::range::RangeBounds<K>>(&self, R)
@@ -263,6 +263,7 @@ pub fn reconcile::replicated_set::ReplicatedSet<K>::retain<P: core::ops::functio
 pub async fn reconcile::replicated_set::ReplicatedSet<K>::run(self)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_nets(&self, &[ipnet::ipnet::IpNet])
+pub fn reconcile::replicated_set::ReplicatedSet<K>::set_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, ()>) + 'static>(&self, F)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_reconcile_interval(&self, core::time::Duration)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_remote_fanout(&self, usize)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_remote_interval(&self, u32)
@@ -304,7 +305,6 @@ impl core::panic::unwind_safe::RefUnwindSafe for reconcile::FileSnapshot
 impl core::panic::unwind_safe::UnwindSafe for reconcile::FileSnapshot
 pub struct reconcile::ReadReplicaMap<K, V>
 impl<K: lww_register::bounds::Key, V: lww_register::bounds::Value> reconcile::read_replica_map::ReadReplicaMap<K, V>
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::add_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::contains_key(&self, &K) -> bool
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
@@ -321,6 +321,7 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(rec
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::ops::range::RangeBounds<K>>(&self, R) -> alloc::vec::Vec<(K, V)>
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::to_vec(&self) -> alloc::vec::Vec<(K, V)>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::values(&self) -> alloc::vec::Vec<V>
@@ -336,7 +337,6 @@ impl<K, V> !core::panic::unwind_safe::RefUnwindSafe for reconcile::read_replica_
 impl<K, V> !core::panic::unwind_safe::UnwindSafe for reconcile::read_replica_map::ReadReplicaMap<K, V>
 pub struct reconcile::ReadReplicaSet<K>(_)
 impl<K: lww_register::bounds::Key> reconcile::read_replica_set::ReadReplicaSet<K>
-pub fn reconcile::read_replica_set::ReadReplicaSet<K>::add_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::contains(&self, &K) -> bool
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::is_empty(&self) -> bool
@@ -346,6 +346,7 @@ pub fn reconcile::read_replica_set::ReadReplicaSet<K>::net(&self) -> ipnet::ipne
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::run(self)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_net(&self, ipnet::ipnet::IpNet)
+pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K> core::clone::Clone for reconcile::read_replica_set::ReadReplicaSet<K>
@@ -360,7 +361,6 @@ impl<K> !core::panic::unwind_safe::UnwindSafe for reconcile::read_replica_set::R
 pub struct reconcile::ReplicatedMap<K, V> where K: core::clone::Clone + core::hash::Hash + core::cmp::Eq + core::marker::Send + core::marker::Sync
 impl<K: lww_register::bounds::Key + core::hash::Hash, V: lww_register::bounds::Value> reconcile::replicated_map::ReplicatedMap<K, V>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::add_net(&self, ipnet::ipnet::IpNet) -> bool
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::add_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, V>) + 'static>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::clear(&self)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::contains_key(&self, &K) -> bool
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::delete_range<R: core::ops::range::RangeBounds<K>>(&self, R)
@@ -392,6 +392,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::retain<P: core::ops::func
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::run(self)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_nets(&self, &[ipnet::ipnet::IpNet])
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, V>) + 'static>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_reconcile_interval(&self, core::time::Duration)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_remote_fanout(&self, usize)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::set_remote_interval(&self, u32)
@@ -425,7 +426,6 @@ impl<K, V> !core::panic::unwind_safe::UnwindSafe for reconcile::replicated_map::
 pub struct reconcile::ReplicatedSet<K> where K: core::clone::Clone + core::hash::Hash + core::cmp::Eq + core::marker::Send + core::marker::Sync(_)
 impl<K: lww_register::bounds::Key + core::hash::Hash> reconcile::replicated_set::ReplicatedSet<K>
 pub fn reconcile::replicated_set::ReplicatedSet<K>::add_net(&self, ipnet::ipnet::IpNet) -> bool
-pub fn reconcile::replicated_set::ReplicatedSet<K>::add_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, ()>) + 'static>(&self, F)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::clear(&self)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::contains(&self, &K) -> bool
 pub fn reconcile::replicated_set::ReplicatedSet<K>::delete_range<R: core::ops::range::RangeBounds<K>>(&self, R)
@@ -448,6 +448,7 @@ pub fn reconcile::replicated_set::ReplicatedSet<K>::retain<P: core::ops::functio
 pub async fn reconcile::replicated_set::ReplicatedSet<K>::run(self)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_nets(&self, &[ipnet::ipnet::IpNet])
+pub fn reconcile::replicated_set::ReplicatedSet<K>::set_pre_insert<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::Entry<lww_register::clock::Timestamp, ()>) + 'static>(&self, F)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_reconcile_interval(&self, core::time::Duration)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_remote_fanout(&self, usize)
 pub fn reconcile::replicated_set::ReplicatedSet<K>::set_remote_interval(&self, u32)
