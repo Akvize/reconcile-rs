@@ -554,9 +554,14 @@ The crate is covered by unit, integration, property-based and documentation test
 suite with (see AGENTS.md §3 for the exact CI invocations, including the two feature-set variants):
 
 ```sh
-cargo test --workspace          # unit + integration tests
-cargo test --doc --workspace    # documentation examples only
+cargo install cargo-nextest
+cargo nextest run --workspace   # unit + integration tests, process-isolated, retries flaky failures
+cargo test --doc --workspace    # documentation examples only — nextest doesn't run these
 ```
+
+A test passing is not the same as it detecting a bug: `./scripts/check-mutation-gate.sh` injects
+faults into the lines a change touches and requires the suite to catch them (CI:
+`.github/workflows/mutants.yml`, config: `.cargo/mutants.toml`; rationale in CONTRIBUTING.md).
 
 Code coverage is measured on every CI run with
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and reported to

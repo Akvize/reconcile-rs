@@ -43,6 +43,6 @@ for commit in ${commits[@]+"${commits[@]}"}; do
   echo "Running cargo clippy on $commit"
   (cd "$tree"; cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings)
 
-  echo "Running cargo test on $commit"
-  (cd "$tree"; cargo test --workspace --features internal-testing)
+  echo "Running cargo nextest on $commit"
+  (cd "$tree"; cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail)
 done

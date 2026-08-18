@@ -44,9 +44,9 @@ cargo fmt --check
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
-cargo test --workspace --features internal-testing
-cargo test --workspace --all-features
-cargo test --doc --workspace --features internal-testing
+cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
+cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
+cargo test --doc --workspace --features internal-testing  # nextest doesn't run doctests
 cargo bench --no-run --features internal-testing              # benches must compile
 cargo doc --workspace                                         # both matter: an intra-doc link to a
 cargo doc --workspace --all-features                          # feature-gated item dangles in only one

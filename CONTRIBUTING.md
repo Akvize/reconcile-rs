@@ -49,13 +49,15 @@ git config --global user.name
 git config --global user.email
 ls -l .git/hooks/pre-commit .git/hooks/pre-push   # both hooks linked
 rustc --version
-cargo deny --version       # AGENTS.md §3's last line; the only one needing a subcommand
+cargo deny --version        # AGENTS.md §3's last line; the only one needing a subcommand
+cargo nextest --version     # AGENTS.md §3's test lines run under this
+ast-grep --version          # structural search/rewrite, not part of any gate
 command -v rust-analyzer dockerfile-language-server-nodejs taplo marksman
 ```
 
-An image built before `cargo-deny` was added to `Dockerfile.dev` passes every check above except
-that one — rebuild (`make dc-rebuild`, or `make build`) rather than installing it by hand, so the
-image and this list stay the same artifact.
+An image built before `cargo-deny`/`cargo-nextest`/`ast-grep` were added to `Dockerfile.dev` passes
+every check above except those — rebuild (`make dc-rebuild`, or `make build`) rather than installing
+them by hand, so the image and this list stay the same artifact.
 
 ## Git hooks
 
@@ -146,6 +148,35 @@ CARGO_TARGET_DIR=$(mktemp -d) cargo package --workspace --allow-dirty
 If that passes, the tree is fine and the warm `target/` was the whole story. CI never sees this —
 it starts from a cold target — so a local-only `cargo package` failure on a symbol a sibling just
 gained is this, not the change under test.
+
+### Why nextest, and why `--flaky-result fail`
+
+nextest runs each test in its own process rather than as a thread in one binary, which is what
+makes `--retries` meaningful: a retry re-runs the actual test process, not just the assertion, so a
+test relying on FD/socket/thread-pool state left over by an earlier failure in the same process
+can't quietly pass on retry the way it might under `cargo test`. `--flaky-result fail` matters
+because the default (`pass`) is silent: a test that only passes on retry 3/4 exits 0 either way, so
+without this flag a flaky test never shows up in CI at all — it just costs time. `cargo test --doc`
+stays a separate §3 line: nextest does not run doctests.
+
+### The mutation gate: why coverage isn't enough
+
+`scripts/check-mutation-gate.sh` (config: `.cargo/mutants.toml`; CI: `.github/workflows/mutants.yml`)
+answers a different question than coverage does: not "did the suite execute this line" but "would
+the suite catch a plausible bug here." Meta's ACH study found **49%** of fault-detecting generated
+tests added zero line coverage (arXiv:2501.12862) — a coverage-delta gate would have discarded half
+the tests that mattered.
+
+Hermeticity is a precondition, not a nicety: `tests/proptest_*.rs` draws a fresh random seed per run
+unless `PROPTEST_RNG_SEED` is set, which would make the same mutant `MISSED` on one run and caught on
+the next. The gate pins it (`20260817`); nothing else in CI does, deliberately — pinning it
+everywhere would trade away what property tests are for, exploring new inputs on every run.
+
+Two lanes, not one: `pr-diff` gates every PR on the mutants its own diff introduces
+(`--in-diff`, verified to need `--workspace` alongside it — without that flag, cargo-mutants scopes
+to the root `reconcile` package and silently skips rsos/rbsr/lww-register/gossip entirely). `nightly`
+sweeps the full ~1400-mutant workspace, sharded 8 ways, and is reported as a trend
+(`continue-on-error`), not a gate — a whole-repo mutation score is a number to watch, not a wall.
 
 ## The one gate no script runs
 
