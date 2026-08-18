@@ -656,7 +656,10 @@ mod pacing {
         }
 
         // One message far bigger than a single 64 KiB datagram, flanked by two ordinary ones.
-        let oversized = vec![Message::Update((999u64, vec![0u8; super::super::BUFFER_SIZE * 2]))];
+        let oversized = vec![Message::Update((
+            999u64,
+            vec![0u8; super::super::BUFFER_SIZE * 2],
+        ))];
         let small_before = bulk_updates(1, 16);
         let small_after = bulk_updates(1, 16);
 
