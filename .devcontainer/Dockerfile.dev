@@ -33,6 +33,15 @@ RUN cargo install taplo-cli --locked --features lsp
 # own version inside `EmbarkStudios/cargo-deny-action@v2` rather than at a fixed one.
 RUN cargo install cargo-deny --locked
 
+# AGENTS.md §3's test lines run under nextest (process-per-test isolation, native flaky-test
+# detection). Unpinned to match CI's `taiki-e/install-action@cargo-nextest`.
+RUN cargo install cargo-nextest --locked
+
+# Structural search/rewrite for Rust (`ast-grep run -p '$X.unwrap()'`), a syntax-aware complement
+# to `rg` for edits a regex would silently under- or over-match (generics, async, macro calls).
+# Not part of any gate — a workflow tool, like rust-analyzer above.
+RUN cargo install ast-grep --locked
+
 RUN curl -L \
      https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux \
      -o /usr/local/bin/marksman \

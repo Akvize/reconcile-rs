@@ -94,8 +94,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
+    - uses: taiki-e/install-action@cargo-nextest
     - run: cargo build --workspace --verbose
-    - run: cargo test --workspace --features internal-testing --verbose
+    - run: cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
     - run: cargo test --doc --workspace --features internal-testing --verbose
 
   # AGENTS.md §6 gates the two feature variants separately on purpose: feature interactions hide
@@ -108,7 +109,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - run: cargo test --workspace --all-features --verbose
+    - uses: taiki-e/install-action@cargo-nextest
+    - run: cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
 
   # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
   # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
@@ -121,9 +123,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
+    - uses: taiki-e/install-action@cargo-nextest
     - run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
     - run: cargo build --workspace --no-default-features --features mac-hmac --verbose
-    - run: cargo test --workspace --no-default-features --features mac-hmac,internal-testing --verbose
+    - run: cargo nextest run --workspace --no-default-features --features mac-hmac,internal-testing --retries 4 --flaky-result fail
 
   # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
   docs:
