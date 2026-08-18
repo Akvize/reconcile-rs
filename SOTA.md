@@ -591,21 +591,25 @@ per issue, none of them a 1.0 gate; the claim and the evidence live in the issue
 |---|---|
 | Is the refinement tree's comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
 | What is the false-convergence rate at reduced fingerprint width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
-| Does a hash-derived split rule measurably break the bound rank cuts license? | [#356](https://github.com/Akvize/reconcile-rs/issues/356) |
-| `Comparison` hands a policy the fingerprint, so a third-party policy can void that bound silently | [#352](https://github.com/Akvize/reconcile-rs/issues/352) |
 | Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
 | Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
 | Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
 | The analysis is dimension-free; the RSOS contract is not — what does `δ > 1` actually need? | [#360](https://github.com/Akvize/reconcile-rs/issues/360) |
 | The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
 
-Two results landed with this index rather than as open issues, because they close rather than open
+Four results landed with this index rather than as open issues, because they close rather than open
 a question: a divergence-adaptive policy is confined to the count, and the count is blind exactly
 where the exact-count guarantee has already run out (folded into
-[#318](https://github.com/Akvize/reconcile-rs/issues/318)); and re-ordering the store does not
-rescue that signal — `rbsr/tests/balance_under_position_map.rs` shows only an order whose leading
+[#318](https://github.com/Akvize/reconcile-rs/issues/318)); re-ordering the store does not rescue
+that signal — `rbsr/tests/balance_under_position_map.rs` shows only an order whose leading
 component is the one that changed makes a divergence visible, so "make `π` injective" is the wrong
-rule, relocation is.
+rule, relocation is; `Comparison` no longer hands a policy the fingerprint at all — narrowed to
+`span()`/`remote_size()`/`agrees()`, making the violation structurally unspellable rather than
+merely bounded ([#352](https://github.com/Akvize/reconcile-rs/issues/352)); and a hash-derived
+split rule does not cleanly exceed the bound — the sharper, statistically unambiguous result is
+that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
+([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
+grounding for the split-boundary half of this claim").
 
 **SOTA target by axis:**
 
