@@ -14,6 +14,7 @@ mod config;
 mod construction;
 mod discovery;
 mod membership;
+mod peer_cap;
 mod persistence;
 mod read;
 mod write;
