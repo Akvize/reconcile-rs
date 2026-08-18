@@ -6,7 +6,9 @@ Source of truth for any human or AI agent working here, across tools (Claude Cod
 This file states rules, not rationale. For rationale and worked examples, follow the links —
 duplicating them here is exactly the rot this file is meant to avoid (§10). That is a budget, not a
 preference: `./scripts/check-doc-budget.sh` fails if this file and `CLAUDE.md` exceed 200 lines
-together, since `CLAUDE.md` imports this one verbatim and a reader gets the sum.
+together, since `CLAUDE.md` imports this one verbatim and a reader gets the sum. The same script
+also caps `SOTA.md` on its own, larger budget — durable reference, not read every session, but not
+unbounded either.
 
 ## 1. Map
 
@@ -38,9 +40,10 @@ export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; wit
                                                              # is a warning locally and an error
                                                              # in CI — run the list as CI runs it
 cargo fmt --check
-./scripts/check-doc-budget.sh                                # AGENTS.md + CLAUDE.md ≤ 200 lines
+./scripts/check-doc-budget.sh                     # AGENTS.md + CLAUDE.md ≤ 200 lines, SOTA.md ≤ 1100
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
 ./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
+./scripts/check-test-file-naming.sh                # split #[cfg(test)] modules named tests.rs
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
@@ -61,7 +64,7 @@ budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
-| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the three `./scripts/check-doc-*.sh`/`check-domain-purity.sh` gates above | 0.4 s |
+| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh` gates above | 0.4 s |
 | [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 

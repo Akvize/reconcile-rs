@@ -22,3 +22,6 @@ echo "Running domain-purity check"
 
 echo "Running doc-structure check"
 (cd $TEMPDIR; ./scripts/check-doc-structure.sh)
+
+echo "Running test-file-naming check"
+(cd $TEMPDIR; ./scripts/check-test-file-naming.sh)

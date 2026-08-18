@@ -4,7 +4,7 @@ globs: ["src/replicated_map.rs", "src/replica.rs"]
 ---
 
 These two files are 1596 and 1494 lines of production code (their inline `#[cfg(test)]`
-modules moved to `src/replicated_map/replicated_map_tests.rs` / `src/replica/tests.rs` —
+modules moved to `src/replicated_map/tests.rs` / `src/replica/tests.rs` —
 issue #402 phase 1). Still large: together they're ~13% of the repo, and reading either in
 full costs more context than most whole sessions need.
 

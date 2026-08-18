@@ -70,12 +70,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Doc budget (AGENTS.md + CLAUDE.md line cap)
+    - name: Doc budget (AGENTS.md + CLAUDE.md, and SOTA.md, line caps)
       run: ./scripts/check-doc-budget.sh
     - name: Domain purity (hexagonal boundary + ARCHITECTURE.md §2's graph vs the manifests)
       run: ./scripts/check-domain-purity.sh
     - name: Doc structure (link/anchor/path resolution, SOTA.md §4.2 entry format)
       run: ./scripts/check-doc-structure.sh
+    - name: Test-file naming (split #[cfg(test)] modules are named tests.rs, not <name>_tests.rs)
+      run: ./scripts/check-test-file-naming.sh
 
   # Both feature axes in one job: they are 20 s and 11 s, and the second reuses the first's
   # dependency build. Splitting them would add a runner start to save nothing.
