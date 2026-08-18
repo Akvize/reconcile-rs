@@ -4,13 +4,15 @@
 
 `reconcile-rs` is a reconciliation service that keeps a key-value map synchronised across several
 instances. This document describes the architecture as it stands today — a completed hexagonal
-(ports & adapters) split into five crates. Correctness and security properties, and the current
-publish status, are tracked in [`PROGRESS.md`](./PROGRESS.md); state-of-the-art positioning is in
-[`SOTA.md`](./SOTA.md). Code locations are given as `file:line` against the current tree.
+(ports & adapters) split into five crates. Correctness and security properties are tracked below
+(§8); state-of-the-art positioning is in [`SOTA.md`](./SOTA.md). Code locations are given as
+`file:line` against the current tree.
 
 The public API and the on-wire / on-disk formats are pre-1.0 and may change. Only `reconcile` is
-published, and that published version predates this workspace split — see
-[`PROGRESS.md`](./PROGRESS.md) for the current publish state.
+published, and that published version predates this workspace split — current publish status and
+the release gate list are tracked live by the `v1.0.0` milestone and
+[issue #206](https://github.com/Akvize/reconcile-rs/issues/206), which owns the plan and the
+reasoning.
 
 ---
 
@@ -299,7 +301,7 @@ bool` became `kind() -> DiscoveryKind`.
 ## 5. Invariants
 
 Load-bearing properties preserved across any change; they encode the correctness and security
-guarantees `PROGRESS.md` tracks the resolution history of.
+guarantees whose resolution history §8 tracks.
 
 1. **Fingerprint format & arithmetic** — `[u64; 4]`, per-element BLAKE3 over `rsos::encoding`'s
    injective byte encoding (not `std::hash::Hash`, whose byte sequences Rust does not stabilize —
@@ -429,6 +431,45 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   larger-than-RAM and full replication are in direct tension — a node holding everything but
   spilling to disk on read destroys the crate's one unambiguous advantage (`SOTA.md` §1.6). Proposal
   and staging: #186.
+
+---
+
+## 8. Audit history
+
+Resolution status of every finding (`Fxx`) from the original code audit (commit `64f1ebf`).
+✅ resolved · ◐ partial · ◯ open. A later 2026-06 adversarial audit filed further findings as
+[#195](https://github.com/Akvize/reconcile-rs/issues/195)–[#205](https://github.com/Akvize/reconcile-rs/issues/205)
+and a 2026-08-10 public-API audit as
+[#282](https://github.com/Akvize/reconcile-rs/issues/282)–[#299](https://github.com/Akvize/reconcile-rs/issues/299),
+both tracked under [issue #206](https://github.com/Akvize/reconcile-rs/issues/206), which owns their
+current status; this table is the historical record of the first, closed audit only.
+
+| # | Severity | Finding | Status | Resolution |
+|---|----------|---------|--------|-------------------|
+| F1 | Critical | `hash==0` sentinel → silent divergence | ✅ | #106 — emptiness/equality decided on `size`, not `hash` |
+| F2 | Critical | panic on malformed UDP → remote DoS | ✅ | #107 — malformed datagrams dropped (`warn!`+`return`) |
+| F3 | Critical | unauthenticated + attacker-controlled timestamp | ✅ | #108 — per-datagram keyed MAC, verified before deserialize (opt-in key) |
+| F4 | Critical | tombstone resurrection (60 s wall-clock GC) | ✅ | #109 — GC gated on causal stability (§5 inv. 6) |
+| F5 | High | physical-clock LWW (lossy + non-commutative) | ✅ | #110 — Hybrid Logical Clock + total order (§4, §5 inv. 2) |
+| F6 | High | 64-bit XOR fingerprint (weak, craftable) | ✅ | #111 — 256-bit additive BLAKE3 (§5 inv. 1). The replacement is itself craftable by a **writing** adversary (Wagner's balance problem over ℤ/2²⁵⁶ — `rbsr/tests/wagner_false_convergence.rs`), tracked separately as [#337](https://github.com/Akvize/reconcile-rs/issues/337) |
+| F7 | High | crafted `RangeAggregate` → panic/underflow | ✅ | #112 — bound validation: an inverted range is rejected before indexing (`rbsr/src/protocol.rs`) |
+| F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 + `rsos::encoding` (§6) — wire fingerprint is BLAKE3 over an owned canonical byte encoding |
+| F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
+| F10 | High | IP-scan discovery, O(N²) membership | ◐ | `Discovery` port + `DnsDiscovery` (§3.2) lands a cloud-native path; bounded-fan-out membership (SWIM/HyParView) still open — [#147](https://github.com/Akvize/reconcile-rs/issues/147)/[#190](https://github.com/Akvize/reconcile-rs/issues/190) |
+| F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_fingerprint_tree_map.rs`, `tests/fuzz_packets.rs` |
+| F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
+| F13 | Medium | panic-only API (no `Result`) | ✅ | #148 — fallible `new` constructors; no network send can panic the run loops |
+| F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | #149 — hook runs outside the write lock on both paths, regression-tested |
+| F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
+| F16 | Medium | loopback benches + README inconsistency | ✅ | [#280](https://github.com/Akvize/reconcile-rs/issues/280) — seeded delay/loss/reordering `Transport` decorator, RTT sweep and loss lane; numbers in `benches/README.md` |
+| F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
+| F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps (#151); `peers` map bounded by `Config::max_peers` (default 1024) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) |
+| F19 | Low | dependency hygiene | ✅ | bincode `with_limit` (#151); `overflow-checks = true` + `cargo deny` CI lane — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
+
+**Score:** 16 resolved · 3 partial (F9, F10, F17) · 0 open. All Critical resolved; all but one High
+resolved or mitigated. Live release-readiness status (the 2026-06 and 2026-08-10 audits, and every
+open maturity/roadmap item) is tracked by the `v1.0.0` milestone and
+[issue #206](https://github.com/Akvize/reconcile-rs/issues/206); this table does not duplicate it.
 
 ---
 

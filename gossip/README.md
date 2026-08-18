@@ -12,7 +12,9 @@
 > or disappear in any release**, including a patch release, with no deprecation period and no
 > mention in `reconcile`'s changelog. Several items are `pub` only so the facade can reach them
 > across the crate boundary; they were private before the workspace split and are not supported API.
-> Current publish status: [`PROGRESS.md`](https://github.com/Akvize/reconcile-rs/blob/main/PROGRESS.md).
+> Current publish status: the
+> [`v1.0.0` milestone](https://github.com/Akvize/reconcile-rs/milestone/2) and
+> [issue #206](https://github.com/Akvize/reconcile-rs/issues/206).
 
 The gossip adapter layer of [`reconcile-rs`](https://github.com/Akvize/reconcile-rs) — everything a
 replica needs to *talk* to its peers, and nothing about what it says:

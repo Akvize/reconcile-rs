@@ -10,9 +10,9 @@
 # stripped their now-closed #280/#288 citations down to that prose) -- so removing a closed
 # reference costs nothing but the vestige.
 #
-# This is deliberately the opposite policy from PROGRESS.md/SOTA.md/ARCHITECTURE.md, where a
-# closed-issue citation is the point: those are living-status/durable-reference docs (excluded from
-# the published package, Cargo.toml's `exclude`), and `check-doc-issue-claims.sh` already polices
+# This is deliberately the opposite policy from SOTA.md/ARCHITECTURE.md, where a closed-issue
+# citation is the point: those are durable-reference docs (excluded from the published package,
+# Cargo.toml's `exclude`), and `check-doc-issue-claims.sh` already polices
 # them on a narrower question -- not "is this issue closed" but "does this document's own state
 # *claim* about it still match reality". That script's annotated-claim form and this script's bare
 # reference form do not overlap: a `[#N](url) (closed)` claim in a `.md` file is correct by

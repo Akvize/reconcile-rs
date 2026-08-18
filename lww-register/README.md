@@ -12,7 +12,9 @@
 > or disappear in any release**, including a patch release, with no deprecation period and no
 > mention in `reconcile`'s changelog. It is versioned against `reconcile`'s API, not its own, and
 > is shaped entirely by what `reconcile` needs — it is not offered as a general-purpose
-> LWW-Register. Current publish status: [`PROGRESS.md`](https://github.com/Akvize/reconcile-rs/blob/main/PROGRESS.md).
+> LWW-Register. Current publish status: the
+> [`v1.0.0` milestone](https://github.com/Akvize/reconcile-rs/milestone/2) and
+> [issue #206](https://github.com/Akvize/reconcile-rs/issues/206).
 
 The state-based last-write-wins register domain of
 [`reconcile-rs`](https://github.com/Akvize/reconcile-rs): `Entry`/`State` (the register cell, its

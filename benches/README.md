@@ -209,7 +209,8 @@ and compares every decision before a table is printed.
 rounds — assume the fixed branching factor `b` of the paper's Algorithm 2. `rbsr` makes the fan-out
 a swappable `RefinementPolicy`, so what a given configuration costs is a measurement rather than a
 quotation: this target supplies it. Interpretation of the numbers below lives in `SOTA.md` §2.2; the
-decisions they drove are in `PROGRESS.md`'s SOTA axis index.
+decisions they drove are on issues [#257](https://github.com/Akvize/reconcile-rs/issues/257) and
+[#315](https://github.com/Akvize/reconcile-rs/issues/315), and in `rbsr/src/policy.rs`'s own rustdoc.
 
 Refinement bytes and one-way messages for `SqrtFanOut` (`√m`) against the default `FixedFanOut(16)`
 and the paper's `t`=32 enumeration threshold, same harness, `d` = 1, one element missing (refinement
@@ -286,7 +287,7 @@ a trade that needs an element to cost ≤ 15 B, where the cheapest this wire for
 (a varint key, a 19-byte `Timestamp`, two framing bytes, then the payload). Totalled: 1.52× the
 default's bytes at 8-byte values, 36× at 4 KB. No swept `t` saves more than 4 % anywhere, all of it
 at 8-byte values, and none beats the default at 64 B or above. The outcome, and why the default did
-not move: `PROGRESS.md`.
+not move: [#315](https://github.com/Akvize/reconcile-rs/issues/315).
 
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,
