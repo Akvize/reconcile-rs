@@ -543,4 +543,31 @@ mod tests {
             }
         }
     }
+
+    /// Pins [`FingerprintDerivedSplit`]'s exact stride formula (`1 + limb % 32`) against known
+    /// fingerprint limbs, not just "differs from a rank-cut policy somewhere" — the mutation gate
+    /// (`AGENTS.md` `.claude/rules/tests.md`) needs a witness for `+`, not `*` or another operator
+    /// combining the `1`, and for `%`, not `/`, dividing by `32`.
+    #[cfg(feature = "internal-testing")]
+    #[test]
+    fn fingerprint_derived_split_stride_is_one_plus_limb_mod_32() {
+        // (fingerprint low limb, expected stride): 0 and 32 both reduce to remainder 0 (stride 1,
+        // pinning `%` over `/`, which would instead give 0 and 1); 31 and 63 both reduce to 31
+        // (stride 32, pinning `+` over `*`, which would instead give 0 and 0).
+        for (limb, expected_stride) in [(0u64, 1usize), (31, 32), (32, 1), (63, 32)] {
+            let comparison = Comparison::new(
+                Aggregate::new(1_000, Fingerprint([limb, 0, 0, 0])),
+                Aggregate::new(2_000, Fingerprint([9, 9, 9, 9])),
+                0,
+            );
+            let Decision::Split(stride) = FingerprintDerivedSplit.decide(comparison) else {
+                panic!("span={}, remote={}: must split", comparison.span(), 2_000);
+            };
+            assert_eq!(
+                stride.get(),
+                expected_stride,
+                "fingerprint limb {limb}: expected stride {expected_stride}"
+            );
+        }
+    }
 }
