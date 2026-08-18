@@ -1,0 +1,40 @@
+# cargo-mutants configuration for reconcile-rs.
+#
+# Verified against this workspace: `cargo mutants --list --workspace` yields 1404
+# mutants with this config (1418 without the exclusions below).
+#
+# Two settings are NOT optional here:
+#
+#   all_features   — cargo-mutants builds per package. `--features internal-testing`
+#                    fails outright because lww-register/rsos/gossip do not define
+#                    that feature:
+#                      error: the package 'lww-register' does not contain this feature
+#
+#   test_workspace — by default each mutant only runs its own package's tests.
+#                    rsos/, gossip/ and lww-register/ have no tests/ directory; their
+#                    real oracles are tests/proptest_fingerprint_tree_map.rs and
+#                    tests/service.rs in the root package. Without this, the score is
+#                    measured against the wrong suite and flatters those crates.
+
+all_features   = true
+test_workspace = true
+
+# netem/service tests wait on real sockets; a mutant that breaks convergence can
+# hang rather than fail. Timeouts count as caught.
+timeout_multiplier   = 3.0
+minimum_test_timeout = 60
+
+# Reuse the built target dir in each scratch copy instead of a cold build per mutant.
+copy_target = true
+
+exclude_globs = ["benches/**", "examples/**"]
+
+# `testing::` accessors exist only under the internal-testing feature: they are test
+# seams, not behaviour. Mutating them yields MISSED results that are noise, not gaps.
+exclude_re = [
+    "testing::",
+    "impl Debug",
+    "impl Display",
+]
+
+skip_calls = ["with_capacity", "reserve"]

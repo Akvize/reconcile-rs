@@ -1,0 +1,8 @@
+# Agent-only exclusions: invisible to git, honoured by ripgrep/fd.
+# Rationale: these files are ~60k tokens of prose+lockfile that an agent almost
+# never needs to grep, but that pollute every `rg -l` orientation pass.
+# Override on demand with `rg --no-ignore` / `rg -u`.
+Cargo.lock
+SOTA.md
+PROGRESS.md
+target/
