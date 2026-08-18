@@ -1,25 +1,35 @@
 #!/usr/bin/env bash
 # SessionStart hook for Claude Code on the web.
 #
-# Installs the one tool AGENTS.md §3's list needs that the web container does not ship. Everything
-# else on that list is `cargo` plus a stable toolchain, both already present; `cargo deny check` is
-# the last line and the only one that needs a subcommand of its own.
+# Two things a web container starts without, that CONTRIBUTING.md's Dev Container starts with:
+# the git hooks linked (AGENTS.md §2) and cargo-deny installed (AGENTS.md §3's last gate line).
+# Missing either turns into the same failure from two directions: pre-commit/pre-push never firing
+# on `git commit`/`git push`, so an agent has to remember to run their equivalent by hand every
+# time instead of getting it for free -- or an agent that reaches §3's last line unable to run it
+# at all, reporting the gate green having actually run fourteen of fifteen and hoped. Doing both
+# here is cheaper than either an agent remembering the setup step or a docs line asking it to.
 #
-# The point is not convenience. §3 says the list *is* what "done" means, so a session that cannot
-# run its last line cannot report the gate green — it can only report fourteen of fifteen and hope.
-# Installing the tool is cheaper than remembering the exception.
+# cargo-deny is not pinned, on purpose: CI runs `EmbarkStudios/cargo-deny-action@v2`
+# (`.github/workflows/main.yml`), which resolves its own cargo-deny inside the v2 line rather than
+# at a fixed version. Pinning here would introduce a local/CI version skew that nobody is
+# watching. `--locked` still builds from the crate's own lockfile, so the build is reproducible
+# for whatever version is current.
 #
-# Not pinned, on purpose: CI runs `EmbarkStudios/cargo-deny-action@v2` (`.github/workflows/main.yml`),
-# which resolves its own cargo-deny inside the v2 line rather than at a fixed version. Pinning here
-# would introduce a local/CI version skew that nobody is watching, which is the failure this hook
-# exists to remove. `--locked` still builds from the crate's own lockfile, so the build is
-# reproducible for whatever version is current.
-#
-# Web only. A local checkout gets its toolchain from CONTRIBUTING.md's Dev Container; installing into
-# a contributor's machine from a hook they did not ask for is not this script's business.
+# Web only. A local checkout gets both from CONTRIBUTING.md's Dev Container; touching a
+# contributor's own machine from a hook they did not ask for is not this script's business.
 set -euo pipefail
 
 [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || exit 0
+
+GIT_ROOT=$(git rev-parse --show-toplevel)
+for hook in pre-commit pre-push; do
+    link="$GIT_ROOT/.git/hooks/$hook"
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "../../$hook" ]; then
+        continue
+    fi
+    ln -sf "../../$hook" "$link"
+    echo "session-start: linked $hook"
+done
 
 if command -v cargo-deny >/dev/null 2>&1; then
     echo "session-start: $(cargo deny --version) already installed"

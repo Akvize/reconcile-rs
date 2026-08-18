@@ -5,9 +5,11 @@
 # that category (`./scripts/lib-changed-paths.sh`, the same categories `main.yml`'s `changes` job
 # and `./pre-push` use).
 #
-# This is what CLAUDE.md points agents at instead of "run every command in AGENTS.md §3 by hand":
-# deciding relevance by eye is exactly the mistake AGENTS.md §10 exists to rule out -- a rule a
-# human (or an agent) must remember and apply belongs in a script instead.
+# Not part of the normal workflow: once the hooks are linked (AGENTS.md §2), `git commit`/`git
+# push` already gate this list automatically (AGENTS.md §3) -- running it by hand duplicates a
+# check a hook or CI already owns the result of. This exists for the exception: local tier-3
+# confidence (build/doctest/bench/doc/package/deny/public-api) without a CI round-trip, e.g. while
+# offline or iterating faster than CI turns around.
 #
 # Override the base with $1; defaults to origin/main, the same convention
 # ./scripts/check-mutation-gate.sh uses. Diffs against the working tree, not just HEAD (see
