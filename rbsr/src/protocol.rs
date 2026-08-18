@@ -20,7 +20,7 @@ use crate::policy::{Comparison, Decision, FanOut, FixedFanOut, RefinementPolicy}
 use crate::rsos_view::RsosView;
 
 /// The refinement policy [`protocol_round`] applies. Costs: `benches/protocol.rs`; the evidence
-/// for this default: `PROGRESS.md`.
+/// for this default: `SOTA.md` §2.2.
 const DEFAULT_POLICY: FixedFanOut = FixedFanOut::new(FanOut::NEGENTROPY);
 
 /// The start bound of a [`RangeAggregate`] range: `Included` or `Unbounded`, never `Excluded`.
