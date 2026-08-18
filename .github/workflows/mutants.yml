@@ -56,20 +56,43 @@ jobs:
         with:
           # Pin: mutants.out/ file formats are explicitly documented as unstable.
           tool: cargo-mutants@27.1.0
-      - run: git diff origin/${{ github.base_ref }}.. -- '*.rs' | tee git.diff
-      # --workspace is load-bearing here too: without it, --in-diff scopes to the root
-      # `reconcile` package only and silently misses mutants in rsos/rbsr/lww-register/gossip.
-      - run: cargo mutants --workspace --no-shuffle -vV --in-diff git.diff --timeout 300
+      # scripts/check-mutation-gate.sh is the single source of truth for this command (AGENTS.md
+      # §10: a rule enforced by eye, or reimplemented ad hoc in a workflow, belongs in a script
+      # both this job and a contributor's local run call) -- it also carries the `--workspace`
+      # rationale (in-diff otherwise scopes to the root `reconcile` package only) and the
+      # PROPTEST_RNG_SEED hermeticity note.
+      - run: ./scripts/check-mutation-gate.sh "origin/${{ github.base_ref }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mutants-incremental
           path: mutants.out
 
+  # Mirrors main.yml's `ci-success`, for the same reason: branch protection pins a required
+  # check by job name, so this workflow needs its own stable aggregate rather than pointing
+  # protection straight at `pr-diff`. Pointing at `pr-diff` directly is doubly wrong here --
+  # `changes` skips it on a doc-only or workflow-only PR (header comment above), and a required
+  # check that a skip leaves pending forever blocks the merge instead of passing it. `if:
+  # always()` and the skip/failure treatment are exactly main.yml's `ci-success` reasoning;
+  # see that job's comment for the detail.
+  mutants-success:
+    name: mutants-success
+    if: always() && github.event_name == 'pull_request'
+    needs:
+      - changes
+      - pr-diff
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fail if any job failed or was cancelled
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: |
+        echo "::error::one or more mutation-gate jobs failed or were cancelled"
+        exit 1
+
   # Full workspace sweep (~1400 mutants), sharded 8 ways so each job lands at
   # ~20-35 min. Reported as a trend, NOT gated: a whole-repo mutation score is a
-  # number to watch, not a wall — hence `continue-on-error` and no `ci-success`
-  # dependency (contrast main.yml's required aggregate check).
+  # number to watch, not a wall — hence `continue-on-error` and no `mutants-success`
+  # dependency (contrast `pr-diff` above, which `mutants-success` does require).
   nightly:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -87,10 +110,18 @@ jobs:
           tool: cargo-mutants@27.1.0
       # round-robin spreads cheap/expensive mutants evenly across shards;
       # the default `slice` groups them, so one shard gets all the slow ones.
+      #
+      # No `--iterate`: it skips mutants recorded as already-caught in
+      # mutants.out/previously_caught.txt, but this job checks out fresh and never restores
+      # that file from a prior run's artifact, so the file is always empty and the flag is
+      # presently a no-op. Don't add it back without also restoring the artifact -- and if
+      # that restoration is ever added, keep a periodic run with no `--iterate` alongside it
+      # (upstream cargo-mutants recommends this), since an always-iterating job never re-checks
+      # a mutant it once caught.
       - run: >
           cargo mutants --workspace
           --shard ${{ matrix.shard }}/8 --sharding round-robin
-          --baseline=skip --timeout 300 --iterate
+          --baseline=skip --timeout 300
       - uses: actions/upload-artifact@v4
         if: always()
         with:

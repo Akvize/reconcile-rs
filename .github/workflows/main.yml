@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Doc budget (AGENTS.md + CLAUDE.md line cap)
+    - name: Doc budget (AGENTS.md + CLAUDE.md, and SOTA.md, line caps)
       run: ./scripts/check-doc-budget.sh
     - name: Domain purity (hexagonal boundary + ARCHITECTURE.md §2's graph vs the manifests)
       run: ./scripts/check-domain-purity.sh
