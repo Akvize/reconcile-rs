@@ -66,10 +66,18 @@ jobs:
   # documentation-only anyway. `check-domain-purity.sh` reads the manifests and `lww-register/src`;
   # `check-doc-structure.sh` greps rustdoc for `SOTA.md` citations. A `**/*.md` filter would have
   # been wrong on its own terms.
+  #
+  # `check-mutant-count.sh` needs `cargo-mutants` on `PATH` (unlike the four scripts above, which
+  # only need plain `cargo`), but the check itself is still sub-second -- `--list` is syntactic
+  # mutant-site discovery, no build (script's own header comment has the measurement).
   repo-gates:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - uses: taiki-e/install-action@v2
+      with:
+        # Pin matches mutants.yml -- keep both in sync.
+        tool: cargo-mutants@27.1.0
     - name: Doc budget (AGENTS.md + CLAUDE.md, and SOTA.md, line caps)
       run: ./scripts/check-doc-budget.sh
     - name: Domain purity (hexagonal boundary + ARCHITECTURE.md §2's graph vs the manifests)
@@ -78,6 +86,8 @@ jobs:
       run: ./scripts/check-doc-structure.sh
     - name: Test-file naming (split #[cfg(test)] modules are named tests.rs, not <name>_tests.rs)
       run: ./scripts/check-test-file-naming.sh
+    - name: Mutant count (.cargo/mutants.toml's header comment vs cargo-mutants --list)
+      run: ./scripts/check-mutant-count.sh
 
   # Both feature axes in one job: they are 20 s and 11 s, and the second reuses the first's
   # dependency build. Splitting them would add a runner start to save nothing.
