@@ -49,6 +49,8 @@ mod policy;
 mod protocol;
 mod rsos_view;
 
+#[cfg(feature = "internal-testing")]
+pub use policy::FingerprintDerivedSplit;
 pub use policy::{
     Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,
     SplitStride, SqrtFanOut,
