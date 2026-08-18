@@ -472,6 +472,29 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    `RSOS<M: Monoid>`) weakens accordingly — its wire-format half (`RangeAggregate` is the wire type,
    so the generalization is not additive later) stands on its own and is the half that fixes the
    timing.
+
+   **Empirical grounding for the split-boundary half of this claim**
+   ([#356](https://github.com/Akvize/reconcile-rs/issues/356),
+   `rbsr/tests/oracle_dependent_split_vs_the_union_bound.rs`): the soundness bound above requires
+   the ranges compared to be a deterministic function of the data (rank-cut, `Select`) — the same
+   property MST's `level = hash(key)` and prolly's rolling-hash chunking give up (§2.1's table).
+   A test-only policy that instead derives its split stride from the local aggregate's fingerprint
+   (`rbsr::Comparison` makes that construction unspellable outside `internal-testing`, #352) was
+   driven to a fixed point at the reduced widths `w ∈ {16, 24}`
+   [#355](https://github.com/Akvize/reconcile-rs/issues/355)'s arm A measured, against the
+   rank-cut `FixedFanOut` control. The dominant, statistically unambiguous result was not an
+   excess over the false-convergence union bound but a **liveness break**: only ~0.53 % of drives
+   (1054 and 1051 of 200,000 trials, at `w = 16` and `24` respectively) reached a fixed point
+   within 128 rounds at all, against 100 % for the rank-cut control — a content-determined stride
+   can land a range on a fixed point that never shrinks. Among the rare drives that did terminate,
+   the false-convergence rate itself was inconclusive at 99 % confidence (`w=16`: 3/1054 events,
+   CI `[7.2e-4, 1.12e-2]`, against a reported union bound of `2.3e-3` — the point estimate sits
+   slightly above the bound but the interval straddles it; `w=24`: 0/1051 events, an uninformatively
+   wide CI given the tiny surviving sample). The rank-cut control produced zero events at either
+   width (CI upper bounds `8.4e-5` and `6.6e-6`, both comfortably under their own bound). Read
+   together: making a split boundary a function of the summary oracle breaks more than the
+   union-bound argument's premise — it can break the protocol's termination guarantee outright,
+   the sharper version of the same claim.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
