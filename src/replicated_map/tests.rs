@@ -24,12 +24,12 @@ fn ephemeral_config() -> Config {
         node_id: None,
         encrypt: false,
         reconcile_interval: Duration::from_secs(1),
-        bulk_send_rate: Some(super::DEFAULT_BULK_SEND_RATE),
-        recv_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
-        send_buffer_size: Some(super::DEFAULT_SOCKET_BUFFER_SIZE),
+        bulk_send_rate: Some(super::config::DEFAULT_BULK_SEND_RATE),
+        recv_buffer_size: Some(super::config::DEFAULT_SOCKET_BUFFER_SIZE),
+        send_buffer_size: Some(super::config::DEFAULT_SOCKET_BUFFER_SIZE),
         freshness_window: gossip::replay::FRESHNESS_WINDOW_DEFAULT,
-        max_peers: super::DEFAULT_MAX_PEERS,
-        max_concurrent_bulk_dumps: super::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
+        max_peers: super::config::DEFAULT_MAX_PEERS,
+        max_concurrent_bulk_dumps: super::config::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
     }
 }
 
@@ -142,7 +142,7 @@ mod tombstone_expiry_bound {
     use super::*;
     use crate::clock::{Hlc, LogicalCounter, PhysicalTime};
     use crate::entry::Entry;
-    use crate::replicated_map::TOMBSTONE_STAMP_DRIFT_BUDGET;
+    use crate::replicated_map::write::TOMBSTONE_STAMP_DRIFT_BUDGET;
     use chrono::Utc;
 
     /// Plant a tombstone carrying exactly `physical_ms` through the hook, and return the
@@ -314,10 +314,22 @@ impl<K: Send + Sync + 'static, V: Send + Sync + 'static> Persistence<K, V> for F
 /// itself, not one doubling of it.
 #[test]
 fn backoff_delay_doubles_from_the_base() {
-    assert_eq!(super::backoff_delay(1), super::LOAD_RETRY_BASE_DELAY);
-    assert_eq!(super::backoff_delay(2), super::LOAD_RETRY_BASE_DELAY * 2);
-    assert_eq!(super::backoff_delay(3), super::LOAD_RETRY_BASE_DELAY * 4);
-    assert_eq!(super::backoff_delay(4), super::LOAD_RETRY_BASE_DELAY * 8);
+    assert_eq!(
+        super::persistence::backoff_delay(1),
+        super::persistence::LOAD_RETRY_BASE_DELAY
+    );
+    assert_eq!(
+        super::persistence::backoff_delay(2),
+        super::persistence::LOAD_RETRY_BASE_DELAY * 2
+    );
+    assert_eq!(
+        super::persistence::backoff_delay(3),
+        super::persistence::LOAD_RETRY_BASE_DELAY * 4
+    );
+    assert_eq!(
+        super::persistence::backoff_delay(4),
+        super::persistence::LOAD_RETRY_BASE_DELAY * 8
+    );
 }
 
 /// A transient load failure (anything but `InvalidData`) must be retried, not turned
@@ -326,7 +338,9 @@ fn backoff_delay_doubles_from_the_base() {
 async fn transient_load_failure_is_retried_not_fatal() {
     let backend = Arc::new(FlakyLoad {
         kind: std::io::ErrorKind::PermissionDenied,
-        failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS - 1),
+        failures_remaining: std::sync::atomic::AtomicU32::new(
+            super::persistence::LOAD_RETRY_ATTEMPTS - 1,
+        ),
     });
     // Must not panic: the store construction below succeeds once the backend stops failing,
     // within the retry budget.
@@ -343,7 +357,9 @@ async fn transient_load_failure_is_retried_not_fatal() {
 async fn load_failure_beyond_retry_budget_still_panics() {
     let backend = Arc::new(FlakyLoad {
         kind: std::io::ErrorKind::PermissionDenied,
-        failures_remaining: std::sync::atomic::AtomicU32::new(super::LOAD_RETRY_ATTEMPTS),
+        failures_remaining: std::sync::atomic::AtomicU32::new(
+            super::persistence::LOAD_RETRY_ATTEMPTS,
+        ),
     });
     let _store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
         .await
@@ -368,7 +384,7 @@ async fn invalid_data_panics_without_retrying() {
         .with_persistence(backend);
     // Unreachable on panic, but documents intent: this must not have gone through even one
     // retry backoff.
-    assert!(start.elapsed() < super::LOAD_RETRY_BASE_DELAY);
+    assert!(start.elapsed() < super::persistence::LOAD_RETRY_BASE_DELAY);
 }
 
 /// `snapshot` clones the map in `SNAPSHOT_CHUNK_SIZE`-entry chunks, releasing and
@@ -379,7 +395,7 @@ async fn invalid_data_panics_without_retrying() {
 async fn snapshot_across_multiple_chunks_recovers_every_entry() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.bin");
-    let n = super::SNAPSHOT_CHUNK_SIZE * 2 + 17; // spans three chunks, last one partial
+    let n = super::persistence::SNAPSHOT_CHUNK_SIZE * 2 + 17; // spans three chunks, last one partial
 
     let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
         .await
