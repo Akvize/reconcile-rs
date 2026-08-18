@@ -20,11 +20,7 @@
 # and say why in the commit.
 set -Eeuo pipefail
 
-# Raised from 200 (deliberately, per this script's own header comment): documenting the
-# structural-relevance mechanism (AGENTS.md §3's new paragraph, CLAUDE.md's §3 pointer) as a rule
-# rather than a habit needed 7 more lines than trimming elsewhere could recover without cutting
-# content the budget script itself would flag as the wrong kind of compression.
-MAX_LINES=207
+MAX_LINES=200
 
 # Resolve the repo root from the script's own location (not `git rev-parse`, since the
 # pre-commit hook runs this against a bare `git checkout-index` copy with no `.git`).
