@@ -405,7 +405,7 @@ impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
 /// harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this crate's
 /// `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
 ///
-/// Enumeration cutoffs match [`FixedFanOut`]'s ([`shared_cutoffs`]), so the only variable this
+/// Enumeration cutoffs match [`FixedFanOut`]'s (`shared_cutoffs`), so the only variable this
 /// isolates is *how the split stride is chosen*, never *when* a range is enumerated instead of
 /// split.
 #[cfg(feature = "internal-testing")]
