@@ -173,7 +173,7 @@ pub enum Decision {
 /// | [`SqrtFanOut`] | the same four | `⌊√m⌋` elements per child, so `Θ(√m)` children |
 /// | [`EnumerateBelowThreshold`] | the paper's `\|X ∩ [l, u)\| ≤ t` | a constant `b` |
 ///
-/// Costs: `benches/protocol.rs`. Default and the evidence for it: `PROGRESS.md`.
+/// Costs: `benches/protocol.rs`. Default and the evidence for it: `SOTA.md` §2.2.
 ///
 /// # Implementing your own
 ///
@@ -264,7 +264,7 @@ impl RefinementPolicy for SqrtFanOut {
 /// [`Default`] is [`FanOut::NEGENTROPY`]. `b` trades three quantities that bottom out separately —
 /// bytes and local work follow `b / ln b`, one-way messages fall as `log_b n` to a floor, and the
 /// widest round grows linearly in `b` and must fit a datagram. Swept over 2…256 by
-/// `benches/protocol.rs`'s `fan_out_sweep`; the chosen value is in `PROGRESS.md`.
+/// `benches/protocol.rs`'s `fan_out_sweep`; the chosen value's evidence is in `SOTA.md` §2.2.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,
@@ -321,7 +321,7 @@ impl RefinementPolicy for FixedFanOut {
 ///
 /// In bytes, that is. What they buy is round trips — one fewer descent level — and a round trip has
 /// a price too, so on a link fast and far enough a threshold can win the wall clock it loses on
-/// bytes. Both crossovers, and why the default answers the byte question: `PROGRESS.md`.
+/// bytes. Both crossovers, and why the default answers the byte question: `SOTA.md` §2.2.
 ///
 /// It ships because the arithmetic, not the conclusion, is what generalizes: a narrower
 /// conflict-resolution stamp, a set-shaped store (`V = ()`) or keys dearer than values move the
