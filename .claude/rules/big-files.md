@@ -3,8 +3,10 @@ description: Reading or editing src/replicated_map.rs or src/replica.rs
 globs: ["src/replicated_map.rs", "src/replica.rs"]
 ---
 
-These two files are 2786 and 2476 lines — together ~53k tokens, 15% of the repo.
-Reading either in full costs more context than most whole sessions need.
+These two files are 1586 and 1482 lines of production code (their inline `#[cfg(test)]`
+modules moved to `src/replicated_map/replicated_map_tests.rs` / `src/replica/tests.rs` —
+issue #402 phase 1). Still large: together they're ~10% of the repo, and reading either in
+full costs more context than most whole sessions need.
 
 - Never `Read` one of these files without an offset/limit range.
 - Orient first: `rg -n '^\s*(pub )?(fn|impl|struct|enum|mod) ' src/replica.rs`
