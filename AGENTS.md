@@ -62,7 +62,7 @@ whose budget it fits, and if it fits none of them it is CI-only by design:
 | tier | what runs | cost |
 |---|---|---|
 | [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the three `./scripts/check-doc-*.sh`/`check-domain-purity.sh` gates above | 0.4 s |
-| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s |
+| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything above | minutes |
 
 So a commit may be lint-dirty and a push should not be: `git commit` is a save point, `git push` a
@@ -70,6 +70,13 @@ publication, and `git push --no-verify` skips tier 2 on purpose. Both hooks chec
 tree — the index, then the commit being pushed — because what is recorded or published is what has
 to be green, whatever is half-finished on disk. `main.yml` and this list are kept in sync by hand —
 change one, change both.
+
+A gate that nothing in the change can affect never runs, at any of the three tiers.
+[`./scripts/lib-changed-paths.sh`](./scripts/lib-changed-paths.sh) categorizes every changed path
+as `rust`/`deps`/neither — the same categories `main.yml`'s `changes` job and `mutants.yml`'s copy
+of it use — for `./pre-push` and `./scripts/run-affected-checks.sh` (what CLAUDE.md points agents
+at instead of this list run by hand) to read locally. Hand-synced with `main.yml`'s filter, same
+reason as the paragraph above.
 
 Why `--all-targets` is load-bearing, why the export exists, and why each tier stops where it does:
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) "Why the gate looks like this" — measured, not asserted.

@@ -121,6 +121,28 @@ Measured on this workspace, four cores, warm `target/`.
   covered for the common case. Doc tests are *not* in that list — plain `cargo test` already runs
   them, which is why §3's separate `cargo test --doc` line is belt-and-braces, not extra coverage.
 
+### A gate never runs on a change it cannot affect
+
+`main.yml`'s `changes` job (and `mutants.yml`'s copy of it) already skip the compile-heavy CI jobs
+on a diff that cannot touch their category — that is what the `changes` job's own header comment
+in `main.yml` explains. Two things did not follow that logic until now: `./pre-push` ran its tier-2
+pair unconditionally regardless of what a push touched, and CLAUDE.md told an agent to run
+AGENTS.md §3's full list "not a subset" — overriding, on every agent-driven change, exactly the
+category-based skip CI itself already applies to the same commands.
+
+`./scripts/lib-changed-paths.sh` is the fix: one predicate (`affects_rust`/`affects_deps`), sourced
+by `./pre-push` and by `./scripts/run-affected-checks.sh`, which CLAUDE.md now points agents at
+instead of the raw list. Its categories are hand-copied from `main.yml`'s `rust`/`deps` filters
+(bash `case` arms mirroring `dorny/paths-filter`'s globs one for one) rather than shared as data,
+for the same reason `main.yml` and AGENTS.md §3's command list are themselves kept in sync by hand:
+a YAML `filters:` block and a bash predicate cannot both read one file without a third tool to
+parse YAML inside pre-commit's 0.4 s budget.
+
+Both callers fail open, not closed: an unresolvable `origin/main` (not fetched, no such remote)
+runs everything rather than silently skipping on a base it cannot compute — the one failure mode a
+structural-relevance mechanism must never have, since a false "unaffected" verdict is
+indistinguishable from a bug that shipped without the gate that would have caught it.
+
 ### `cargo package` can fail on a stale sibling, and only locally
 
 Reproducible: pull a commit that adds a **public item to a workspace sibling**, run §3's list in a

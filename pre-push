@@ -29,10 +29,21 @@ done
 GIT_ROOT=$(git rev-parse --show-toplevel)
 export CARGO_TARGET_DIR="${GIT_ROOT}/target"
 
+source "${GIT_ROOT}/scripts/lib-changed-paths.sh"
+
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
 
 for commit in ${commits[@]+"${commits[@]}"}; do
+  # Neither check's verdict can change on a commit whose diff against origin/main touches
+  # nothing that can affect a Rust build/test outcome -- main.yml's `changes` job would skip
+  # the same commit's `clippy`/`test` jobs for the same reason. Never skip on an unresolvable
+  # origin/main (not fetched, no such remote): run unconditionally instead of guessing.
+  if git rev-parse --verify -q origin/main >/dev/null && ! affects_rust origin/main "$commit"; then
+    echo "Skipping clippy/nextest on $commit: no path affecting a Rust build/test outcome"
+    continue
+  fi
+
   # Check the commit being pushed rather than the working tree, for the same
   # reason pre-commit checks the index: what gets published is what has to be
   # green, whatever is half-finished on disk.

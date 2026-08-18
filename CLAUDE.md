@@ -5,7 +5,7 @@
 Everything above is imported verbatim from [`AGENTS.md`](./AGENTS.md), the source of truth for this
 repo — read it, don't skim it. This file adds only what's specific to Claude Code sessions:
 
-- Before reporting work done, run every command in AGENTS.md §3, not a subset.
+- Before reporting work done, run `./scripts/run-affected-checks.sh` — the AGENTS.md §3 commands your diff can affect, never hand-picked.
 - Touching `rsos/`, `rbsr/`, or `lww-register/`? Re-read AGENTS.md §9 — `./scripts/check-domain-purity.sh`
   gates all three against infrastructure imports (manifest **and** source), and the gate fails the
   build, not just a warning.
