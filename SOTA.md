@@ -3,8 +3,10 @@
 > **Reference document.** Where `reconcile-rs` sits in the landscape of set reconciliation, diffable
 > data structures, and replica consistency — plus a glossary and bibliography. This is **durable
 > background**: the field positioning and the design taxonomy move slowly, unlike the code. It
-> deliberately carries **no status or findings** — for the live correctness, security and maturity
-> state see [`PROGRESS.md`](./PROGRESS.md); for the target design see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> deliberately carries **no status or findings** — for live correctness/security/maturity status see
+> the `v1.0.0` milestone and [issue #206](https://github.com/Akvize/reconcile-rs/issues/206); for the
+> resolved-audit historical record see [`ARCHITECTURE.md`](./ARCHITECTURE.md) §8; for the target
+> design see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 >
 > - **Literature survey dated:** 2026-05-30, with a targeted addendum on 2026-08-10 (arXiv:2603.19820
 >   read in full against its four published repositories; §1.3/§2.1/§2.2/§2.3 revised and eight
@@ -17,13 +19,13 @@
 >   state of the art — not an audit of any particular commit.
 > - **Navigation:** a [glossary (§3)](#3-glossary) defines ~120 terms and an
 >   [alphabetical index (§5)](#5-alphabetical-index) lists them; first uses in the text link to it.
-> - **`Fxx`** denotes a finding from the original code audit; its current status lives in
->   [`PROGRESS.md`](./PROGRESS.md).
+> - **`Fxx`** denotes a finding from the original code audit; its resolution record lives in
+>   [`ARCHITECTURE.md`](./ARCHITECTURE.md) §8.
 > - **Measured figures live in `benches/README.md`, not here** ([#346](https://github.com/Akvize/reconcile-rs/issues/346),
 >   option A): §1.3/§2.2 state the claim and verdict a benchmark run supports; the harness output
->   itself — bytes, message counts, timings — is reproduced there, and the decisions it drove are in
->   [`PROGRESS.md`](./PROGRESS.md)'s SOTA axis index. A refinement-policy or benchmark change should
->   never require editing this file.
+>   itself — bytes, message counts, timings — is reproduced there, and the decisions it drove are
+>   cited by issue number against each axis in §2.4 below. A refinement-policy or benchmark change
+>   should never require editing this file.
 
 ---
 
@@ -178,9 +180,8 @@ a single embeddable Rust library. The pitch is "replicated state without standin
 
 Fit-for-purpose guidance (good fit / wrong tool) lives once, in README.md's "When to use this" —
 not duplicated here. **Path to best-of-breed:** the open performance/scaling roadmap that moves
-reconcile-rs from the "real but narrow" niche of §1.2 to a credible Rust IMDG is tracked in
-[`PROGRESS.md`](./PROGRESS.md) §4 — its *SOTA axis index* is the per-axis view, one row per axis
-below — not here.
+reconcile-rs from the "real but narrow" niche of §1.2 to a credible Rust IMDG is the axis list in
+§2.4 below, each cited against the issue that carries its live status — not here.
 
 ---
 
@@ -292,8 +293,8 @@ copy-on-write B+-tree addressed by page number.
   protocol messages — the opposite of RBSR's large-n/small-d target, a regime where the cost is
   dominated by enumeration and point access rather than range aggregation. The result to carry
   forward is therefore *"an aggregate-augmented persistent engine costs ~2× an in-RAM array on the
-  hot path"*, which is the number that was missing from the persistence decision (see
-  [`PROGRESS.md`](./PROGRESS.md) §4 on #271), not *"in-tree aggregates beat memory"*.
+  hot path"*, which is the number that was missing from the persistence build-vs-adopt call (see
+  [#271](https://github.com/Akvize/reconcile-rs/issues/271)), not *"in-tree aggregates beat memory"*.
 
 | Structure | Position/boundary | History-indep. | Diffs… | Structural sharing / versioning | Persistence | Resists leading-zeros | Maturity |
 |---|---|---|---|---|---|---|---|
@@ -367,7 +368,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   `T_loc`. *b* = 4 wins on bytes and CPU but costs two round-trips — break-even only when the
   "network" is in-process, at microsecond RTTs. Because the policy never crosses the wire and mixed
   pairs converge, changing *b* is a per-node behaviour choice, not a cluster-wide format decision.
-  Numbers: `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
+  Numbers: `benches/README.md`; decision record:
+  [#257](https://github.com/Akvize/reconcile-rs/issues/257) and `rbsr/src/policy.rs`'s own rustdoc.
 - **The arity question has a forty-year analytical treatment, in a literature neither RBSR paper
   cites** ([§4.1](#41-cross-community-vocabulary), [§4.4](#44-bibliography)). Random-access *tree
   algorithms* solve "split a population into `q` groups when the location of the conflicts is
@@ -421,7 +423,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   the peer mostly already holds — a trade that only pays off below the cheapest price this wire
   format can carry an element at, and is a net loss once totalled across payload sizes: worse than
   the default at every value size but the smallest, and there only by a few percent. Numbers:
-  `benches/README.md`; decision record: `PROGRESS.md`'s SOTA axis index.
+  `benches/README.md`; decision record:
+  [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`'s own rustdoc.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 44 B per advertised range, against Negentropy's 16 B truncated comparison value
   (§2.1). That 44 B is 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
@@ -431,8 +434,9 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   the bytes above. The two decisions are only separable if the fan-out shrinks — which, now that the
   fan-out is a swappable policy, is a one-line change to a caller rather than an edit to the protocol
   loop. Recovering the 4 B/limb varint overhead needs a raw-bytes `Serialize` impl, which is a wire
-  break — out of scope for this doc fix, and deferred to ride the wire-version-field train #309
-  landed rather than costing a 2.0 on its own; decision recorded in `PROGRESS.md`'s SOTA axis index.
+  break — out of scope for this doc fix, and deferred to ride the wire-version-field train
+  [#309](https://github.com/Akvize/reconcile-rs/issues/309) landed rather than costing a 2.0 on its
+  own; decision recorded there.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → the strongest single-shot candidate on
   communication. It is not the only point on that front: **PBS** trades a few rounds for markedly
@@ -488,34 +492,35 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
 These are the axes along which an RSOS is judged against the state of the art — the **design
 target** for a structure of this family ("persistent RSOS with a secure, generic fingerprint").
-They are described here as durable design goals; which of them `reconcile-rs` has since addressed
-is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row per axis below (the
-`Fxx` pointers map to its §2 table).
+They are described here as durable design goals; each item cites the issue carrying its live
+status, so this section never needs an edit when that status changes.
 
 **P0 — Correctness of the structure itself:**
 1. **Secure and wide fingerprint**: replace the 64-bit XOR with a **≥256-bit, non-GF(2)-linear**
    combiner (hash-then-add mod 2²⁵⁶, MSet-Mu-Hash/LtHash) or *keyed*. XOR = self-inverse + linear →
    craftable collisions (Gaussian elimination ~2 s even in 256-bit) + birthday at 2³². The path
    taken by Negentropy. **This is THE criterion that separates a "toy" structure from a SOTA one.**
-   (cf. F6) — but width alone settles only the *honest* model: modular addition at 256 bits stays
-   Wagner-breakable, and the keyed-lift fix is
-   [#337](https://github.com/Akvize/reconcile-rs/issues/337).
+   (cf. F6, [#111](https://github.com/Akvize/reconcile-rs/issues/111)) — but width alone settles
+   only the *honest* model: modular addition at 256 bits stays Wagner-breakable, and the keyed-lift
+   fix is [#337](https://github.com/Akvize/reconcile-rs/issues/337).
 2. **Decouple "empty" from "hash==0"** (`size==0`) — otherwise the structure can claim "converged"
-   while having lost data. (cf. F1)
+   while having lost data. (cf. F1, [#106](https://github.com/Akvize/reconcile-rs/issues/106))
 3. **Stable, versioned hash as a wire contract** (pinned SipHash/xxHash/BLAKE3 + golden-vector).
-   (cf. F8)
+   (cf. F8, [#111](https://github.com/Akvize/reconcile-rs/issues/111))
 
 **P1 — Generality (what makes it a *structure*, not a special case):**
 4. **Generic summary over a monoid**: today `rsos` hardwires its range summary to the 256-bit additive
    `Fingerprint` (`ARCHITECTURE.md` §7, tracked as `BYOLiftingMonoid`); generalizing to `RSOS<M: Monoid>`
    also enables sum/min/max/count and sketches. Enables **embedding a sketch in the leaves** (hybrid
-   RBSR + a leaf sketch) to break the O(log n) RTT cost (§2.2).
+   RBSR + a leaf sketch) to break the O(log n) RTT cost (§2.2). **Waived to 2.0** —
+   [#298](https://github.com/Akvize/reconcile-rs/issues/298), decision recorded in `ARCHITECTURE.md` §7.
 5. **Fully expose the RSOS contract** — ✅ **done**: `rank`/`select`/`range` are `pub` on the standalone
    `rsos` crate's `FingerprintTreeMap` (ARCHITECTURE.md §3.2), a reusable generic building block
    independent of `reconcile`. (Previously in tension with an earlier ARCHITECTURE.md draft that kept
    these `pub(crate)` inside the monolithic crate; resolved in favor of exposure once `rsos` became its
-   own published-intent crate.) Remaining: lazy + double-ended iterators (repo issue #92 — the
-   umbrella that consolidated #89–#91).
+   own published-intent crate.) Remaining: lazy + double-ended iterators —
+   [#92](https://github.com/Akvize/reconcile-rs/issues/92) (the umbrella that consolidated #89–#91),
+   naming freezes tracked by [#291](https://github.com/Akvize/reconcile-rs/issues/291).
 
 **P2 — Durability & distributed properties carried by the structure:**
 6. **Persistence / content-addressing** *(the big gap vs prolly/AELMDB)*: (a) snapshot+WAL including
@@ -524,23 +529,60 @@ is tracked in [`PROGRESS.md`](./PROGRESS.md) §4's *SOTA axis index*, one row pe
    **Node content-addressing** is a further step layered on that, and what it adds is *cross-version
    identity* (versioning, diff between snapshots, incremental cold start), not the sharing itself;
    the two are separable and priced separately.
+   [#271](https://github.com/Akvize/reconcile-rs/issues/271) tracks the epic; its build-vs-adopt call
+   against LMDB/AELMDB is settled in its own body, content addressing parked separately on
+   [#188](https://github.com/Akvize/reconcile-rs/issues/188).
 7. **Conflict metadata in the value**: HLC + total tie-break `(timestamp, node_id)`; ideally
-   **pluggable CRDT** values; versioned tombstones with **causal-stability GC**. (cf. F4, F5)
+   **pluggable CRDT** values; versioned tombstones with **causal-stability GC**. (cf. F4
+   [#109](https://github.com/Akvize/reconcile-rs/issues/109), F5
+   [#110](https://github.com/Akvize/reconcile-rs/issues/110)) — pluggable CRDT deferred, no trigger
+   fired: [#184](https://github.com/Akvize/reconcile-rs/issues/184), decision recorded in
+   `ARCHITECTURE.md` §7.
 10. **Write cost under concurrency** *(the axis the family's cost models omit)*: answering
    `Aggregate(l, u)` in O(log n) requires an up-to-date summary on every node from leaf to root, so
    **every insert writes the root** — a contention point the contract creates, not an implementation
    defect. arXiv:2603.19820 §7.1 scopes its evaluation to single-machine with no concurrency, and no
    RBSR work prices it. The prior art is outside the line: **AB-tree** maintains aggregate metadata
-   in a paginated tree under concurrent updates. Numbering starts at 10 so P0–P3's existing ids stay
-   stable.
+   in a paginated tree under concurrent updates. Open question:
+   [#359](https://github.com/Akvize/reconcile-rs/issues/359). Numbering starts at 10 so P0–P3's
+   existing ids stay stable.
 
 **P3 — What makes it *believed* to be SOTA:**
 8. **Property-testing + fuzzing as a foundation**: `proptest` vs `BTreeMap` oracle +
    `check_invariants`, and especially **the convergence property** (two random trees → diff loop →
    identical state + ranges = true symmetric difference, under reordered/duplicated/dropped
-   messages). The category standard (`merkle-search-tree` is fuzz-tested). (cf. F11)
+   messages). The category standard (`merkle-search-tree` is fuzz-tested). (cf. F11,
+   [#113](https://github.com/Akvize/reconcile-rs/issues/113))
 9. **First-class adversarial robustness**: segment-bound validation, allocation bounds, bounded
    fan-out — to hold up against hostile peers (the MST/Willow use case).
+   [#284](https://github.com/Akvize/reconcile-rs/issues/284) (RSOS contract),
+   [#230](https://github.com/Akvize/reconcile-rs/issues/230) (oversize values),
+   [#150](https://github.com/Akvize/reconcile-rs/issues/150) (bounded `peers` map).
+
+### 2.4.1 Open research questions
+
+Opened 2026-08-14: where this repository can test a claim the published work leaves open. One row
+per issue, none of them a 1.0 gate; the claim and the evidence live in the issue, not here.
+
+| Question | Issue |
+|---|---|
+| Is the refinement tree's comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
+| What is the false-convergence rate at reduced fingerprint width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
+| Does a hash-derived split rule measurably break the bound rank cuts license? | [#356](https://github.com/Akvize/reconcile-rs/issues/356) |
+| `Comparison` hands a policy the fingerprint, so a third-party policy can void that bound silently | [#352](https://github.com/Akvize/reconcile-rs/issues/352) |
+| Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
+| Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
+| Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
+| The analysis is dimension-free; the RSOS contract is not — what does `δ > 1` actually need? | [#360](https://github.com/Akvize/reconcile-rs/issues/360) |
+| The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
+
+Two results landed with this index rather than as open issues, because they close rather than open
+a question: a divergence-adaptive policy is confined to the count, and the count is blind exactly
+where the exact-count guarantee has already run out (folded into
+[#318](https://github.com/Akvize/reconcile-rs/issues/318)); and re-ordering the store does not
+rescue that signal — `rbsr/tests/balance_under_position_map.rs` shows only an order whose leading
+component is the one that changed makes a divergence visible, so "make `π` injective" is the wrong
+rule, relocation is.
 
 **SOTA target by axis:**
 
@@ -571,7 +613,7 @@ surrounding system.
 > distributed systems, cryptography, networking and complexity, and **(c)** the Rust tooling — all
 > **implementation-agnostic**. The repository's own identifiers, types and constants are intentionally
 > not catalogued here (see [§3.1](#g91)). `Fxx` references denote the original audit findings, whose
-> current status lives in [`PROGRESS.md`](./PROGRESS.md).
+> resolution record lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §8.
 
 <a id="g91"></a>
 ### 3.1 — Repository identifiers
@@ -579,8 +621,9 @@ surrounding system.
 > **Implementation-agnostic by design.** This positioning document does not catalogue the
 > repository's own types, methods and constants. For the code surface, see the crate's API
 > documentation (`cargo doc`); for the module map and the target design, see
-> [`ARCHITECTURE.md`](./ARCHITECTURE.md) (§2.1); for the audit findings and their current status,
-> see [`PROGRESS.md`](./PROGRESS.md). The subsections below define the **field-agnostic** concepts.
+> [`ARCHITECTURE.md`](./ARCHITECTURE.md) (§2.1); for the audit findings and their resolution
+> record, see [`ARCHITECTURE.md`](./ARCHITECTURE.md) §8. The subsections below define the
+> **field-agnostic** concepts.
 
 <a id="g92"></a>
 ### 3.2 — Competing data structures and algorithms
@@ -975,4 +1018,4 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
 *The state-of-the-art positioning was produced by a literature survey across four themes
 (set-reconciliation algorithms, diffable/Merkle structures, consistency & conflict resolution, and
 the Rust ecosystem), every claim backed by a cited source. The accompanying code-audit findings,
-and their resolution status, live in [`PROGRESS.md`](./PROGRESS.md).*
+and their resolution record, live in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §8.*

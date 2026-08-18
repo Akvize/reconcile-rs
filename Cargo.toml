@@ -38,14 +38,13 @@ exclude = [
     "examples/k8s/",
     "ARCHITECTURE.md",
     "SOTA.md",
-    "PROGRESS.md",
 ]
 
 [profile.release]
 debug = true
-# Decision recorded in PROGRESS.md §3 (#312): a silent-wraparound bug in release is worse than a
-# panic — it manifests as a divergent fingerprint the reconciliation protocol cannot explain, not
-# as a bounded, alertable liveness event.
+# Decision recorded on #312: a silent-wraparound bug in release is worse than a panic — it
+# manifests as a divergent fingerprint the reconciliation protocol cannot explain, not as a
+# bounded, alertable liveness event.
 overflow-checks = true
 
 [[bench]]

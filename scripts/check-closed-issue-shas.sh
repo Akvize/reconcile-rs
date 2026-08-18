@@ -4,7 +4,7 @@
 # issue -- and the PR itself was never merged. `git log --all` finds the commit fine (it is real,
 # on some branch), so nothing before this script would ever flag it; `git merge-base --is-ancestor
 # <sha> main` does not, which is exactly the gap this closes. Same class as the #218-#221 pattern
-# PROGRESS.md already documents for PR bodies -- this is the analogous check for issue bodies.
+# issue #206 already documents for PR bodies -- this is the analogous check for issue bodies.
 #
 # Requires `gh` (authenticated -- GH_TOKEN/GITHUB_TOKEN in env, as GitHub Actions sets by default)
 # and a full clone: a shallow checkout would make every real, merged SHA look unreachable too.

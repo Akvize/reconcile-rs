@@ -130,12 +130,14 @@ deliberately out of this crate's lean core, not an oversight in this encoding.
 
 ## Documentation
 
-- [`PROGRESS.md`](PROGRESS.md) — the living status of the project: which review findings are fixed
-  vs. open, a maturity checklist, and the roadmap. **Start here for "where things stand".**
+- The [`v1.0.0` milestone](https://github.com/Akvize/reconcile-rs/milestone/2) and
+  [issue #206](https://github.com/Akvize/reconcile-rs/issues/206) — live correctness/security/release
+  status. **Start here for "where things stand".**
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the crate/module map, the ports & adapters (hexagonal)
-  design, domain types and their rationale, and the load-bearing invariants.
+  design, domain types and their rationale, the load-bearing invariants, and (§8) the resolution
+  history of the original code audit's findings.
 - [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
-  Durable background; carries no status — see `PROGRESS.md` for the current state of each finding.
+  Durable background; carries no status.
 
 ## Security model
 
@@ -497,7 +499,7 @@ This independently matches [Range-Based Set Reconciliation](https://arxiv.org/ab
 against a small read-only backend trait (`rbsr::RsosView`) rather than `FingerprintTreeMap`
 directly, so it runs over any store that can answer the four range/order-statistics queries it
 needs. Crate map, dependency graph and rationale: [`ARCHITECTURE.md`](ARCHITECTURE.md) §2. Publish
-status of the five crates: [`PROGRESS.md`](PROGRESS.md).
+status of the five crates: the `v1.0.0` milestone and issue #206.
 
 Our B-tree implementation stays within a factor 2 of the standard library's `BTreeMap`, at the cost
 of the extra invariants a fingerprint-carrying tree must maintain:

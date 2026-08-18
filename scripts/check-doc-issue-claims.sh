@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Every issue-state claim a document makes must still be true.
 #
-# The docs assert issue state in prose all over -- PROGRESS.md alone carries ~100 issue references
-# -- and that state moves without the prose moving with it. PROGRESS.md records the failure twice in
-# its own text ("this file had claimed that prematurely while the issue was still open", #179 and
-# #180), which is what makes this an invariant worth a command rather than a habit.
+# The docs assert issue state in prose all over -- ARCHITECTURE.md and SOTA.md between them carry
+# dozens of issue references -- and that state moves without the prose moving with it. A predecessor
+# of this table (the now-removed PROGRESS.md) recorded exactly that failure twice in its own text
+# ("this file had claimed that prematurely while the issue was still open", #179 and #180), which is
+# what makes this an invariant worth a command rather than a habit.
 #
 # ---------------------------------------------------------------------------------------------
 # Scope, and why it is this narrow.
@@ -48,9 +49,9 @@ CLAIM_RE='\[#[0-9]+\]\([^)]*\)[[:space:]]*\((closed|open|resolved|fixed|merged)\
 
 # `grep -o` so each hit is a self-contained `[#N](url) (state` pair. Extracting the number and the
 # state word independently from a whole *line* would reattach them wrongly whenever a line carries
-# several references -- PROGRESS.md has such a line, where `[#110]` and `[#109]` precede the only
-# actual claim, which is `[#184](…) (closed, …)`. That is the same misattribution this script exists
-# to avoid, so it must not commit it itself.
+# several references, e.g. a sentence citing two unrelated issue numbers before the only one that
+# actually carries an annotated claim. That is the same misattribution this script exists to avoid,
+# so it must not commit it itself.
 while IFS= read -r hit; do
     file=${hit%%:*}
     rest=${hit#*:}

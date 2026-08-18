@@ -15,9 +15,9 @@ sibling) `→ reconcile` (facade). See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §
 and diagram. Edition 2021, no MSRV pin.
 
 Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/deployment),
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) (module map, ports & adapters, invariants),
-[`PROGRESS.md`](./PROGRESS.md) (live correctness/security/publish status),
-[`SOTA.md`](./SOTA.md) (durable positioning/glossary/bibliography).
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) (module map, ports & adapters, invariants, audit history),
+[`SOTA.md`](./SOTA.md) (durable positioning/glossary/bibliography). Live correctness/security/
+release status is the `v1.0.0` milestone and issue #206, not a file.
 
 ## 2. Environment
 
@@ -137,9 +137,9 @@ transport/auth/replay/discovery knows what an `Entry`/`Timestamp`/`Key` is; if a
 that edge, it has landed in the wrong crate. Widening either set means updating the script **and**
 `ARCHITECTURE.md` §2 together; the §2 half is gated — part 3 checks its graph against the manifests.
 
-Docs that change with code, same PR: `README.md`, `ARCHITECTURE.md` §1–§3, this file.
-[`PROGRESS.md`](./PROGRESS.md): living status, update as findings/phases change. `SOTA.md`: durable
-reference, not updated for routine changes.
+Docs that change with code, same PR: `README.md`, `ARCHITECTURE.md` §1–§3, this file. `SOTA.md`:
+durable reference, not updated for routine changes. Live correctness/security/release status lives
+in the `v1.0.0` milestone and issue #206 — a GitHub query, not a file to keep in sync by hand.
 
 **Every fact lives in exactly one place; everywhere else links to it.** A restatement is a second
 copy that drifts, and the drifted copy is read as true. Hence **prose is the last resort**, in docs
@@ -170,7 +170,7 @@ been published. Publishing all five in dependency order (`rsos` → `rbsr`,`lww-
 `reconcile`) is implemented in `.github/workflows/tags.yml` (its comments are the source of truth
 for the mechanics: tag/manifest version check, publish order, idempotent skip-if-published, the
 stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Current status
-and the next version to cut are a live decision — see [`PROGRESS.md`](./PROGRESS.md), not this file.
+and the next version to cut are a live decision — see the `v1.0.0` milestone and issue #206.
 
 `gossip` publishes as `reconcile-gossip` (name taken); every dependent renames it back
 (`gossip = { package = "reconcile-gossip", ... }`) so source everywhere still says `use gossip::…`.

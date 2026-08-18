@@ -10,7 +10,7 @@ the same question ("where, and how much").
 - Start with `rg -l <pattern>` (which files) or `rg -c <pattern>` (how many hits
   per file), not `rg -n` or a full `Read`, unless you already know you need every
   matching line.
-- `.rgignore` already drops `Cargo.lock`/`SOTA.md`/`PROGRESS.md`/`target/` from the
+- `.rgignore` already drops `Cargo.lock`/`SOTA.md`/`target/` from the
   default search surface; use `rg -u` to include them when a task is actually
   about one of them.
 - `rg -t toml` includes `Cargo.lock` (a 53 KB file) — prefer `-g '*.toml'` or an
