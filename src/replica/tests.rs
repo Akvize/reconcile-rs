@@ -185,6 +185,92 @@ mod deadlock_regressions {
 }
 
 #[cfg(test)]
+mod handle_messages_return_value {
+    //! `run()` only registers a sender in `peers`/`members` when [`handle_messages`] returns
+    //! `true` (`spoke_dated`) — a value-only sender (a read replica) must never gate tombstone GC.
+    //! Exercised by calling `handle_messages` directly with each message shape, rather than
+    //! through the network loop: the loop's own convergence-style tests seed membership by other
+    //! means too, so they do not reliably fail when this return value alone is wrong.
+
+    use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
+    use crate::entry::{Entry, State};
+    use crate::replica::Replica;
+    use crate::replicated_map::Config;
+    use bincode::{DefaultOptions, Serializer};
+    use gossip::auth;
+    use serde::Serialize;
+    use std::net::SocketAddr;
+
+    use super::super::Message;
+
+    /// Serialize a single message the same way a peer's datagram would arrive — the leading
+    /// wire-version byte plus the encoded message, no authentication.
+    fn message_bytes(message: &Message<i32, Entry<Timestamp, u8>, State<u8>>) -> Vec<u8> {
+        let mut buf = vec![gossip::auth::WIRE_VERSION];
+        message
+            .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+            .unwrap();
+        buf
+    }
+
+    async fn feed(
+        engine: &Replica<i32, u8>,
+        message: &Message<i32, Entry<Timestamp, u8>, State<u8>>,
+    ) -> bool {
+        let bytes = message_bytes(message);
+        let payload = auth::Authenticator::new(None, false)
+            .open(&bytes)
+            .expect("unauthenticated mode clears any datagram")
+            .check_version()
+            .expect("message_bytes stamps the current wire version");
+        let peer: SocketAddr = "127.0.0.60:9".parse().unwrap();
+        let payload = payload
+            .verify_replay(&engine.replay_filter, peer.ip())
+            .expect("unauthenticated mode is exempt from the replay check");
+        let mut send_buf = Vec::new();
+        engine.handle_messages(payload, peer, &mut send_buf).await
+    }
+
+    fn future_stamp() -> Timestamp {
+        Timestamp::new(
+            Hlc::new(PhysicalTime::from_millis(u64::MAX), LogicalCounter::new(0)),
+            NodeId::new(0),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_dated_update_reports_true() {
+        let config = Config::default()
+            .with_port(0)
+            .with_listen_addr("127.0.0.60".parse().unwrap())
+            .with_insecure_no_key();
+        let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");
+        let message = Message::Update((1, Entry::present(future_stamp(), 7)));
+        assert!(
+            feed(&engine, &message).await,
+            "a dated Update must report spoke_dated = true, or run() will never grant its \
+             sender peers/members membership"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_value_only_update_reports_false() {
+        let config = Config::default()
+            .with_port(0)
+            .with_listen_addr("127.0.0.61".parse().unwrap())
+            .with_insecure_no_key();
+        let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");
+        let message: Message<i32, Entry<Timestamp, u8>, State<u8>> =
+            Message::ValueUpdate((1, State::Present(7)));
+        assert!(
+            !feed(&engine, &message).await,
+            "a value-only ValueUpdate must report spoke_dated = false — a read replica must never \
+             gate tombstone GC by being granted peers/members membership"
+        );
+    }
+}
+
+#[cfg(test)]
 mod auth_attack {
     use std::time::Duration;
 
@@ -545,6 +631,12 @@ mod pacing {
 
     /// Send `messages` (unauthenticated, to a discard address — the datagrams go nowhere on an
     /// unconnected UDP socket) at `rate` and return how long it took.
+    ///
+    /// Bounded by an outer timeout well above any legitimate pacing delay this module exercises:
+    /// a broken pacing calculation (e.g. a duration derived from multiplying instead of dividing)
+    /// produces an astronomically large but finite `Duration`, which `sleep` then waits out
+    /// literally rather than erroring — an unbounded `.await` here would hang the test for as
+    /// long as the surrounding harness lets it, instead of failing fast and readably.
     async fn time_send(messages: &[Msg], rate: Option<usize>) -> Duration {
         let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let transport = UdpTransport::new(socket);
@@ -558,7 +650,14 @@ mod pacing {
         let peer: SocketAddr = "127.0.0.1:9".parse().unwrap(); // discard port
         let mut send_buf = Vec::new();
         let start = Instant::now();
-        send_messages_paced(messages, &ports, &peer, &mut send_buf, rate).await;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            send_messages_paced(messages, &ports, &peer, &mut send_buf, rate),
+        )
+        .await
+        .expect(
+            "send_messages_paced took over 10s — pacing duration math is almost certainly broken",
+        );
         start.elapsed()
     }
 
@@ -1036,5 +1135,85 @@ mod in_memory_convergence {
             let ok = rt.block_on(converges(&entries));
             prop_assert!(ok, "B did not converge to A's {} entries over the in-memory transport", entries.len());
         }
+    }
+}
+
+mod immediate_broadcast {
+    //! `Replica::insert`'s immediate push (`just_insert` + `broadcast`) is a distinct delivery
+    //! path from the periodic anti-entropy round `start_reconciliation` drives — a mutant that
+    //! guts `broadcast` into a no-op is invisible to a convergence test whose only peer also
+    //! polls the sender periodically, since the round would eventually pull the same data. These
+    //! tests starve that fallback (a `reconcile_interval` far longer than the test can run, and
+    //! the receiver never told about the sender) so only the immediate push can possibly deliver.
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use crate::clock::{ManualClock, NodeId};
+    use crate::entry::Entry;
+    use crate::replica::Replica;
+    use crate::replicated_map::Config;
+    use crate::transport::InMemoryNetwork;
+
+    /// `insert`'s broadcast must reach an already-known peer without waiting for a reconciliation
+    /// round: both engines' `reconcile_interval` is set far beyond the test's deadline, and only
+    /// the sender is told about the peer — the receiver never queries anyone.
+    #[tokio::test]
+    async fn insert_broadcasts_immediately_without_a_reconciliation_round() {
+        let net = InMemoryNetwork::new();
+        let port = 5006u16;
+        let a_ip: IpAddr = "127.0.4.10".parse().unwrap();
+        let b_ip: IpAddr = "127.0.4.11".parse().unwrap();
+        let cfg = |ip: IpAddr| {
+            Config::default()
+                .with_listen_addr(ip)
+                .with_port(port)
+                // Long enough that this test's deadline is reached first if the immediate
+                // broadcast path is the only way the value can arrive.
+                .with_reconcile_interval(Duration::from_secs(3600))
+                .with_insecure_no_key()
+        };
+        let a: Replica<u32, u32> = Replica::new_with_transport(
+            cfg(a_ip),
+            Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+            Arc::new(ManualClock::new(NodeId::new(1))),
+        );
+        let b: Replica<u32, u32> = Replica::new_with_transport(
+            cfg(b_ip),
+            Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+            Arc::new(ManualClock::new(NodeId::new(2))),
+        );
+
+        let ta = tokio::spawn(a.clone().run());
+        let tb = tokio::spawn(b.clone().run());
+        // Let each engine's unconditional round-0 settle while neither knows any peer, so it is a
+        // no-op — otherwise a stray first round could race the assertions below.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Only A is told about B: B must learn of A purely by receiving a datagram from it.
+        a.peers.write().insert(b_ip, Instant::now());
+        a.insert(7, Entry::present(a.clock_now(), 42));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut received = None;
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if let Some(entry) = b.map.read().get(&7) {
+                received = entry.value().copied();
+                if received.is_some() {
+                    break;
+                }
+            }
+        }
+
+        ta.abort();
+        tb.abort();
+        assert_eq!(
+            received,
+            Some(42),
+            "B never received A's insert via the immediate broadcast path — both engines' \
+             reconcile_interval is far beyond this test's deadline, and B was never told about A, \
+             so only insert's own broadcast call could have delivered it"
+        );
     }
 }
