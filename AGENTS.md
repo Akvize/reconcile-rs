@@ -21,8 +21,8 @@ Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/depl
 
 ## 2. Environment
 
-Plain `cargo` + a Rust toolchain is enough. [`CONTRIBUTING.md`](./CONTRIBUTING.md) documents a Dev
-Container / Docker setup. Link both git hooks once (§3):
+Plain `cargo` + a Rust toolchain is enough (§3's public-API gate also needs `nightly` + `cargo-public-api`).
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) documents a Dev Container / Docker setup. Link both git hooks once (§3):
 
 ```bash
 ln -sf ../../pre-commit .git/hooks/pre-commit
@@ -52,6 +52,7 @@ cargo doc --workspace                                         # both matter: an 
 cargo doc --workspace --all-features                          # feature-gated item dangles in only one
 cargo package --workspace --allow-dirty                       # release packaging, §11
 cargo deny check                                              # advisories/licenses/sources, deny.toml
+./scripts/check-public-api.sh                                 # public-API snapshot + 0.x-leak gate, §11
 ```
 
 `--workspace`, never `--all`. This list is what CI runs and what "done" means. The two git hooks run
@@ -164,20 +165,19 @@ Prose-only guidelines decay; failing commands don't.
 ## 11. Publishing
 
 Only `reconcile` is on crates.io today, and that published `0.2.1` predates the workspace split (it
-vendors what are now `rsos`/`rbsr`/`lww-register`/`gossip` directly) — the four sibling crates have
-never been published. Publishing all five, in dependency order
-(`rsos` → `rbsr`,`lww-register` → `gossip` → `reconcile`), is implemented in
-`.github/workflows/tags.yml` (read its comments — they are the source of truth for the mechanics:
-tag/manifest version check, publish order, idempotent skip-if-published, the local stale-registry-cache
-gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Current status and the version to cut
-next are a live decision — see [`PROGRESS.md`](./PROGRESS.md), not this file.
+vendors what are now `rsos`/`rbsr`/`lww-register`/`gossip` directly) — the four siblings have never
+been published. Publishing all five in dependency order (`rsos` → `rbsr`,`lww-register` → `gossip` →
+`reconcile`) is implemented in `.github/workflows/tags.yml` (its comments are the source of truth
+for the mechanics: tag/manifest version check, publish order, idempotent skip-if-published, the
+stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Current status
+and the next version to cut are a live decision — see [`PROGRESS.md`](./PROGRESS.md), not this file.
 
 `gossip` publishes as `reconcile-gossip` (name taken); every dependent renames it back
 (`gossip = { package = "reconcile-gossip", ... }`) so source everywhere still says `use gossip::…`.
-Every intra-workspace dependency carries a `version` alongside its `path` (required for
-`cargo package`/`publish` to resolve it). The four siblings are on crates.io only because cargo has
-no vendoring — depend on `reconcile`, not on them.
+Every intra-workspace dependency carries a `version` alongside its `path` (`cargo package`/`publish` need
+it) — the four siblings are on crates.io only because cargo has no vendoring; depend on `reconcile`, not on them.
 
 **Version lines (#308, 2026-08-11).** `rsos`/`lww-register`/`reconcile-gossip` are in `reconcile`'s
 public API → majors coupled → `1.0.0` with it, its semver covering the re-exported items only.
 `rbsr` is not → stays `0.x` until #289 settles it; promoting later is additive, demoting is not.
+`./scripts/check-public-api.sh` (§3) gates a `rbsr` symbol re-entering the public API, mechanically (#311).

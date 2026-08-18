@@ -199,6 +199,31 @@ jobs:
     - uses: actions/checkout@v3
     - uses: EmbarkStudios/cargo-deny-action@v2
 
+  # #311 rule 2/3: a committed public-API snapshot per crate (`public-api/*.txt`), diffed against
+  # `cargo public-api`'s live render, plus a check that `reconcile`'s public API names no `rbsr`
+  # symbol (AGENTS.md §11, #308 — `rbsr` is deliberately held at 0.x). Rule 1
+  # (`cargo-semver-checks` against a published baseline) is sequenced separately: it needs a
+  # registry baseline, and 4 of the 5 crates have never published one (AGENTS.md §11).
+  #
+  # CI-only tier (AGENTS.md §3): a full-workspace rustdoc-json build per crate is well over
+  # `pre-push`'s ~20 s budget. Needs a `nightly` toolchain (rustdoc's unstable
+  # `--output-format json`, which the stable channel does not expose) in addition to the `stable`
+  # default every other job uses, so it is the one job that installs a second toolchain.
+  #
+  # `cargo install` rather than `taiki-e/install-action`: that action has no `cargo-public-api`
+  # entry in its tool manifest (unlike `cargo-llvm-cov` below), so `@cargo-public-api` fails to
+  # resolve as a ref.
+  public-api:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@nightly
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo install cargo-public-api --locked
+    - run: ./scripts/check-public-api.sh
+
   coverage:
     needs: changes
     if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
@@ -248,6 +273,7 @@ jobs:
       - bench
       - package
       - deny
+      - public-api
       - coverage
     runs-on: ubuntu-latest
     steps:

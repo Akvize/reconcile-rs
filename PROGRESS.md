@@ -116,7 +116,7 @@ but one High resolved or mitigated.
   explicit bound check, not by this flag; this closes the residual, unaudited surface
 - [x] Bound the `peers` map in unauthenticated mode — [#150](https://github.com/Akvize/reconcile-rs/issues/150) (PR #245; `Config::max_peers`, default 1024)
 - [ ] `SECURITY.md` + private vulnerability reporting — [#313](https://github.com/Akvize/reconcile-rs/issues/313)
-- [ ] Mechanical semver / public-API gate in CI — [#311](https://github.com/Akvize/reconcile-rs/issues/311)
+- [ ] Mechanical semver / public-API gate in CI — [#311](https://github.com/Akvize/reconcile-rs/issues/311) (rules 2/3 landed, rule 1 still sequenced on the first five-crate publish)
 
 ---
 
@@ -554,7 +554,7 @@ flowchart LR
 | [#308](https://github.com/Akvize/reconcile-rs/issues/308) | ✅ **closed** 2026-08-14 — decided, diagram above. Reversible by construction: `0.x → 1.0` is additive, `1.0 → 2.0` is not, and #307's `feat(rbsr)!` on `main` the same day (`protocol_round` → `RoundOutcome`, `SqrtFanOut` retired as default) would have forced that 2.0. Remaining is mechanical: version bumps, card wording, the re-check via #311 |
 | [#189](https://github.com/Akvize/reconcile-rs/issues/189) | Reopened 2026-08-11 — was closed `completed` while nothing landed. No `rust-version` anywhere, no MSRV lane, no `docs.rs` metadata (so `encryption`/`zeroize`/`metrics`/`dns-hickory` are invisible on the rendered docs), no `keywords`/`categories` on the published crate |
 | [#310](https://github.com/Akvize/reconcile-rs/issues/310) | No `CHANGELOG.md`, no `0.2.1` → 1.0 migration guide |
-| [#311](https://github.com/Akvize/reconcile-rs/issues/311) | No mechanical semver / public-API gate — after 1.0 that rule would be enforced by eye, which AGENTS.md §10 forbids. Also what re-verifies #308's "no `0.x` crate in the public API" mechanically rather than by review |
+| [#311](https://github.com/Akvize/reconcile-rs/issues/311) | 🔶 rules 2/3 landed — `scripts/check-public-api.sh`, committed `public-api/*.txt` snapshots per crate, `main.yml`'s `public-api` job; a `rbsr` symbol re-entering `reconcile`'s public API fails the build, naming #308. Rule 1 (`cargo-semver-checks`) stays sequenced on the first five-crate publish (needs a registry baseline) |
 | [#312](https://github.com/Akvize/reconcile-rs/issues/312) | ✅ resolved 2026-08-13 — `deny.toml` + `main.yml`'s `deny` job, `overflow-checks = true` with the trade-off recorded (§3) |
 | [#313](https://github.com/Akvize/reconcile-rs/issues/313) | No `SECURITY.md` — a documented threat model with no disclosure channel |
 | [#204](https://github.com/Akvize/reconcile-rs/issues/204) | ✅ **closed** 2026-08-14 — `tags.yml` verifies tag against manifest and publishes in dependency order, docs no longer say `0.0.0-git`. Its one open item, the version decision, is not separate tracking — it is the row directly below |
