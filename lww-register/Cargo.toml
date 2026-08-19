@@ -1,7 +1,8 @@
 [package]
 name = "lww-register"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 # As with `reconcile-gossip`, the "implementation detail" wording is on the crates.io card on
 # purpose: this crate is published only so `reconcile` can be (cargo has no vendoring), not because

@@ -4,8 +4,9 @@
 # Rust source anywhere says anything but `use gossip::…` — the published name is a registry detail,
 # not an API one. The directory stays `gossip/`.
 name = "reconcile-gossip"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 # The "implementation detail" wording is deliberate and belongs on the crates.io card itself: this
 # crate is published only because cargo has no vendoring — `reconcile` cannot be published unless
@@ -19,6 +20,12 @@ repository = "https://github.com/Akvize/reconcile-rs"
 readme = "README.md"
 keywords = ["gossip", "udp", "reconcile", "internal"]
 categories = ["network-programming"]
+
+# See reconcile's own [package.metadata.docs.rs] (#189) — same reasoning, this crate owns the
+# mac-blake3/mac-hmac/zeroize/encryption/dns-hickory feature gates reconcile forwards.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["mac-blake3"]
