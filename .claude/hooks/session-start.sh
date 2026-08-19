@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 # SessionStart hook for Claude Code on the web.
 #
-# Two things a web container starts without, that CONTRIBUTING.md's Dev Container starts with:
-# the git hooks linked (AGENTS.md §2) and cargo-deny installed (AGENTS.md §3's last gate line).
-# Missing either turns into the same failure from two directions: pre-commit/pre-push never firing
-# on `git commit`/`git push`, so an agent has to remember to run their equivalent by hand every
-# time instead of getting it for free -- or an agent that reaches §3's last line unable to run it
-# at all, reporting the gate green having actually run fourteen of fifteen and hoped. Doing both
-# here is cheaper than either an agent remembering the setup step or a docs line asking it to.
+# Four things a web container starts without, that CONTRIBUTING.md's Dev Container starts with:
+# the git hooks linked (AGENTS.md §2), cargo-deny installed (AGENTS.md §3's last gate line),
+# cargo-nextest installed (the pre-push tier, AGENTS.md §3's table), and cargo-mutants installed
+# (the `repo-gates` job's `check-mutant-count.sh`, CI-only -- not in the pre-commit/pre-push
+# tiers, but its counts are version-sensitive, so a local run without it either can't check the
+# gate at all or, worse, reports numbers that don't match CI's pinned version and sends an agent
+# chasing a phantom drift). Missing any of these turns into the same failure from two directions:
+# pre-commit/pre-push never firing on `git commit`/`git push`, so an agent has to remember to run
+# their equivalent by hand every time instead of getting it for free -- or an agent that reaches a
+# gate line unable to run it at all, reporting it green having actually run N-1 of N and hoped
+# (cargo-nextest missing silently falls through to `git push --no-verify`-shaped trouble: the
+# pre-push hook itself fails outright rather than skipping the check, but only after the agent has
+# already burned time treating `cargo test` as equivalent). Doing all four here is cheaper than
+# either an agent remembering the setup step or a docs line asking it to.
 #
-# cargo-deny is not pinned, on purpose: CI runs `EmbarkStudios/cargo-deny-action@v2`
-# (`.github/workflows/main.yml`), which resolves its own cargo-deny inside the v2 line rather than
-# at a fixed version. Pinning here would introduce a local/CI version skew that nobody is
-# watching. `--locked` still builds from the crate's own lockfile, so the build is reproducible
-# for whatever version is current.
+# cargo-deny and cargo-nextest are deliberately unpinned: CI resolves cargo-deny via
+# `EmbarkStudios/cargo-deny-action@v2` (`.github/workflows/main.yml`), which floats inside the v2
+# line rather than a fixed version, and cargo-nextest has no CI-side pin either -- pinning here
+# would introduce a local/CI version skew that nobody is watching. cargo-mutants is the opposite:
+# CI pins it exactly (`taiki-e/install-action`, `cargo-mutants@27.1.0` in `main.yml`), and
+# `check-mutant-count.sh`'s numbers are cargo-mutants-version-dependent, so matching that pin here
+# is what makes a local re-run of the gate mean anything. `--locked` still builds from each
+# crate's own lockfile, so every install here is reproducible for the version it targets.
 #
 # Web only. A local checkout gets both from CONTRIBUTING.md's Dev Container; touching a
 # contributor's own machine from a hook they did not ask for is not this script's business.
@@ -33,9 +43,27 @@ done
 
 if command -v cargo-deny >/dev/null 2>&1; then
     echo "session-start: $(cargo deny --version) already installed"
-    exit 0
+else
+    echo "session-start: installing cargo-deny (AGENTS.md §3's last gate line) ..."
+    cargo install cargo-deny --locked
+    echo "session-start: $(cargo deny --version) ready"
 fi
 
-echo "session-start: installing cargo-deny (AGENTS.md §3's last gate line) ..."
-cargo install cargo-deny --locked
-echo "session-start: $(cargo deny --version) ready"
+if command -v cargo-nextest >/dev/null 2>&1; then
+    echo "session-start: $(cargo nextest --version | head -1) already installed"
+else
+    echo "session-start: installing cargo-nextest (the pre-push tier, AGENTS.md §3) ..."
+    cargo install cargo-nextest --locked
+    echo "session-start: $(cargo nextest --version | head -1) ready"
+fi
+
+# Pinned to match main.yml's `taiki-e/install-action` `cargo-mutants@27.1.0` exactly -- see the
+# header comment above for why this one tool is pinned when cargo-deny/cargo-nextest are not.
+MUTANTS_VERSION=27.1.0
+if command -v cargo-mutants >/dev/null 2>&1 && [ "$(cargo mutants --version | awk '{print $2}')" = "$MUTANTS_VERSION" ]; then
+    echo "session-start: cargo-mutants $MUTANTS_VERSION already installed"
+else
+    echo "session-start: installing cargo-mutants $MUTANTS_VERSION (repo-gates' check-mutant-count.sh) ..."
+    cargo install cargo-mutants --locked --version "$MUTANTS_VERSION"
+    echo "session-start: $(cargo mutants --version) ready"
+fi

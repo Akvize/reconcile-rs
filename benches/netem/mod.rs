@@ -111,7 +111,7 @@ impl Probability {
     /// integer arithmetic, for the same reason as [`Rtt::label`].
     pub fn label(self) -> String {
         let tenths = (self.0 * 1_000.0).round() as u64;
-        if tenths.is_multiple_of(10) {
+        if tenths % 10 == 0 {
             format!("loss={}%", tenths / 10)
         } else {
             format!("loss={}.{}%", tenths / 10, tenths % 10)

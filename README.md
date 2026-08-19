@@ -138,6 +138,12 @@ deliberately out of this crate's lean core, not an oversight in this encoding.
   history of the original code audit's findings.
 - [`SOTA.md`](SOTA.md) — state-of-the-art positioning, competitor audit, glossary and bibliography.
   Durable background; carries no status.
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed release to release.
+- [`MIGRATING.md`](MIGRATING.md) — upgrading from `0.2.1`, the last pre-workspace-split release.
+- [`SECURITY.md`](SECURITY.md) — supported versions and how to report a vulnerability privately.
+
+MSRV is **1.85**, declared as `rust-version` on all five manifests and checked mechanically by
+`clippy::incompatible_msrv` (AGENTS.md §3).
 
 ## Security model
 

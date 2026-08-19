@@ -23,11 +23,21 @@ resolver = "2"
 
 [package]
 name = "reconcile"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
+# See #189. Floor forced by the dependency graph, not this crate's own API surface: `blake3 1.8.5
+# -> cpufeatures 0.3.0` needs edition 2024, stabilized in 1.85. A library aims for the floor, not
+# whatever the latest stdlib convenience happens to need — `u32::is_multiple_of` (1.87) briefly
+# pushed this to 1.87 before being rewritten as `% == 0` in `src/replica/run.rs` and
+# `benches/netem/mod.rs`. `clippy::incompatible_msrv` (implied by -Dwarnings, AGENTS.md §3) is what
+# actually catches a raise, silent or not; a pinned-toolchain CI lane (#189) is still unlanded.
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
+readme = "README.md"
+keywords = ["reconciliation", "gossip", "replicated", "eventually-consistent", "crdt"]
+categories = ["data-structures", "network-programming"]
 # Keep the published crate to the library proper. Everything below is repository-only material —
 # turnkey Kubernetes example/deployment scaffolding and long-form design docs — that bloats the
 # package without serving consumers of the crate. (Relative links to these from README still
@@ -39,6 +49,13 @@ exclude = [
     "ARCHITECTURE.md",
     "SOTA.md",
 ]
+
+# docs.rs builds default features only by default; this renders every feature-gated item (with its
+# "available on crate feature X" badge) instead of hiding mac-hmac/zeroize/encryption/metrics/
+# metrics-prometheus/dns-hickory entirely (#189).
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [profile.release]
 debug = true
@@ -116,11 +133,11 @@ chrono = { version = "0.4.31", features = ["serde"] }
 # `Authenticator`, replay protection, `Discovery`) — see `gossip/src/lib.rs`.
 # `default-features = false` so this crate's own `mac-blake3` default is the single place the MAC
 # backend gets chosen; the unification entries above forward it.
-gossip = { package = "reconcile-gossip", version = "0.1.0", path = "gossip", default-features = false }
+gossip = { package = "reconcile-gossip", version = "0.3.0", path = "gossip", default-features = false }
 ipnet = "2.9.0"
 # The LWW-Register CRDT domain (`Entry`/`State`, `Timestamp`/`Clock`, `Persistence`, `Key`/`Value`)
 # — see `lww-register/src/lib.rs`. Infrastructure-free by construction.
-lww-register = { version = "0.1.0", path = "lww-register" }
+lww-register = { version = "0.3.0", path = "lww-register" }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
 parking_lot = "0.12.1"
@@ -135,7 +152,7 @@ rbsr = { version = "0.1.0", path = "rbsr" }
 # publish time and resolves the requirement from crates.io, so without it `cargo package`/`publish`
 # refuses the crate outright. That is what unblocks publishing the facade at all (#204, AGENTS.md
 # §11).
-rsos = { version = "0.1.0", path = "rsos" }
+rsos = { version = "0.3.0", path = "rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros", "sync"] }
 tracing = "0.1.40"
