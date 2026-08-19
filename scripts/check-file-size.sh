@@ -18,9 +18,10 @@
 #
 # EXCEPTIONS are files already over FAIL when this gate (or a tightened budget) was introduced,
 # grandfathered rather than split as a side effect -- each is a candidate for its own
-# #421/#425-style split, tracked separately. Adding to this list needs the same justification
-# in its commit; per check-doc-budget.sh's precedent, it is not the default remedy for a file
-# that grows past FAIL after today -- split the file first.
+# #421/#425-style split, tracked separately (#427 is the umbrella issue; a specific split gets
+# its own #423-style C-design sub-issue when someone is ready to take it). Adding to this list
+# needs the same justification in its commit; per check-doc-budget.sh's precedent, it is not the
+# default remedy for a file that grows past FAIL after today -- split the file first.
 #
 # The whitelist is never silent: every run prints its full contents (count + per-file line
 # count), pass or fail, and a listed path that no longer exists or no longer needs the grant
@@ -37,8 +38,8 @@ TEST_WARN=600
 TEST_FAIL=900
 
 EXCEPTIONS=(
-    "rsos/src/fingerprint_tree_map.rs"      # 1426L prod -- order-statistics tree, #(follow-up TBD)
-    "rsos/src/fingerprint_tree_map_iter.rs" # 907L prod  -- its iterator family, same follow-up
+    "rsos/src/fingerprint_tree_map.rs"      # 1426L prod -- order-statistics tree
+    "rsos/src/fingerprint_tree_map_iter.rs" # 907L prod  -- its iterator family
     "rbsr/src/protocol.rs"                  # 854L prod  -- the RBSR wire protocol state machine
     "gossip/src/auth.rs"                    # 820L prod  -- MAC backends + wire auth, security-sensitive
     "src/read_replica_map.rs"               # 752L prod  -- read-replica facade, mirrors ReplicatedMap's read half
