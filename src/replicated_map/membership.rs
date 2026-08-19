@@ -85,6 +85,26 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns
     /// `false` (and logs) if the [`MAX_NETS`](super::MAX_NETS) cap is already reached. The local network is re-derived.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8308".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// let region_a: ipnet::IpNet = "10.1.0.0/16".parse().unwrap();
+    /// assert!(store.add_net(region_a)); // true: declared
+    /// assert!(store.add_net(region_a)); // still true: adding it again is a no-op, not an error
+    /// assert_eq!(store.nets().iter().filter(|n| **n == region_a).count(), 1); // no duplicate entry
+    ///
+    /// assert!(store.remove_net(region_a)); // true: was declared
+    /// assert!(!store.nets().contains(&region_a));
+    /// ```
     #[must_use]
     pub fn add_net(&self, net: IpNet) -> bool {
         self.engine.add_net(net)

@@ -66,6 +66,32 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// backoff before this panics, so a slow-starting environment does not crash-loop on every
     /// restart attempt; a decode/format error ([`InvalidData`](io::ErrorKind::InvalidData)) is
     /// never transient and panics immediately, unretried.
+    ///
+    /// ```
+    /// use reconcile::{
+    ///     replicated_map::Config, Entry, FileSnapshot, Hlc, LogicalCounter, NodeId,
+    ///     PersistedState, Persistence, PhysicalTime, ReplicatedMap, Timestamp,
+    /// };
+    /// use std::sync::Arc;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> std::io::Result<()> {
+    /// let dir = tempfile::tempdir()?;
+    /// let backend = FileSnapshot::new(dir.path().join("snapshot"));
+    ///
+    /// // Simulates a prior process that shut down having persisted one entry.
+    /// let stamp = Timestamp::new(Hlc::new(PhysicalTime::from_millis(0), LogicalCounter::new(0)), NodeId::new(1));
+    /// backend.save(&PersistedState::from(vec![("a".to_string(), Entry::present(stamp, 1))]))?;
+    ///
+    /// // A fresh store, pointed at that same backend, recovers the entry immediately -- loading
+    /// // happens synchronously in `with_persistence` itself, not on the periodic save timer.
+    /// let store = ReplicatedMap::<String, i32>::new(Config::default().with_insecure_no_key())
+    ///     .await?
+    ///     .with_persistence(Arc::new(backend));
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(1));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_persistence(mut self, backend: Arc<dyn Persistence<K, V>>) -> Self {
         // A random node id changes every restart, so the LWW tie-break is stable only within one
         // process lifetime — durable state wants an explicit `Config::with_node_id`.
