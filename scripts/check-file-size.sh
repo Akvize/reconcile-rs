@@ -48,7 +48,6 @@ EXCEPTIONS=(
     "rsos/src/encoding.rs"                  # 611L prod  -- the canonical encoding every fingerprint is defined over
     "rbsr/src/policy.rs"                    # 573L prod  -- RBSR split/recursion policy
     "src/clock.rs"                          # 534L prod  -- the reconcile-facing Clock port + HLC wiring
-    "src/replica/run.rs"                    # 503L prod  -- #425: the receive loop, called out as not decomposing further
     "tests/service.rs"                      # 1214L test -- top-level end-to-end oracle suite
 )
 

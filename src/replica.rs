@@ -459,10 +459,12 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 }
 
+mod dispatch;
 mod gc;
 mod membership;
 mod pacing;
 mod read;
+mod reconciliation;
 mod run;
 mod write;
 
