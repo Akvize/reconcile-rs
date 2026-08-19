@@ -90,3 +90,8 @@ pub use protocol::{
     RoundOutcome,
 };
 pub use rsos_view::RsosView;
+
+// Re-exported so a caller building a `RangeAggregate` (whose `aggregate` field is an
+// `rsos::Aggregate`) never needs its own, independently-versioned dependency on `rsos` — the same
+// reasoning #297 applied one crate up.
+pub use rsos;
