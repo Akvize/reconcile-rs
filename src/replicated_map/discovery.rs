@@ -92,6 +92,21 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// is [`Speculative`](crate::DiscoveryKind::Speculative). A speculative source's absences must
     /// never decommission a live member: that would release the causal-stability GC gate
     /// (`ARCHITECTURE.md` §5 invariant 6) on a member that never actually left.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, DnsDiscovery, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> std::io::Result<()> {
+    /// // Point at a Kubernetes headless Service (`clusterIP: None`): one DNS record per ready pod.
+    /// let discovery = Arc::new(DnsDiscovery::new("my-service.my-namespace.svc.cluster.local", 4242));
+    /// let store = ReplicatedMap::<String, String>::new(Config::default().with_insecure_no_key())
+    ///     .await?
+    ///     .with_discovery(discovery);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_discovery(mut self, discovery: Arc<dyn Discovery>) -> Self {
         assert!(
             matches!(discovery.kind(), DiscoveryKind::Authoritative),

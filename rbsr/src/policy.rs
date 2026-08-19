@@ -19,6 +19,16 @@ use rsos::Aggregate;
 ///
 /// A zero stride emits no children and would hang the protocol; every constructor raises it to
 /// [`ONE`](Self::ONE).
+///
+/// ```
+/// use rbsr::{FanOut, SplitStride};
+///
+/// // 10 elements split into at most 3 children needs a stride of 4: 4, 4, then 2.
+/// assert_eq!(SplitStride::for_fan_out(10, FanOut::new(3)).get(), 4);
+///
+/// // A stride of zero would never advance, so it is raised to one instead of hanging the protocol.
+/// assert_eq!(SplitStride::per_child(0), SplitStride::ONE);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SplitStride(usize);
 
@@ -48,6 +58,15 @@ impl SplitStride {
 ///
 /// A fan-out of one is the identity partition and would never terminate; [`new`](Self::new) raises
 /// `0` and `1` to `2`.
+///
+/// ```
+/// use rbsr::FanOut;
+///
+/// // Both degenerate inputs are raised to the smallest fan-out that actually refines.
+/// assert_eq!(FanOut::new(0), FanOut::new(2));
+/// assert_eq!(FanOut::new(1), FanOut::BINARY);
+/// assert_eq!(FanOut::NEGENTROPY.get(), 16);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FanOut(usize);
 
@@ -86,6 +105,22 @@ impl FanOut {
 /// [`remote_size`](Self::remote_size) are `size()`-only and therefore always safe; `Comparison`
 /// carries no accessor that returns a fingerprint or a full [`Aggregate`], so the violation is
 /// structurally unspellable rather than merely discouraged.
+///
+/// ```
+/// use rbsr::Comparison;
+/// use rsos::{Aggregate, Fingerprint};
+///
+/// // Same fingerprint, different size: `agrees()` must not be fooled by a fingerprint collision --
+/// // it reads the whole `Aggregate`, never the fingerprint alone.
+/// let mismatch = Comparison::new(
+///     Aggregate::new(2, Fingerprint::ZERO),
+///     Aggregate::new(3, Fingerprint::ZERO),
+///     0,
+/// );
+/// assert!(!mismatch.agrees());
+/// assert_eq!(mismatch.span(), 2);
+/// assert_eq!(mismatch.remote_size(), 3);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Comparison {
     local: Aggregate,
@@ -241,6 +276,23 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
 /// children whatever `d` is: communication is `Θ(√n)`, not `O(d log n)`, and the paper's
 /// `T_loc = O(hL + bhI + K)` does not apply. It buys depth — `Θ(log log n)` rounds. Competitive
 /// only as `d` approaches `√n`; measured in `benches/protocol.rs`.
+///
+/// ```
+/// use rbsr::{Comparison, Decision, RefinementPolicy, SqrtFanOut};
+/// use rsos::{Aggregate, Fingerprint};
+///
+/// let comparison = Comparison::new(
+///     Aggregate::new(400, Fingerprint([1, 0, 0, 0])),
+///     Aggregate::new(400, Fingerprint([2, 0, 0, 0])),
+///     0,
+/// );
+/// let Decision::Split(stride) = SqrtFanOut.decide(comparison) else {
+///     panic!("a mismatching range must split");
+/// };
+/// // The stride is the square root of the span, so -- unlike `FixedFanOut` -- the child count
+/// // grows with the range instead of staying capped at a constant `b`.
+/// assert_eq!(stride.get(), 20);
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqrtFanOut;
 
@@ -265,6 +317,32 @@ impl RefinementPolicy for SqrtFanOut {
 /// bytes and local work follow `b / ln b`, one-way messages fall as `log_b n` to a floor, and the
 /// widest round grows linearly in `b` and must fit a datagram. Swept over 2…256 by
 /// `benches/protocol.rs`'s `fan_out_sweep`; the chosen value's evidence is in `SOTA.md` §2.2.
+///
+/// ```
+/// use rbsr::{Comparison, Decision, FanOut, FixedFanOut, RefinementPolicy};
+/// use rsos::{Aggregate, Fingerprint};
+///
+/// let small = Comparison::new(
+///     Aggregate::new(100, Fingerprint([1, 0, 0, 0])),
+///     Aggregate::new(100, Fingerprint([2, 0, 0, 0])),
+///     0,
+/// );
+/// let large = Comparison::new(
+///     Aggregate::new(1_000_000, Fingerprint([1, 0, 0, 0])),
+///     Aggregate::new(1_000_000, Fingerprint([2, 0, 0, 0])),
+///     0,
+/// );
+///
+/// // The child count stays at or under `b` however wide the range is -- unlike `SqrtFanOut`,
+/// // whose child count grows with it.
+/// for comparison in [small, large] {
+///     let Decision::Split(stride) = FixedFanOut::default().decide(comparison) else {
+///         panic!("a mismatching range must split");
+///     };
+///     let children = comparison.span().div_ceil(stride.get());
+///     assert!(children <= FanOut::NEGENTROPY.get());
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,
@@ -332,6 +410,29 @@ impl RefinementPolicy for FixedFanOut {
 ///
 /// [`Default`] is the paper's experimental configuration. `t = 0` is raised to `1`, which would
 /// otherwise split a range into itself forever.
+///
+/// ```
+/// use rbsr::{Comparison, Decision, EnumerateBelowThreshold, FanOut, RefinementPolicy};
+/// use rsos::{Aggregate, Fingerprint};
+///
+/// let policy = EnumerateBelowThreshold::new(32, FanOut::NEGENTROPY);
+///
+/// // At or below `t`: IDLIST, whatever the peer's range holds.
+/// let at_threshold = Comparison::new(
+///     Aggregate::new(32, Fingerprint([1, 0, 0, 0])),
+///     Aggregate::new(64, Fingerprint([2, 0, 0, 0])),
+///     0,
+/// );
+/// assert_eq!(policy.decide(at_threshold), Decision::Enumerate);
+///
+/// // One element above `t`: SPLIT instead.
+/// let above_threshold = Comparison::new(
+///     Aggregate::new(33, Fingerprint([1, 0, 0, 0])),
+///     Aggregate::new(64, Fingerprint([2, 0, 0, 0])),
+///     0,
+/// );
+/// assert!(matches!(policy.decide(above_threshold), Decision::Split(_)));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EnumerateBelowThreshold {
     threshold: usize,

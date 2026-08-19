@@ -408,6 +408,24 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     ///
     /// The repair runs from a [`Drop`] guard, so a panicking `callback` still leaves the cached
     /// aggregates consistent with the stored value; the panic propagates unchanged.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let mut map = FingerprintTreeMap::new();
+    /// map.insert(1, 10);
+    /// let before = map.aggregate(..);
+    ///
+    /// map.with_mut(&1, |v| *v.unwrap() = 99);
+    ///
+    /// // The stored value moved...
+    /// assert_eq!(map.get(&1), Some(&99));
+    /// // ...and so did the cached aggregate -- unlike a bare `&mut V`, `with_mut` keeps the
+    /// // fingerprint honest without a manual re-lift.
+    /// let after = map.aggregate(..);
+    /// assert_ne!(before.fingerprint(), after.fingerprint());
+    /// assert_eq!(before.size(), after.size());
+    /// ```
     pub fn with_mut<R, F: FnOnce(Option<&mut V>) -> R>(&mut self, key: &K, callback: F) -> R {
         let mut descent = Vec::new();
         let mut node = self.root.as_ref();
@@ -435,6 +453,19 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 
     /// Position of `key` in the in-order sequence, or `None` if absent — unlike
     /// [`rank`](FingerprintTreeMap::rank), which returns the insertion point for an absent key.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let map: FingerprintTreeMap<i32, &str> = [(10, "a"), (20, "b"), (30, "c")].into_iter().collect();
+    ///
+    /// // A present key reports its own index...
+    /// assert_eq!(map.position(&20), Some(1));
+    /// // ...while an absent key -- even one that would sort inside the map -- is `None`, unlike
+    /// // `rank`, which would still report where it would land.
+    /// assert_eq!(map.position(&15), None);
+    /// assert_eq!(map.rank(&15), 1);
+    /// ```
     pub fn position(&self, key: &K) -> Option<usize> {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
@@ -588,6 +619,19 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 
     /// Removes every entry for which `keep` returns `false`. `O(n log n)`: collect, then remove.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let mut map: FingerprintTreeMap<i32, i32> = (0..6).map(|k| (k, k * 10)).collect();
+    /// map.retain(|k, _| k % 2 == 0);
+    ///
+    /// // Only the entries `keep` approved survive, in the same key order.
+    /// assert_eq!(
+    ///     map.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>(),
+    ///     vec![(0, 0), (2, 20), (4, 40)]
+    /// );
+    /// ```
     pub fn retain<F: FnMut(&K, &V) -> bool>(&mut self, mut keep: F)
     where
         K: Clone,
@@ -746,6 +790,19 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 
     /// Position of `key` in the in-order sequence, or the position it would occupy after
     /// insertion; [`Rsos::rank`](crate::Rsos::rank)'s realization.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let map: FingerprintTreeMap<i32, &str> = [(10, "a"), (20, "b"), (30, "c")].into_iter().collect();
+    ///
+    /// // A present key's rank is its in-order index...
+    /// assert_eq!(map.rank(&20), 1);
+    /// // ...and an absent key still gets the index it would land at if inserted, unlike
+    /// // `position`, which is `None` for a key that was never stored.
+    /// assert_eq!(map.rank(&15), 1);
+    /// assert_eq!(map.rank(&100), map.len());
+    /// ```
     pub fn rank(&self, key: &K) -> usize {
         fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
             if let Some(children) = node.children.as_ref() {
@@ -778,6 +835,18 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// # Panics
     ///
     /// If the position is out of bounds.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let map: FingerprintTreeMap<i32, &str> = [(10, "a"), (20, "b"), (30, "c")].into_iter().collect();
+    ///
+    /// assert_eq!(map.select(1), &20);
+    ///
+    /// // `select` and `rank` are inverses over a present key: selecting a key's own rank returns
+    /// // that key back.
+    /// assert_eq!(map.select(map.rank(&30)), &30);
+    /// ```
     #[must_use]
     pub fn select(&self, index: usize) -> &K {
         fn aux<K: Ord, V>(node: &Node<K, V>, mut index: usize) -> &K {
@@ -818,6 +887,20 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
 ///
 /// Named `ItemRange`, not `Range`: the latter would collide with [`std::ops::Range`], which this
 /// type's own generic parameter `R` is frequently instantiated with. Frozen (#291).
+///
+/// ```
+/// use rsos::FingerprintTreeMap;
+///
+/// let map: FingerprintTreeMap<i32, &str> =
+///     [(10, "a"), (20, "b"), (30, "c"), (40, "d")].into_iter().collect();
+///
+/// // Only the keys inside the bound are yielded, in key order -- not the whole map.
+/// let pairs: Vec<_> = map.range(20..40).collect();
+/// assert_eq!(pairs, vec![(&20, &"b"), (&30, &"c")]);
+///
+/// // Its count agrees with the aggregate computed over the same range: both walk the same subtree.
+/// assert_eq!(map.range(20..40).count(), map.aggregate(20..40).size());
+/// ```
 pub struct ItemRange<'a, K, V, R: RangeBounds<K>> {
     /// Owned, not borrowed: a borrowed range makes `map.range(lo..hi)` on runtime bounds `E0716`.
     range: R,
@@ -951,6 +1034,16 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
 
     /// The smallest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
     /// leftmost path.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let map: FingerprintTreeMap<i32, &str> = [(30, "c"), (10, "a"), (20, "b")].into_iter().collect();
+    ///
+    /// // Smallest by key, not insertion order.
+    /// assert_eq!(map.first_key_value(), Some((&10, &"a")));
+    /// assert_eq!(map.last_key_value(), Some((&30, &"c")));
+    /// ```
     #[must_use]
     pub fn first_key_value(&self) -> Option<(&K, &V)> {
         let mut node = self.root.as_ref();
@@ -962,6 +1055,13 @@ impl<K: Ord, V> FingerprintTreeMap<K, V> {
 
     /// The largest key and its value, or `None` if the tree is empty. `O(log n)`: descends the
     /// rightmost path.
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let empty: FingerprintTreeMap<i32, &str> = FingerprintTreeMap::new();
+    /// assert_eq!(empty.last_key_value(), None);
+    /// ```
     #[must_use]
     pub fn last_key_value(&self) -> Option<(&K, &V)> {
         let mut node = self.root.as_ref();

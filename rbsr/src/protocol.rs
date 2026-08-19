@@ -257,6 +257,38 @@ pub fn initial_ranges<K, B: RsosView<K>>(local: &B) -> Vec<RangeAggregate<K>> {
 /// cannot be diffed for it, since one range can appear in both and a dropped segment in neither.
 ///
 /// [`AddAssign`] accumulates a whole reconciliation.
+///
+/// ```
+/// use rsos::FingerprintTreeMap;
+/// use rbsr::{initial_ranges, protocol_round};
+///
+/// // Three active ranges against the same responder `b`, chosen to hit SKIP, IDLIST and SPLIT in
+/// // one round: `b` matches itself, an empty store advertises against non-empty `b`, and a
+/// // same-sized-but-disjoint `c` mismatches `b`.
+/// let mut b = FingerprintTreeMap::new();
+/// for i in 0..40 {
+///     b.insert(i, i);
+/// }
+/// let empty: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+/// let mut c = FingerprintTreeMap::new();
+/// for i in 0..40 {
+///     c.insert(i + 1000, i); // same count as `b`, disjoint keys -> different fingerprint
+/// }
+///
+/// let mut active = initial_ranges(&b);
+/// active.extend(initial_ranges(&empty));
+/// active.extend(initial_ranges(&c));
+///
+/// let mut children = Vec::new();
+/// let mut enumerations = Vec::new();
+/// let outcome = protocol_round(&b, active, &mut children, &mut enumerations);
+///
+/// assert_eq!(outcome.skipped(), 1); // `b` vs `b`
+/// assert_eq!(outcome.enumerated(), 1); // `b` vs `empty`
+/// assert_eq!(outcome.split(), 1); // `b` vs `c`
+/// assert_eq!(outcome.children(), children.len()); // every SPLIT/bounced child, tallied
+/// assert_eq!(outcome.dropped_malformed(), 0); // no inverted range in this round
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RoundOutcome {
     skipped: usize,
@@ -340,6 +372,29 @@ where
 /// The policy chooses the outcome and the split width, nothing else: bounds validation, rank
 /// arithmetic, `select` cuts and the partition invariant stay here. `?Sized`, so
 /// `&dyn RefinementPolicy` works.
+///
+/// ```
+/// use rsos::FingerprintTreeMap;
+/// use rbsr::{initial_ranges, protocol_round_with_policy, SqrtFanOut};
+///
+/// let mut a = FingerprintTreeMap::new();
+/// let mut b = FingerprintTreeMap::new();
+/// for i in 0..400 {
+///     a.insert(i, i);
+///     b.insert(i, i);
+/// }
+/// b.insert(999, 999); // only `b` has this key, so the outer range mismatches and must split
+///
+/// let active = initial_ranges(&b);
+/// let mut children = Vec::new();
+/// let mut enumerations = Vec::new();
+/// protocol_round_with_policy(&a, &SqrtFanOut, active, &mut children, &mut enumerations);
+///
+/// // `SqrtFanOut` cuts `a`'s 400-element span into exactly ⌊√400⌋ = 20 children, unlike the
+/// // default `FixedFanOut`, which would cap it at 16 regardless of the span.
+/// assert_eq!(children.len(), 20);
+/// assert!(enumerations.is_empty());
+/// ```
 pub fn protocol_round_with_policy<K, B, P>(
     local: &B,
     policy: &P,
