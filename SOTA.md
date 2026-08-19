@@ -495,6 +495,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    together: making a split boundary a function of the summary oracle breaks more than the
    union-bound argument's premise — it can break the protocol's termination guarantee outright,
    the sharper version of the same claim.
+
+   **Scope of the MST/prolly analogy, corrected 2026-08-19**: the comparison two paragraphs up
+   ("the same property MST's `level = hash(key)` and prolly's rolling-hash chunking give up") is
+   sound as a description of shared-oracle *shape determination*, but neither structure has an
+   analogue of RBSR's iterative `RefinementPolicy::decide` step — MST/prolly termination follows
+   from the comparison walk's bounded depth, not from an independence property a split rule could
+   violate. So this finding is not "MST/prolly are exposed to the same failure and happen not to
+   trigger it" — they are outside its mechanism entirely. The result's real scope is protocols in
+   the **iterative RBSR family with a pluggable split policy** (RBSR itself, GenSync) — that is the
+   comparison class a write-up should state, not the wider Merkle-structure family §2.1 tabulates.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
