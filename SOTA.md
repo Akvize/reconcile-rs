@@ -838,6 +838,7 @@ pass had already ruled out. Record negative results too.
 | 2026-08-14 | "partitioned set reconciliation"; reference lists of arXiv:2509.02373 (25) and arXiv:2603.19820 (27), walked one level | `cs.IT` / `cs.NI` | **§4.4's `cs.IT` group** — EPSR, GenSync, the tree-algorithm arity lineage, multi-party, MET-IBLT. §2.2 revised |
 | 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not found, and not needed.** The search assumed the law had to be borrowed; it derives in four lines from the protocol itself (§2.2), so this row is closed by derivation rather than by citation |
 | 2026-08-17 | post-2026-08-14 sweep: new arXiv/venue results on range-based/partitioned set reconciliation, rateless IBLT/CertainSync follow-ups, multi-party reconciliation, prolly/Merkle tree updates, Willow/Earthstar changes, GenSync follow-ups, PODC 2026 accepted-papers list | `cs.DC`/`cs.CR`/`cs.IT` + venue programs, via WebSearch (WebFetch could not reach `arxiv.org`, `dl.acm.org`, `ceur-ws.org`, `semanticscholar.org` or `podc.org` from this session — network egress proxy blocked all five; findings below are WebSearch-summary-sourced, not read from the primer PDF) | One finding, §2.1: Rawat et al. 2026 (§4.4) bounds prolly trees' cascading-rechunking cost. Nothing new found on the other axes — RIBLT/CertainSync/ConflictSync/Rateless-Bloom-Filters lineage, multi-party reconciliation (still 2013–2021), and Willow/Earthstar are unchanged since the last pass over each |
+| 2026-08-19 | citation-tracking pass on the two pivot papers: `"<title>" cited by`/`follow-up` per Meyer arXiv:2212.13567 and Yang et al. arXiv:2402.02668 | targeted, via WebSearch only (`arxiv.org`, `api.semanticscholar.org`, `api.openalex.org` all confirmed egress-blocked this session — no programmatic citation graph available, summaries only) | Confirmed arXiv:2603.19820 (already §4.4) is Meyer's direct RBSR heir. CertainSync and ConflictSync (already §4.4) confirmed as RIBLT's real follow-ups; ConflictSync's venue resolved to PaPoC 2026. No new reference found beyond what §4.4 already held |
 
 ### 4.4 Bibliography
 
@@ -858,9 +859,18 @@ pass had already ruled out. Record negative results too.
   ancestry of range-based refinement, predating the RBSR framing. **Also the root of the PSR line**
   ([§4.1](#41-cross-community-vocabulary)): the one paper both dialects cite, and the reason this
   page held the ancestor for months without ever reaching its `cs.IT` continuation.
-- *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314 (SIGMETRICS 2025) — https://arxiv.org/abs/2504.08314
-- *ConflictSync*, arXiv:2505.01144 (2025, Baquero group) — the first digest-driven synchronisation
-  algorithm for state-based CRDTs, cutting transfer up to 18× — https://arxiv.org/abs/2505.01144
+- *CertainSync: Rateless Set Reconciliation with Certainty*, arXiv:2504.08314v1 (ACM SIGMETRICS
+  Performance Evaluation Review, June 2025) — https://arxiv.org/abs/2504.08314
+  **Bears on:** direct RIBLT follow-up removing the estimator/parametrization step §2.2 flags as
+  RIBLT's one soft spot — doesn't change the hybrid-RBSR-plus-sketch conclusion, strengthens the
+  "which sketch" half of it. → §2.2, [#185](https://github.com/Akvize/reconcile-rs/issues/185)
+- *ConflictSync: Bandwidth Efficient Synchronization of Divergent State*, arXiv:2505.01144v1 (2025,
+  Baquero group; published PaPoC 2026 — 13th Workshop on Principles and Practice of Consistency for
+  Distributed Data, April 2026) — the first digest-driven synchronisation algorithm for state-based
+  CRDTs, cutting transfer up to 18× — https://arxiv.org/abs/2505.01144
+  **Bears on:** state-based-CRDT sync converging toward digest-driven sync, i.e. toward what this
+  crate already does — same read as CertainSync, orthogonal axis (conflict resolution, not the
+  refinement algorithm). → §1.5, §2.4 item 7
 - *Rateless Bloom Filters*, arXiv:2510.27614 (2025, Baquero group) — https://arxiv.org/abs/2510.27614
   ; both validate §2.2's hybrid conclusion and show delta-CRDT sync converging toward digest-driven
   sync, i.e. toward what this crate already does.
