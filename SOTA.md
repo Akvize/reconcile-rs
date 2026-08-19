@@ -949,11 +949,16 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
 - S. Tatham, *Counted B-Trees* (2004) — https://www.chiark.greenend.org.uk/~sgtatham/algorithms/cbtree.html
   — the subtree-count augmentation giving O(log n) rank/select. Direct prior art for `tree_size`:
   the order-statistic half of RSOS is a documented classic, not a 2026 result.
-- Z. Zhao, D. Xie, F. Li, *AB-tree: Index for concurrent random sampling and updates*, VLDB 15(9),
-  2022 — maintaining aggregate metadata inside a page-oriented tree **under concurrent updates**.
-  The reference for the contention this design has by construction (every insert rewrites the root
-  aggregate, today hidden behind one global `RwLock`) and for epic
-  [#271](https://github.com/Akvize/reconcile-rs/issues/271).
+- Z. Zhao, D. Xie, F. Li, *AB-tree: Index for Concurrent Random Sampling and Updates*,
+  `doi:10.14778/3538598.3538606` (VLDB 15(9), 2022) — https://vldb.org/pvldb/vol15/p1835-zhao.pdf ;
+  code (primary source read for this entry — `vldb.org` was egress-blocked) via
+  https://github.com/zzy7896321/abtree_public.
+  **Bears on:** the mechanism is not root-path locking — writers CAS-append immutable weight deltas
+  (tagged by inserting xmin) into a lock-free, per-page MVCC version-store chain instead of writing
+  an absolute aggregate in place; readers sum the snapshot-visible deltas, and a background GC
+  consolidates each chain once no live snapshot needs it, *except the root's*, deliberately left
+  uncollapsed because that is exactly where contention concentrates. →
+  [#359](https://github.com/Akvize/reconcile-rs/issues/359), §2.4 item 10.
 - F. Li, M. Hadjieleftheriou, G. Kollios, L. Reyzin, *Dynamic authenticated index structures for
   outsourced databases* (Embedded Merkle B-tree), SIGMOD 2006 — twenty years of prior art on
   caching digests inside a B-tree. Different goal (verifiable query answering, not range
