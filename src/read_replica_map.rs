@@ -146,15 +146,20 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// If `config.cluster_key` is `None` without also setting
     /// [`Config::with_insecure_no_key`] — see #325.
     ///
-    /// ```rust,no_run
-    /// # use std::sync::Arc;
-    /// # use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap};
+    /// ```
+    /// use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap};
+    ///
     /// let network = InMemoryNetwork::new();
-    /// let transport = Arc::new(network.bind("127.0.0.1:8080".parse().unwrap()));
+    /// let transport = Arc::new(network.bind("127.0.0.1:8304".parse().unwrap()));
     /// let read_replica = ReadReplicaMap::<String, String>::new_with_transport(
     ///     Config::default().with_insecure_no_key(),
     ///     transport,
     /// );
+    ///
+    /// // Read-only: nothing arrives until it reconciles with a dated peer (module docs).
+    /// assert!(read_replica.is_empty());
+    /// assert!(read_replica.get(&"a".to_string()).is_none());
     /// ```
     pub fn new_with_transport(
         config: Config,

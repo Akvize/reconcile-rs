@@ -191,6 +191,17 @@ impl Blake3Hasher {
 /// Part of the wire protocol — see this module's golden vectors. The [`Serialize`] bound admits
 /// keys and values std implements no [`Hash`](std::hash::Hash) for
 /// ([`HashMap`](std::collections::HashMap), [`HashSet`](std::collections::HashSet)).
+///
+/// ```
+/// use rsos::lift;
+///
+/// // Injective within a type: changing either half of the pair moves the fingerprint.
+/// assert_ne!(lift(&1, &"a"), lift(&2, &"a"));
+/// assert_ne!(lift(&1, &"a"), lift(&1, &"b"));
+///
+/// // Deterministic: the same pair always lifts to the same fingerprint.
+/// assert_eq!(lift(&1, &"a"), lift(&1, &"a"));
+/// ```
 pub fn lift<K: Serialize + ?Sized, V: Serialize + ?Sized>(key: &K, value: &V) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
     hasher.absorb(key);
@@ -199,6 +210,16 @@ pub fn lift<K: Serialize + ?Sized, V: Serialize + ?Sized>(key: &K, value: &V) ->
 }
 
 /// The canonical 256-bit digest of a single value — [`lift`] with no key half, same encoding.
+///
+/// ```
+/// use rsos::{digest, lift};
+///
+/// // No key half: digesting a value is lift with a unit key.
+/// assert_eq!(digest(&"Hello"), lift(&(), &"Hello"));
+///
+/// // Distinct values digest to distinct fingerprints.
+/// assert_ne!(digest(&"Hello"), digest(&"Hell"));
+/// ```
 pub fn digest<T: Serialize + ?Sized>(value: &T) -> Fingerprint {
     let mut hasher = Blake3Hasher::new();
     hasher.absorb(value);

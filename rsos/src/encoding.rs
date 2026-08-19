@@ -44,6 +44,25 @@ use std::fmt::{self, Display};
 use serde::{ser, Serialize};
 
 /// A byte sink the canonical encoder writes into: `blake3::Hasher`, or `Vec<u8>` for buffering.
+///
+/// ```
+/// use rsos::encoding::{encode_into, Sink};
+///
+/// // A minimal sink that only counts bytes, without storing them.
+/// struct ByteCounter(usize);
+/// impl Sink for ByteCounter {
+///     fn put(&mut self, bytes: &[u8]) {
+///         self.0 += bytes.len();
+///     }
+/// }
+///
+/// let mut counter = ByteCounter(0);
+/// encode_into(&mut counter, "hello").unwrap();
+///
+/// // An 8-byte little-endian length prefix, then the 5 payload bytes -- any `Sink` sees exactly
+/// // what the `Vec<u8>` impl would.
+/// assert_eq!(counter.0, 8 + 5);
+/// ```
 pub trait Sink {
     /// Append `bytes` to the sink.
     fn put(&mut self, bytes: &[u8]);
@@ -84,6 +103,19 @@ impl ser::Error for Error {
 }
 
 /// Write `value`'s canonical encoding into `sink`.
+///
+/// ```
+/// use rsos::encoding::encode_into;
+///
+/// let mut bytes = Vec::new();
+/// encode_into(&mut bytes, "ab").unwrap();
+///
+/// // `str`/`bytes` are length-prefixed -- a `u64` little-endian count, then the raw bytes -- which
+/// // is what keeps ("ab", "c") and ("a", "bc") from encoding to the same bytes downstream.
+/// let mut expected = 2u64.to_le_bytes().to_vec();
+/// expected.extend_from_slice(b"ab");
+/// assert_eq!(bytes, expected);
+/// ```
 pub fn encode_into<S: Sink, T: Serialize + ?Sized>(sink: &mut S, value: &T) -> Result<(), Error> {
     value.serialize(Serializer { sink })
 }

@@ -49,6 +49,25 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Prefer [`get_cloned`](Self::get_cloned), which drops the lock before returning, as the
     /// default read when the value will be compared against or fed into a subsequent write.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8302".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// assert!(store.get(&"a".to_string()).is_none());
+    /// store.insert("a".to_string(), 1);
+    /// assert_eq!(store.get(&"a".to_string()).as_deref(), Some(&1)); // ValueRef derefs to &V
+    /// # }
+    /// ```
     pub fn get(&self, k: &K) -> Option<ValueRef<'_, V>> {
         let guard = self.engine.map.read();
         RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value()))

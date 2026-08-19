@@ -154,6 +154,17 @@ impl TryFrom<&[u8]> for ClusterKey {
 }
 
 /// Why constructing a [`ClusterKey`] from untrusted input failed.
+///
+/// ```
+/// use reconcile_gossip::auth::{ClusterKey, ClusterKeyError};
+///
+/// let err = ClusterKey::from_hex("too short").unwrap_err();
+/// assert_eq!(err, ClusterKeyError::WrongHexLength(9));
+/// assert_eq!(
+///     err.to_string(),
+///     "cluster key must be 64 hex characters, got 9"
+/// );
+/// ```
 #[derive(Debug, Eq, PartialEq)]
 pub enum ClusterKeyError {
     /// [`ClusterKey::from_hex`] got a string that was not exactly `2 * KEY_LEN` (64) characters.

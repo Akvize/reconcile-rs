@@ -147,6 +147,28 @@ impl NodeId {
 ///
 /// Obtainable only via [`clamped_to_drift`](AdmittedTime::clamped_to_drift) or
 /// [`trusted`](AdmittedTime::trusted) — no public field, no `Default`, no `From<PhysicalTime>`.
+///
+/// ```
+/// use lww_register::clock::{AdmittedTime, ClockDrift, PhysicalTime};
+///
+/// let local_now = PhysicalTime::from_millis(1_000);
+/// let budget = ClockDrift::from_millis(500);
+///
+/// // A remote reading within the drift budget is admitted unchanged.
+/// let in_budget = AdmittedTime::clamped_to_drift(PhysicalTime::from_millis(1_200), local_now, budget);
+/// assert_eq!(in_budget.physical(), PhysicalTime::from_millis(1_200));
+/// assert!(!in_budget.was_clamped());
+///
+/// // A hostile reading far beyond the budget is capped at `local_now + budget`, not admitted as-is.
+/// let hostile = AdmittedTime::clamped_to_drift(PhysicalTime::from_millis(u64::MAX), local_now, budget);
+/// assert_eq!(hostile.physical(), PhysicalTime::from_millis(1_500));
+/// assert!(hostile.was_clamped());
+///
+/// // A stamp this node authored itself skips the clamp entirely.
+/// let own = AdmittedTime::trusted(PhysicalTime::from_millis(u64::MAX));
+/// assert_eq!(own.physical(), PhysicalTime::from_millis(u64::MAX));
+/// assert!(!own.was_clamped());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AdmittedTime {
     physical: PhysicalTime,
@@ -204,6 +226,27 @@ impl AdmittedTime {
 ///
 /// Field declaration order *is* the first two thirds of the conflict order (`ARCHITECTURE.md` §5
 /// invariant 2); no identity takes part in the arithmetic.
+///
+/// ```
+/// use lww_register::clock::{AdmittedTime, Hlc, LogicalCounter, PhysicalTime};
+///
+/// // A local tick with no remote input just advances the logical counter.
+/// let mut clock = Hlc::START;
+/// clock = clock.next_tick();
+/// assert_eq!(clock, Hlc::new(PhysicalTime::EPOCH, LogicalCounter::new(1)));
+///
+/// // A remote reading strictly ahead of local physical time pulls the clock forward to it,
+/// // then ticks once more -- the result is strictly greater than both inputs.
+/// let local_phys = PhysicalTime::from_millis(10);
+/// let remote = Hlc::new(PhysicalTime::from_millis(500), LogicalCounter::new(3));
+/// clock.advance_past_remote(
+///     local_phys,
+///     AdmittedTime::trusted(remote.physical()),
+///     remote.logical(),
+/// );
+/// assert!(clock > remote);
+/// assert!(clock.physical() >= remote.physical());
+/// ```
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]
@@ -356,6 +399,51 @@ impl Timestamp {
 ///
 /// Concrete [`Timestamp`] rather than an associated type, so the port stays object-safe and no
 /// clock parameter leaks into the engine.
+///
+/// A minimal, correct implementor -- verified against [`assert_conformance`], the check every
+/// real adapter should run before it is trusted in production:
+///
+/// ```
+/// use std::sync::Mutex;
+/// use lww_register::clock::{assert_conformance, AdmittedTime, Clock, Hlc, NodeId, PhysicalTime, Timestamp};
+///
+/// struct MyClock {
+///     node_id: NodeId,
+///     last: Mutex<Hlc>,
+/// }
+///
+/// impl Clock for MyClock {
+///     fn node_id(&self) -> NodeId {
+///         self.node_id
+///     }
+///
+///     fn now(&self) -> Timestamp {
+///         let mut last = self.last.lock().unwrap();
+///         *last = last.next_tick();
+///         Timestamp::new(*last, self.node_id)
+///     }
+///
+///     fn observe(&self, remote: Timestamp) {
+///         let mut last = self.last.lock().unwrap();
+///         last.advance_past_remote(
+///             PhysicalTime::EPOCH,
+///             AdmittedTime::trusted(remote.physical()),
+///             remote.logical(),
+///         );
+///     }
+///
+///     fn observe_trusted(&self, remote: Timestamp) {
+///         // No clamp: the one caller entitled to trust a stamp this node itself authored.
+///         self.observe(remote);
+///     }
+/// }
+///
+/// let clock = MyClock {
+///     node_id: NodeId::new(1),
+///     last: Mutex::new(Hlc::START),
+/// };
+/// assert_conformance(&clock); // panics with a diagnostic if the contract is violated
+/// ```
 pub trait Clock: Send + Sync + 'static {
     /// Mint a strictly-monotonic local timestamp for a write or an outgoing message.
     fn now(&self) -> Timestamp;

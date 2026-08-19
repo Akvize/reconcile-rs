@@ -118,6 +118,25 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// is no reactor running" unless called from inside a Tokio runtime (`#[tokio::main]`,
     /// `#[tokio::test]`, or an explicit `Runtime::block_on`/`Handle::enter`). This holds for every
     /// write method on this type.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8301".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// assert_eq!(store.insert("a".to_string(), 1), None); // nothing there before
+    /// assert_eq!(store.insert("a".to_string(), 2), Some(1)); // returns the value it replaced
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(2));
+    /// # }
+    /// ```
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -187,6 +206,26 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Panics
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8303".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// store.insert("a".to_string(), 1);
+    /// assert_eq!(store.remove(&"a".to_string()), Some(1)); // returns the removed value
+    /// assert_eq!(store.remove(&"a".to_string()), None); // already gone: a tombstone, not live
+    /// assert!(store.get(&"a".to_string()).is_none());
+    /// # }
+    /// ```
     pub fn remove(&self, key: &K) -> Option<V> {
         let ret = self
             .engine

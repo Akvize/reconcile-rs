@@ -31,6 +31,19 @@ use rsos::Fingerprint;
 
 /// A read-only replica of a replicated set; see the
 /// [module documentation](crate::read_replica_set).
+///
+/// ```
+/// use reconcile::{replicated_map::Config, ReadReplicaSet};
+///
+/// # #[tokio::main]
+/// # async fn main() -> std::io::Result<()> {
+/// let set = ReadReplicaSet::<String>::new(Config::default().with_insecure_no_key()).await?;
+///
+/// // Read-only: nothing arrives until it reconciles with a dated peer (module docs).
+/// assert!(!set.contains(&"a".to_string()));
+/// # Ok(())
+/// # }
+/// ```
 pub struct ReadReplicaSet<K>(ReadReplicaMap<K, ()>);
 
 impl<K> Clone for ReadReplicaSet<K> {

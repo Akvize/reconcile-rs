@@ -103,6 +103,20 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Errors
     ///
     /// If the socket cannot be bound to `(config.listen_addr, config.port)`.
+    ///
+    /// ```
+    /// use reconcile::{replicated_map::Config, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> std::io::Result<()> {
+    /// // Port 0 (the default) asks the OS for an ephemeral port -- no fixed port to collide on.
+    /// let store = ReplicatedMap::<String, i32>::new(Config::default().with_insecure_no_key()).await?;
+    ///
+    /// store.insert("a".to_string(), 1);
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(1));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn new(config: Config) -> io::Result<Self> {
         Ok(Self::from_engine(Replica::<K, V>::new(config).await?))
     }
