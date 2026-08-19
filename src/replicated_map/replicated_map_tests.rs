@@ -11,11 +11,11 @@ use crate::{
 };
 
 /// A config bound to a fresh port on loopback — port `0` is refused, so
-/// [`next_ephemeral_test_port`](crate::replica::next_ephemeral_test_port) stands in for it —
+/// [`next_ephemeral_test_port`](crate::replica::tests::next_ephemeral_test_port) stands in for it —
 /// so persistence tests can construct stores without colliding on a fixed port.
 fn ephemeral_config() -> Config {
     Config {
-        port: crate::replica::next_ephemeral_test_port(),
+        port: crate::replica::tests::next_ephemeral_test_port(),
         listen_addr: "127.0.0.1".parse().unwrap(),
         nets: [None; MAX_NETS],
         remote_interval: 6,
@@ -656,7 +656,7 @@ fn discovery_config() -> Config {
     // A real, bindable loopback address (the engine binds a socket in `new`) on an ephemeral
     // port. No `with_net`, mirroring the Kubernetes setup where discovery is purely DNS-driven.
     Config::default()
-        .with_port(crate::replica::next_ephemeral_test_port())
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_insecure_no_key()
 }
@@ -1167,7 +1167,7 @@ async fn decommission_frees_peer_cap_slot() {
     let newcomer: std::net::IpAddr = "127.1.0.3".parse().unwrap();
 
     let config = Config::default()
-        .with_port(crate::replica::next_ephemeral_test_port())
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_max_peers(2)
         .with_insecure_no_key();

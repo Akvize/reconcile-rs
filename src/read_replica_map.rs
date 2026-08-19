@@ -630,7 +630,7 @@ mod tests {
         // A fresh port per call — Config::port must be nonzero — on the loopback default
         // network.
         Config::default()
-            .with_port(crate::replica::next_ephemeral_test_port())
+            .with_port(crate::replica::tests::next_ephemeral_test_port())
             .with_insecure_no_key()
     }
 

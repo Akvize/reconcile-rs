@@ -124,7 +124,7 @@ mod read_replica_set_tests {
 
     fn ephemeral_config() -> Config {
         Config {
-            port: crate::replica::next_ephemeral_test_port(),
+            port: crate::replica::tests::next_ephemeral_test_port(),
             listen_addr: "127.0.0.1".parse().unwrap(),
             nets: [None; MAX_NETS],
             remote_interval: 6,

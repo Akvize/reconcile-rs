@@ -1539,10 +1539,10 @@ impl Drop for BulkDumpCountGuard {
     }
 }
 
-// next_ephemeral_test_port lives in `tests.rs`, not here: it's test-only, and this file is
-// already large enough (.claude/rules/big-files.md) without test helpers added back into it.
+// `pub(crate)` (not private): `tests::next_ephemeral_test_port` is reused by other files' own
+// test modules (replicated_set.rs, read_replica_set.rs, read_replica_map.rs,
+// replicated_map_tests.rs), which reach it as `crate::replica::tests::next_ephemeral_test_port`.
+// This is the only test-only content this production file carries — a visibility marker on its
+// own test submodule, no test code or symbol imported into it.
 #[cfg(test)]
-pub(crate) use tests::next_ephemeral_test_port;
-
-#[cfg(test)]
-mod tests;
+pub(crate) mod tests;

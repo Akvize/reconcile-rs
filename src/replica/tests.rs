@@ -625,7 +625,7 @@ mod pacing {
             let config = Config {
                 bulk_send_rate,
                 ..Config::default()
-                    .with_port(crate::replica::next_ephemeral_test_port())
+                    .with_port(crate::replica::tests::next_ephemeral_test_port())
                     .with_listen_addr(addr.parse().unwrap())
                     .with_insecure_no_key()
             };
@@ -783,7 +783,7 @@ mod tombstone_ack_bounds {
     async fn engine(addr: &str) -> Replica<i32, i32> {
         // Use a distinct port per module to avoid bind conflicts between parallel test runs.
         let config = Config::default()
-            .with_port(crate::replica::next_ephemeral_test_port())
+            .with_port(crate::replica::tests::next_ephemeral_test_port())
             .with_listen_addr(addr.parse().unwrap())
             .with_insecure_no_key();
         Replica::new(config).await.expect("bind failed")
@@ -933,7 +933,7 @@ mod dump_budget {
         use crate::replica::Replica;
 
         let config = Config::default()
-            .with_port(crate::replica::next_ephemeral_test_port())
+            .with_port(crate::replica::tests::next_ephemeral_test_port())
             .with_listen_addr("127.0.0.99".parse().unwrap())
             .with_max_concurrent_bulk_dumps(1)
             .with_insecure_no_key();
