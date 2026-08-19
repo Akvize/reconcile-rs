@@ -1,12 +1,13 @@
 # Benchmarks
 
-Three Criterion targets, all `harness = false`, none feature-gated:
+Four Criterion targets, all `harness = false`, none feature-gated:
 
 | Target | What it measures |
 |---|---|
 | `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
 | `system` | End-to-end, **public-API** system benchmarks (below), including the injected-RTT/loss lane. |
 | `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — total wire bytes at four value sizes, then messages, advertised ranges, refinement bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
+| `contention` | `K`-writer write throughput vs writer count, `FingerprintTreeMap` against a `BTreeMap` no-aggregate control, both behind one shared `parking_lot::RwLock` of the exact shape `src/replica.rs` uses (below). |
 
 No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
 
@@ -295,6 +296,82 @@ The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 silently changing every cluster's bandwidth profile — this benchmark quantifies such a change, it
 does not guard it. `split_children_partition_the_parent_range` is policy-independent and must hold
 under any fan-out rule.
+
+## The `contention` benchmark
+
+```sh
+cargo bench --bench contention             # printed summary + Criterion groups
+cargo bench --bench contention -- --quick
+
+# The printed summary only (no timed group): give Criterion a filter that matches no benchmark id.
+cargo bench --bench contention -- 'no_such_benchmark'
+```
+
+Answers [#445](https://github.com/Akvize/reconcile-rs/issues/445), feeding
+[#359](https://github.com/Akvize/reconcile-rs/issues/359): the RSOS contract
+(`rsos/src/fingerprint_tree_map.rs`) must answer `Aggregate(l, u)` in `O(log n)`, which means every
+insert writes the composable summary on every node from the leaf to the root — a write to the
+hottest node in the tree, on every insert, by construction. Today that cost is invisible:
+`src/replicated_map.rs` already serialises every writer behind one global `RwLock`, so the root
+write costs nothing beyond the lock itself. This target isolates the two by running the identical
+`N`-writer harness over two arms, both behind one shared `parking_lot::RwLock<_>` of the exact shape
+`src/replica.rs`'s `map: Arc<RwLock<FingerprintTreeMap<K, V>>>` uses:
+
+- **`fingerprint_tree_map`** — `RwLock<FingerprintTreeMap<u64, u64>>`, the real contract.
+- **`btree_map`** — `RwLock<BTreeMap<u64, u64>>`, the no-aggregate control: same lock, same insert
+  shape, no root-path summary to maintain.
+
+Both arms pre-fill the map to 100 000 entries outside the timed region (`log₁₆ 100 000 ≈ 5` — an
+empty map has no root path worth contending on, which would understate the RSOS arm's cost), then
+spawn `N` writer threads that each insert 20 000 fresh, disjoint keys — one `write()` acquisition per
+key, the same shape a gossip receipt or a local write takes today — starting together via a
+`Barrier` so the timed region is genuinely concurrent rather than staggered by thread-spawn latency.
+`N` sweeps `1, 2, 4, 8, 16`, covering this repository's own CI/dev-container core count (4) and
+pushing past it, since contention beyond the core count is exactly the regime a lock-free redesign
+(#271/#273/#274, out of scope here) would target.
+
+**Comparability caveat (#281).** Unlike `bench`/`protocol`, this target is not deterministic —
+throughput is wall-clock, not counted, so it inherits scheduler noise the way the RTT lane above
+does. Both arms run in the same process, on the same hardware, in the same invocation, so the
+*ratio* between arms at a given `N` is the load-bearing number; absolute ops/s is specific to the
+machine that produced it and is not portable across machines or runs.
+
+### Results
+
+Measured on a 4-core machine (`nproc` = 4), `RUSTFLAGS` unset, release profile, one representative
+run (throughput ops/s, `PREFILL` = 100 000, 20 000 inserts/writer):
+
+| writers (`N`) | `fingerprint_tree_map` ops/s | `btree_map` ops/s | ratio (fp/btree) | delta ops/s (btree − fp) |
+|---:|---:|---:|---:|---:|
+| 1 | 2 613 627 | 7 727 695 | 0.34× | 5 114 067 |
+| 2 | 1 676 253 | 3 117 085 | 0.54× | 1 440 832 |
+| 4 | 1 169 189 | 2 484 360 | 0.47× | 1 315 171 |
+| 8 | 1 003 831 | 2 929 071 | 0.34× | 1 925 240 |
+| 16 | 1 223 793 | 3 096 266 | 0.40× | 1 872 473 |
+
+A second run (same machine, same invocation shape) reproduces the pattern rather than the exact
+figures — expected per the caveat above:
+
+| writers (`N`) | `fingerprint_tree_map` ops/s | `btree_map` ops/s | ratio (fp/btree) |
+|---:|---:|---:|---:|
+| 1 | 2 645 138 | 8 847 671 | 0.30× |
+| 2 | 1 747 919 | 3 145 004 | 0.56× |
+| 4 | 1 380 527 | 2 909 714 | 0.47× |
+| 8 | 960 643 | 3 265 382 | 0.29× |
+| 16 | 1 097 485 | 3 766 965 | 0.29× |
+
+**What this answers for #359.** At `N = 1` (no lock contention at all), `FingerprintTreeMap` runs at
+roughly 0.30–0.34× a bare `BTreeMap`'s throughput under the identical lock — that ratio is the RSOS
+contract's own per-insert cost: the root-path aggregate maintenance, alone. Past `N = 1`, both arms'
+throughput collapses together (the shared `RwLock` serialises every writer, so total throughput does
+not scale with `N` for either arm), and the fingerprint/btree **ratio stays in the same 0.29×–0.56×
+band at every swept `N`** rather than widening as `N` grows. In other words: **the root-path write
+does not become a *larger* share of the cost as writer count increases** — the global `RwLock`
+already flattens both arms to roughly the same, lock-dominated regime the moment a second writer
+shows up, and the RSOS contract's own overhead is priced in per-insert (a roughly constant ~2–3×
+multiplier), not amplified further by contention. No swept `N` up to 16 (4× this machine's core
+count) shows the root-path write "start to dominate" *beyond* what it already costs at `N = 1` — the
+lock is, and remains, the larger term at every `N > 1` measured here.
 
 ## Not covered yet
 
