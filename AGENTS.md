@@ -65,7 +65,7 @@ budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
-| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh`/`check-file-size.sh` gates above | 0.4 s |
+| [`./pre-commit`](./pre-commit) | `gitleaks protect --staged`, `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh`/`check-file-size.sh` gates above | 0.4 s |
 | [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 

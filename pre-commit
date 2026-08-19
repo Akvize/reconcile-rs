@@ -5,6 +5,12 @@ set -Eeuo pipefail
 # rustc, so committing stays interactive. Everything that needs a compile runs at
 # push time (./pre-push) or in CI (.github/workflows/main.yml).
 
+echo "Running gitleaks"
+# Operates on the git index directly (--staged), so it runs before the
+# checkout-index below flattens the staged tree into a plain directory with no
+# .git for it to read.
+gitleaks protect --staged --redact --no-banner
+
 # To handle partially committed files, we must copy the staged changes to a
 # separate location. See also https://stackoverflow.com/a/36793330
 TEMPDIR=$(mktemp -d)
