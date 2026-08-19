@@ -10,25 +10,13 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bincode::{DefaultOptions, Serializer};
 use gossip::auth;
-use serde::Serialize;
 
-use super::super::Message;
+use super::deadlock_regressions::update_message_bytes;
 use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
-use crate::entry::{Entry, State};
+use crate::entry::Entry;
 use crate::replica::Replica;
 use crate::replicated_map::Config;
-
-/// Serialize an `Update`, matching `deadlock_regressions.rs`'s network-ingest helper.
-fn update_message_bytes(key: i32, value: Entry<Timestamp, u8>) -> Vec<u8> {
-    let message = Message::Update::<i32, Entry<Timestamp, u8>, State<u8>>((key, value));
-    let mut buf = vec![gossip::auth::WIRE_VERSION];
-    message
-        .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
-        .unwrap();
-    buf
-}
 
 /// A remote `Update` whose stamp exactly equals the locally-held stamp must not be treated as
 /// newer — `handle_messages` only re-applies on a *strictly greater* stamp. Equal stamps only
