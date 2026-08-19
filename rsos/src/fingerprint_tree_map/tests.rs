@@ -149,6 +149,52 @@ fn clear_empties_the_tree_and_preserves_invariants() {
     tree.check_invariants();
 }
 
+/// `check_invariants` only proves anything if it actually rejects a broken tree: tamper with a
+/// leaf's cached fingerprint directly (through the crate-internal `Node` fields tests.rs shares
+/// with the rest of `fingerprint_tree_map`) and require a panic.
+#[test]
+fn check_invariants_panics_on_a_corrupted_fingerprint_cache() {
+    let mut tree: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
+    tree.insert(1, 10);
+    tree.insert(2, 20);
+    tree.check_invariants();
+
+    tree.root.fingerprints[0] += lift(&999u64, &999u64);
+
+    let panicked =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.check_invariants())).is_err();
+    assert!(
+        panicked,
+        "check_invariants must reject a tampered fingerprint cache"
+    );
+}
+
+/// The minimum-occupancy check only applies once `min` or `max` is `Some` (i.e. not at the true
+/// root) -- along the rightmost spine, `max` stays `None` all the way down and only `min` is
+/// `Some`, so this specifically exercises the `||`, not the `&&` a node could be mutated to.
+#[test]
+fn check_invariants_panics_on_an_underfull_non_root_node_on_the_rightmost_spine() {
+    let mut tree: FingerprintTreeMap<u64, u64> = (0..200).map(|k| (k, k)).collect();
+    tree.check_invariants();
+
+    let mut node = tree.root.as_mut();
+    while let Some(children) = node.children.as_mut() {
+        node = children.last_mut().unwrap().as_mut();
+    }
+    while node.keys.len() >= super::MIN_CAPACITY {
+        node.keys.pop();
+        node.values.pop();
+        node.fingerprints.pop();
+    }
+
+    let panicked =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.check_invariants())).is_err();
+    assert!(
+        panicked,
+        "check_invariants must reject an under-full non-root node"
+    );
+}
+
 #[test]
 fn retain_drops_non_matching_and_preserves_invariants() {
     let mut tree: FingerprintTreeMap<u64, u64> = FingerprintTreeMap::new();
