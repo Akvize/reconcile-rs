@@ -36,7 +36,7 @@ license = "MIT OR Apache-2.0"
 description = "A reconciliation storage service to sync a key-value map over multiple instances"
 repository = "https://github.com/Akvize/reconcile-rs"
 readme = "README.md"
-keywords = ["reconciliation", "gossip", "replicated", "eventually-consistent", "crdt"]
+keywords = ["reconciliation", "gossip", "replicated", "distributed", "crdt"]
 categories = ["data-structures", "network-programming"]
 # Keep the published crate to the library proper. Everything below is repository-only material —
 # turnkey Kubernetes example/deployment scaffolding and long-form design docs — that bloats the
