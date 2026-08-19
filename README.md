@@ -589,13 +589,20 @@ faults into the lines a change touches and requires the suite to catch them (CI:
 Code coverage is measured on every CI run with
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and reported to
 [Codecov](https://codecov.io/gh/Akvize/reconcile-rs) (see the coverage badge at
-the top; informational only, not a merge gate — AGENTS.md §7). To reproduce locally:
+the top). Two tiers, both on overall project coverage (`codecov.yml`, AGENTS.md §7): a
+non-blocking `warning` status below 100%, and a blocking `minimum` status below 90%. Per-PR patch
+coverage stays informational — a coverage number, delta or absolute, isn't trusted to gate an
+individual change here; that's the mutation gate's job (above). To reproduce locally:
 
 ```sh
 cargo install cargo-llvm-cov
-cargo llvm-cov --workspace            # text summary in the terminal
-cargo llvm-cov --workspace --html     # browsable HTML report under target/llvm-cov/html
+cargo llvm-cov --workspace --all-features            # text summary in the terminal
+cargo llvm-cov --workspace --all-features --html     # browsable HTML report under target/llvm-cov/html
 ```
 
-Coverage is collected with the crate's default features. The `mac-blake3` and
-`mac-hmac` backends are mutually exclusive, so do **not** pass `--all-features`.
+`--all-features` is required, not optional, despite `mac-blake3`/`mac-hmac` being mutually
+exclusive at runtime: exactly one backend compiles in either way (`mac-blake3` takes precedence),
+so this measures the same MAC backend a default-features run would. What actually needs
+`--all-features` is the integration tests, which build against `internal-testing`-gated seams and
+fail to compile without it — `cargo llvm-cov --workspace` alone errors on this crate. This matches
+CI's own coverage job exactly.

@@ -122,8 +122,8 @@ because feature interactions hide bugs.
 New behavior needs a test: `tests/*.rs` for public-API-crossing changes, `#[cfg(test)]` for internal
 invariants. `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz
 oracles for the tree and the wire format — extend these over narrow examples when touching parsing
-or `FingerprintTreeMap` invariants. Codecov coverage is `informational: true` — not a merge gate;
-don't rely on it as proof.
+or `FingerprintTreeMap` invariants. Codecov (`codecov.yml`) warns below 100% project coverage and
+gates at 90%; per-PR patch coverage stays informational — README "Testing and coverage".
 
 ## 8. Security
 
