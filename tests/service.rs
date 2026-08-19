@@ -817,10 +817,9 @@ async fn runtime_config_setters() {
     let net_d = "127.0.9.0/30".parse().unwrap(); // does not contain addr
     let host_route = "127.0.8.1/32".parse().unwrap();
 
-    // Port 0 = ephemeral, so this never collides with the networked tests above.
     let store = ReplicatedMap::<i32, i32>::new(
         Config::default()
-            .with_port(0)
+            .with_port(8090)
             .with_listen_addr(addr)
             .with_net(net_c)
             .with_insecure_no_key(),
@@ -847,7 +846,7 @@ async fn runtime_config_setters() {
     );
 
     // set_nets: wholesale replacement re-derives the local net.
-    store.set_nets(&[net_c]);
+    store.set_nets(&[net_c]).unwrap();
     assert_eq!(store.nets(), vec![net_c]);
     assert_eq!(store.local_net(), net_c);
 

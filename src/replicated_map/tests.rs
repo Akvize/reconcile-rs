@@ -19,11 +19,12 @@ mod persistence;
 mod read;
 mod write;
 
-/// A config bound to an ephemeral UDP port on loopback, so persistence tests can construct
-/// stores without colliding on a fixed port.
+/// A config bound to a fresh port on loopback — port `0` is refused, so
+/// [`next_ephemeral_test_port`](crate::replica::tests::next_ephemeral_test_port) stands in for it
+/// — so persistence tests can construct stores without colliding on a fixed port.
 fn ephemeral_config() -> Config {
     Config {
-        port: 0,
+        port: crate::replica::tests::next_ephemeral_test_port(),
         listen_addr: "127.0.0.1".parse().unwrap(),
         nets: [None; MAX_NETS],
         remote_interval: 6,

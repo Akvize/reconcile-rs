@@ -32,7 +32,7 @@ mod read;
 mod write;
 
 pub(crate) use config::MIN_BULK_SEND_RATE;
-pub use config::{Config, MAX_NETS};
+pub use config::{Config, ConfigError, MAX_NETS};
 #[cfg(test)]
 pub(crate) use discovery::MemberPresence;
 
@@ -109,8 +109,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> std::io::Result<()> {
-    /// // Port 0 (the default) asks the OS for an ephemeral port -- no fixed port to collide on.
-    /// let store = ReplicatedMap::<String, i32>::new(Config::default().with_insecure_no_key()).await?;
+    /// let store = ReplicatedMap::<String, i32>::new(Config::new(8081).with_insecure_no_key()).await?;
     ///
     /// store.insert("a".to_string(), 1);
     /// assert_eq!(store.get_cloned(&"a".to_string()), Some(1));
