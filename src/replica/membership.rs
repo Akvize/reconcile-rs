@@ -16,19 +16,28 @@ use ipnet::IpNet;
 use tracing::warn;
 
 use crate::bounds::{Key, Value};
-use crate::replicated_map::MAX_NETS;
+use crate::replicated_map::{ConfigError, MAX_NETS};
 
 use super::{derive_local_net, Replica};
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.
-    pub(crate) fn set_nets(&self, nets: &[IpNet]) {
+    ///
+    /// # Errors
+    ///
+    /// If `nets` exceeds [`MAX_NETS`] — the same cap `Config::with_net`/`try_with_net` enforce at
+    /// construction time and [`add_net`](Self::add_net) enforces at runtime.
+    pub(crate) fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        if nets.len() > MAX_NETS {
+            return Err(ConfigError::TooManyNets);
+        }
         let nets = nets.to_vec();
         let local = derive_local_net(&nets, self.listen_addr);
         // local_net is always derived from nets; update it together so a reader never observes a
         // local net that is inconsistent with the freshly-installed nets for long.
         *self.local_net.write() = local;
         *self.nets.write() = nets;
+        Ok(())
     }
 
     /// (runtime) Declare an additional network. Idempotent; returns `false` (and logs) if the

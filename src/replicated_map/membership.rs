@@ -15,7 +15,7 @@ use tracing::{info, instrument};
 
 use crate::bounds::{Key, Value};
 
-use super::ReplicatedMap;
+use super::{ConfigError, ReplicatedMap};
 
 impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Run one round of anti-entropy against the configured peers: compare fingerprints, exchange
@@ -77,10 +77,16 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// (runtime) Replace the declared geographical networks, re-deriving the local one. See
     /// [`Config::nets`](super::Config::nets).
     ///
-    /// Safe live: topology is per-node and carries no wire tag, and repair of known peers is not
-    /// gated on net membership, so the worst case is suboptimal WAN traffic, never divergence.
-    pub fn set_nets(&self, nets: &[IpNet]) {
-        self.engine.set_nets(nets);
+    /// # Errors
+    ///
+    /// If `nets` exceeds [`MAX_NETS`](super::MAX_NETS) — the same cap
+    /// `Config::with_net`/`try_with_net` enforce at construction time.
+    ///
+    /// Safe live otherwise: topology is per-node and carries no wire tag, and repair of known
+    /// peers is not gated on net membership, so the worst case is suboptimal WAN traffic, never
+    /// divergence.
+    pub fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
+        self.engine.set_nets(nets)
     }
 
     /// (runtime) Declare an additional network (e.g. opening a new region). Idempotent; returns

@@ -167,7 +167,7 @@ async fn decommission_frees_peer_cap_slot() {
     let newcomer: std::net::IpAddr = "127.1.0.3".parse().unwrap();
 
     let config = Config::default()
-        .with_port(0)
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.1".parse().unwrap())
         .with_max_peers(2)
         .with_insecure_no_key();

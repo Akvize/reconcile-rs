@@ -10,9 +10,37 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ReplicatedMap;
+use crate::{
+    replicated_map::{ConfigError, MAX_NETS},
+    ReplicatedMap,
+};
 
 use super::ephemeral_config;
+
+/// `set_nets` enforces the same [`MAX_NETS`] cap `Config::with_net`/`try_with_net` do at
+/// construction time, just at runtime — both the accepting and the rejecting side need coverage.
+#[tokio::test]
+async fn set_nets_enforces_max_nets_at_runtime() {
+    let store = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .unwrap();
+
+    let within_cap: Vec<_> = (0..MAX_NETS)
+        .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+        .collect();
+    store
+        .set_nets(&within_cap)
+        .expect("exactly MAX_NETS networks should be accepted");
+
+    let over_cap: Vec<_> = (0..=MAX_NETS)
+        .map(|i| format!("127.0.0.0/{}", 8 + (i % 24)).parse().unwrap())
+        .collect();
+    assert_eq!(
+        store.set_nets(&over_cap),
+        Err(ConfigError::TooManyNets),
+        "MAX_NETS + 1 networks should be rejected"
+    );
+}
 
 /// `ReplicatedMap::start_reconciliation` must actually drive a round through the engine, not
 /// silently no-op: with the *automatic* background trigger disabled (an hour-long
