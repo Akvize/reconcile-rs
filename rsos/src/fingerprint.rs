@@ -46,6 +46,19 @@ use crate::encoding;
 ///
 /// A non-empty range can fingerprint to [`ZERO`](Fingerprint::ZERO); never decide emptiness on
 /// the fingerprint, only on the element count.
+///
+/// ```
+/// use rsos::{lift, Fingerprint};
+///
+/// let a = lift(&1, &"one");
+/// let b = lift(&2, &"two");
+///
+/// // combine/remove are inverses -- this is what lets a range's fingerprint be maintained
+/// // incrementally as elements are inserted and removed, rather than rehashed from scratch.
+/// let combined = a.combine(b);
+/// assert_eq!(combined.remove(b), a);
+/// assert_eq!(combined.remove(a).remove(b), Fingerprint::ZERO);
+/// ```
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fingerprint(pub [u64; 4]);
 

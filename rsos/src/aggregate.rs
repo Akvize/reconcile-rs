@@ -23,6 +23,18 @@ use crate::fingerprint::Fingerprint;
 ///
 /// Field declaration order is the wire order: `fingerprint` before `size`, inverse of Def. 3.5's
 /// written pair. Reordering is a silent wire break, caught only by `tests/wire_format.rs`.
+///
+/// ```
+/// use rsos::{lift, Aggregate};
+///
+/// let a = Aggregate::new(1, lift(&1, &"one"));
+/// let b = Aggregate::new(1, lift(&2, &"two"));
+///
+/// // Aggregates for disjoint ranges compose under `+`, and the count adds up -- this is what
+/// // lets a subtree's aggregate be maintained from its children's, not recomputed on every read.
+/// let whole = a + b;
+/// assert_eq!(whole.size(), 2);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Aggregate {
     fingerprint: Fingerprint,

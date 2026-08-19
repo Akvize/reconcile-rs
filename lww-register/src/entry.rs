@@ -71,6 +71,20 @@ impl<V> From<State<V>> for Option<V> {
 
 /// A stored cell: a value (or tombstone) stamped with a conflict-resolution token `T`, in practice
 /// always [`Timestamp`](crate::clock::Timestamp).
+///
+/// ```
+/// use lww_register::Entry;
+/// use lww_register::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
+///
+/// let stamp_at = |ms| Timestamp::new(Hlc::new(PhysicalTime::from_millis(ms), LogicalCounter::new(0)), NodeId::new(1));
+///
+/// let older = Entry::present(stamp_at(100), "a");
+/// let newer = Entry::present(stamp_at(200), "b");
+///
+/// // Last-write-wins: the entry with the strictly greater stamp wins, regardless of merge order.
+/// assert_eq!(older.merge(&newer).value(), Some(&"b"));
+/// assert_eq!(newer.merge(&older).value(), Some(&"b"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entry<T, V> {
     /// The conflict-resolution stamp.

@@ -174,13 +174,14 @@ Prose-only guidelines decay; failing commands don't.
 
 ## 11. Publishing
 
-Only `reconcile` is on crates.io today, and that published `0.2.1` predates the workspace split (it
-vendors what are now `rsos`/`rbsr`/`lww-register`/`gossip` directly) — the four siblings have never
-been published. Publishing all five in dependency order (`rsos` → `rbsr`,`lww-register` → `gossip` →
+As of `v0.3.0` (2026-08-19) all five crates are on crates.io: `reconcile`/`rsos`/`lww-register`/
+`reconcile-gossip` at `0.3.0`, `rbsr` at `0.1.0` (own line, see Version lines below). `0.2.1` was
+the last release before the workspace split (it vendored the four siblings directly) — see
+`MIGRATING.md`. Publishing in dependency order (`rsos` → `rbsr`,`lww-register` → `gossip` →
 `reconcile`) is implemented in `.github/workflows/tags.yml` (its comments are the source of truth
 for the mechanics: tag/manifest version check, publish order, idempotent skip-if-published, the
-stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Current status
-and the next version to cut are a live decision — see the `v1.0.0` milestone and issue #206.
+stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Next-version
+decisions live at the `v1.0.0` milestone and issue #206.
 
 `gossip` publishes as `reconcile-gossip` (name taken); every dependent renames it back
 (`gossip = { package = "reconcile-gossip", ... }`) so source everywhere still says `use gossip::…`.

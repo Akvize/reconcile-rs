@@ -36,6 +36,20 @@ use rsos::{Aggregate, Rsos};
 /// Breaking a *defended* law costs the backend its own correctness and nothing here. Breaking
 /// **summary-folds-lift** or **one-snapshot-per-round** reconciles **silently wrongly**: no
 /// convergence, no error.
+///
+/// ```
+/// use rsos::FingerprintTreeMap;
+/// use rbsr::RsosView;
+///
+/// let mut map = FingerprintTreeMap::new();
+/// map.insert(1, "a");
+/// map.insert(2, "b");
+///
+/// // Never implemented directly -- FingerprintTreeMap gets this for free from the blanket
+/// // `impl<K, T: Rsos<K>> RsosView<K> for T` below.
+/// assert_eq!(RsosView::size(&map), 2);
+/// assert_eq!(RsosView::rank(&map, &2), 1);
+/// ```
 pub trait RsosView<K> {
     /// `size()` → `|X|`: the number of elements currently in the set.
     fn size(&self) -> usize;

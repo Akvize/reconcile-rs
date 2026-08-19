@@ -338,6 +338,23 @@ impl<K, V> Node<K, V> {
 
 /// This crate's [`Rsos`](crate::Rsos) realization: an in-memory, `ArrayVec`-node B-tree (order 6)
 /// caching a per-subtree [`Aggregate`] at every node.
+///
+/// ```
+/// use rsos::FingerprintTreeMap;
+///
+/// let mut map = FingerprintTreeMap::new();
+/// map.insert(1, "one");
+/// map.insert(2, "two");
+/// map.insert(3, "three");
+///
+/// assert_eq!(map.get(&2), Some(&"two"));
+/// assert_eq!(map.len(), 3);
+///
+/// // The whole-tree aggregate is what a peer compares over the wire to detect divergence --
+/// // two trees with the same aggregate over the same range are assumed to hold the same data.
+/// let whole = map.aggregate(..);
+/// assert_eq!(whole.size(), 3);
+/// ```
 #[derive(Clone)]
 pub struct FingerprintTreeMap<K, V> {
     pub(crate) root: Box<Node<K, V>>,

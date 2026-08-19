@@ -294,6 +294,23 @@ impl Hlc {
 /// Field declaration order *is* the conflict order `(physical, logical, node_id)`
 /// (`ARCHITECTURE.md` §5 invariant 2). Neither the newtypes nor the nesting costs anything on the
 /// wire, pinned by `tests/timestamp_wire_format.rs`.
+///
+/// ```
+/// use lww_register::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
+///
+/// let hlc_at = |ms| Hlc::new(PhysicalTime::from_millis(ms), LogicalCounter::new(0));
+///
+/// // Later physical time always wins, whatever the node identities.
+/// let earlier = Timestamp::new(hlc_at(100), NodeId::new(9));
+/// let later = Timestamp::new(hlc_at(200), NodeId::new(1));
+/// assert!(later > earlier);
+///
+/// // A tie on (physical, logical) breaks on node_id -- the deterministic tie-break every replica
+/// // computes identically, with no coordination.
+/// let same_time_low_node = Timestamp::new(hlc_at(100), NodeId::new(1));
+/// let same_time_high_node = Timestamp::new(hlc_at(100), NodeId::new(9));
+/// assert!(same_time_high_node > same_time_low_node);
+/// ```
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]

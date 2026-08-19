@@ -93,6 +93,21 @@ impl<K, V> From<DatedEntries<K, V>> for PersistedState<K, V> {
 ///
 /// Held behind an [`Arc`](std::sync::Arc) and snapshotted from a background task, hence
 /// `Send + Sync + 'static`.
+///
+/// ```
+/// use lww_register::{Entry, InMemoryPersistence, PersistedState, Persistence};
+/// use lww_register::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
+///
+/// let stamp = Timestamp::new(Hlc::new(PhysicalTime::from_millis(0), LogicalCounter::new(0)), NodeId::new(1));
+/// let backend = InMemoryPersistence::new();
+/// assert!(backend.load().unwrap().is_none()); // nothing saved yet
+///
+/// let state: PersistedState<&str, i32> = vec![("a", Entry::present(stamp, 1))].into();
+/// backend.save(&state).unwrap();
+///
+/// let loaded = backend.load().unwrap().unwrap();
+/// assert_eq!(loaded.entries, state.entries);
+/// ```
 pub trait Persistence<K, V>: Send + Sync + 'static {
     /// Load the previously saved state, or `Ok(None)` if nothing was ever saved.
     fn load(&self) -> io::Result<Option<PersistedState<K, V>>>;

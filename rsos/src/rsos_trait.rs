@@ -22,6 +22,20 @@ use crate::fingerprint_tree_map::FingerprintTreeMap;
 /// inherent API alongside (crate root docs). `K` is the paper's `U`; the value is the payload
 /// Def. 3.4's lift consults, and is an *associated* type so `rbsr`'s
 /// `impl<K, T: Rsos<K>> RsosView<K> for T` stays expressible (rustc E0207).
+///
+/// ```
+/// use rsos::{FingerprintTreeMap, Rsos};
+///
+/// let mut map = FingerprintTreeMap::new();
+/// map.insert(1, "a");
+/// map.insert(2, "b");
+///
+/// // FingerprintTreeMap's own inherent methods share several of these names (`rank`, `select`,
+/// // `aggregate`) with idiomatic Rust signatures; qualify with the trait to call this contract
+/// // specifically, as a generic `fn foo<K, T: Rsos<K>>(store: &T)` would.
+/// assert_eq!(Rsos::size(&map), 2);
+/// assert_eq!(Rsos::rank(&map, &2), 1);
+/// ```
 pub trait Rsos<K> {
     /// The type stored against each key.
     type Value;
