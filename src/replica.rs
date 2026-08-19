@@ -1539,25 +1539,10 @@ impl Drop for BulkDumpCountGuard {
     }
 }
 
-/// A fresh, real bindable port for a test that needs one but does not care which. `Config::port`
-/// must be nonzero — gossip has no per-peer port discovery, so `0` can never converge — but many
-/// single-node/no-real-peer tests only used `0` for its other property, an OS-assigned port that
-/// never collides with a concurrently running test.
-///
-/// A process-local counter cannot reproduce that collision-freedom: `cargo nextest` runs every
-/// test in its own process, so a `static` counter starts fresh in each one, and two tests in
-/// different processes can compute the identical "next" port and race to bind it. Probing the OS
-/// for a genuinely free port instead — bind `:0`, read back what the kernel picked, drop the
-/// socket — is what `cargo test`'s thread model and `nextest`'s process model both leave free at
-/// the moment this returns.
+// next_ephemeral_test_port lives in `tests.rs`, not here: it's test-only, and this file is
+// already large enough (.claude/rules/big-files.md) without test helpers added back into it.
 #[cfg(test)]
-pub(crate) fn next_ephemeral_test_port() -> u16 {
-    std::net::UdpSocket::bind("127.0.0.1:0")
-        .expect("OS should hand out an ephemeral port")
-        .local_addr()
-        .expect("a bound socket reports its own address")
-        .port()
-}
+pub(crate) use tests::next_ephemeral_test_port;
 
 #[cfg(test)]
 mod tests;
