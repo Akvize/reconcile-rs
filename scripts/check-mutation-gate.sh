@@ -36,18 +36,23 @@ fi
 echo "check-mutation-gate: mutating lines changed against ${BASE_REF}"
 echo "                     PROPTEST_RNG_SEED=${PROPTEST_RNG_SEED}"
 
-# cargo-mutants tests mutants one at a time by default. --jobs runs several build+test
-# copies concurrently, but the tool's own docs (book/src/parallelism.md) warn that
-# scaling it with core count "is unlikely to work out well" -- cargo/rustc already
-# parallelize a single build aggressively, so N copies each fan out to N threads and
-# thrash. Their guidance: start conservatively at 2-3 regardless of machine size. Derive
-# from nproc so a smaller box (e.g. a contributor's laptop) doesn't oversubscribe, but
-# cap at 3 so a bigger CI runner doesn't either.
-JOBS=3
-if command -v nproc >/dev/null 2>&1; then
-    NPROC=$(nproc)
-    [ "$NPROC" -lt "$JOBS" ] && JOBS="$NPROC"
-fi
+# cargo-mutants tests mutants one at a time by default. This gate ran --jobs 3 for a
+# while (parallel build+test copies), capped and derived from nproc the same way this
+# comment used to describe -- but #438 tracked down a *second* class of concurrency bug
+# beyond the copy_target race below: at --jobs > 1, a mutant that is reliably CAUGHT in
+# isolation intermittently reports MISSED under load, with no source change between runs
+# and no consistent single culprit mutant (four occurrences across two PRs, at least two
+# distinct mutants, all in plain synchronous code with no wall-clock dependency -- so not
+# the timeout-sensitive-proptest class #425 already documented). Isolating each with
+# `--jobs 1` (same flags otherwise, including --copy-target=false below) caught every one
+# of them, every time; --jobs 1 has not produced a false MISSED in any of this
+# investigation's runs. No upstream fix exists yet (tracked in #438) and root-causing the
+# exact mechanism would need reproducing a resource-contention race that costs 15-20
+# minutes per attempt -- so until #438 lands one, this gate trades speed for the one
+# property that actually matters for an automated gate: a MISSED here must mean a real
+# gap, not "re-run and see." Fixed at 1, not derived from nproc -- a bigger box does not
+# make the race safer, only faster to hit.
+JOBS=1
 
 # --copy-target=false overrides .cargo/mutants.toml's `copy_target = true` (there to
 # reuse the warm target/ dir for a fast *sequential* run). Verified empirically: with
@@ -55,7 +60,8 @@ fi
 # concurrent build activity in it (rustc still touching target/debug/{deps,incremental}
 # after "the build" returns) and reliably crashes with "Worker thread failed: ... IO
 # error ... No such file or directory" -- reproduced on every run, --jobs 2 and 3 both.
-# Cold per-mutant builds are the price of avoiding that race.
+# Moot now that JOBS is fixed at 1 (no concurrent copy to race), but kept as the safe
+# default in case --jobs is ever raised again.
 #
 # --workspace is load-bearing: without it cargo-mutants scopes to the invoking package
 # only (the root `reconcile` crate), so a diff touching rsos/rbsr/lww-register/gossip
