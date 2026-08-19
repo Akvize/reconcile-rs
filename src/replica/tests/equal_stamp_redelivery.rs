@@ -27,7 +27,7 @@ use crate::replicated_map::Config;
 #[tokio::test]
 async fn equal_stamp_update_is_not_reapplied() {
     let config = Config::default()
-        .with_port(0)
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr("127.0.0.150".parse().unwrap())
         .with_insecure_no_key();
     let engine = Replica::<i32, u8>::new(config).await.expect("bind failed");

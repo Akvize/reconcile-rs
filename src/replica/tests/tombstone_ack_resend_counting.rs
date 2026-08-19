@@ -15,7 +15,7 @@ use super::super::{Message, MAX_MESSAGES_PER_DATAGRAM};
 
 async fn engine(addr: &str) -> Replica<i32, i32> {
     let config = Config::default()
-        .with_port(0)
+        .with_port(crate::replica::tests::next_ephemeral_test_port())
         .with_listen_addr(addr.parse().unwrap())
         .with_insecure_no_key();
     Replica::new(config).await.expect("bind failed")
