@@ -86,6 +86,8 @@ jobs:
       run: ./scripts/check-doc-structure.sh
     - name: Test-file naming (split #[cfg(test)] modules are named tests.rs, not <name>_tests.rs)
       run: ./scripts/check-test-file-naming.sh
+    - name: File size (prod/test line-count budgets, warning + hard-fail tiers)
+      run: ./scripts/check-file-size.sh
     - name: Mutant count (.cargo/mutants.toml's header comment vs cargo-mutants --list)
       run: ./scripts/check-mutant-count.sh
 

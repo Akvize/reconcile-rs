@@ -25,3 +25,6 @@ echo "Running doc-structure check"
 
 echo "Running test-file-naming check"
 (cd $TEMPDIR; ./scripts/check-test-file-naming.sh)
+
+echo "Running file-size check"
+(cd $TEMPDIR; ./scripts/check-file-size.sh)
