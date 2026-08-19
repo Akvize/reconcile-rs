@@ -31,7 +31,7 @@ use super::{Message, Replica, BUFFER_SIZE, MAX_SENDTO_RETRIES};
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Bundle this engine's outbound ports and send state for the batched-message helpers
     /// ([`send_messages_to`] / [`send_messages_paced`]). See [`SendPorts`].
-    pub(super) fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
+    pub(super) fn send_ports(&self) -> SendPorts<'_, dyn Transport> {
         SendPorts {
             transport: &*self.transport,
             authenticator: &self.authenticator,
@@ -125,7 +125,7 @@ pub(crate) struct SendPorts<'a, T: ?Sized> {
     pub(crate) sender_counter: &'a replay::SenderCounter,
 }
 
-pub(crate) async fn send_to_retry<T: Transport<Addr = SocketAddr> + ?Sized>(
+pub(crate) async fn send_to_retry<T: Transport + ?Sized>(
     transport: &T,
     authenticator: &auth::Authenticator,
     sender_counter: &replay::SenderCounter,
@@ -166,7 +166,7 @@ pub(crate) async fn send_messages_to<K, V, P, T>(
     K: Serialize,
     V: Serialize,
     P: Serialize,
-    T: Transport<Addr = SocketAddr> + ?Sized,
+    T: Transport + ?Sized,
 {
     send_messages_paced(messages, ports, peer, send_buf, None).await
 }
@@ -186,7 +186,7 @@ pub(crate) async fn send_messages_paced<K, V, P, T>(
     K: Serialize,
     V: Serialize,
     P: Serialize,
-    T: Transport<Addr = SocketAddr> + ?Sized,
+    T: Transport + ?Sized,
 {
     debug!("sending {} messages to {peer}", messages.len());
     // Reserve room for the authentication tag so the sealed datagram still fits a UDP payload.

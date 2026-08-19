@@ -16,6 +16,8 @@ pub fn reconcile_gossip::auth::Authenticator::seal(&self, reconcile_gossip::repl
 pub fn reconcile_gossip::auth::Authenticator::with_rotation(core::option::Option<reconcile_gossip::auth::Keys>, bool) -> Self
 impl core::clone::Clone for reconcile_gossip::auth::Authenticator
 pub fn reconcile_gossip::auth::Authenticator::clone(&self) -> reconcile_gossip::auth::Authenticator
+impl core::fmt::Debug for reconcile_gossip::auth::Authenticator
+pub fn reconcile_gossip::auth::Authenticator::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for reconcile_gossip::auth::Authenticator
 impl core::marker::Send for reconcile_gossip::auth::Authenticator
 impl core::marker::Sync for reconcile_gossip::auth::Authenticator
@@ -76,6 +78,8 @@ impl reconcile_gossip::auth::Keys
 pub fn reconcile_gossip::auth::Keys::single(reconcile_gossip::auth::ClusterKey) -> reconcile_gossip::auth::Keys
 impl core::clone::Clone for reconcile_gossip::auth::Keys
 pub fn reconcile_gossip::auth::Keys::clone(&self) -> reconcile_gossip::auth::Keys
+impl core::fmt::Debug for reconcile_gossip::auth::Keys
+pub fn reconcile_gossip::auth::Keys::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for reconcile_gossip::auth::Keys
 impl core::marker::Send for reconcile_gossip::auth::Keys
 impl core::marker::Sync for reconcile_gossip::auth::Keys
@@ -91,6 +95,8 @@ pub fn reconcile_gossip::auth::Payload<'_, reconcile_gossip::auth::Verified>::as
 impl<'a> reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>
 pub fn reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>::check_version(self) -> core::result::Result<Self, u8>
 pub fn reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>::verify_replay(self, &reconcile_gossip::replay::ReplayFilter, core::net::ip_addr::IpAddr) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Verified>>
+impl<'a, State: core::fmt::Debug> core::fmt::Debug for reconcile_gossip::auth::Payload<'a, State>
+pub fn reconcile_gossip::auth::Payload<'a, State>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a, State> core::marker::Freeze for reconcile_gossip::auth::Payload<'a, State>
 impl<'a, State> core::marker::Send for reconcile_gossip::auth::Payload<'a, State> where State: core::marker::Send
 impl<'a, State> core::marker::Sync for reconcile_gossip::auth::Payload<'a, State> where State: core::marker::Sync
@@ -161,9 +167,28 @@ impl core::marker::Unpin for reconcile_gossip::discovery::DiscoveryKind
 impl core::marker::UnsafeUnpin for reconcile_gossip::discovery::DiscoveryKind
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::discovery::DiscoveryKind
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::DiscoveryKind
+#[non_exhaustive] pub enum reconcile_gossip::discovery::DnsDiscoveryError
+pub reconcile_gossip::discovery::DnsDiscoveryError::Resolve(core::io::error::Error)
+pub reconcile_gossip::discovery::DnsDiscoveryError::Timeout(tokio::time::error::Elapsed)
+impl core::error::Error for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Send for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Sync for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Unpin for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::UnsafeUnpin for reconcile_gossip::discovery::DnsDiscoveryError
+impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::discovery::DnsDiscoveryError
+impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::DnsDiscoveryError
 pub struct reconcile_gossip::discovery::DnsDiscovery
 impl reconcile_gossip::discovery::DnsDiscovery
 pub fn reconcile_gossip::discovery::DnsDiscovery::new(impl core::convert::Into<alloc::string::String>, u16) -> Self
+pub fn reconcile_gossip::discovery::DnsDiscovery::with_timeout(self, core::time::Duration) -> Self
+impl core::fmt::Debug for reconcile_gossip::discovery::DnsDiscovery
+pub fn reconcile_gossip::discovery::DnsDiscovery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::DnsDiscovery
 pub fn reconcile_gossip::discovery::DnsDiscovery::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::DnsDiscovery::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
@@ -177,6 +202,8 @@ impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::DnsDi
 pub struct reconcile_gossip::discovery::RandomProbe
 impl reconcile_gossip::discovery::RandomProbe
 pub fn reconcile_gossip::discovery::RandomProbe::new(alloc::sync::Arc<parking_lot::rwlock::RwLock<alloc::vec::Vec<ipnet::ipnet::IpNet>>>, alloc::sync::Arc<parking_lot::rwlock::RwLock<rand::rngs::std::StdRng>>) -> Self
+impl core::fmt::Debug for reconcile_gossip::discovery::RandomProbe
+pub fn reconcile_gossip::discovery::RandomProbe::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::RandomProbe
 pub fn reconcile_gossip::discovery::RandomProbe::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::RandomProbe::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
@@ -187,6 +214,7 @@ impl core::marker::Unpin for reconcile_gossip::discovery::RandomProbe
 impl core::marker::UnsafeUnpin for reconcile_gossip::discovery::RandomProbe
 impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::discovery::RandomProbe
 impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::RandomProbe
+pub const reconcile_gossip::discovery::DEFAULT_DNS_DISCOVERY_TIMEOUT: core::time::Duration
 pub trait reconcile_gossip::discovery::Discovery: core::marker::Send + core::marker::Sync + 'static
 pub fn reconcile_gossip::discovery::Discovery::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::Discovery::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
@@ -196,7 +224,8 @@ pub fn reconcile_gossip::discovery::DnsDiscovery::kind(&self) -> reconcile_gossi
 impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::RandomProbe
 pub fn reconcile_gossip::discovery::RandomProbe::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::RandomProbe::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
-pub type reconcile_gossip::discovery::DiscoverFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>>> + core::marker::Send + 'a)>>
+pub type reconcile_gossip::discovery::DiscoverFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>, reconcile_gossip::discovery::DiscoveryError>> + core::marker::Send + 'a)>>
+pub type reconcile_gossip::discovery::DiscoveryError = alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
 pub mod reconcile_gossip::gen_ip
 pub fn reconcile_gossip::gen_ip::gen_ip<R: rand::rng::Rng>(&mut R, ipnet::ipnet::IpNet) -> core::net::ip_addr::IpAddr
 pub fn reconcile_gossip::gen_ip::gen_ipv4<R: rand::rng::Rng>(&mut R, ipnet::ipnet::Ipv4Net) -> core::net::ip_addr::Ipv4Addr
@@ -210,6 +239,8 @@ impl reconcile_gossip::replay::ReplayFilter
 pub fn reconcile_gossip::replay::ReplayFilter::check_and_record(&self, core::net::ip_addr::IpAddr, reconcile_gossip::replay::Seq, reconcile_gossip::replay::Stamp) -> bool
 pub fn reconcile_gossip::replay::ReplayFilter::len(&self) -> usize
 pub fn reconcile_gossip::replay::ReplayFilter::new(core::time::Duration, bool) -> Self
+impl core::fmt::Debug for reconcile_gossip::replay::ReplayFilter
+pub fn reconcile_gossip::replay::ReplayFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl !core::marker::Freeze for reconcile_gossip::replay::ReplayFilter
 impl core::marker::Send for reconcile_gossip::replay::ReplayFilter
 impl core::marker::Sync for reconcile_gossip::replay::ReplayFilter
@@ -225,6 +256,8 @@ pub fn reconcile_gossip::replay::SenderCounter::next_stamp(&self) -> reconcile_g
 pub fn reconcile_gossip::replay::SenderCounter::next_stamp_at(&self, u64) -> reconcile_gossip::replay::Stamp
 impl core::default::Default for reconcile_gossip::replay::SenderCounter
 pub fn reconcile_gossip::replay::SenderCounter::default() -> Self
+impl core::fmt::Debug for reconcile_gossip::replay::SenderCounter
+pub fn reconcile_gossip::replay::SenderCounter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl !core::marker::Freeze for reconcile_gossip::replay::SenderCounter
 impl core::marker::Send for reconcile_gossip::replay::SenderCounter
 impl core::marker::Sync for reconcile_gossip::replay::SenderCounter
@@ -311,6 +344,8 @@ impl core::clone::Clone for reconcile_gossip::InMemoryNetwork
 pub fn reconcile_gossip::InMemoryNetwork::clone(&self) -> reconcile_gossip::InMemoryNetwork
 impl core::default::Default for reconcile_gossip::InMemoryNetwork
 pub fn reconcile_gossip::InMemoryNetwork::default() -> reconcile_gossip::InMemoryNetwork
+impl core::fmt::Debug for reconcile_gossip::InMemoryNetwork
+pub fn reconcile_gossip::InMemoryNetwork::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for reconcile_gossip::InMemoryNetwork
 impl core::marker::Send for reconcile_gossip::InMemoryNetwork
 impl core::marker::Sync for reconcile_gossip::InMemoryNetwork
@@ -319,8 +354,9 @@ impl core::marker::UnsafeUnpin for reconcile_gossip::InMemoryNetwork
 impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::InMemoryNetwork
 impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::InMemoryNetwork
 pub struct reconcile_gossip::transport::InMemoryTransport
+impl core::fmt::Debug for reconcile_gossip::InMemoryTransport
+pub fn reconcile_gossip::InMemoryTransport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::transport::Transport for reconcile_gossip::InMemoryTransport
-pub type reconcile_gossip::InMemoryTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::InMemoryTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::InMemoryTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::InMemoryTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
@@ -341,7 +377,6 @@ pub fn reconcile_gossip::transport::UdpTransport::clone(&self) -> reconcile_goss
 impl core::fmt::Debug for reconcile_gossip::transport::UdpTransport
 pub fn reconcile_gossip::transport::UdpTransport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::transport::Transport for reconcile_gossip::transport::UdpTransport
-pub type reconcile_gossip::transport::UdpTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::transport::UdpTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::transport::UdpTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::transport::UdpTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
@@ -353,17 +388,14 @@ impl core::marker::UnsafeUnpin for reconcile_gossip::transport::UdpTransport
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::transport::UdpTransport
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::transport::UdpTransport
 pub trait reconcile_gossip::transport::Transport: core::marker::Send + core::marker::Sync + 'static
-pub type reconcile_gossip::transport::Transport::Addr: core::clone::Clone + core::cmp::Eq + core::hash::Hash + core::marker::Send + core::marker::Sync
-pub fn reconcile_gossip::transport::Transport::local_addr(&self) -> core::io::error::Result<Self::Addr>
-pub fn reconcile_gossip::transport::Transport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, Self::Addr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn reconcile_gossip::transport::Transport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 Self::Addr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn reconcile_gossip::transport::Transport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
+pub fn reconcile_gossip::transport::Transport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn reconcile_gossip::transport::Transport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl reconcile_gossip::transport::Transport for reconcile_gossip::InMemoryTransport
-pub type reconcile_gossip::InMemoryTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::InMemoryTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::InMemoryTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::InMemoryTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl reconcile_gossip::transport::Transport for reconcile_gossip::transport::UdpTransport
-pub type reconcile_gossip::transport::UdpTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::transport::UdpTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::transport::UdpTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::transport::UdpTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
@@ -386,9 +418,28 @@ impl core::marker::Unpin for reconcile_gossip::discovery::DiscoveryKind
 impl core::marker::UnsafeUnpin for reconcile_gossip::discovery::DiscoveryKind
 impl core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::discovery::DiscoveryKind
 impl core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::DiscoveryKind
+#[non_exhaustive] pub enum reconcile_gossip::DnsDiscoveryError
+pub reconcile_gossip::DnsDiscoveryError::Resolve(core::io::error::Error)
+pub reconcile_gossip::DnsDiscoveryError::Timeout(tokio::time::error::Elapsed)
+impl core::error::Error for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for reconcile_gossip::discovery::DnsDiscoveryError
+pub fn reconcile_gossip::discovery::DnsDiscoveryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Send for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Sync for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::Unpin for reconcile_gossip::discovery::DnsDiscoveryError
+impl core::marker::UnsafeUnpin for reconcile_gossip::discovery::DnsDiscoveryError
+impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::discovery::DnsDiscoveryError
+impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::discovery::DnsDiscoveryError
 pub struct reconcile_gossip::DnsDiscovery
 impl reconcile_gossip::discovery::DnsDiscovery
 pub fn reconcile_gossip::discovery::DnsDiscovery::new(impl core::convert::Into<alloc::string::String>, u16) -> Self
+pub fn reconcile_gossip::discovery::DnsDiscovery::with_timeout(self, core::time::Duration) -> Self
+impl core::fmt::Debug for reconcile_gossip::discovery::DnsDiscovery
+pub fn reconcile_gossip::discovery::DnsDiscovery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::DnsDiscovery
 pub fn reconcile_gossip::discovery::DnsDiscovery::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::DnsDiscovery::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
@@ -407,6 +458,8 @@ impl core::clone::Clone for reconcile_gossip::InMemoryNetwork
 pub fn reconcile_gossip::InMemoryNetwork::clone(&self) -> reconcile_gossip::InMemoryNetwork
 impl core::default::Default for reconcile_gossip::InMemoryNetwork
 pub fn reconcile_gossip::InMemoryNetwork::default() -> reconcile_gossip::InMemoryNetwork
+impl core::fmt::Debug for reconcile_gossip::InMemoryNetwork
+pub fn reconcile_gossip::InMemoryNetwork::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for reconcile_gossip::InMemoryNetwork
 impl core::marker::Send for reconcile_gossip::InMemoryNetwork
 impl core::marker::Sync for reconcile_gossip::InMemoryNetwork
@@ -415,8 +468,9 @@ impl core::marker::UnsafeUnpin for reconcile_gossip::InMemoryNetwork
 impl !core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::InMemoryNetwork
 impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::InMemoryNetwork
 pub struct reconcile_gossip::InMemoryTransport
+impl core::fmt::Debug for reconcile_gossip::InMemoryTransport
+pub fn reconcile_gossip::InMemoryTransport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::transport::Transport for reconcile_gossip::InMemoryTransport
-pub type reconcile_gossip::InMemoryTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::InMemoryTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::InMemoryTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::InMemoryTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
@@ -430,6 +484,8 @@ impl !core::panic::unwind_safe::UnwindSafe for reconcile_gossip::InMemoryTranspo
 pub struct reconcile_gossip::RandomProbe
 impl reconcile_gossip::discovery::RandomProbe
 pub fn reconcile_gossip::discovery::RandomProbe::new(alloc::sync::Arc<parking_lot::rwlock::RwLock<alloc::vec::Vec<ipnet::ipnet::IpNet>>>, alloc::sync::Arc<parking_lot::rwlock::RwLock<rand::rngs::std::StdRng>>) -> Self
+impl core::fmt::Debug for reconcile_gossip::discovery::RandomProbe
+pub fn reconcile_gossip::discovery::RandomProbe::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::RandomProbe
 pub fn reconcile_gossip::discovery::RandomProbe::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::RandomProbe::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
@@ -450,7 +506,6 @@ pub fn reconcile_gossip::transport::UdpTransport::clone(&self) -> reconcile_goss
 impl core::fmt::Debug for reconcile_gossip::transport::UdpTransport
 pub fn reconcile_gossip::transport::UdpTransport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl reconcile_gossip::transport::Transport for reconcile_gossip::transport::UdpTransport
-pub type reconcile_gossip::transport::UdpTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::transport::UdpTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::transport::UdpTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::transport::UdpTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
@@ -471,18 +526,16 @@ impl reconcile_gossip::discovery::Discovery for reconcile_gossip::discovery::Ran
 pub fn reconcile_gossip::discovery::RandomProbe::discover(&self) -> reconcile_gossip::discovery::DiscoverFuture<'_>
 pub fn reconcile_gossip::discovery::RandomProbe::kind(&self) -> reconcile_gossip::discovery::DiscoveryKind
 pub trait reconcile_gossip::Transport: core::marker::Send + core::marker::Sync + 'static
-pub type reconcile_gossip::Transport::Addr: core::clone::Clone + core::cmp::Eq + core::hash::Hash + core::marker::Send + core::marker::Sync
-pub fn reconcile_gossip::Transport::local_addr(&self) -> core::io::error::Result<Self::Addr>
-pub fn reconcile_gossip::Transport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, Self::Addr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn reconcile_gossip::Transport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 Self::Addr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn reconcile_gossip::Transport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
+pub fn reconcile_gossip::Transport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn reconcile_gossip::Transport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl reconcile_gossip::transport::Transport for reconcile_gossip::InMemoryTransport
-pub type reconcile_gossip::InMemoryTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::InMemoryTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::InMemoryTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::InMemoryTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl reconcile_gossip::transport::Transport for reconcile_gossip::transport::UdpTransport
-pub type reconcile_gossip::transport::UdpTransport::Addr = core::net::socket_addr::SocketAddr
 pub fn reconcile_gossip::transport::UdpTransport::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
 pub fn reconcile_gossip::transport::UdpTransport::recv_from<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<(usize, core::net::socket_addr::SocketAddr)>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn reconcile_gossip::transport::UdpTransport::send_to<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 [u8], &'life2 core::net::socket_addr::SocketAddr) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<usize>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
-pub type reconcile_gossip::DiscoverFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::io::error::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>>> + core::marker::Send + 'a)>>
+pub type reconcile_gossip::DiscoverFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<core::net::ip_addr::IpAddr>, reconcile_gossip::discovery::DiscoveryError>> + core::marker::Send + 'a)>>
+pub type reconcile_gossip::DiscoveryError = alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>
