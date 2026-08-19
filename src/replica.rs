@@ -257,7 +257,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
-/// Reject `config.port == 0` (#293): gossip does no per-peer port discovery, so every outbound
+/// Reject `config.port == 0`: gossip does no per-peer port discovery, so every outbound
 /// datagram to a peer is addressed to `config.port` literally. Port `0` binds an OS-assigned
 /// ephemeral port for receiving, but that assigned port is never read back into the value peers
 /// are addressed on — a node configured this way sends every peer datagram to port `0` and can
@@ -539,7 +539,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// # Errors
     ///
     /// If `nets` exceeds [`MAX_NETS`] — the same cap [`Config::with_net`]/`try_with_net` enforce
-    /// at construction time and [`add_net`](Self::add_net) enforces at runtime (#293).
+    /// at construction time and [`add_net`](Self::add_net) enforces at runtime.
     pub(crate) fn set_nets(&self, nets: &[IpNet]) -> Result<(), ConfigError> {
         if nets.len() > MAX_NETS {
             return Err(ConfigError::TooManyNets);
@@ -1539,10 +1539,10 @@ impl Drop for BulkDumpCountGuard {
     }
 }
 
-/// A fresh, real bindable port for a test that needs one but does not care which (#293:
-/// `Config::port` must be nonzero — gossip has no per-peer port discovery, so `0` can never
-/// converge — but many single-node/no-real-peer tests only used `0` for its other property, an
-/// OS-assigned port that never collides with a concurrently running test).
+/// A fresh, real bindable port for a test that needs one but does not care which. `Config::port`
+/// must be nonzero — gossip has no per-peer port discovery, so `0` can never converge — but many
+/// single-node/no-real-peer tests only used `0` for its other property, an OS-assigned port that
+/// never collides with a concurrently running test.
 ///
 /// A process-local counter cannot reproduce that collision-freedom: `cargo nextest` runs every
 /// test in its own process, so a `static` counter starts fresh in each one, and two tests in

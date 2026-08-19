@@ -10,8 +10,8 @@ use crate::{
     FileSnapshot, ReplicatedMap,
 };
 
-/// A config bound to a fresh port on loopback (#293: port `0` is refused, so
-/// [`next_ephemeral_test_port`](crate::replica::next_ephemeral_test_port) stands in for it),
+/// A config bound to a fresh port on loopback — port `0` is refused, so
+/// [`next_ephemeral_test_port`](crate::replica::next_ephemeral_test_port) stands in for it —
 /// so persistence tests can construct stores without colliding on a fixed port.
 fn ephemeral_config() -> Config {
     Config {
@@ -48,8 +48,8 @@ async fn missing_key_and_no_insecure_opt_in_panics_at_construction() {
     let _ = ReplicatedMap::<i32, i32>::new(config).await;
 }
 
-/// #293: `Config::port == 0` ("let the OS pick") can never converge — gossip addresses every
-/// outbound datagram to this port, so there is no per-peer discovery to learn what the OS chose.
+/// `Config::port == 0` ("let the OS pick") can never converge — gossip addresses every outbound
+/// datagram to this port, so there is no per-peer discovery to learn what the OS chose.
 /// `ReplicatedMap::new` must refuse this before ever touching a socket.
 #[tokio::test]
 async fn zero_port_is_rejected_before_binding() {
@@ -98,7 +98,7 @@ fn config_debug_redacts_cluster_key_but_not_its_presence() {
     );
 }
 
-/// #293: `set_nets` enforces the same [`MAX_NETS`] cap `Config::with_net`/`try_with_net` do at
+/// `set_nets` enforces the same [`MAX_NETS`] cap `Config::with_net`/`try_with_net` do at
 /// construction time, just at runtime — both the accepting and the rejecting side need coverage.
 #[tokio::test]
 async fn set_nets_enforces_max_nets_at_runtime() {

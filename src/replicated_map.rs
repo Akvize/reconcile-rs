@@ -1029,7 +1029,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Errors
     ///
     /// If `nets` exceeds [`MAX_NETS`] — the same cap `Config::with_net`/`try_with_net` enforce at
-    /// construction time (#293).
+    /// construction time.
     ///
     /// Safe live otherwise: topology is per-node and carries no wire tag, and repair of known
     /// peers is not gated on net membership, so the worst case is suboptimal WAN traffic, never
@@ -1325,7 +1325,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
 /// Maximum number of geographical networks (CIDRs) a [`Config`] can declare, or a running node
 /// can hold via [`ReplicatedMap::set_nets`]/[`add_net`](ReplicatedMap::add_net) — one behavior for
-/// the cap everywhere it is enforced (#293). Eight networks is generous for real geographical
+/// the cap everywhere it is enforced. Eight networks is generous for real geographical
 /// deployments.
 pub const MAX_NETS: usize = 8;
 
@@ -1351,7 +1351,7 @@ impl std::error::Error for ConfigError {}
 /// [`Config::default`]) and the `with_*` builders (e.g. [`with_net`](Config::with_net)); every
 /// field is `pub` for direct construction and reading within this crate, but `#[non_exhaustive]`
 /// means an external crate must go through a constructor and builders — one construction path,
-/// not two with different guarantees (#293).
+/// not two with different guarantees.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Config {
@@ -1520,9 +1520,9 @@ impl Default for Config {
     }
 }
 impl Config {
-    /// The documented default constructor (#293): `port` is the one setting every node in a
-    /// cluster must agree on (see [`port`](Self::port)'s docs for why `0` can never converge).
-    /// Equivalent to `Config::default().with_port(port)`.
+    /// The documented default constructor: `port` is the one setting every node in a cluster
+    /// must agree on (see [`port`](Self::port)'s docs for why `0` can never converge). Equivalent
+    /// to `Config::default().with_port(port)`.
     #[must_use]
     pub fn new(port: u16) -> Self {
         Config::default().with_port(port)
@@ -1547,7 +1547,7 @@ impl Config {
     ///
     /// If more than [`MAX_NETS`] networks are declared. See [`try_with_net`](Self::try_with_net)
     /// for a non-panicking alternative — the same [`MAX_NETS`] cap
-    /// [`ReplicatedMap::set_nets`]/[`add_net`](ReplicatedMap::add_net) enforce at runtime (#293).
+    /// [`ReplicatedMap::set_nets`]/[`add_net`](ReplicatedMap::add_net) enforce at runtime.
     #[must_use]
     pub fn with_net(self, net: IpNet) -> Self {
         match self.try_with_net(net) {

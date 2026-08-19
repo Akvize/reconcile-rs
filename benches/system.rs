@@ -67,7 +67,7 @@ fn log_group<'a>(
     group
 }
 
-/// A fresh port per call (#293: `Config::port` must be nonzero), so many [`loaded_store`]s can
+/// A fresh port per call — `Config::port` must be nonzero — so many [`loaded_store`]s can
 /// coexist.
 fn next_bench_port() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};

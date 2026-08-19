@@ -24,7 +24,7 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::Registry;
 
-/// A fresh, real bindable port per call (#293: `Config::port` must be nonzero), so the several
+/// A fresh, real bindable port per call — `Config::port` must be nonzero — so the several
 /// tests in this file calling `local_config()` never collide with each other. `cargo nextest`
 /// runs each `#[test]` in its own process, so a process-local counter restarts at the same value
 /// in every one of them — probing the OS for a genuinely free port is what stays collision-free
@@ -181,10 +181,10 @@ async fn local_mutations_increment_metric_counters() {
     assert_eq!(removes, 1, "expected one removal to be counted");
 }
 
-/// #293/#294: a `Config` field a `ReadReplicaMap` cannot act on (it mints no timestamps and
-/// runs no bulk-transfer machinery) must not silently do nothing — a WARN naming the field is
-/// the only observable trace `warn_on_ignored_config_fields` leaves, so assert on it directly
-/// rather than only on the function having run.
+/// #294: a `Config` field a `ReadReplicaMap` cannot act on (it mints no timestamps and runs no
+/// bulk-transfer machinery) must not silently do nothing — a WARN naming the field is the only
+/// observable trace `warn_on_ignored_config_fields` leaves, so assert on it directly rather than
+/// only on the function having run.
 #[tokio::test(flavor = "current_thread")]
 async fn read_replica_warns_about_config_fields_it_cannot_honour() {
     keep_callsites_hot();
@@ -232,7 +232,7 @@ async fn read_replica_stays_quiet_when_no_ignored_field_is_set() {
     );
 }
 
-/// #293/#294: `warn_on_ignored_config_fields` warns about `nets` specifically when more than one
+/// #294: `warn_on_ignored_config_fields` warns about `nets` specifically when more than one
 /// network is declared (a `ReadReplicaMap` only ever tracks one) — the `local_config()`-based
 /// tests above all use exactly one net, which cannot distinguish "more than one" from "fewer than
 /// one", so this asserts the boundary directly on both sides.

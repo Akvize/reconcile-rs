@@ -333,8 +333,8 @@ mod replicated_set_tests {
         assert!(set.is_empty());
     }
 
-    /// #293: `ReplicatedSet::set_nets` is a thin delegate to `ReplicatedMap::set_nets` — assert
-    /// the delegation actually happens (the `MAX_NETS` cap is enforced through it), not just that
+    /// `ReplicatedSet::set_nets` is a thin delegate to `ReplicatedMap::set_nets` — assert the
+    /// delegation actually happens (the `MAX_NETS` cap is enforced through it), not just that
     /// calling it doesn't panic.
     #[tokio::test]
     async fn set_nets_enforces_max_nets_at_runtime() {

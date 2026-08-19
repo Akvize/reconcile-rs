@@ -109,10 +109,10 @@ impl<K, V> Clone for ReadReplicaMap<K, V> {
     }
 }
 
-/// #293/#294: `ReadReplicaMap` mints no timestamps and runs no bulk-transfer/cross-net-throttle
+/// #294: `ReadReplicaMap` mints no timestamps and runs no bulk-transfer/cross-net-throttle
 /// machinery, so several `Config` fields that matter to a dated [`ReplicatedMap`] have no effect
-/// here. A non-default value silently doing nothing is exactly the trap #293 exists to close —
-/// warn once, at construction, rather than leave it silent.
+/// here. A non-default value silently doing nothing is a trap — warn once, at construction,
+/// rather than leave it silent.
 fn warn_on_ignored_config_fields(config: &Config) {
     let default = Config::default();
     let mut ignored = Vec::new();
@@ -143,7 +143,7 @@ fn warn_on_ignored_config_fields(config: &Config) {
     if !ignored.is_empty() {
         warn!(
             "ReadReplicaMap ignores these Config fields, set here to a non-default value: {}. \
-             See #293/#294.",
+             See #294.",
             ignored.join(", ")
         );
     }
@@ -627,7 +627,7 @@ mod tests {
     use crate::replicated_map::Config;
 
     fn ephemeral_config() -> Config {
-        // A fresh port per call (#293: Config::port must be nonzero) on the loopback default
+        // A fresh port per call — Config::port must be nonzero — on the loopback default
         // network.
         Config::default()
             .with_port(crate::replica::next_ephemeral_test_port())
