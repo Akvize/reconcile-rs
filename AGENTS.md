@@ -44,6 +44,7 @@ cargo fmt --check
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
 ./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
 ./scripts/check-test-file-naming.sh                # split #[cfg(test)] modules named tests.rs
+./scripts/check-file-size.sh                    # prod/test line-count budgets, warn + hard-fail
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
@@ -64,7 +65,7 @@ budget it fits, and if it fits none of them it is CI-only by design:
 
 | tier | what runs | cost |
 |---|---|---|
-| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh` gates above | 0.4 s |
+| [`./pre-commit`](./pre-commit) | `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh`/`check-file-size.sh` gates above | 0.4 s |
 | [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 
@@ -121,8 +122,8 @@ because feature interactions hide bugs.
 New behavior needs a test: `tests/*.rs` for public-API-crossing changes, `#[cfg(test)]` for internal
 invariants. `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz
 oracles for the tree and the wire format — extend these over narrow examples when touching parsing
-or `FingerprintTreeMap` invariants. Codecov coverage is `informational: true` — not a merge gate;
-don't rely on it as proof.
+or `FingerprintTreeMap` invariants. Codecov (`codecov.yml`) warns below 100% project coverage and
+gates at 90%; per-PR patch coverage stays informational — README "Testing and coverage".
 
 ## 8. Security
 

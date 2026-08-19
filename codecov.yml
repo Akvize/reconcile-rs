@@ -1,8 +1,25 @@
+# Two tiers on project (overall, post-PR) coverage: `warning` never blocks and flags any drop
+# below 100%; `minimum` blocks (informational: false) if the project falls below 90% -- current
+# is ~93.8% line coverage (cargo llvm-cov --workspace --all-features), so this has real margin,
+# not a threshold picked to always pass. `default: false` retires the old single unnamed status
+# these two replace. See README "Testing and coverage" for what actually enforces `minimum`
+# (this file alone posts a status; branch protection is what makes it block a merge).
+#
+# patch (just the PR's changed lines) stays informational-only, deliberately not given a
+# `minimum` twin: CONTRIBUTING.md "why coverage isn't enough" is exactly about not trusting
+# a coverage number, delta or absolute, to gate an individual change -- that is the mutation
+# gate's job. A per-PR patch floor would fight that same-file argument on a small diff, where
+# one hard-to-reach line swings the percentage the most.
 coverage:
   status:
     project:
-      default:
+      default: false
+      warning:
+        target: 100%
         informational: true
+      minimum:
+        target: 90%
+        informational: false
     patch:
       default:
         informational: true

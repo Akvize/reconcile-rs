@@ -235,6 +235,10 @@ real drift becomes a `C-bug` issue with the citing file/line and the mismatch; n
 
 ## Code coverage
 
-See [`README.md`](./README.md) "Testing and coverage" for the `cargo-llvm-cov` commands. Two extras
-for local iteration: `--hide-instantiations --text` for a detailed missed-lines report, and the
+See [`README.md`](./README.md) "Testing and coverage" for the `cargo-llvm-cov` commands and the
+project-coverage gate in `codecov.yml`. It does not contradict "why coverage isn't enough" above:
+that section is about trusting coverage to answer "would the suite catch a fault," which it
+doesn't; the gate only answers "is this code exercised at all," a floor rather than a
+fault-detection proxy — the two coexist because they measure different things. Two extras for
+local iteration: `--hide-instantiations --text` for a detailed missed-lines report, and the
 `report` sub-command to reuse a previous run's results instead of re-running the tests.
