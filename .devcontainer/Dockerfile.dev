@@ -47,6 +47,13 @@ RUN curl -L \
      -o /usr/local/bin/marksman \
   && chmod +x /usr/local/bin/marksman
 
+# `./pre-commit`'s secret scan (AGENTS.md §3's table). Pinned, unlike marksman/rust-analyzer
+# above: session-start.sh installs the same pinned version for web sessions, and there is no
+# GitHub-releases "latest" redirect either script can resolve through the agent proxy.
+RUN curl -L \
+     https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+   | tar xz -C /usr/local/bin gitleaks
+
 # These dirs were populated as root by the RUN steps above; the container runs as 'dev' below.
 RUN chown -R dev:dev /usr/local/cargo /usr/local/rustup
 
