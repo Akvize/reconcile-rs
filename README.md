@@ -142,7 +142,7 @@ deliberately out of this crate's lean core, not an oversight in this encoding.
 - [`MIGRATING.md`](MIGRATING.md) — upgrading from `0.2.1`, the last pre-workspace-split release.
 - [`SECURITY.md`](SECURITY.md) — supported versions and how to report a vulnerability privately.
 
-MSRV is **1.87**, declared as `rust-version` on all five manifests and checked mechanically by
+MSRV is **1.85**, declared as `rust-version` on all five manifests and checked mechanically by
 `clippy::incompatible_msrv` (AGENTS.md §3).
 
 ## Security model

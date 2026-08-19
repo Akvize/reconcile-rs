@@ -24,7 +24,7 @@ All notable changes to this project are documented here. Format follows
 ### Added
 
 - `CHANGELOG.md`, `SECURITY.md`, `MIGRATING.md`.
-- `rust-version` (MSRV 1.87) declared on all five manifests, plus `docs.rs` build metadata so
+- `rust-version` (MSRV 1.85) declared on all five manifests, plus `docs.rs` build metadata so
   feature-gated items render on the published docs.
 
 ## [0.2.1] - 2026-06-12

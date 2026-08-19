@@ -6,7 +6,7 @@
 name = "reconcile-gossip"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 # The "implementation detail" wording is deliberate and belongs on the crates.io card itself: this
 # crate is published only because cargo has no vendoring — `reconcile` cannot be published unless
