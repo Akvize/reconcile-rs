@@ -52,12 +52,13 @@ rustc --version
 cargo deny --version        # AGENTS.md §3's last line; the only one needing a subcommand
 cargo nextest --version     # AGENTS.md §3's test lines run under this
 ast-grep --version          # structural search/rewrite, not part of any gate
+gitleaks version             # ./pre-commit's secret scan
 command -v rust-analyzer dockerfile-language-server-nodejs taplo marksman
 ```
 
-An image built before `cargo-deny`/`cargo-nextest`/`ast-grep` were added to `Dockerfile.dev` passes
-every check above except those — rebuild (`make dc-rebuild`, or `make build`) rather than installing
-them by hand, so the image and this list stay the same artifact.
+An image built before `cargo-deny`/`cargo-nextest`/`ast-grep`/`gitleaks` were added to
+`Dockerfile.dev` passes every check above except those — rebuild (`make dc-rebuild`, or `make
+build`) rather than installing them by hand, so the image and this list stay the same artifact.
 
 ## Git hooks
 
@@ -242,3 +243,15 @@ doesn't; the gate only answers "is this code exercised at all," a floor rather t
 fault-detection proxy — the two coexist because they measure different things. Two extras for
 local iteration: `--hide-instantiations --text` for a detailed missed-lines report, and the
 `report` sub-command to reuse a previous run's results instead of re-running the tests.
+
+## Code quality trend (complexity, duplication)
+
+`code-quality` in `main.yml` runs `./scripts/report-code-quality.sh` on every Rust-affecting PR and
+posts its output to the job summary — cognitive complexity per function
+([mozilla/rust-code-analysis](https://github.com/mozilla/rust-code-analysis)) and cross-file
+duplication ([jscpd](https://github.com/kucherenko/jscpd)). Deliberately not a gate and absent from
+`ci-success`'s `needs:` (main.yml): unlike every check in AGENTS.md §3, "should this function be
+simpler" has no single right threshold for a script to enforce, so it stays a number to watch, not
+one to fail the build over. Run it locally with `cargo install rust-code-analysis-cli --locked` and
+`npm install -g jscpd` on `PATH` — neither ships in `Dockerfile.dev`, since nothing else here needs
+them outside this one report.
