@@ -115,7 +115,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Bounded to [`TOMBSTONE_ACK_RESEND_BYTE_BUDGET`] bytes per datagram, over a window whose
     /// start advances with `round` across sorted keys, so every tombstone is covered within a
     /// bounded number of rounds.
-    fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
+    pub(super) fn resend_held_tombstone_acks(&self, send_buf: &mut Vec<u8>, round: u32) -> usize {
         let mut keys: Vec<K> = self.live_tombstones.read().iter().cloned().collect();
         if keys.is_empty() {
             return 0;
