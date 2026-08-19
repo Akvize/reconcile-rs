@@ -26,7 +26,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod auth;
 // Named after the external crate it wraps; `::bincode::…` disambiguates from this module.
