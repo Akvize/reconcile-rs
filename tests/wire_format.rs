@@ -14,10 +14,10 @@
 //! Putting the byte-level check where the codec already lives is what keeps a codec dependency out
 //! of `rbsr` entirely, rather than admitting one and then carving an exception for it.
 //!
-//! The segment is built through `RangeAggregate::for_testing`, the `internal-testing` seam, because
-//! chosen bounds are the whole point: `initial_ranges` only ever emits `(Unbounded, Unbounded)`, so a
-//! vector built from it would never exercise the `Included`/`Excluded` encodings — nor catch a
-//! reordering of `StartBound`/`EndBound`'s variants, which bincode writes positionally.
+//! The segment is built through `RangeAggregate::new`, because chosen bounds are the whole point:
+//! `initial_ranges` only ever emits `(Unbounded, Unbounded)`, so a vector built from it would never
+//! exercise the `Included`/`Excluded` encodings — nor catch a reordering of `StartBound`/
+//! `EndBound`'s variants, which bincode writes positionally.
 
 #![cfg(feature = "internal-testing")]
 
@@ -42,7 +42,7 @@ fn wire_format_is_unchanged_by_the_aggregate_collapse() {
         254, 1, 2, 251, 44, 1,
     ];
 
-    let segment = RangeAggregate::for_testing(
+    let segment = RangeAggregate::new(
         Some(7u32),
         Some(42u32),
         Aggregate::new(

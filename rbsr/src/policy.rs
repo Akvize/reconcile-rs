@@ -519,10 +519,9 @@ impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
 /// of the data alone.
 ///
 /// Since #352, `Comparison`'s public API carries no accessor returning a fingerprint, so this
-/// cannot be built from outside the crate; it exists only under `internal-testing`, the same seam
-/// [`RangeAggregate::for_testing`](crate::RangeAggregate::for_testing) uses, so a measurement
-/// harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this crate's
-/// `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
+/// cannot be built from outside the crate; it exists only under `internal-testing`, so a
+/// measurement harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this
+/// crate's `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
 ///
 /// Enumeration cutoffs match [`FixedFanOut`]'s (`shared_cutoffs`), so the only variable this
 /// isolates is *how the split stride is chosen*, never *when* a range is enumerated instead of

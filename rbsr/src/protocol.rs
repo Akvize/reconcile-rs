@@ -88,25 +88,36 @@ impl<K> RangeBounds<K> for KeyRange<K> {
 
 /// A `KeyRange` paired with the [`Aggregate`] over it: the unit the RBSR protocol exchanges.
 ///
-/// The wire type. bincode inlines the nested `Aggregate` in field declaration order, so
-/// [`Aggregate`]'s own field order is load-bearing here; the bytes are pinned by a golden vector
-/// in `reconcile`'s `tests/wire_format.rs`.
+/// # Wire layout
+///
+/// bincode inlines both fields positionally, in declaration order, with no length prefix or tag
+/// on the struct itself — only its two fields carry framing:
+///
+/// 1. `range.0` (the start bound): a `u32` variant tag (`0` = `Unbounded`, `1` = `Included`),
+///    followed by the key `K`'s own encoding when `Included`.
+/// 2. `range.1` (the end bound): the same shape (`0` = `Unbounded`, `1` = `Excluded`).
+/// 3. `aggregate`: [`Aggregate`]'s own fields, in *its* declaration order — currently
+///    `fingerprint` (four `u64` limbs) then `size` (a `u64`), each bincode's variable-length
+///    integer encoding.
+///
+/// This layout is pinned by a golden vector in `reconcile`'s `tests/wire_format.rs`; reordering
+/// any field here or in [`Aggregate`] is a protocol break, not a refactor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RangeAggregate<K> {
     range: KeyRange<K>,
     aggregate: Aggregate,
 }
 
-/// Test-only seam for out-of-crate wire-format oracles, behind `internal-testing`: builds a
-/// segment with *chosen* bounds, which [`initial_ranges`] alone never produces.
-///
-/// `None` is unbounded, `Some(k)` is `Included(k)` on the start and `Excluded(k)` on the end —
-/// an excluded start or included end stays unspellable.
-#[cfg(feature = "internal-testing")]
 impl<K> RangeAggregate<K> {
-    /// Build a `RangeAggregate` with chosen bounds and aggregate, bypassing [`initial_ranges`] /
-    /// [`protocol_round`]. See the impl-level docs above for the bound encoding.
-    pub fn for_testing(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
+    /// Build a `RangeAggregate` over a bounded starting family — the entry point for **subspace**
+    /// (prefix/partial) reconciliation: seed [`protocol_round`] with one or more of these instead
+    /// of [`initial_ranges`]' single `(−∞, +∞)` range, and only the given key interval is
+    /// compared.
+    ///
+    /// `None` is unbounded, `Some(k)` is `Included(k)` on the start and `Excluded(k)` on the end —
+    /// an excluded start or included end stays unspellable, matching what [`initial_ranges`] and
+    /// [`protocol_round`] themselves can ever produce.
+    pub fn new(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
         RangeAggregate {
             range: KeyRange::new(
                 start.map_or(StartBound::Unbounded, StartBound::Included),
@@ -114,6 +125,21 @@ impl<K> RangeAggregate<K> {
             ),
             aggregate,
         }
+    }
+
+    /// The lower bound of this range, `Unbounded` or `Included`.
+    pub fn start_bound(&self) -> Bound<&K> {
+        RangeBounds::start_bound(&self.range)
+    }
+
+    /// The upper bound of this range, `Unbounded` or `Excluded`.
+    pub fn end_bound(&self) -> Bound<&K> {
+        RangeBounds::end_bound(&self.range)
+    }
+
+    /// The [`Aggregate`] (fingerprint + size) this peer computed over the range.
+    pub fn aggregate(&self) -> &Aggregate {
+        &self.aggregate
     }
 }
 
