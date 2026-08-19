@@ -34,9 +34,14 @@ pub use reconcile::Transport
 pub use reconcile::UdpTransport
 pub use reconcile::Value
 pub use reconcile::Values
+pub use reconcile::async_trait
 pub use reconcile::bounds
 pub use reconcile::discovery
 pub use reconcile::entry
+pub use reconcile::ipnet
+pub use reconcile::parking_lot
+pub use reconcile::rand
+pub use reconcile::tokio
 pub use reconcile::transport
 pub mod reconcile::clock
 pub use reconcile::clock::AdmittedTime
@@ -79,7 +84,8 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::fingerprint<R: core::o
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::for_each<F: core::ops::function::FnMut(&K, &V)>(&self, F)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::for_each_in_range<R: core::ops::range::RangeBounds<K>, F: core::ops::function::FnMut(&K, &V)>(&self, R, F)
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get(&self, &K) -> core::option::Option<parking_lot::rwlock::MappedRwLockReadGuard<'_, V>>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get(&self, &K) -> core::option::Option<reconcile::value_ref::ValueRef<'_, V>>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get_cloned(&self, &K) -> core::option::Option<V>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::is_empty(&self) -> bool
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::keys(&self) -> alloc::vec::Vec<K>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::last_key_value(&self) -> core::option::Option<(K, V)>
@@ -205,7 +211,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::fingerprint<R: core::ops:
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::for_each<F: core::ops::function::FnMut(&K, &V)>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::for_each_in_range<R: core::ops::range::RangeBounds<K>, F: core::ops::function::FnMut(&K, &V)>(&self, R, F)
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get(&self, &K) -> core::option::Option<parking_lot::rwlock::MappedRwLockReadGuard<'_, V>>
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get(&self, &K) -> core::option::Option<reconcile::value_ref::ValueRef<'_, V>>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get_cloned(&self, &K) -> core::option::Option<V>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::is_empty(&self) -> bool
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::keys(&self) -> alloc::vec::Vec<K>
@@ -294,6 +300,18 @@ impl<K> core::marker::Unpin for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> core::marker::UnsafeUnpin for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> !core::panic::unwind_safe::RefUnwindSafe for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> !core::panic::unwind_safe::UnwindSafe for reconcile::replicated_set::ReplicatedSet<K>
+pub mod reconcile::value_ref
+pub struct reconcile::value_ref::ValueRef<'a, V>(_)
+impl<V> core::ops::deref::Deref for reconcile::value_ref::ValueRef<'_, V>
+pub type reconcile::value_ref::ValueRef<'_, V>::Target = V
+pub fn reconcile::value_ref::ValueRef<'_, V>::deref(&self) -> &V
+impl<'a, V> core::marker::Freeze for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> !core::marker::Send for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::marker::Sync for reconcile::value_ref::ValueRef<'a, V> where V: core::marker::Sync
+impl<'a, V> core::marker::Unpin for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::marker::UnsafeUnpin for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::panic::unwind_safe::RefUnwindSafe for reconcile::value_ref::ValueRef<'a, V> where V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, V> core::panic::unwind_safe::UnwindSafe for reconcile::value_ref::ValueRef<'a, V> where V: core::panic::unwind_safe::RefUnwindSafe
 pub struct reconcile::FileSnapshot
 impl reconcile::FileSnapshot
 pub fn reconcile::FileSnapshot::new(impl core::convert::AsRef<std::path::Path>) -> Self
@@ -318,7 +336,8 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::fingerprint<R: core::o
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::for_each<F: core::ops::function::FnMut(&K, &V)>(&self, F)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::for_each_in_range<R: core::ops::range::RangeBounds<K>, F: core::ops::function::FnMut(&K, &V)>(&self, R, F)
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get(&self, &K) -> core::option::Option<parking_lot::rwlock::MappedRwLockReadGuard<'_, V>>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get(&self, &K) -> core::option::Option<reconcile::value_ref::ValueRef<'_, V>>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::get_cloned(&self, &K) -> core::option::Option<V>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::is_empty(&self) -> bool
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::keys(&self) -> alloc::vec::Vec<K>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::last_key_value(&self) -> core::option::Option<(K, V)>
@@ -397,7 +416,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::fingerprint<R: core::ops:
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::first_key_value(&self) -> core::option::Option<(K, V)>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::for_each<F: core::ops::function::FnMut(&K, &V)>(&self, F)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::for_each_in_range<R: core::ops::range::RangeBounds<K>, F: core::ops::function::FnMut(&K, &V)>(&self, R, F)
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get(&self, &K) -> core::option::Option<parking_lot::rwlock::MappedRwLockReadGuard<'_, V>>
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get(&self, &K) -> core::option::Option<reconcile::value_ref::ValueRef<'_, V>>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::get_cloned(&self, &K) -> core::option::Option<V>
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::is_empty(&self) -> bool
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::keys(&self) -> alloc::vec::Vec<K>
@@ -484,3 +503,14 @@ impl<K> core::marker::Unpin for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> core::marker::UnsafeUnpin for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> !core::panic::unwind_safe::RefUnwindSafe for reconcile::replicated_set::ReplicatedSet<K>
 impl<K> !core::panic::unwind_safe::UnwindSafe for reconcile::replicated_set::ReplicatedSet<K>
+pub struct reconcile::ValueRef<'a, V>(_)
+impl<V> core::ops::deref::Deref for reconcile::value_ref::ValueRef<'_, V>
+pub type reconcile::value_ref::ValueRef<'_, V>::Target = V
+pub fn reconcile::value_ref::ValueRef<'_, V>::deref(&self) -> &V
+impl<'a, V> core::marker::Freeze for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> !core::marker::Send for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::marker::Sync for reconcile::value_ref::ValueRef<'a, V> where V: core::marker::Sync
+impl<'a, V> core::marker::Unpin for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::marker::UnsafeUnpin for reconcile::value_ref::ValueRef<'a, V>
+impl<'a, V> core::panic::unwind_safe::RefUnwindSafe for reconcile::value_ref::ValueRef<'a, V> where V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, V> core::panic::unwind_safe::UnwindSafe for reconcile::value_ref::ValueRef<'a, V> where V: core::panic::unwind_safe::RefUnwindSafe

@@ -38,3 +38,18 @@ pub mod transport;
 
 pub use discovery::{DiscoverFuture, Discovery, DiscoveryKind, DnsDiscovery, RandomProbe};
 pub use transport::{InMemoryNetwork, InMemoryTransport, Transport, UdpTransport};
+
+// #297: re-exported so a public signature naming one of these types (`RandomProbe::new`'s
+// `parking_lot`/`rand` parameters, `Config::nets`' `ipnet::IpNet`, `UdpTransport::new`/`socket`'s
+// `tokio::net::UdpSocket`, `Transport`'s `#[async_trait]`) never forces a dependent onto an
+// independently-versioned copy of the crate that type comes from — the version dependents see is
+// the exact one this crate was built against. Not every dependency is re-exported this way: only
+// ones that are genuinely part of a public contract, as opposed to `bincode`/
+// `metrics-exporter-prometheus`, which are wrapped instead (`bincode.rs`, `reconcile`'s
+// `prometheus.rs`) because their errors are an implementation choice, not something a caller of
+// this crate should have to name.
+pub use async_trait::async_trait;
+pub use ipnet;
+pub use parking_lot;
+pub use rand;
+pub use tokio;

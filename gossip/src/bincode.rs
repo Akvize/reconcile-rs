@@ -13,8 +13,48 @@
 //! codec, so a forged datagram never reaches [`decode_stream`] (`ARCHITECTURE.md` §5 invariant 5).
 //! `::bincode::…` names the external crate.
 
+use std::error::Error as StdError;
+use std::fmt;
+
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+
+/// Why [`encode`] failed. Opaque wrapper over the external `bincode` crate's error (#297): a
+/// public signature naming `::bincode::Error` directly would force every dependent onto this
+/// crate's exact `bincode` version for a type they never construct or match on — `encode` only
+/// fails when `T`'s `Serialize` implementation does, so callers observe this as `Debug`/`Display`
+/// or via [`std::error::Error::source`], never by matching a variant.
+#[derive(Debug)]
+pub struct EncodeError(::bincode::Error);
+
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bincode encode failed: {}", self.0)
+    }
+}
+
+impl StdError for EncodeError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+/// Why [`decode_stream`] failed: a message failed to deserialize before a clean end-of-input.
+/// Opaque for the same reason as [`EncodeError`].
+#[derive(Debug)]
+pub struct DecodeError(::bincode::Error);
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bincode decode failed: {}", self.0)
+    }
+}
+
+impl StdError for DecodeError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&*self.0)
+    }
+}
 
 /// Append the encoding of `value` to a caller-owned buffer, so a batch frames into one datagram
 /// without per-message allocation.
@@ -22,9 +62,11 @@ use serde::Serialize;
 /// # Errors
 ///
 /// Only if `T`'s `Serialize` implementation fails.
-pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<()> {
+pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> Result<(), EncodeError> {
     use ::bincode::{DefaultOptions, Serializer};
-    value.serialize(&mut Serializer::new(out, DefaultOptions::new()))
+    value
+        .serialize(&mut Serializer::new(out, DefaultOptions::new()))
+        .map_err(EncodeError)
 }
 
 /// Decode a stream of `T` from `bytes`, stopping at a clean end-of-input or at `max_items` —
@@ -37,7 +79,7 @@ pub fn encode<T: Serialize>(value: &T, out: &mut Vec<u8>) -> ::bincode::Result<(
 pub fn decode_stream<T: DeserializeOwned>(
     bytes: &[u8],
     max_items: usize,
-) -> ::bincode::Result<Vec<T>> {
+) -> Result<Vec<T>, DecodeError> {
     use ::bincode::{DefaultOptions, Deserializer};
     let mut deserializer = Deserializer::from_slice(bytes, DefaultOptions::new());
     let mut out = Vec::new();
@@ -51,7 +93,7 @@ pub fn decode_stream<T: DeserializeOwned>(
                         break;
                     }
                 }
-                return Err(err);
+                return Err(DecodeError(err));
             }
         }
     }
@@ -91,9 +133,45 @@ mod tests {
     #[test]
     fn a_malformed_message_is_an_error() {
         let decoded: Result<Vec<bool>, _> = decode_stream(&[2u8], 100);
+        let err = match decoded {
+            Ok(_) => panic!("a malformed message must be rejected, not silently accepted"),
+            Err(e) => e,
+        };
         assert!(
-            decoded.is_err(),
-            "a malformed message must be rejected, not silently accepted"
+            err.to_string().contains("bincode decode failed"),
+            "unexpected Display: {err}"
+        );
+        assert!(
+            StdError::source(&err).is_some(),
+            "expected source() to chain to the underlying bincode error"
+        );
+    }
+
+    /// A type whose `Serialize` always fails, so [`encode`] has something to wrap into an
+    /// [`EncodeError`] — `Display`/`source` are otherwise unreachable, since every other type in
+    /// this test file serializes successfully.
+    struct AlwaysFailsToSerialize;
+
+    impl serde::Serialize for AlwaysFailsToSerialize {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("deliberately unserializable"))
+        }
+    }
+
+    #[test]
+    fn encode_failure_reports_display_and_source() {
+        let mut buf = Vec::new();
+        let err = match encode(&AlwaysFailsToSerialize, &mut buf) {
+            Ok(()) => panic!("AlwaysFailsToSerialize must fail to encode"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("bincode encode failed"),
+            "unexpected Display: {err}"
+        );
+        assert!(
+            StdError::source(&err).is_some(),
+            "expected source() to chain to the underlying bincode error"
         );
     }
 

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ipnet::IpNet;
-use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
+use parking_lot::{RwLock, RwLockReadGuard};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tokio::time::timeout;
@@ -44,6 +44,7 @@ use crate::replica::{
 };
 use crate::replicated_map::Config;
 use crate::transport::{Transport, UdpTransport};
+use crate::value_ref::ValueRef;
 use crate::FingerprintTreeMap;
 use gossip::auth;
 use gossip::gen_ip::{gen_ip, net_of};
@@ -224,9 +225,18 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     }
 
     /// Get the live value for a key, or `None` if the key is absent or holds a replicated tombstone.
-    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+    pub fn get(&self, k: &K) -> Option<ValueRef<'_, V>> {
         let guard = self.tree.read();
-        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|state| state.as_value())).ok()
+        RwLockReadGuard::try_map(guard, |tree| tree.get(k).and_then(|state| state.as_value()))
+            .ok()
+            .map(ValueRef)
+    }
+
+    /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
+    /// released before this returns — the default read when the value will be compared against or
+    /// fed into a subsequent write, mirroring [`ReplicatedMap::get_cloned`](crate::ReplicatedMap::get_cloned).
+    pub fn get_cloned(&self, k: &K) -> Option<V> {
+        self.get(k).map(|v| v.clone())
     }
 
     /// Whether the read replica currently holds a live value for the key (a tombstone counts as
@@ -589,6 +599,19 @@ mod tests {
         assert_eq!(read_replica.get(&1).as_deref(), Some(&"hello".to_string()));
         assert!(read_replica.contains_key(&1));
         assert_eq!(read_replica.len(), 1);
+    }
+
+    /// `get_cloned` mirrors `get`, but owns rather than borrows: present for an integrated key,
+    /// `None` for one that was never integrated.
+    #[tokio::test]
+    async fn get_cloned_returns_an_owned_copy_or_none_for_a_missing_key() {
+        let read_replica = ReadReplicaMap::<i32, String>::new(ephemeral_config())
+            .await
+            .expect("bind failed");
+        assert_eq!(read_replica.get_cloned(&1), None);
+        read_replica.integrate(vec![(1, State::Present("hello".to_string()))]);
+        assert_eq!(read_replica.get_cloned(&1), Some("hello".to_string()));
+        assert_eq!(read_replica.get_cloned(&2), None);
     }
 
     /// A replicated tombstone (`State::Tombstone`) hides the value but is still a stored entry.
