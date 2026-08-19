@@ -90,6 +90,32 @@ fn test_aggregate() {
     assert_eq!(tree.aggregate(..), agg2);
 }
 
+/// `aggregate`'s cached-subtree fast path only applies once a query's bound falls strictly
+/// outside a node's own key range (`fingerprint_tree_map::query`'s `lower_bound`/`upper_bound`
+/// comparisons) -- a boundary a handful of hand-picked ranges can easily miss. Exhaustively
+/// pairing every key with every other key on a deep enough tree (100 keys, several B-tree
+/// levels at `B == 6`) forces every separator to sit at both a range start and a range end at
+/// least once.
+#[test]
+fn aggregate_matches_brute_force_for_every_boundary_pair() {
+    let entries: Vec<(u32, u32)> = (0..100).map(|k| (k, k * 7)).collect();
+    let tree: FingerprintTreeMap<u32, u32> = entries.iter().copied().collect();
+    tree.check_invariants();
+
+    for lo in 0..=100u32 {
+        for hi in lo..=100u32 {
+            let range = lo..hi;
+            let expected = entries
+                .iter()
+                .filter(|(k, _)| range.contains(k))
+                .fold(Aggregate::ZERO, |acc, (k, v)| {
+                    acc + Aggregate::new(1, lift(k, v))
+                });
+            assert_eq!(tree.aggregate(range.clone()), expected, "range {range:?}");
+        }
+    }
+}
+
 #[test]
 fn contains_key_tracks_presence() {
     let mut tree = FingerprintTreeMap::new();
@@ -109,6 +135,7 @@ fn clear_empties_the_tree_and_preserves_invariants() {
         tree.insert(rng.gen(), rng.gen());
     }
     tree.check_invariants();
+    assert!(!tree.is_empty());
 
     tree.clear();
 

@@ -231,10 +231,28 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 if max_height != 1 {
                     assert_eq!(child_height, max_height, "height invariant violated");
                 }
+                max_height = child_height;
             }
             assert_eq!(cum, node.subtree, "subtree aggregate invariant violated");
             (cum, max_height + 1)
         }
-        aux(&self.root, None, None);
+        let (_, height) = aux(&self.root, None, None);
+
+        // Height must count actual levels, not just agree between siblings: walk straight down
+        // the leftmost path (an independent measurement) and check it agrees with `aux`'s own
+        // count. `aux` counts one level higher than the walk (a leaf with no children still
+        // reports height 2, since `max_height` starts at 1 and is never touched before the
+        // final `+ 1`), hence the `+ 1` below.
+        let mut walked_height = 1;
+        let mut node = self.root.as_ref();
+        while let Some(children) = node.children.as_ref() {
+            walked_height += 1;
+            node = &children[0];
+        }
+        assert_eq!(
+            height,
+            walked_height + 1,
+            "recursive height computation disagrees with a direct walk to a leaf"
+        );
     }
 }
