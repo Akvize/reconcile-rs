@@ -88,6 +88,21 @@ compile_error!(
 ///
 /// `Debug` is redacting: it never prints the key material, so an accidental `{:?}` in a log
 /// statement cannot leak it.
+///
+/// ```
+/// use reconcile_gossip::auth::ClusterKey;
+///
+/// let key = ClusterKey::from_hex(
+///     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+/// )
+/// .unwrap();
+///
+/// // Debug never prints the key material, even by accident.
+/// assert_eq!(format!("{key:?}"), "ClusterKey(\"<redacted>\")");
+///
+/// // A key that isn't exactly 64 hex characters is rejected, not silently truncated/padded.
+/// assert!(ClusterKey::from_hex("too short").is_err());
+/// ```
 #[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
 #[derive(Clone)]
 pub struct ClusterKey([u8; KEY_LEN]);

@@ -46,6 +46,24 @@ pub const MAX_NETS: usize = 8;
 /// [`Config::default`] and the `with_*` builders (e.g. [`with_port`](Config::with_port),
 /// [`with_listen_addr`](Config::with_listen_addr), [`with_net`](Config::with_net)); every field
 /// is `pub` for direct construction where that reads better.
+///
+/// ```
+/// use reconcile::{replicated_map::Config, ClusterKey};
+///
+/// let key = ClusterKey::from_hex(
+///     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+/// )
+/// .unwrap();
+///
+/// // The `with_*` builders chain -- see README "Security model" for why a real deployment
+/// // always sets a cluster key (`with_insecure_no_key()` is the explicit opt-out, not this).
+/// let config = Config::default()
+///     .with_port(4242)
+///     .with_net("10.1.0.0/16".parse().unwrap())
+///     .with_cluster_key(key);
+///
+/// assert_eq!(config.port, 4242);
+/// ```
 #[derive(Clone)]
 pub struct Config {
     /// UDP port to bind. `0` (the default) asks the OS for an ephemeral port; read back the

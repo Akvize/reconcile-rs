@@ -104,6 +104,28 @@ where
 /// Saves are **atomic**: written to a sibling `*.tmp`, flushed, then renamed over the target, then
 /// the containing directory is synced (best-effort — some filesystems do not support syncing a
 /// directory handle) so the rename itself survives a crash, not only the file's bytes.
+///
+/// ```
+/// use reconcile::{
+///     Entry, FileSnapshot, Hlc, LogicalCounter, NodeId, Persistence, PersistedState,
+///     PhysicalTime, Timestamp,
+/// };
+///
+/// let dir = tempfile::tempdir().unwrap();
+/// let backend = FileSnapshot::new(dir.path().join("snapshot")); // does not exist yet
+///
+/// let first: Option<PersistedState<String, i32>> = backend.load().unwrap();
+/// assert!(first.is_none()); // nothing saved yet
+///
+/// let stamp = Timestamp::new(Hlc::new(PhysicalTime::from_millis(0), LogicalCounter::new(0)), NodeId::new(1));
+/// let state = PersistedState::from(vec![("a".to_string(), Entry::present(stamp, 1))]);
+/// backend.save(&state).unwrap();
+///
+/// // A fresh FileSnapshot pointed at the same path reads back what was saved -- this is what
+/// // lets a restarted node recover instead of rejoining the cluster as an empty replica.
+/// let loaded: PersistedState<String, i32> = backend.load().unwrap().unwrap();
+/// assert_eq!(loaded.entries, state.entries);
+/// ```
 #[derive(Clone, Debug)]
 pub struct FileSnapshot {
     path: PathBuf,

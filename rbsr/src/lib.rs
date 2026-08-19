@@ -41,6 +41,36 @@
 //!
 //! [`RsosView`] is the four read-only Def. 3.9 operations RBSR needs, blanket-implemented for
 //! every [`rsos::Rsos`], so any backend works with no per-type code here.
+//!
+//! ```
+//! use rsos::FingerprintTreeMap;
+//! use rbsr::{initial_ranges, protocol_round};
+//!
+//! let mut a = FingerprintTreeMap::new();
+//! let mut b = FingerprintTreeMap::new();
+//! for i in 0..20 {
+//!     a.insert(i, i);
+//!     b.insert(i, i);
+//! }
+//! a.insert(999, 999); // only `a` has this key
+//!
+//! // Alternate rounds between the two sides until nothing is left to resolve -- this is the
+//! // driving loop a transport layer (like `reconcile`'s gossip adapter) runs over the wire.
+//! let mut active = initial_ranges(&a);
+//! let (mut responder, mut advertiser) = (&b, &a);
+//! let mut enumerated = 0;
+//! while !active.is_empty() {
+//!     let mut children = Vec::new();
+//!     let mut enumerations = Vec::new();
+//!     let outcome = protocol_round(responder, active, &mut children, &mut enumerations);
+//!     enumerated += outcome.enumerated();
+//!     active = children;
+//!     std::mem::swap(&mut responder, &mut advertiser);
+//! }
+//!
+//! // The one-element difference was found.
+//! assert!(enumerated > 0);
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
