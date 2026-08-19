@@ -150,6 +150,7 @@ impl fmt::Display for Stamp {
 ///
 /// Bit 0 set — the high-water sequence itself — is an invariant every mutator here maintains, so
 /// no caller has to.
+#[derive(Debug)]
 struct SlidingBitmap([u64; (WINDOW_SIZE / 64) as usize]);
 
 impl SlidingBitmap {
@@ -214,6 +215,7 @@ impl SlidingBitmap {
 }
 
 /// The per-peer replay state.
+#[derive(Debug)]
 struct PeerState {
     /// Highest sequence number accepted from this peer.
     max_seq: Seq,
@@ -289,6 +291,7 @@ fn phys_now_ms() -> u64 {
 
 /// Sender-side replay state, one per node. `stamp_floor` keeps minted stamps monotonic within the
 /// process — the guarantee the receiver's tail guard relies on, lost on restart (module docs).
+#[derive(Debug)]
 pub struct SenderCounter {
     seq: AtomicU64,
     stamp_floor: AtomicU64,
@@ -332,6 +335,7 @@ impl SenderCounter {
 /// could clear the freshness check anyway. `enabled` mirrors the owning
 /// [`crate::auth::Authenticator`]'s mode, fixed at construction; a disabled filter accepts
 /// everything, so no caller decides whether replay-checking applies.
+#[derive(Debug)]
 pub struct ReplayFilter {
     peers: Mutex<HashMap<IpAddr, PeerState>>,
     freshness_window: Duration,

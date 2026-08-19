@@ -1,7 +1,7 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1465
-# mutants with this config (1491 without the exclusions below) -- the delta between them (currently
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1469
+# mutants with this config (1495 without the exclusions below) -- the delta between them (currently
 # 26) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to

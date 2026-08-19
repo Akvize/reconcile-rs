@@ -133,12 +133,17 @@ Four outbound ports, each removing one concrete infrastructure dependency from t
 
 `Clock` returns the concrete `Timestamp` rather than a generic associated type: it is the only stamp
 in use, and the tombstone wheel and wire format are already coupled to its shape. `Transport` is
-`#[async_trait]` and object-safe (`Arc<dyn Transport<...>>`); `InMemoryTransport`/`InMemoryNetwork`
-are public (not test-gated) so downstream crates can drive a deterministic in-process cluster in
-their own tests. `Discovery::kind` distinguishes a speculative probe result (steers only
-the current round's targets) from an authoritative one (seeded into the known-peer set, an absence
-decommissions after a grace period) — either way discovery never grants causal-stability membership
-(§5 invariant 6), which a peer must earn via an authenticated dated datagram.
+`#[async_trait]` and object-safe (`Arc<dyn Transport>`), fixed to `SocketAddr` rather than carrying
+a generic `Addr` — every call site hard-wired that anyway, so the associated type was dead freedom
+(#287). `InMemoryTransport`/`InMemoryNetwork` are public (not test-gated) so downstream crates can
+drive a deterministic in-process cluster in their own tests. `Discovery::discover` reports failure
+as a boxed `DiscoveryError`, so an implementor is free to define a richer error taxonomy
+(`DnsDiscovery`'s `DnsDiscoveryError` distinguishes a resolver failure from a lookup that blew its
+timeout budget) without giving up the `Arc<dyn Discovery>` trait object every call site relies on.
+`Discovery::kind` distinguishes a speculative probe result (steers only the current round's targets)
+from an authoritative one (seeded into the known-peer set, an absence decommissions after a grace
+period) — either way discovery never grants causal-stability membership (§5 invariant 6), which a
+peer must earn via an authenticated dated datagram.
 
 **Wire encoding is not a port.** `gossip::bincode::{encode, decode_stream}` are plain `pub fn`s (no
 trait, no adapter type) — the crate owns exactly one implementation and has no test-driven need for a

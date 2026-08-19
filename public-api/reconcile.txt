@@ -5,8 +5,10 @@ pub use reconcile::ClusterKey
 pub use reconcile::ClusterKeyError
 pub use reconcile::DiscoverFuture
 pub use reconcile::Discovery
+pub use reconcile::DiscoveryError
 pub use reconcile::DiscoveryKind
 pub use reconcile::DnsDiscovery
+pub use reconcile::DnsDiscoveryError
 pub use reconcile::Entry
 pub use reconcile::Fingerprint
 pub use reconcile::FingerprintTreeMap
@@ -92,7 +94,7 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::last_key_value(&self) 
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::len(&self) -> usize
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::net(&self) -> ipnet::ipnet::IpNet
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport<Addr = core::net::socket_addr::SocketAddr>>) -> Self
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport>) -> Self
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::ops::range::RangeBounds<K>>(&self, R) -> alloc::vec::Vec<(K, V)>
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
@@ -254,7 +256,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::upsert<F: core::ops::func
 impl<K: lww_register::bounds::Key + core::hash::Hash, V: lww_register::bounds::Value> reconcile::replicated_map::ReplicatedMap<K, V>
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_clock(reconcile::replicated_map::Config, alloc::sync::Arc<dyn lww_register::clock::Clock>) -> core::io::error::Result<Self>
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport<Addr = core::net::socket_addr::SocketAddr>>) -> Self
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport>) -> Self
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::node_id(&self) -> lww_register::clock::NodeId
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
@@ -369,7 +371,7 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::last_key_value(&self) 
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::len(&self) -> usize
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::net(&self) -> ipnet::ipnet::IpNet
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
-pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport<Addr = core::net::socket_addr::SocketAddr>>) -> Self
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport>) -> Self
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::ops::range::RangeBounds<K>>(&self, R) -> alloc::vec::Vec<(K, V)>
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
@@ -459,7 +461,7 @@ pub fn reconcile::replicated_map::ReplicatedMap<K, V>::upsert<F: core::ops::func
 impl<K: lww_register::bounds::Key + core::hash::Hash, V: lww_register::bounds::Value> reconcile::replicated_map::ReplicatedMap<K, V>
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::new(reconcile::replicated_map::Config) -> core::io::error::Result<Self>
 pub async fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_clock(reconcile::replicated_map::Config, alloc::sync::Arc<dyn lww_register::clock::Clock>) -> core::io::error::Result<Self>
-pub fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport<Addr = core::net::socket_addr::SocketAddr>>) -> Self
+pub fn reconcile::replicated_map::ReplicatedMap<K, V>::new_with_transport(reconcile::replicated_map::Config, alloc::sync::Arc<dyn reconcile_gossip::transport::Transport>) -> Self
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::node_id(&self) -> lww_register::clock::NodeId
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::seed_peer(&self, core::net::ip_addr::IpAddr)
 pub fn reconcile::replicated_map::ReplicatedMap<K, V>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
