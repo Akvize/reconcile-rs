@@ -9,9 +9,10 @@
 use std::hash::Hash;
 use std::ops::RangeBounds;
 
-use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
+use parking_lot::RwLockReadGuard;
 
 use crate::bounds::{Key, Value};
+use crate::value_ref::ValueRef;
 use rsos::Fingerprint;
 
 use super::ReplicatedMap;
@@ -48,9 +49,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Prefer [`get_cloned`](Self::get_cloned), which drops the lock before returning, as the
     /// default read when the value will be compared against or fed into a subsequent write.
-    pub fn get(&self, k: &K) -> Option<MappedRwLockReadGuard<'_, V>> {
+    pub fn get(&self, k: &K) -> Option<ValueRef<'_, V>> {
         let guard = self.engine.map.read();
-        RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value())).ok()
+        RwLockReadGuard::try_map(guard, |map| map.get(k).and_then(|entry| entry.value()))
+            .ok()
+            .map(ValueRef)
     }
 
     /// Clone of the live value for `k`, or `None`. Unlike [`get`](Self::get), the read lock is
