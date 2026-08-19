@@ -102,6 +102,28 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
     /// `k` is live).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8305".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// // Absent: no race-free `get`-then-`insert` needed, `update` just reports it and does nothing.
+    /// assert!(!store.update(&"a".to_string(), |v| *v += 1));
+    ///
+    /// store.insert("a".to_string(), 1);
+    /// assert!(store.update(&"a".to_string(), |v| *v += 1)); // atomic against a concurrent writer
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(2));
+    /// # }
+    /// ```
     #[must_use]
     pub fn update<F: FnOnce(&mut V)>(&self, k: &K, f: F) -> bool {
         self.mutate_live(k, f)
@@ -119,6 +141,29 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # Panics
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8306".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// // Absent: the default is inserted as-is, `f` never runs.
+    /// store.upsert("a".to_string(), 1, |v| *v += 100);
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(1));
+    ///
+    /// // Live: `f` runs against the existing value, `default` is discarded.
+    /// store.upsert("a".to_string(), 1, |v| *v += 100);
+    /// assert_eq!(store.get_cloned(&"a".to_string()), Some(101));
+    /// # }
+    /// ```
     pub fn upsert<F: FnOnce(&mut V)>(&self, k: K, default: V, f: F) {
         if !self.mutate_live(&k, f) {
             self.insert(k, default);
@@ -133,6 +178,26 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// See [`insert`](Self::insert) — the broadcast requires an ambient Tokio runtime (only when
     /// `k` is absent/tombstoned).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use reconcile::{replicated_map::Config, InMemoryNetwork, ReplicatedMap};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let network = InMemoryNetwork::new();
+    /// let transport = Arc::new(network.bind("127.0.0.1:8307".parse().unwrap()));
+    /// let store = ReplicatedMap::<String, i32>::new_with_transport(
+    ///     Config::default().with_insecure_no_key(),
+    ///     transport,
+    /// );
+    ///
+    /// // Absent: `f` runs, its result is both inserted and returned.
+    /// assert_eq!(store.get_or_insert_with(&"a".to_string(), || 1), 1);
+    /// // Live: `f` never runs, the existing value is returned instead.
+    /// assert_eq!(store.get_or_insert_with(&"a".to_string(), || 999), 1);
+    /// # }
+    /// ```
     pub fn get_or_insert_with<F: FnOnce() -> V>(&self, k: &K, f: F) -> V {
         if let Some(value) = self.get(k) {
             return value.clone();
