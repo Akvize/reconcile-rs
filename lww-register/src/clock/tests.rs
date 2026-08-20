@@ -133,6 +133,19 @@ fn advance_past_remote_ignores_a_trailing_remotes_logical_counter() {
     assert_eq!(last, hlc(100, 2));
 }
 
+/// When `self` and the remote land on the exact same physical instant (a genuine tie), the
+/// result must take the *larger* of the two logical counters, not just `self`'s own.
+#[test]
+fn advance_past_remote_mixes_logical_counters_on_a_genuine_physical_tie() {
+    let mut last = hlc(50, 2);
+    last.advance_past_remote(
+        PhysicalTime::EPOCH,
+        AdmittedTime::trusted(PhysicalTime::from_millis(50)),
+        LogicalCounter::new(9),
+    );
+    assert_eq!(last, hlc(50, 10));
+}
+
 /// Out-of-budget readings come back capped and flagged, in-budget ones untouched.
 #[test]
 fn clamped_to_drift_caps_a_far_future_reading() {
