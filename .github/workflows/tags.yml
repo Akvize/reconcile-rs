@@ -37,6 +37,18 @@ jobs:
             exit 1
           fi
 
+      # #310: a release with no changelog entry ships silently undocumented. `CHANGELOG.md` is
+      # Keep-a-Changelog (`## [X.Y.Z] - date`), so the tag's version is a section heading —
+      # matched literally, not as a semver range, since a released version is an exact string here.
+      - name: Check the tag has a matching CHANGELOG.md section
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF##*/v}"
+          if ! grep -qF "## [$tag_version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$tag_version]' section for tag v$tag_version" >&2
+            exit 1
+          fi
+
       # Cheap pre-flight: package (and compile) every member together before touching the registry.
       # `--workspace` resolves the intra-workspace `path` + `version` dependencies against a local
       # temporary registry, so it verifies crates that a per-crate `cargo package` cannot until
