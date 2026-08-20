@@ -21,7 +21,12 @@ pub(crate) struct Node<K, V> {
     pub(crate) children: Option<ArrayVec<Box<Node<K, V>>, { MAX_CAPACITY + 1 }>>,
     /// `A(S)` over this node's whole subtree: its own separators plus everything under
     /// `children`.
-    pub(super) subtree: Aggregate,
+    ///
+    /// Private to this module, and deliberately: every write goes through
+    /// [`set_subtree`](Node::set_subtree), the single point [`counters`](crate::counters)
+    /// observes. A maintenance path able to assign this field directly would be a maintenance
+    /// path the counters silently miss.
+    subtree: Aggregate,
 }
 
 impl<K, V> Node<K, V> {
@@ -35,11 +40,39 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// `A(S)` over this node's whole subtree — the cached value, never recomputed here.
+    pub(super) fn subtree(&self) -> Aggregate {
+        self.subtree
+    }
+
+    /// **The** write to [`subtree`](Node::subtree), and so the one place aggregate maintenance is
+    /// counted. Every other mutator routes through it.
+    ///
+    /// Node *construction* deliberately does not: a fresh node initialized to
+    /// [`Aggregate::ZERO`] has no subtree to summarize yet, and the
+    /// [`refresh_aggregate`](Node::refresh_aggregate) that follows a split is the maintenance.
+    fn set_subtree(&mut self, aggregate: Aggregate) {
+        crate::counters::record_aggregate_update();
+        self.subtree = aggregate;
+    }
+
+    /// Compose `part` into this node's aggregate: `⊗`, for a subtree that gained `part`.
+    pub(super) fn compose_into_subtree(&mut self, part: Aggregate) {
+        self.set_subtree(self.subtree + part);
+    }
+
+    /// Remove `part` from this node's aggregate, for a subtree that lost it.
+    ///
+    /// Precondition, inherited from [`without`]: `part` was previously composed in.
+    pub(super) fn decompose_from_subtree(&mut self, part: Aggregate) {
+        self.set_subtree(without(self.subtree, part));
+    }
+
     /// `|S|` over this node's whole subtree — `O(1)`, cached in [`subtree`](Node::subtree).
     /// Crate-visible so the iterators in `fingerprint_tree_map_iter` can seed an exact
     /// `remaining` count without an unconstrained-generic `FingerprintTreeMap::len` call.
     pub(crate) fn subtree_size(&self) -> usize {
-        self.subtree.size()
+        self.subtree().size()
     }
 
     /// Recompute [`subtree`](Node::subtree) by composing own separators with each child's
@@ -51,10 +84,10 @@ impl<K, V> Node<K, V> {
         }
         if let Some(children) = self.children.as_ref() {
             for child in children {
-                aggregate += child.subtree;
+                aggregate += child.subtree();
             }
         }
-        self.subtree = aggregate;
+        self.set_subtree(aggregate);
     }
 
     pub(super) fn insert(
@@ -106,7 +139,7 @@ impl<K, V> Node<K, V> {
             self.keys.insert(index, key);
             self.values.insert(index, value);
             self.fingerprints.insert(index, fingerprint);
-            self.subtree += Aggregate::new(1, diff_fp);
+            self.compose_into_subtree(Aggregate::new(1, diff_fp));
             if let Some(right_child) = right_child {
                 assert!(self.children.is_some());
                 self.children
@@ -144,17 +177,20 @@ impl<K, V> Node<K, V> {
                 sibling.fingerprints.remove(0),
             )
         };
-        sibling.subtree = without(sibling.subtree, element(h));
+        sibling.decompose_from_subtree(element(h));
         // take the boundary child from the sibling if any
         let c = sibling.children.as_mut().map(|children| {
-            let c = if from_left {
+            if from_left {
                 children.pop().unwrap()
             } else {
                 children.remove(0)
-            };
-            sibling.subtree = without(sibling.subtree, c.subtree);
-            c
+            }
         });
+        // Settled after the closure, not inside it: `decompose_from_subtree` needs all of
+        // `sibling`, which the `children` borrow above still holds.
+        if let Some(c) = c.as_ref() {
+            sibling.decompose_from_subtree(c.subtree());
+        }
         // exchange the sibling's separator with the parent's separator
         let k = std::mem::replace(&mut self.keys[sep_index], k);
         let v = std::mem::replace(&mut self.values[sep_index], v);
@@ -170,10 +206,10 @@ impl<K, V> Node<K, V> {
             current.values.push(v);
             current.fingerprints.push(h);
         }
-        current.subtree += element(h);
+        current.compose_into_subtree(element(h));
         // move the rotated child into the current node if any
         if let Some(c) = c {
-            current.subtree += c.subtree;
+            current.compose_into_subtree(c.subtree());
             let current_children = current.children.as_mut().unwrap();
             if from_left {
                 current_children.insert(0, c);
@@ -210,7 +246,9 @@ impl<K, V> Node<K, V> {
             current.keys.push(k);
             current.values.push(v);
             current.fingerprints.push(h);
-            current.subtree += element(h);
+            current.compose_into_subtree(element(h));
+            // Read before the moves below dismantle `right_sibling` field by field.
+            let absorbed = right_sibling.subtree();
             for k in right_sibling.keys {
                 current.keys.push(k);
             }
@@ -225,7 +263,7 @@ impl<K, V> Node<K, V> {
                     child_children.push(c);
                 }
             }
-            current.subtree += right_sibling.subtree;
+            current.compose_into_subtree(absorbed);
         }
     }
 }

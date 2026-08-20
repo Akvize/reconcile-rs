@@ -47,6 +47,13 @@
 #![deny(missing_docs)]
 
 pub mod aggregate;
+// Public only under `--cfg reconcile_internal_testing` (#330, AGENTS.md §6), which a dependent's
+// build cannot set — so this is a seam no consumer can reach and 1.0 never freezes. See the
+// module's own docs.
+#[cfg(reconcile_internal_testing)]
+pub mod counters;
+#[cfg(not(reconcile_internal_testing))]
+mod counters;
 pub mod encoding;
 pub mod fingerprint;
 pub mod fingerprint_tree_map;
