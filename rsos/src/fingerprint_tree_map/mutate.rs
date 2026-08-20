@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::borrow::Borrow;
+
 use arrayvec::ArrayVec;
 use serde::Serialize;
 use tracing::trace;
@@ -83,9 +85,15 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         );
         ret
     }
+}
 
+impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// Removes `key`, returning its value if it was present.
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         fn rightmost_child<K, V>(node: &mut Node<K, V>) -> (K, V, Fingerprint) {
             if let Some(children) = node.children.as_mut() {
                 let (k, v, fp) = rightmost_child(children.last_mut().unwrap());
@@ -101,8 +109,11 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             }
         }
         /// The fingerprint delta and the value removed at `key`, if present.
-        fn aux<K: Ord, V>(node: &mut Node<K, V>, key: &K) -> (Fingerprint, Option<V>) {
-            match node.keys.binary_search(key) {
+        fn aux<K: Borrow<Q>, V, Q: Ord + ?Sized>(
+            node: &mut Node<K, V>,
+            key: &Q,
+        ) -> (Fingerprint, Option<V>) {
+            match node.keys.binary_search_by(|probe| probe.borrow().cmp(key)) {
                 Ok(index) => {
                     if let Some(children) = node.children.as_mut() {
                         let (prev_k, prev_v, prev_fp) = rightmost_child(&mut children[index]);
@@ -173,7 +184,9 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             self.remove(key);
         }
     }
+}
 
+impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// Recomputes every cached [`Aggregate`] and checks the ordering, occupancy and height
     /// invariants. `O(n)` — for tests.
     ///
@@ -254,5 +267,76 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
             walked_height + 1,
             "recursive height computation disagrees with a direct walk to a leaf"
         );
+    }
+
+    /// A view onto `key`'s slot, for a get-or-insert an `rsos`-only dependent otherwise has no way
+    /// to express (`with_mut` already covers in-place mutation of a *known-present* key).
+    ///
+    /// ```
+    /// use rsos::FingerprintTreeMap;
+    ///
+    /// let mut map: FingerprintTreeMap<&str, i32> = FingerprintTreeMap::new();
+    /// map.entry("a").or_insert(1);
+    /// map.entry("a").and_modify(|v| *v += 10).or_insert(0);
+    /// assert_eq!(map.get("a"), Some(&11));
+    /// ```
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V>
+    where
+        K: Clone,
+    {
+        Entry { map: self, key }
+    }
+}
+
+/// A view into a single slot of a [`FingerprintTreeMap`], from [`FingerprintTreeMap::entry`].
+///
+/// Closure-shaped, not the `&mut V`-handing-out guard `std::collections::btree_map::Entry` offers:
+/// [`with_mut`](FingerprintTreeMap::with_mut) is the crate's only summary-safe path to a mutable
+/// reference precisely because it re-lifts from a [`Drop`] guard: a bare `&mut V` returned here
+/// could be mutated after the entry is gone with no chance to repair the cached fingerprint, and a
+/// `Drop`-guard-returning `or_insert` would be unsound under `mem::forget`. So every method below
+/// either returns a shared `&V` (reading never skips a re-lift) or takes the mutation as a closure
+/// (`and_modify`), which runs through `with_mut` internally.
+pub struct Entry<'a, K, V> {
+    map: &'a mut FingerprintTreeMap<K, V>,
+    key: K,
+}
+
+impl<'a, K: Serialize + Ord + Clone, V: Serialize> Entry<'a, K, V> {
+    /// Inserts `default` if the entry is vacant, then returns the (possibly just-inserted) value.
+    pub fn or_insert(self, default: V) -> &'a V {
+        self.or_insert_with(|| default)
+    }
+
+    /// Inserts the result of `default` if the entry is vacant, then returns the (possibly
+    /// just-inserted) value. `default` runs only when the entry is vacant.
+    pub fn or_insert_with(self, default: impl FnOnce() -> V) -> &'a V {
+        if !self.map.contains_key(&self.key) {
+            self.map.insert(self.key.clone(), default());
+        }
+        self.map
+            .get(&self.key)
+            .expect("just inserted, or already present")
+    }
+
+    /// Inserts `V::default()` if the entry is vacant, then returns the (possibly just-inserted)
+    /// value.
+    pub fn or_default(self) -> &'a V
+    where
+        V: Default,
+    {
+        self.or_insert_with(V::default)
+    }
+
+    /// Calls `f` with a mutable reference to the value if the entry is occupied, re-lifting
+    /// afterward via [`with_mut`](FingerprintTreeMap::with_mut) — a no-op on a vacant entry.
+    /// Returns `self` so it can chain into `or_insert`/`or_insert_with`/`or_default`.
+    pub fn and_modify(self, f: impl FnOnce(&mut V)) -> Self {
+        self.map.with_mut(&self.key, |v| {
+            if let Some(v) = v {
+                f(v);
+            }
+        });
+        self
     }
 }

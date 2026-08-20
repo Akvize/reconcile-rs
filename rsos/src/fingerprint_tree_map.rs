@@ -30,6 +30,7 @@ mod node;
 mod query;
 mod range;
 
+pub use mutate::Entry;
 pub(crate) use node::Node;
 
 const B: usize = 6;

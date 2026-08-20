@@ -121,7 +121,11 @@ pub fn encode_into<S: Sink, T: Serialize + ?Sized>(sink: &mut S, value: &T) -> R
 }
 
 /// Encode `value` canonically into a fresh byte buffer.
-fn encode_to_vec<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
+///
+/// Equivalent to [`encode_into`] against a fresh `Vec<u8>` — public because that composition is
+/// three lines any dependent can already write, so keeping this one private buys no protection,
+/// only an extra round trip for a caller that just wants the bytes.
+pub fn encode_to_vec<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     encode_into(&mut buf, value)?;
     Ok(buf)

@@ -55,6 +55,11 @@ mod rsos_trait;
 
 pub use aggregate::Aggregate;
 pub use fingerprint::{digest, lift, Fingerprint};
-pub use fingerprint_tree_map::{FingerprintTreeMap, ItemRange};
+pub use fingerprint_tree_map::{Entry, FingerprintTreeMap, ItemRange};
 pub use fingerprint_tree_map_iter::{IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use rsos_trait::Rsos;
+
+// Re-exported so a third party building a `lift`-compatible `Fingerprint` from raw bytes (via
+// `Fingerprint::from_le_bytes` and `encoding::Sink for blake3::Hasher`) never needs its own,
+// independently-versioned `blake3` dependency.
+pub use blake3;
