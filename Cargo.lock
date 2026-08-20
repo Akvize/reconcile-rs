@@ -1292,6 +1292,7 @@ dependencies = [
 name = "rbsr"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "rand 0.8.7",
  "rsos",
  "serde",

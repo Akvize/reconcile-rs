@@ -189,9 +189,12 @@ pub enum Decision {
     /// (`SPLITBYRANK`), each re-advertised with this peer's aggregate.
     ///
     /// The driver owns Proposition 4.1's partition invariant whatever stride is chosen
-    /// (`ARCHITECTURE.md` §5 invariant 9); it cannot own *progress*. A stride at or above
-    /// [`Comparison::span`] emits one child equal to the parent — legitimate, used by every
-    /// shipped policy for a lone local element, and terminating only because the peer refines it.
+    /// (`ARCHITECTURE.md` §5 invariant 10). A stride at or above [`Comparison::span`] emits one
+    /// child equal to the parent — legitimate, used by every shipped policy for a lone local
+    /// element (`span() <= 1`), terminating only because the peer refines it. For `span() > 1`
+    /// that argument is [`RefinementPolicy`]'s progress law, not the driver's to assume: a
+    /// `Split` that violates it is converted to an [`Enumerate`](Decision::Enumerate) instead of
+    /// reaching the fan-out below (`ARCHITECTURE.md` §5 invariant 13, #420).
     Split(SplitStride),
 }
 
@@ -199,6 +202,21 @@ pub enum Decision {
 ///
 /// A **purely local decision, never a wire contract** (`ARCHITECTURE.md` §3.1): peers running
 /// different policies converge. A policy must therefore never be advertised or negotiated.
+///
+/// # Law: eventual progress (#420)
+///
+/// Whenever [`Comparison::span`] is greater than one, `decide` must return a
+/// [`Decision::Split`] whose stride is strictly less than the span — a real cut, not the
+/// single-child identity split [`Decision::Split`]'s docs carve out for `span() <= 1`. Every
+/// shipped policy holds this (pinned by `tests/shipped_policies_always_progress.rs`); #356's
+/// `FingerprintDerivedSplit` probe does not, and hung on ~99.5% of drives because of it — a
+/// content-determined stride can land a range on a fixed point that never shrinks.
+///
+/// Breaking the law no longer hangs the driver: `protocol_round_with_policy` converts a
+/// non-progressing `Split` into an `Enumerate` rather than trusting a plugged-in policy to hold
+/// this itself (`ARCHITECTURE.md` §5 invariant 13). That makes the law non-fatal to violate, not
+/// free to — a policy that violates it still pays for every such range in an immediate IDLIST
+/// instead of the split it asked for.
 ///
 /// # The shipped policies
 ///
@@ -501,10 +519,9 @@ impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
 /// of the data alone.
 ///
 /// Since #352, `Comparison`'s public API carries no accessor returning a fingerprint, so this
-/// cannot be built from outside the crate; it exists only under `internal-testing`, the same seam
-/// [`RangeAggregate::for_testing`](crate::RangeAggregate::for_testing) uses, so a measurement
-/// harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this crate's
-/// `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
+/// cannot be built from outside the crate; it exists only under `internal-testing`, so a
+/// measurement harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this
+/// crate's `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
 ///
 /// Enumeration cutoffs match [`FixedFanOut`]'s (`shared_cutoffs`), so the only variable this
 /// isolates is *how the split stride is chosen*, never *when* a range is enumerated instead of

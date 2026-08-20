@@ -74,7 +74,7 @@ pub struct ReadReplicaMap<K, V> {
     /// The datagram-I/O port (default adapter: [`UdpTransport`]), shared with every clone. A read
     /// replica sends and receives exclusively through it, exactly like
     /// [`Replica`](crate::Replica) — no `tokio::net` call sites of its own.
-    transport: Arc<dyn Transport<Addr = SocketAddr>>,
+    transport: Arc<dyn Transport>,
     /// The single network this replica probes: the one containing its listen address, else the
     /// first declared, else loopback. Retunable via [`set_net`](Self::set_net).
     net: Arc<RwLock<IpNet>>,
@@ -203,17 +203,14 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     /// assert!(read_replica.is_empty());
     /// assert!(read_replica.get(&"a".to_string()).is_none());
     /// ```
-    pub fn new_with_transport(
-        config: Config,
-        transport: Arc<dyn Transport<Addr = SocketAddr>>,
-    ) -> Self {
+    pub fn new_with_transport(config: Config, transport: Arc<dyn Transport>) -> Self {
         Self::build(config, transport)
     }
 
     /// Assemble a read replica from an already-constructed [`Transport`]. Pure wiring — no I/O.
     /// Panics rather than being fallible; see [`new_with_transport`](Self::new_with_transport).
     /// The fallible socket bind lives in [`new`](Self::new).
-    fn build(config: Config, transport: Arc<dyn Transport<Addr = SocketAddr>>) -> Self {
+    fn build(config: Config, transport: Arc<dyn Transport>) -> Self {
         config.check_key_or_insecure_opt_in();
         warn_on_ignored_config_fields(&config);
         let authenticator = auth::Authenticator::new(config.cluster_key, config.encrypt);
@@ -435,7 +432,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
 
     /// Bundle the outbound ports the batched-send helpers need, exactly as
     /// [`Replica`](crate::Replica) does. See [`SendPorts`].
-    fn send_ports(&self) -> SendPorts<'_, dyn Transport<Addr = SocketAddr>> {
+    fn send_ports(&self) -> SendPorts<'_, dyn Transport> {
         SendPorts {
             transport: &*self.transport,
             authenticator: &self.authenticator,

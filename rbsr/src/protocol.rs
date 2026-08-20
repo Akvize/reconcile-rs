@@ -88,25 +88,36 @@ impl<K> RangeBounds<K> for KeyRange<K> {
 
 /// A `KeyRange` paired with the [`Aggregate`] over it: the unit the RBSR protocol exchanges.
 ///
-/// The wire type. bincode inlines the nested `Aggregate` in field declaration order, so
-/// [`Aggregate`]'s own field order is load-bearing here; the bytes are pinned by a golden vector
-/// in `reconcile`'s `tests/wire_format.rs`.
+/// # Wire layout
+///
+/// bincode inlines both fields positionally, in declaration order, with no length prefix or tag
+/// on the struct itself — only its two fields carry framing:
+///
+/// 1. `range.0` (the start bound): a `u32` variant tag (`0` = `Unbounded`, `1` = `Included`),
+///    followed by the key `K`'s own encoding when `Included`.
+/// 2. `range.1` (the end bound): the same shape (`0` = `Unbounded`, `1` = `Excluded`).
+/// 3. `aggregate`: [`Aggregate`]'s own fields, in *its* declaration order — currently
+///    `fingerprint` (four `u64` limbs) then `size` (a `u64`), each bincode's variable-length
+///    integer encoding.
+///
+/// This layout is pinned by a golden vector in `reconcile`'s `tests/wire_format.rs`; reordering
+/// any field here or in [`Aggregate`] is a protocol break, not a refactor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RangeAggregate<K> {
     range: KeyRange<K>,
     aggregate: Aggregate,
 }
 
-/// Test-only seam for out-of-crate wire-format oracles, behind `internal-testing`: builds a
-/// segment with *chosen* bounds, which [`initial_ranges`] alone never produces.
-///
-/// `None` is unbounded, `Some(k)` is `Included(k)` on the start and `Excluded(k)` on the end —
-/// an excluded start or included end stays unspellable.
-#[cfg(feature = "internal-testing")]
 impl<K> RangeAggregate<K> {
-    /// Build a `RangeAggregate` with chosen bounds and aggregate, bypassing [`initial_ranges`] /
-    /// [`protocol_round`]. See the impl-level docs above for the bound encoding.
-    pub fn for_testing(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
+    /// Build a `RangeAggregate` over a bounded starting family — the entry point for **subspace**
+    /// (prefix/partial) reconciliation: seed [`protocol_round`] with one or more of these instead
+    /// of [`initial_ranges`]' single `(−∞, +∞)` range, and only the given key interval is
+    /// compared.
+    ///
+    /// `None` is unbounded, `Some(k)` is `Included(k)` on the start and `Excluded(k)` on the end —
+    /// an excluded start or included end stays unspellable, matching what [`initial_ranges`] and
+    /// [`protocol_round`] themselves can ever produce.
+    pub fn new(start: Option<K>, end: Option<K>, aggregate: Aggregate) -> Self {
         RangeAggregate {
             range: KeyRange::new(
                 start.map_or(StartBound::Unbounded, StartBound::Included),
@@ -114,6 +125,21 @@ impl<K> RangeAggregate<K> {
             ),
             aggregate,
         }
+    }
+
+    /// The lower bound of this range, `Unbounded` or `Included`.
+    pub fn start_bound(&self) -> Bound<&K> {
+        RangeBounds::start_bound(&self.range)
+    }
+
+    /// The upper bound of this range, `Unbounded` or `Excluded`.
+    pub fn end_bound(&self) -> Bound<&K> {
+        RangeBounds::end_bound(&self.range)
+    }
+
+    /// The [`Aggregate`] (fingerprint + size) this peer computed over the range.
+    pub fn aggregate(&self) -> &Aggregate {
+        &self.aggregate
     }
 }
 
@@ -347,7 +373,7 @@ impl AddAssign for RoundOutcome {
 /// [`RoundOutcome::dropped_malformed`]).
 ///
 /// The rule is a [`RefinementPolicy`], swappable through [`protocol_round_with_policy`] without a
-/// protocol break. Whatever the policy, the driver keeps `ARCHITECTURE.md` §5 invariant 9: a
+/// protocol break. Whatever the policy, the driver keeps `ARCHITECTURE.md` §5 invariant 10: a
 /// SPLIT's children are pairwise disjoint with union the parent.
 pub fn protocol_round<K, B: RsosView<K>>(
     local: &B,
@@ -372,6 +398,12 @@ where
 /// The policy chooses the outcome and the split width, nothing else: bounds validation, rank
 /// arithmetic, `select` cuts and the partition invariant stay here. `?Sized`, so
 /// `&dyn RefinementPolicy` works.
+///
+/// A `Split` this policy returns for a range of more than one local element is trusted to narrow
+/// it ([`RefinementPolicy`]'s progress law); one that would not is converted to an `Enumerate`
+/// instead of reaching the fan-out below, whatever policy produced it (`ARCHITECTURE.md` §5
+/// invariant 13, #420) — the driver stays liveness-safe even against a policy that breaks the
+/// law, at the cost of an immediate IDLIST for the ranges where it does.
 ///
 /// ```
 /// use rsos::FingerprintTreeMap;
@@ -439,7 +471,19 @@ where
         // is read from the bundled aggregate, not from `end_index - start_index` — see
         // `RsosView`'s count-agreement law for why those two agree only for a defended backend.
         let comparison = Comparison::new(local_aggregate, remote, outcome.children);
-        match policy.decide(comparison) {
+        let span = comparison.span();
+        let decision = match policy.decide(comparison) {
+            Decision::Split(stride) if span > 1 && stride.get() >= span => {
+                debug!(
+                    "policy returned a non-progressing SPLIT (stride {} >= span {span} with \
+                     span > 1); forcing IDLIST for this range instead of stalling on it",
+                    stride.get()
+                );
+                Decision::Enumerate
+            }
+            other => other,
+        };
+        match decision {
             Decision::Skip => {
                 outcome.skipped += 1;
             }
@@ -496,7 +540,7 @@ mod tests {
 
     use rsos::{Fingerprint, FingerprintTreeMap};
 
-    use crate::policy::{EnumerateBelowThreshold, SqrtFanOut};
+    use crate::policy::{EnumerateBelowThreshold, SplitStride, SqrtFanOut};
 
     /// A real `FingerprintTreeMap` over the given keys.
     fn tree(keys: &[i32]) -> FingerprintTreeMap<i32, i32> {
@@ -686,7 +730,7 @@ mod tests {
         }
     }
 
-    /// `ARCHITECTURE.md` §5 invariant 9, under any policy.
+    /// `ARCHITECTURE.md` §5 invariant 10, under any policy.
     #[test]
     fn split_children_partition_the_parent_range() {
         let store = tree(&(0..400).collect::<Vec<_>>());
@@ -814,6 +858,25 @@ mod tests {
         ]
     }
 
+    /// A policy that behaves like [`FixedFanOut`] except it never actually narrows a range once a
+    /// real cut is possible (`span() > 1`) — it asks for a stride wider than any span instead.
+    /// `ARCHITECTURE.md` §5 invariant 13 (#420): included in [`policies`] so the driver's guard,
+    /// not this policy's own hygiene, is what the convergence matrix below is proving. Without
+    /// that guard this would hang exactly like #356's `FingerprintDerivedSplit` probe.
+    #[derive(Clone, Copy, Debug, Default)]
+    struct NeverNarrows;
+
+    impl RefinementPolicy for NeverNarrows {
+        fn decide(&self, comparison: Comparison) -> Decision {
+            match FixedFanOut::default().decide(comparison) {
+                Decision::Split(_) if comparison.span() > 1 => {
+                    Decision::Split(SplitStride::per_child(usize::MAX))
+                }
+                other => other,
+            }
+        }
+    }
+
     fn policies() -> Vec<(&'static str, Box<dyn RefinementPolicy>)> {
         vec![
             ("SqrtFanOut", Box::new(SqrtFanOut)),
@@ -830,7 +893,41 @@ mod tests {
                 "EnumerateBelow(t=1,b=2)",
                 Box::new(EnumerateBelowThreshold::new(1, FanOut::BINARY)),
             ),
+            ("NeverNarrows", Box::new(NeverNarrows)),
         ]
+    }
+
+    /// `ARCHITECTURE.md` §5 invariant 13 (#420), isolated to one round: a policy asking for a
+    /// stride that would not narrow a `span() > 1` range must not reach the fan-out loop as a
+    /// `Split` at all — it is answered as an `Enumerate`, counted and bounced back exactly like a
+    /// policy that had returned `Enumerate` itself.
+    #[test]
+    fn non_progressing_split_is_converted_to_enumerate() {
+        let store = tree(&(0..10).collect::<Vec<_>>()); // span = 10, so span() > 1
+        let segment = RangeAggregate {
+            range: KeyRange::new(StartBound::Unbounded, EndBound::Unbounded),
+            aggregate: Aggregate::new(5, Fingerprint([9, 9, 9, 9])), // non-empty, disagrees
+        };
+        let mut child_ranges = Vec::new();
+        let mut enumeration_ranges = Vec::new();
+        let outcome = protocol_round_with_policy(
+            &store,
+            &NeverNarrows,
+            vec![segment],
+            &mut child_ranges,
+            &mut enumeration_ranges,
+        );
+        assert_eq!(outcome.split(), 0, "must not be counted as a SPLIT");
+        assert_eq!(
+            outcome.enumerated(),
+            1,
+            "must be counted as an IDLIST instead"
+        );
+        assert_eq!(enumeration_ranges.len(), 1);
+        // The peer's range was non-empty, so IDLIST's one-directional bounce-back applies here
+        // exactly as it would for a policy that had returned `Decision::Enumerate` directly.
+        assert_eq!(child_ranges.len(), 1);
+        assert_eq!(child_ranges[0].aggregate, Aggregate::ZERO);
     }
 
     #[test]

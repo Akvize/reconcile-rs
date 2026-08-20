@@ -1,0 +1,30 @@
+# Negentropy's counted refinement columns — `benches/protocol.rs`'s external anchor (#362).
+#
+# What this file is for, what it may be compared against, and what the anchor superseded:
+# `benches/README.md`, "The Negentropy anchor". This header carries provenance only, so the two
+# cannot drift.
+#
+# PROVENANCE
+#   implementation  https://github.com/hoytech/negentropy  (the reference implementation, cited by
+#                   arXiv:2603.19820's own evaluation)
+#   commit          b3687652922785c6f3b6c00684f51c6977965784  (2026-08-01)
+#   driver          benches/fixtures/negentropy-drive.js  (committed beside this file)
+#   command         cp benches/fixtures/negentropy-drive.js <negentropy>/js/drive.js
+#                   cd <negentropy>/js && node --max-old-space-size=4096 drive.js <n> <d>
+#   generated       2026-08-20, node v22.22.2
+#
+# Regeneration is manual and out of band by design (#362, "Accepted cost"): a plain `cargo bench`
+# cannot reproduce this file, and nothing in CI reads it.
+#
+# COLUMNS. `fp_*` count mode=1 (Fingerprint) ranges — the only ones commensurable with
+# `Cost::ranges`/`Cost::refinement_bytes`. `fp_bytes` prices each range *including* its bound and
+# mode varint: a per-range figure that omits the framing a range cannot travel without is arithmetic,
+# not a measurement, which is the defect this anchor exists to have caught. The `idlist_*` columns
+# are recorded for completeness and do NOT compare — see the README section above.
+#
+# n	d	messages	fp_ranges	fp_bytes	skip_ranges	idlist_ranges	idlist_ids	total_wire_bytes
+1000	1	4	32	608	3	2	7	856
+10000	1	4	48	927	3	1	2	1011
+100000	1	4	48	943	3	1	24	1734
+1000000	1	6	64	1278	5	2	33	2373
+1000000	100	6	3472	67853	400	200	3148	170995

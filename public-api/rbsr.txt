@@ -1,4 +1,5 @@
 pub mod rbsr
+pub use rbsr::rsos
 pub enum rbsr::Decision
 pub rbsr::Decision::Enumerate
 pub rbsr::Decision::Skip
@@ -119,6 +120,11 @@ impl core::marker::UnsafeUnpin for rbsr::FixedFanOut
 impl core::panic::unwind_safe::RefUnwindSafe for rbsr::FixedFanOut
 impl core::panic::unwind_safe::UnwindSafe for rbsr::FixedFanOut
 pub struct rbsr::RangeAggregate<K>
+impl<K> rbsr::RangeAggregate<K>
+pub fn rbsr::RangeAggregate<K>::aggregate(&self) -> &rsos::aggregate::Aggregate
+pub fn rbsr::RangeAggregate<K>::end_bound(&self) -> core::ops::range::Bound<&K>
+pub fn rbsr::RangeAggregate<K>::new(core::option::Option<K>, core::option::Option<K>, rsos::aggregate::Aggregate) -> Self
+pub fn rbsr::RangeAggregate<K>::start_bound(&self) -> core::ops::range::Bound<&K>
 impl<'de, K> serde::de::Deserialize<'de> for rbsr::RangeAggregate<K> where K: serde::de::Deserialize<'de>
 pub fn rbsr::RangeAggregate<K>::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
 impl<K: core::clone::Clone> core::clone::Clone for rbsr::RangeAggregate<K>

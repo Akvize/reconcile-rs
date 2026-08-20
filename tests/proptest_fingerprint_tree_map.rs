@@ -668,7 +668,7 @@ proptest! {
         keys.dedup();
         let store = HostileRanks { keys, rank_answers };
 
-        let segment = RangeAggregate::for_testing(
+        let segment = RangeAggregate::new(
             start,
             end,
             rsos::Aggregate::new(1, Fingerprint([1, 0, 0, 0])),

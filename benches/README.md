@@ -297,6 +297,45 @@ silently changing every cluster's bandwidth profile — this benchmark quantifie
 does not guard it. `split_children_partition_the_parent_range` is policy-independent and must hold
 under any fan-out rule.
 
+### The Negentropy anchor
+
+The one column here not produced by `reconcile-rs`
+([#362](https://github.com/Akvize/reconcile-rs/issues/362)). `print_negentropy_anchor` prints it on
+every run of this target, reading `benches/fixtures/negentropy-counted.tsv`, whose header carries the
+provenance and the generating command. Refinement columns only; `b` = 16 and `Clustering::Scattered`
+both sides.
+
+| `n` | `d` | B | ranges | msgs | B/range | Negentropy B | ranges | msgs | B/range | ratio |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10³ | 1 | 1 701 | 39 | 6 | 43.62 | 608 | 32 | 4 | 19.00 | 2.30× |
+| 10⁴ | 1 | 2 195 | 49 | 6 | 44.80 | 927 | 48 | 4 | 19.31 | 2.32× |
+| 10⁵ | 1 | 2 789 | 61 | 6 | 45.72 | 943 | 48 | 4 | 19.65 | 2.33× |
+| 10⁶ | 1 | 3 834 | 78 | 8 | 49.15 | 1 278 | 64 | 6 | 19.97 | 2.46× |
+| 10⁶ | 100 | 253 153 | 5 247 | 8 | 48.25 | 67 853 | 3 472 | 6 | 19.54 | 2.47× |
+
+What it supersedes, and what it leaves open:
+
+| | |
+|---|---|
+| superseded | `SOTA.md`'s "44 B/range against 16 B" — both figures were payload-only, and a range does not travel without its bound and framing |
+| our per-range cost | not a constant: 43.6 B → 49.2 B as `n` grows, since `KeyRange` bounds cost more varint bytes as keys grow |
+| where the gap is | bound encoding is ~5 B here against ~4 B there, so the gap is summary width — §2.1's trade, confirmed |
+| open | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 3.0× against 2.46× per range. Unexplained; not attributable to summary width |
+
+Commensurability, before summing anything against the totals above:
+
+| | |
+|---|---|
+| compares | the fixture's `fp_ranges`/`fp_bytes` (mode=1 ranges) against `Cost::ranges`/`Cost::refinement_bytes` |
+| does not compare | the IDLIST halves — a Negentropy element is a timestamp + a 256-bit id, ours is a key + an HLC + a value |
+| instance | modelled, not shared: item `k` gets timestamp `k` and a deterministic 32-byte id, so both refine over the same logical ordering of the same `n` items |
+
+`benches/fixtures/negentropy-drive.js` parses Negentropy's emitted messages against its
+[protocol v1 spec](https://github.com/hoytech/negentropy/blob/master/docs/negentropy-protocol-v1.md)
+rather than its internals, and asserts it consumes each message to the byte — a conformance check on
+our reading of that spec. Regeneration is manual and out of band, the cost #362 accepts on the
+record; nothing in CI reads the fixture, and a missing one prints a skip, never a failure.
+
 ## The `contention` benchmark
 
 ```sh
