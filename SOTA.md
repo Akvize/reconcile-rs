@@ -484,27 +484,39 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    timing.
 
    **Empirical grounding for the split-boundary half of this claim**
-   ([#356](https://github.com/Akvize/reconcile-rs/issues/356),
-   `rbsr/tests/oracle_dependent_split_vs_the_union_bound.rs`): the soundness bound above requires
-   the ranges compared to be a deterministic function of the data (rank-cut, `Select`) — the same
-   property MST's `level = hash(key)` and prolly's rolling-hash chunking give up (§2.1's table).
-   A test-only policy that instead derives its split stride from the local aggregate's fingerprint
-   (`rbsr::Comparison` makes that construction unspellable outside `internal-testing`, #352) was
-   driven to a fixed point at the reduced widths `w ∈ {16, 24}`
-   [#355](https://github.com/Akvize/reconcile-rs/issues/355)'s arm A measured, against the
-   rank-cut `FixedFanOut` control. The dominant, statistically unambiguous result was not an
-   excess over the false-convergence union bound but a **liveness break**: only ~0.53 % of drives
-   (1054 and 1051 of 200,000 trials, at `w = 16` and `24` respectively) reached a fixed point
-   within 128 rounds at all, against 100 % for the rank-cut control — a content-determined stride
-   can land a range on a fixed point that never shrinks. Among the rare drives that did terminate,
-   the false-convergence rate itself was inconclusive at 99 % confidence (`w=16`: 3/1054 events,
-   CI `[7.2e-4, 1.12e-2]`, against a reported union bound of `2.3e-3` — the point estimate sits
-   slightly above the bound but the interval straddles it; `w=24`: 0/1051 events, an uninformatively
-   wide CI given the tiny surviving sample). The rank-cut control produced zero events at either
-   width (CI upper bounds `8.4e-5` and `6.6e-6`, both comfortably under their own bound). Read
-   together: making a split boundary a function of the summary oracle breaks more than the
-   union-bound argument's premise — it can break the protocol's termination guarantee outright,
-   the sharper version of the same claim.
+   ([#356](https://github.com/Akvize/reconcile-rs/issues/356), [#420](https://github.com/Akvize/reconcile-rs/issues/420);
+   `rbsr/tests/joint_progress_and_the_oracle_coupling_confound.rs` and
+   `the_union_bounds_effective_multiplier.rs`). The soundness bound above needs the
+   ranges compared to be a deterministic function of the data (rank-cut, `Select`). Refinement
+   needs a *second*, independent property RBSR's literature leaves implicit: every `SPLIT` must
+   narrow the range it cuts, or terminate because the peer cuts instead. `rbsr::oracle_probe`'s
+   policies (unspellable outside `internal-testing` since #352) separate the two — drives settling,
+   20,000 per policy, `w = 16`, `n = 512`, `d = 1`, against the **pre-#420** driver:
+
+   | stride | reads the fingerprint | ignores it |
+   |---|---|---|
+   | relative to the span | `1 + limb mod (span−1)`: **100 %** | `FixedFanOut`: **100 %** |
+   | independent of it | `1 + limb mod 32`: **0.53 %** | `1 + mix(span) mod 32`: **0.05 %**; a constant: **0 %** |
+
+   Span-relativity decides termination, not oracle-coupling: reading no fingerprint at all is the
+   worse half of each row, and non-progressing splits per drive are 6.79 fingerprint-derived
+   against 6.69 for a constant and 0.00 for both span-relative policies. Pre-#420 a *single*
+   deviant peer stalled a correct one on 91.6 % of drives, `shared_cutoffs` answering a lone local
+   element with a deliberate non-progressing `Split(ONE)`. #420's guard (`ARCHITECTURE.md` §5
+   invariant 13) keys on exactly that variable — `stride >= span` at `span > 1` becomes an
+   `Enumerate` — costing a conforming policy nothing, pricing a violating one at one forced IDLIST
+   each, and settling 200,000/200,000 drives; a guard keyed on "reads the oracle" would have caught
+   neither oracle-independent policy. Stalls are provable, not round-capped: a drive is a
+   deterministic map on `(responder parity, active family)`, so a repeated state never terminates.
+
+   Two limits on the **soundness** half, neither about termination: the bound
+   `mean(comparisons) × 2⁻ʷ` is ~49× loose (`agrees()` tests the whole `Aggregate`, so only a
+   same-size range can falsely agree — 1.07 of 52.2 comparisons), and at `d = 1` the outer range is
+   the only reliably collision-capable comparison, compared *before any split decision exists*, so
+   the rate is policy-independent by construction and a zero-event run there confirms nothing. At
+   `d = 16` the policies separate with no excess for the coupled one. What oracle-independence buys
+   is the bound's *portability across widths*: under rank-cut the index set is identical at every
+   `w`, so a multiplier measured at one transfers; under a coupled rule nothing transfers.
 
    **Scope of the MST/prolly analogy, corrected 2026-08-19**: the comparison two paragraphs up
    ("the same property MST's `level = hash(key)` and prolly's rolling-hash chunking give up") is
@@ -516,23 +528,6 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    the **iterative RBSR family with a pluggable split policy** (RBSR itself, GenSync) — that is the
    comparison class a write-up should state, not the wider Merkle-structure family §2.1 tabulates.
 
-   **Liveness fix, 2026-08-20** (#420): the liveness break above is now the *unguarded* mechanism's
-   behavior only. `protocol_round_with_policy` gained a driver-side guard (`ARCHITECTURE.md` §5
-   invariant 13): a `Split` for `span() > 1` that would not narrow the range — exactly the
-   condition this counter-example relies on — is converted to an `Enumerate` before it can hang the
-   driver, whatever policy produced it. Re-measured against the guarded driver,
-   `FingerprintDerivedSplit` now reaches a fixed point on 200,000/200,000 trials at both widths (up
-   from 1,054/200,000 and 1,051/200,000).
-
-   **Soundness comparison, correction pending** ([#473](https://github.com/Akvize/reconcile-rs/pull/473)):
-   termination was never what starved the soundness comparison — "well-powered for the first time"
-   does not follow from the liveness fix alone. The reported false-convergence bound it was measured
-   against is itself ~49× too tight (`Comparison::agrees` tests the whole `Aggregate`, so only a
-   same-size range can falsely agree at any width), and at `d = 1` the only reliably
-   collision-capable comparison runs before any split decision exists, making a
-   coupled-vs-rank-cut rate comparison there policy-independent by construction. Both flaws predate
-   #420 and were invisible while termination masked the measurement. #473 restates the comparison
-   against the corrected bound and at `d > 1`, where the policies do separate — not yet on `main`.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
