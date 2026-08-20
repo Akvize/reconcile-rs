@@ -143,11 +143,18 @@ fn honest() -> Vec<u64> {
     (0..500u64).collect()
 }
 
-/// One content class: the honest data plus a single planted key.
-fn store(width: u32, plant: u64) -> NarrowStore {
+/// One content class: the honest data plus a single planted key, and optionally a batch of keys
+/// written to *both* peers.
+fn store_with(width: u32, plant: u64, shared: &[u64]) -> NarrowStore {
     let mut keys = honest();
     keys.push(plant);
+    keys.extend_from_slice(shared);
     NarrowStore::new(width, keys)
+}
+
+/// One content class, with no shared writes on top.
+fn store(width: u32, plant: u64) -> NarrowStore {
+    store_with(width, plant, &[])
 }
 
 /// Two distinct planted keys whose lifts agree mod `2^width`, by birthday search.
@@ -375,4 +382,48 @@ fn fleet_size_does_not_change_the_verdict_count() {
             }
         }
     }
+}
+
+/// **Redundancy is not the only thing that fails to help: churn does not either.** `⊗` is a group
+/// operation, so an element written to *both* peers moves both sums by the same delta and the
+/// aggregates still agree. The outer range keeps SKIPping, refinement never starts, and the cut
+/// point that would separate the two planted keys is never computed — whatever else the fleet
+/// writes, and wherever it lands relative to the plant.
+#[test]
+fn a_collision_is_absorbing_under_shared_writes() {
+    let plants = class_plants(WIDTH);
+    let (low, high) = (plants[0].min(plants[1]), plants[0].max(plants[1]));
+
+    let batches: [(&str, Vec<u64>); 3] = [
+        ("below both plants", (600..700).collect()),
+        ("between the plants", (low + 1..high).take(50).collect()),
+        ("above both plants", (high + 1..=high + 50).collect()),
+    ];
+
+    for (label, shared) in batches {
+        assert!(!shared.is_empty(), "{label}: the batch must not be vacuous");
+        let a = store_with(WIDTH, plants[0], &shared);
+        let b = store_with(WIDTH, plants[1], &shared);
+
+        assert_ne!(a.keys, b.keys, "{label}: the stores must still differ");
+        assert!(
+            session(&a, &b).declared_convergence(),
+            "{label}: a write applied to both peers cancels in the aggregate and must leave the \
+             collision intact"
+        );
+    }
+}
+
+/// The control. A write landing on **one** side does break it — so the absorbing property above is
+/// the shared delta cancelling, not the driver ignoring writes altogether.
+#[test]
+fn a_one_sided_write_does_break_the_collision() {
+    let plants = class_plants(WIDTH);
+    let a = store(WIDTH, plants[0]);
+    let b = store_with(WIDTH, plants[1], &[601]);
+
+    assert!(
+        session(&a, &b).repaired(),
+        "a write on one side alone must refine to enumeration"
+    );
 }
