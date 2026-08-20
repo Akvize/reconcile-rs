@@ -68,9 +68,18 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         }
     }
 
+    /// Run one round of value-only anti-entropy against the configured peers. Normally driven by
+    /// [`run`](Self::run)'s loop; exposed for callers that want to force an out-of-band round
+    /// (e.g. in tests), mirroring [`ReplicatedMap::start_reconciliation`](crate::ReplicatedMap::start_reconciliation).
+    pub async fn start_reconciliation(&self) {
+        let mut send_buf = Vec::new();
+        self.start_reconciliation_inner(&mut send_buf).await;
+    }
+
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
-    /// kicking off / continuing a value-only reconciliation round.
-    pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
+    /// kicking off / continuing a value-only reconciliation round. `send_buf` is caller-owned so
+    /// [`run`](Self::run)'s hot loop can reuse one allocation across rounds.
+    async fn start_reconciliation_inner(&self, send_buf: &mut Vec<u8>) {
         let segments = rbsr::initial_ranges(&*self.tree.read());
         send_buf.clear();
         for segment in segments {
@@ -176,12 +185,12 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     pub async fn run(self) {
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        self.start_reconciliation(&mut send_buf).await;
+        self.start_reconciliation_inner(&mut send_buf).await;
         loop {
             match timeout(ACTIVITY_TIMEOUT, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     debug!("read replica: no recent activity; initiating value-only diff");
-                    self.start_reconciliation(&mut send_buf).await;
+                    self.start_reconciliation_inner(&mut send_buf).await;
                 }
                 Ok(Err(err)) => warn!("read replica network error in recv_from: {err}"),
                 Ok(Ok((size, peer))) => {
