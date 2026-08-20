@@ -59,12 +59,29 @@
 //! now reaches a fixed point on 200,000/200,000 trials at both widths (up from 1,054 and 1,051
 //! respectively). The finding above still describes what the *unguarded* mechanism does — that is
 //! the [`RefinementPolicy`] progress law this policy violates — it is just no longer what a drive
-//! through this crate's own driver does. With termination no longer the bottleneck, the soundness
-//! comparison this module set out to make is well-powered for the first time: at `w=16`,
-//! 3/200,000 events, 99% CI `[3.8e-6, 5.9e-5]`, comfortably under the reported bound `1.12e-3`; at
-//! `w=24`, 0/200,000 events, 99% CI `[0, 3.3e-5]` against a reported bound of `4.39e-6` — zero
-//! events, but (like the rank-cut control's own `w=24` row in #356) a CI built on zero successes
-//! at this sample size is too wide to confirm that on its own.
+//! through this crate's own driver does. Re-run figures: at `w=16`, 3/200,000 events; at `w=24`,
+//! 0/200,000.
+//!
+//! **What that does *not* establish** (`joint_progress_and_the_oracle_coupling_confound.rs`,
+//! `the_union_bounds_effective_multiplier.rs`): that the soundness comparison is now well-powered.
+//! Termination was never what limited it, and two things still do.
+//!
+//! - The reported bound `mean(comparisons) × 2⁻ʷ` is ~49× looser than the quantity it stands for.
+//!   [`rbsr::Comparison::agrees`] tests the whole `Aggregate`, so a range whose two sides differ in
+//!   `size` cannot falsely agree at any width: 1.067 of the 52.229 comparisons a drive makes are
+//!   collision-capable, and the observed rate tracks that multiplier flat over `w = 8..14`.
+//!   `3/200,000` is not comfortably under `1.12e-3`; it sits *on* the corrected bound (≈3.3
+//!   expected events).
+//! - At the `swap_size = 1` difference this module measures, the outer range is the only reliably
+//!   collision-capable comparison, and it is compared **before any split decision exists** — so the
+//!   rate is policy-independent by construction. `at_one_element_of_difference_every_policy_posts_the_same_events`
+//!   asserts the strong form: three policies, including a rank-cut control, falsely converge on
+//!   *exactly the same drives*. Separating split policies on soundness needs `d > 1`.
+//!
+//! The cause of the liveness break is also not what this module's title assumes; see
+//! `joint_progress_and_the_oracle_coupling_confound.rs` for the 2×2 that separates reading the
+//! fingerprint from drawing a stride independent of the span, and finds only the second in the
+//! mechanism.
 //!
 //! [#355]: https://github.com/Akvize/reconcile-rs/issues/355
 
@@ -376,7 +393,7 @@ fn rank_cut_false_convergence_rate() {
 
 /// Fixed trial budget for the oracle-dependent policy, **not** derived from
 /// [`trial_count_for`]. That sizing assumes drives converge at roughly `FixedFanOut`'s rate;
-/// [`FingerprintDerivedSplit`] overwhelmingly does not (its stride is drawn from a fixed `1..=32`
+/// [`rbsr::FingerprintDerivedSplit`] overwhelmingly does not (its stride is drawn from a fixed `1..=32`
 /// range independent of the current span, so once a range's span drops below 32 — a couple of
 /// levels in — a "stride ≥ span" no-progress SPLIT is likely on *both* sides most rounds, and
 /// since the stride is a pure function of unchanging content, a range that lands there can loop
