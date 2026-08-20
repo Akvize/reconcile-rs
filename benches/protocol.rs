@@ -615,6 +615,82 @@ fn print_element_price() {
     }
 }
 
+/// The one column in this file that is not reconcile-rs against reconcile-rs (#362).
+///
+/// Reads `benches/fixtures/negentropy-counted.tsv` — counts produced by the reference Negentropy
+/// implementation, out of band, at a pinned commit — and prints them beside this harness's own for
+/// the same `(n, d)`. Both run `b = 16`.
+///
+/// **Only the refinement columns are commensurable**, and only per range: a Negentropy element is a
+/// timestamp + a 256-bit id, ours is a key + an HLC + a value, so the IDLIST halves do not compare
+/// and are not printed here. The fixture's header carries the full caveat list; read it before
+/// quoting anything from this block.
+///
+/// Missing or malformed fixture is a skip, never a panic: the file is a manual artifact by design,
+/// and a `cargo bench` that cannot find it is not a failing benchmark.
+fn print_negentropy_anchor() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/benches/fixtures/negentropy-counted.tsv"
+    );
+    let Ok(fixture) = std::fs::read_to_string(path) else {
+        println!("[protocol] negentropy anchor: fixture not found at {path} — skipping (#362)");
+        return;
+    };
+
+    println!(
+        "[protocol] negentropy anchor (#362): refinement columns only, b=16 both sides. \
+         `bytes` prices each range *including* its bound and framing, which is the whole point — \
+         a per-range figure that omits them is arithmetic, not a measurement."
+    );
+    for line in fixture.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // n  d  messages  fp_ranges  fp_bytes  skip_ranges  idlist_ranges  idlist_ids  total_wire
+        let cols: Vec<&str> = line.split('\t').collect();
+        let parsed = (|| {
+            Some((
+                cols.first()?.parse::<usize>().ok()?,
+                cols.get(1)?.parse::<usize>().ok()?,
+                cols.get(2)?.parse::<usize>().ok()?,
+                cols.get(3)?.parse::<usize>().ok()?,
+                cols.get(4)?.parse::<usize>().ok()?,
+            ))
+        })();
+        let Some((n, d, their_messages, their_ranges, their_bytes)) = parsed else {
+            println!("[protocol]   unparsable fixture row, skipping: {line}");
+            continue;
+        };
+
+        let full = store(n, &[]);
+        let holed = store(n, &missing_keys(n, d, Clustering::Scattered));
+        let ours = counted_reconcile(&full, &holed, &FixedFanOut::default());
+
+        let per_range = |bytes: usize, ranges: usize| {
+            if ranges == 0 {
+                f64::NAN
+            } else {
+                bytes as f64 / ranges as f64
+            }
+        };
+        let (mine, theirs) = (
+            per_range(ours.refinement_bytes, ours.ranges),
+            per_range(their_bytes, their_ranges),
+        );
+        println!(
+            "[protocol]   n={n:>8} d={d:>3} | reconcile-rs {ours_b:>7} B / {ours_r:>5} r \
+             / {ours_m:>2} msgs = {mine:>6.2} B/r | negentropy {their_bytes:>7} B \
+             / {their_ranges:>5} r / {their_messages:>2} msgs = {theirs:>6.2} B/r | ratio {ratio:.2}x",
+            ours_b = ours.refinement_bytes,
+            ours_r = ours.ranges,
+            ours_m = ours.messages,
+            ratio = mine / theirs,
+        );
+    }
+}
+
 /// The refinement/IDLIST breakdown under a total: why the policy landed there.
 fn breakdown(cost: &Cost) -> String {
     format!(
@@ -650,6 +726,7 @@ fn counted_reconcile<S: Rsos<u64>>(a: &S, b: &S, policy: &dyn RefinementPolicy) 
 fn reconciliation_cost(c: &mut Criterion) {
     payload_size_does_not_move_the_trace();
     print_element_price();
+    print_negentropy_anchor();
     println!(
         "[protocol] full reconciliation, u64 keys. Refinement policy is a local decision: \
          the wire type carries none, so these are comparable runs of the same protocol.\n\

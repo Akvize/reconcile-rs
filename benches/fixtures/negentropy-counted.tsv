@@ -1,0 +1,55 @@
+# Negentropy's counted refinement columns — the external anchor for `benches/protocol.rs` (#362).
+#
+# WHY THIS FILE EXISTS. Every other comparison `benches/protocol.rs` supports is reconcile-rs
+# against reconcile-rs: policy against policy, `b` against `b`. This fixture is the one column
+# produced by a *different implementation of the same algorithm family*, so the harness can print a
+# figure that is not self-referential.
+#
+# PROVENANCE — regenerating this file is a manual, out-of-band act, by design (#362 "Accepted cost,
+# named up front"; same posture as `img/perf-*.png`). It is NOT reproducible by a plain
+# `cargo bench`, and nothing in CI reads it.
+#
+#   implementation:  https://github.com/hoytech/negentropy  (the reference implementation, the one
+#                    arXiv:2603.19820's own evaluation cites)
+#   commit:          b3687652922785c6f3b6c00684f51c6977965784  (2026-08-01)
+#   driver:          benches/fixtures/negentropy-drive.js  (committed beside this file)
+#   command:         cp benches/fixtures/negentropy-drive.js <negentropy>/js/drive.js
+#                    cd <negentropy>/js && node --max-old-space-size=4096 drive.js <n> <d>
+#   generated:       2026-08-20, node v22.22.2
+#
+# HOW THE COUNTS ARE OBTAINED. The driver does not read Negentropy's internals. It parses the
+# emitted wire messages against the published grammar in Negentropy's own protocol v1 spec
+# (docs/negentropy-protocol-v1.md, in the upstream repository named above):
+#
+#   Message := <protocolVersion (Byte)> <Range>*
+#   Range   := <upperBound (Bound)> <mode (Varint)> <payload (Skip | Fingerprint | IdList)>
+#   Bound   := <encodedTimestamp (Varint)> <length (Varint)> <idPrefix (Byte)*>
+#
+# so it doubles as a conformance check on our reading of that spec: the parser asserts it consumes
+# every message to the byte, and would fail loudly if the grammar and the implementation disagreed.
+#
+# COMMENSURABILITY — READ BEFORE SUMMING ANYTHING AGAINST OUR OWN TOTALS (#362 non-goals).
+#
+#  1. ONLY THE REFINEMENT COLUMNS COMPARE. `fp_ranges`/`fp_bytes` below count mode=1
+#     (Fingerprint) ranges only, which is what `Cost::ranges`/`Cost::refinement_bytes` count on our
+#     side. The `idlist_*` columns are recorded for completeness and are NOT commensurable with our
+#     IDLIST columns: a Negentropy element is a 64-bit timestamp + a 256-bit id, ours is a key + an
+#     HLC + a *value* of arbitrary size. Do not add the two totals together.
+#  2. THE INSTANCE IS MODELLED, NOT SHARED. Our store is keyed by `u64` and ordered by key;
+#     Negentropy orders by (timestamp, id). The driver gives item `k` timestamp `k` and a
+#     deterministic 32-byte id, so both implementations refine over the same logical ordering of the
+#     same `n` items with the same `d` spread evenly — `Clustering::Spread`. It is the same
+#     *instance shape*, not the same bytes.
+#  3. SAME FAN-OUT, DIFFERENT DESCENT. Both run `b = 16`. They still do not advertise the same
+#     number of ranges (see `benches/README.md`); that difference is a finding, not an error bar.
+#
+# COLUMNS. `fp_bytes` is the on-wire cost of the mode=1 ranges *including* each range's bound and
+# mode varint, not the 16-byte fingerprint payload alone — the whole point of the anchor is that a
+# per-range figure must price the framing the range cannot travel without.
+#
+# n	d	messages	fp_ranges	fp_bytes	skip_ranges	idlist_ranges	idlist_ids	total_wire_bytes
+1000	1	4	32	608	3	2	7	856
+10000	1	4	48	927	3	1	2	1011
+100000	1	4	48	943	3	1	24	1734
+1000000	1	6	64	1278	5	2	33	2373
+1000000	100	6	3472	67853	400	200	3148	170995
