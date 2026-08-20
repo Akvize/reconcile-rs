@@ -413,28 +413,12 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   cost moves from local CPU at RTT ≈ 0, to round trips at 50 ms, to `reconcile_interval` under loss,
   so a ranking taken at one network point does not transfer to another.
 - **Every cost model on this page is two-party; the system is N-party — and a fleet *replays* a
-  collision rather than resampling one.** RBSR, PSR, CPI and RIBLT all state their bounds for one
-  pair of peers, while `ReplicatedMap` runs a gossip cluster whose per-write amplification is O(N)
-  (§1.2, `benches/system.rs::gossip_fanout`). Settled by **derivation, not measurement**: no session
-  nonce, peer identity or salt enters `rsos::lift` and `Comparison::agrees` compares whole bundled
-  aggregates, so a verdict is a function of the *content* pair. The loop varies only *which* peer is
-  contacted (`src/replica/reconciliation.rs`: every known local peer every round, a shuffled
-  `remote_fanout` subset across networks), never what a contacted pair computes — so
-  arXiv:2212.13567 §5.1's "would merely delay propagation" imports a partner draw's independence
-  into the comparison. Distinct verdicts are bounded by content classes, never by `N`:
-
-  | fleet state | content classes over `r` | retries `N` buys |
-  |---|---|---|
-  | freshly partitioned, divergent | many | ≈ `N` |
-  | converged but for one divergence | **2** | **0** |
-
-  Redundancy buys nothing exactly when the fleet is healthy, and a range two peers wrongly agree on
-  stays wrong for everyone who later syncs from either. Derivation and `N`-sweep:
-  `rbsr/tests/fleet_replays_a_false_skip.rs` — no fleet harness, so it never reaches
-  `gossip_propagation`'s scheduler ceiling. The multi-party literature no RBSR work cites is still
-  Mitzenmacher & Pagh, *Distributed Computing* 2018; keying the lift
-  ([#337](https://github.com/Akvize/reconcile-rs/issues/337)) does not decorrelate this — a cluster
-  key is not a session key. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
+  collision rather than resampling one.** RBSR, PSR, CPI and RIBLT state their bounds for one pair
+  of peers, while `ReplicatedMap` runs a gossip cluster at O(N) write amplification (§1.2,
+  `benches/system.rs::gossip_fanout`). A fixed `lift` makes a verdict a function of the *content*
+  pair, so distinct verdicts are bounded by content classes and never by `N`: a converged fleet
+  buys **0** retries. Refutes arXiv:2212.13567 §5.1 by derivation; mechanism, scope and the
+  `N`-sweep in `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
@@ -661,10 +645,8 @@ split rule does not cleanly exceed the bound — the sharper, statistically unam
 that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
 ([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
 grounding for the split-boundary half of this claim").
-
-[#354](https://github.com/Akvize/reconcile-rs/issues/354) left the table the other way — opened as a
-question, closed by derivation rather than by the measurement campaign it proposed: a fleet's
-distinct-verdict count is bounded by its content classes, not by `N` (§2.2).
+[#354](https://github.com/Akvize/reconcile-rs/issues/354) left it the other way: opened as a
+question, closed by derivation rather than the campaign it proposed (§2.2).
 
 **SOTA target by axis:**
 
