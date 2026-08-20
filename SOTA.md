@@ -410,11 +410,28 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   GenSync's headline reappears at this smaller scale — inside this one implementation the binding
   cost moves from local CPU at RTT ≈ 0, to round trips at 50 ms, to `reconcile_interval` under loss,
   so a ranking taken at one network point does not transfer to another.
-- **Every cost model on this page is two-party; the system is N-party.** RBSR, PSR, CPI and RIBLT
-  all state their bounds for one pair of peers, while `ReplicatedMap` runs a gossip cluster whose
-  per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
-  reconciliation has its own literature (Mitzenmacher & Pagh, *Distributed Computing* 2018) that no
-  RBSR work cites. Unexamined axis, not a known-good one.
+- **Every cost model on this page is two-party; the system is N-party — and a fleet *replays* a
+  collision rather than resampling one.** RBSR, PSR, CPI and RIBLT all state their bounds for one
+  pair of peers, while `ReplicatedMap` runs a gossip cluster whose per-write amplification is O(N)
+  (§1.2, `benches/system.rs::gossip_fanout`). Settled by **derivation, not measurement**: no session
+  nonce, peer identity or salt enters `rsos::lift` and `Comparison::agrees` compares whole bundled
+  aggregates, so a verdict is a function of the *content* pair, and anti-entropy randomizes which
+  pair meets (`RandomProbe`), never what the pair computes. "With many peers a bad comparison merely
+  delays propagation" imports the partner draw's independence into the comparison itself; distinct
+  verdicts are bounded by distinct content classes, never by `N`:
+
+  | fleet state | content classes over `r` | retries `N` buys |
+  |---|---|---|
+  | freshly partitioned, divergent | many | ≈ `N` |
+  | converged but for one divergence | **2** | **0** |
+
+  Redundancy buys nothing exactly when the fleet is healthy, and a range two peers wrongly agree on
+  stays wrong for everyone who later syncs from either. Derivation and `N`-sweep:
+  `rbsr/tests/fleet_replays_a_false_skip.rs`, which needs no fleet harness and so never reaches
+  `gossip_propagation`'s scheduler ceiling. Multi-party set reconciliation still has a literature no
+  RBSR work cites (Mitzenmacher & Pagh, *Distributed Computing* 2018), and keying the lift
+  ([#337](https://github.com/Akvize/reconcile-rs/issues/337)) does not decorrelate this — a cluster
+  key is not a session key. → [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
@@ -607,7 +624,6 @@ per issue, none of them a 1.0 gate; the claim and the evidence live in the issue
 | Is the refinement tree's comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
 | What is the false-convergence rate at reduced fingerprint width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
 | Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
-| Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
 | Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
 | The analysis is dimension-free; the RSOS contract is not — what does `δ > 1` actually need? | [#360](https://github.com/Akvize/reconcile-rs/issues/360) |
 | The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
@@ -625,6 +641,10 @@ split rule does not cleanly exceed the bound — the sharper, statistically unam
 that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
 ([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
 grounding for the split-boundary half of this claim").
+
+[#354](https://github.com/Akvize/reconcile-rs/issues/354) left the table the other way — opened as a
+question, closed by derivation rather than by the measurement campaign it proposed: a fleet's
+distinct-verdict count is bounded by its content classes, not by `N` (§2.2).
 
 **SOTA target by axis:**
 
@@ -935,8 +955,8 @@ sourced from abstracts and search summaries — read before quoting a number fro
   `doi:10.1007/s00446-017-0316-0` (Distributed Computing 31(6), 2018; preprint `arXiv:1311.2037`) —
   https://arxiv.org/abs/1311.2037
   **Bears on:** the only entry here that is not two-party. Every cost model on this page is stated
-  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — an
-  unexamined axis with an existing literature. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174)
+  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — the
+  literature §2.2's fleet result is answered against. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174), [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - **F. Lázaro, B. Matuz**, *A rate-compatible solution to the set reconciliation problem*,
   `arXiv:2211.05472v2` (IEEE Trans. Commun. 71(10), 2023 — v2 is the accepted revision) —
   https://arxiv.org/abs/2211.05472
