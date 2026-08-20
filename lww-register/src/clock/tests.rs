@@ -119,6 +119,20 @@ fn advance_past_remote_is_strictly_monotonic() {
     assert!(last > before);
 }
 
+/// When `self` is strictly ahead of the remote in physical time, the remote's logical counter
+/// belongs to an older instant and must not be mixed in — even if it happens to be numerically
+/// larger than `self`'s own counter.
+#[test]
+fn advance_past_remote_ignores_a_trailing_remotes_logical_counter() {
+    let mut last = hlc(100, 1);
+    last.advance_past_remote(
+        PhysicalTime::EPOCH,
+        AdmittedTime::trusted(PhysicalTime::from_millis(50)),
+        LogicalCounter::new(9_999),
+    );
+    assert_eq!(last, hlc(100, 2));
+}
+
 /// Out-of-budget readings come back capped and flagged, in-budget ones untouched.
 #[test]
 fn clamped_to_drift_caps_a_far_future_reading() {
