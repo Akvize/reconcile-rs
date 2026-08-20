@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 
 use serde::Serialize;
@@ -72,7 +73,7 @@ impl<K: Serialize, V: Serialize> Drop for Relift<'_, K, V> {
     }
 }
 
-impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// An empty tree. Equivalent to [`Default::default`].
     #[must_use]
     pub fn new() -> Self {
@@ -80,9 +81,16 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 
     /// Returns the value associated with `key`, if present.
-    pub fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
-        fn aux<'a, K: Ord, V>(node: &'a Node<K, V>, key: &K) -> Option<&'a V> {
-            match node.keys.binary_search(key) {
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        fn aux<'a, K: Borrow<Q>, V, Q: Ord + ?Sized>(
+            node: &'a Node<K, V>,
+            key: &Q,
+        ) -> Option<&'a V> {
+            match node.keys.binary_search_by(|probe| probe.borrow().cmp(key)) {
                 Ok(index) => Some(&node.values[index]),
                 Err(index) => {
                     if let Some(children) = node.children.as_ref() {
@@ -97,10 +105,16 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     }
 
     /// Returns whether `key` is present.
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         self.get(key).is_some()
     }
+}
 
+impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// Calls `callback` with a mutable reference to the value at `key` (`None` if absent), then
     /// re-lifts the element and propagates the fingerprint delta to the root, returning the
     /// callback's own return value.
@@ -154,7 +168,9 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
         let value = guard.value_mut();
         callback(Some(value))
     }
+}
 
+impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// Position of `key` in the in-order sequence, or `None` if absent — unlike
     /// [`rank`](FingerprintTreeMap::rank), which returns the insertion point for an absent key.
     ///
@@ -170,13 +186,17 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// assert_eq!(map.position(&15), None);
     /// assert_eq!(map.rank(&15), 1);
     /// ```
-    pub fn position(&self, key: &K) -> Option<usize> {
-        fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> Option<usize> {
+    pub fn position<Q>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        fn aux<K: Borrow<Q>, V, Q: Ord + ?Sized>(node: &Node<K, V>, key: &Q) -> Option<usize> {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
                 for i in 0..node.keys.len() {
-                    let cmp = key.cmp(&node.keys[i]);
-                    if cmp == Ordering::Less {
+                    let cmp = node.keys[i].borrow().cmp(key);
+                    if cmp == Ordering::Greater {
                         return aux(&children[i], key).map(|offset| index + offset);
                     }
                     index += children[i].subtree.size();
@@ -187,7 +207,9 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 }
                 aux(children.last().unwrap().as_ref(), key).map(|offset| index + offset)
             } else {
-                node.keys.binary_search(key).ok()
+                node.keys
+                    .binary_search_by(|probe| probe.borrow().cmp(key))
+                    .ok()
             }
         }
         aux(self.root.as_ref(), key)

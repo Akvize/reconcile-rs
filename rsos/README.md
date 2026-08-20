@@ -15,9 +15,10 @@ every subtree, a *range fingerprint*, so the hash of any key interval is availab
   across Rust versions, platforms and endianness, and the reason the element bound is `Serialize`
   rather than `std::hash::Hash` (whose byte sequences Rust does not promise to keep stable, and
   which `HashMap`/`HashSet` do not implement at all).
-- `Rsos<K>` — the trait stating the operations such a store must answer (Def. 3.9 of
-  [Range-Based Set Reconciliation](https://arxiv.org/abs/2212.13567), Aljoscha Meyer, 2023), with an
-  associated `Value` type so a backend names its own value type.
+- `Rsos<K>` — the trait stating the operations such a store must answer (Def. 3.9 of *Range-Based
+  Set Reconciliation via Range-Summarizable Order-Statistics Stores*, Amparore,
+  [arXiv:2603.19820](https://arxiv.org/abs/2603.19820)), with an associated `Value` type so a
+  backend names its own value type.
 
 This crate is a standalone leaf: no workspace dependencies, no async runtime, no sockets, no codec.
 It is the data structure that makes range-based set reconciliation cheap, and is useful on its own

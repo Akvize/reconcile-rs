@@ -1,4 +1,5 @@
 pub mod rsos
+pub use rsos::blake3
 pub mod rsos::aggregate
 pub struct rsos::aggregate::Aggregate
 impl rsos::aggregate::Aggregate
@@ -57,17 +58,24 @@ pub fn alloc::vec::Vec<u8>::put(&mut self, &[u8])
 impl rsos::encoding::Sink for blake3::Hasher
 pub fn blake3::Hasher::put(&mut self, &[u8])
 pub fn rsos::encoding::encode_into<S: rsos::encoding::Sink, T: serde::ser::Serialize + ?core::marker::Sized>(&mut S, &T) -> core::result::Result<(), rsos::encoding::Error>
+pub fn rsos::encoding::encode_to_vec<T: serde::ser::Serialize + ?core::marker::Sized>(&T) -> core::result::Result<alloc::vec::Vec<u8>, rsos::encoding::Error>
 pub mod rsos::fingerprint
 pub struct rsos::fingerprint::Fingerprint(pub [u64; 4])
 impl rsos::fingerprint::Fingerprint
 pub const rsos::fingerprint::Fingerprint::ZERO: rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::combine(self, rsos::fingerprint::Fingerprint) -> rsos::fingerprint::Fingerprint
+pub const fn rsos::fingerprint::Fingerprint::from_le_bytes(&[u8; 32]) -> rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::remove(self, rsos::fingerprint::Fingerprint) -> rsos::fingerprint::Fingerprint
+pub const fn rsos::fingerprint::Fingerprint::to_le_bytes(self) -> [u8; 32]
 impl core::clone::Clone for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::clone(&self) -> rsos::fingerprint::Fingerprint
 impl core::cmp::Eq for rsos::fingerprint::Fingerprint
+impl core::cmp::Ord for rsos::fingerprint::Fingerprint
+pub fn rsos::fingerprint::Fingerprint::cmp(&self, &rsos::fingerprint::Fingerprint) -> core::cmp::Ordering
 impl core::cmp::PartialEq for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::eq(&self, &rsos::fingerprint::Fingerprint) -> bool
+impl core::cmp::PartialOrd for rsos::fingerprint::Fingerprint
+pub fn rsos::fingerprint::Fingerprint::partial_cmp(&self, &rsos::fingerprint::Fingerprint) -> core::option::Option<core::cmp::Ordering>
 impl core::default::Default for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::default() -> rsos::fingerprint::Fingerprint
 impl core::fmt::Debug for rsos::fingerprint::Fingerprint
@@ -105,6 +113,19 @@ impl core::panic::unwind_safe::UnwindSafe for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::digest<T: serde::ser::Serialize + ?core::marker::Sized>(&T) -> rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::lift<K: serde::ser::Serialize + ?core::marker::Sized, V: serde::ser::Serialize + ?core::marker::Sized>(&K, &V) -> rsos::fingerprint::Fingerprint
 pub mod rsos::fingerprint_tree_map
+pub struct rsos::fingerprint_tree_map::Entry<'a, K, V>
+impl<'a, K: serde::ser::Serialize + core::cmp::Ord + core::clone::Clone, V: serde::ser::Serialize> rsos::Entry<'a, K, V>
+pub fn rsos::Entry<'a, K, V>::and_modify(self, impl core::ops::function::FnOnce(&mut V)) -> Self
+pub fn rsos::Entry<'a, K, V>::or_default(self) -> &'a V where V: core::default::Default
+pub fn rsos::Entry<'a, K, V>::or_insert(self, V) -> &'a V
+pub fn rsos::Entry<'a, K, V>::or_insert_with(self, impl core::ops::function::FnOnce() -> V) -> &'a V
+impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where K: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where K: core::marker::Send, V: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where K: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where K: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> !core::panic::unwind_safe::UnwindSafe for rsos::Entry<'a, K, V>
 pub struct rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 impl<K, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::into_keys(self) -> rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
@@ -117,26 +138,31 @@ pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::keys(&self) -> rsos
 impl<K, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::values(&self) -> rsos::fingerprint_tree_map_iter::Values<'_, K, V>
 impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::first_key_value(&self) -> core::option::Option<(&K, &V)>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::last_key_value(&self) -> core::option::Option<(&K, &V)>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::range<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint_tree_map::ItemRange<'_, K, V, R>
-impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::aggregate<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::aggregate::Aggregate
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::is_empty(&self) -> bool
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::len(&self) -> usize
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank(&self, &K) -> usize
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank<Q>(&self, &Q) -> usize where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::select(&self, usize) -> &K
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::clear(&mut self)
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::remove<Q>(&mut self, &Q) -> core::option::Option<V> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::retain<F: core::ops::function::FnMut(&K, &V) -> bool>(&mut self, F) where K: core::clone::Clone
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::contains_key<Q>(&self, &Q) -> bool where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::get<Q>(&self, &Q) -> core::option::Option<&V> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::new() -> Self
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::first_key_value(&self) -> core::option::Option<(&K, &V)>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::last_key_value(&self) -> core::option::Option<(&K, &V)>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::range<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint_tree_map::ItemRange<'_, K, V, R>
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::position<Q>(&self, &Q) -> core::option::Option<usize> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
 impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::check_invariants(&self)
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::clear(&mut self)
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K, V) -> core::option::Option<V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::remove(&mut self, &K) -> core::option::Option<V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::retain<F: core::ops::function::FnMut(&K, &V) -> bool>(&mut self, F) where K: core::clone::Clone
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::entry(&mut self, K) -> rsos::Entry<'_, K, V> where K: core::clone::Clone
 impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::contains_key(&self, &K) -> bool
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::get<'a>(&'a self, &K) -> core::option::Option<&'a V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::new() -> Self
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::position(&self, &K) -> core::option::Option<usize>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K, V) -> core::option::Option<V>
+impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::with_mut<R, F: core::ops::function::FnOnce(core::option::Option<&mut V>) -> R>(&mut self, &K, F) -> R
 impl<'a, K, V> core::iter::traits::collect::IntoIterator for &'a rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub type &'a rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::IntoIter = rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
@@ -340,16 +366,35 @@ impl core::marker::Unpin for rsos::aggregate::Aggregate
 impl core::marker::UnsafeUnpin for rsos::aggregate::Aggregate
 impl core::panic::unwind_safe::RefUnwindSafe for rsos::aggregate::Aggregate
 impl core::panic::unwind_safe::UnwindSafe for rsos::aggregate::Aggregate
+pub struct rsos::Entry<'a, K, V>
+impl<'a, K: serde::ser::Serialize + core::cmp::Ord + core::clone::Clone, V: serde::ser::Serialize> rsos::Entry<'a, K, V>
+pub fn rsos::Entry<'a, K, V>::and_modify(self, impl core::ops::function::FnOnce(&mut V)) -> Self
+pub fn rsos::Entry<'a, K, V>::or_default(self) -> &'a V where V: core::default::Default
+pub fn rsos::Entry<'a, K, V>::or_insert(self, V) -> &'a V
+pub fn rsos::Entry<'a, K, V>::or_insert_with(self, impl core::ops::function::FnOnce() -> V) -> &'a V
+impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where K: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where K: core::marker::Send, V: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where K: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where K: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> !core::panic::unwind_safe::UnwindSafe for rsos::Entry<'a, K, V>
 pub struct rsos::Fingerprint(pub [u64; 4])
 impl rsos::fingerprint::Fingerprint
 pub const rsos::fingerprint::Fingerprint::ZERO: rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::combine(self, rsos::fingerprint::Fingerprint) -> rsos::fingerprint::Fingerprint
+pub const fn rsos::fingerprint::Fingerprint::from_le_bytes(&[u8; 32]) -> rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::remove(self, rsos::fingerprint::Fingerprint) -> rsos::fingerprint::Fingerprint
+pub const fn rsos::fingerprint::Fingerprint::to_le_bytes(self) -> [u8; 32]
 impl core::clone::Clone for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::clone(&self) -> rsos::fingerprint::Fingerprint
 impl core::cmp::Eq for rsos::fingerprint::Fingerprint
+impl core::cmp::Ord for rsos::fingerprint::Fingerprint
+pub fn rsos::fingerprint::Fingerprint::cmp(&self, &rsos::fingerprint::Fingerprint) -> core::cmp::Ordering
 impl core::cmp::PartialEq for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::eq(&self, &rsos::fingerprint::Fingerprint) -> bool
+impl core::cmp::PartialOrd for rsos::fingerprint::Fingerprint
+pub fn rsos::fingerprint::Fingerprint::partial_cmp(&self, &rsos::fingerprint::Fingerprint) -> core::option::Option<core::cmp::Ordering>
 impl core::default::Default for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::default() -> rsos::fingerprint::Fingerprint
 impl core::fmt::Debug for rsos::fingerprint::Fingerprint
@@ -396,26 +441,31 @@ pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::keys(&self) -> rsos
 impl<K, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::values(&self) -> rsos::fingerprint_tree_map_iter::Values<'_, K, V>
 impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::first_key_value(&self) -> core::option::Option<(&K, &V)>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::last_key_value(&self) -> core::option::Option<(&K, &V)>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::range<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint_tree_map::ItemRange<'_, K, V, R>
-impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::aggregate<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::aggregate::Aggregate
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::is_empty(&self) -> bool
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::len(&self) -> usize
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank(&self, &K) -> usize
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank<Q>(&self, &Q) -> usize where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::select(&self, usize) -> &K
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::clear(&mut self)
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::remove<Q>(&mut self, &Q) -> core::option::Option<V> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::retain<F: core::ops::function::FnMut(&K, &V) -> bool>(&mut self, F) where K: core::clone::Clone
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::contains_key<Q>(&self, &Q) -> bool where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::get<Q>(&self, &Q) -> core::option::Option<&V> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::new() -> Self
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::first_key_value(&self) -> core::option::Option<(&K, &V)>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::last_key_value(&self) -> core::option::Option<(&K, &V)>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::range<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint_tree_map::ItemRange<'_, K, V, R>
+impl<K: core::cmp::Ord, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::position<Q>(&self, &Q) -> core::option::Option<usize> where K: core::borrow::Borrow<Q>, Q: core::cmp::Ord + ?core::marker::Sized
 impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::check_invariants(&self)
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::clear(&mut self)
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K, V) -> core::option::Option<V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::remove(&mut self, &K) -> core::option::Option<V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::retain<F: core::ops::function::FnMut(&K, &V) -> bool>(&mut self, F) where K: core::clone::Clone
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::entry(&mut self, K) -> rsos::Entry<'_, K, V> where K: core::clone::Clone
 impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::contains_key(&self, &K) -> bool
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::get<'a>(&'a self, &K) -> core::option::Option<&'a V>
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::new() -> Self
-pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::position(&self, &K) -> core::option::Option<usize>
+pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K, V) -> core::option::Option<V>
+impl<K: serde::ser::Serialize + core::cmp::Ord, V: serde::ser::Serialize> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::with_mut<R, F: core::ops::function::FnOnce(core::option::Option<&mut V>) -> R>(&mut self, &K, F) -> R
 impl<'a, K, V> core::iter::traits::collect::IntoIterator for &'a rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 pub type &'a rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::IntoIter = rsos::fingerprint_tree_map_iter::Iter<'a, K, V>

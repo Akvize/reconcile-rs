@@ -59,20 +59,65 @@ use crate::encoding;
 /// assert_eq!(combined.remove(b), a);
 /// assert_eq!(combined.remove(a).remove(b), Fingerprint::ZERO);
 /// ```
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Fingerprint(pub [u64; 4]);
 
 impl Fingerprint {
     /// The fingerprint of the empty range and the additive identity.
     pub const ZERO: Fingerprint = Fingerprint([0; 4]);
 
-    /// Interpret 32 bytes (little-endian) as a fingerprint.
-    fn from_bytes(bytes: &[u8; 32]) -> Fingerprint {
-        let mut limbs = [0u64; 4];
-        for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
-            *limb = u64::from_le_bytes(chunk.try_into().unwrap());
-        }
-        Fingerprint(limbs)
+    /// Interpret 32 bytes (little-endian) as a fingerprint — the inverse of
+    /// [`to_le_bytes`](Fingerprint::to_le_bytes). A third party can build a `lift`-compatible
+    /// fingerprint from raw bytes (e.g. a BLAKE3 digest computed with the re-exported
+    /// [`blake3`]) without reimplementing this limb decode.
+    ///
+    /// ```
+    /// use rsos::Fingerprint;
+    ///
+    /// let fp = Fingerprint([1, 2, 3, 4]);
+    /// assert_eq!(Fingerprint::from_le_bytes(&fp.to_le_bytes()), fp);
+    /// ```
+    ///
+    /// Unrolled rather than looped over the four limbs: a fixed count of four is simpler written
+    /// out than indexed, and it keeps this `const fn` free of a manually incremented loop counter
+    /// — the shape a single mutated `+=` could turn into an infinite loop, rather than a
+    /// fast-failing wrong answer.
+    #[must_use]
+    pub const fn from_le_bytes(bytes: &[u8; 32]) -> Fingerprint {
+        Fingerprint([
+            u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]),
+            u64::from_le_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]),
+            u64::from_le_bytes([
+                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22],
+                bytes[23],
+            ]),
+            u64::from_le_bytes([
+                bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30],
+                bytes[31],
+            ]),
+        ])
+    }
+
+    /// The 32-byte little-endian encoding of this fingerprint — the inverse of
+    /// [`from_le_bytes`](Fingerprint::from_le_bytes). Unrolled for the same reason as
+    /// `from_le_bytes` above.
+    #[must_use]
+    pub const fn to_le_bytes(self) -> [u8; 32] {
+        let [a, b, c, d] = self.0;
+        let a = a.to_le_bytes();
+        let b = b.to_le_bytes();
+        let c = c.to_le_bytes();
+        let d = d.to_le_bytes();
+        [
+            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5],
+            b[6], b[7], c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], d[0], d[1], d[2], d[3],
+            d[4], d[5], d[6], d[7],
+        ]
     }
 
     /// Combine two fingerprints (addition modulo 2²⁵⁶, with carry propagation).
@@ -181,7 +226,7 @@ impl Blake3Hasher {
     }
 
     fn fingerprint(&self) -> Fingerprint {
-        Fingerprint::from_bytes(self.0.finalize().as_bytes())
+        Fingerprint::from_le_bytes(self.0.finalize().as_bytes())
     }
 }
 
