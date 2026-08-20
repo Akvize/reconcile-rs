@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1466
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1465
 # mutants with this config (1491 without the exclusions below) -- the delta between them (currently
-# 25) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 26) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -48,13 +48,23 @@ exclude_globs = ["benches/**", "examples/**"]
 # zero cases where a flipped/loosened/tightened operator changed which subtree got returned.
 # #427.
 #
-# The five patterns below each mutate a loop counter that starts at 0 (`i += 1` -> `i *= 1`, or
+# The six patterns below each mutate a loop counter that starts at 0 (`i += 1` -> `i *= 1`, or
 # the `<=`/`+` a length-bounded index/count comparison is built from) into an update that never
 # advances it -- a genuine infinite loop, not a coverage gap: check-mutation-gate.sh already scores
 # a TIMEOUT the same as caught (matching the "hang rather than fail" policy above), so cargo-mutants
 # spending its full 300s proving what's true by construction is pure wall-clock cost for the same
 # verdict it would reach in 0s if it never generated the mutant at all. #427/#452 measured this
-# directly: these five alone cost 5*300s = 25 of a ~120-min in-diff run on a large file-move split.
+# directly: these six alone cost 6*300s = 30 of a ~120-min in-diff run on a large file-move split.
+#
+# `range.rs:28:56` is the same defect shape via *recursion* instead of a `while` loop:
+# `<ItemRange as Iterator>::next` freezes `children_passed` at its current value (`x * 1 == x`)
+# and falls through to `self.next()`, which never converges -- but because that's a genuine
+# recursive call rather than a bounded loop, cargo-mutants' own graceful timeout doesn't reliably
+# get a chance to fire first: #452 reproduced this locally with the exact CI invocation and got
+# `Signalled(9)` at 131s (an external kill, well under the 300s --timeout), not a clean Timeout
+# verdict. On a resource-constrained hosted runner the same spike plausibly takes down the whole
+# VM rather than just the subprocess -- matching three consecutive "runner has received a shutdown
+# signal" failures of `pr-diff`'s shard 0, each stopped at nearly this same mutant.
 exclude_re = [
     "testing::",
     "impl Debug",
@@ -63,6 +73,7 @@ exclude_re = [
     "fingerprint_tree_map/query\\.rs:59:19: replace \\+= with \\*=",
     "fingerprint_tree_map/query\\.rs:68:19: replace \\+= with \\*=",
     "fingerprint_tree_map/query\\.rs:100:38: replace \\+ with \\*",
+    "fingerprint_tree_map/range\\.rs:28:56: replace \\+ with \\*",
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
 ]
