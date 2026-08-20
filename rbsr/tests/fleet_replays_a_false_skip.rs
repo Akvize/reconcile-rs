@@ -20,12 +20,16 @@
 //!   ⇒ identical verdict, for every i — all skip, or none does
 //! ```
 //!
-//! What anti-entropy randomizes is **which pair meets** (`reconcile`'s `RandomProbe`), never what
-//! the pair computes. The standing intuition — "with many peers a bad comparison merely delays
-//! propagation" — imports the independence of gossip's *partner draw* into the *comparison*. So
-//! the count of distinct verdicts a fleet can reach is governed by its number of distinct **content
-//! classes**, not by `N` — which `fleet_size_does_not_change_the_verdict_count` below asserts
-//! directly: hold the class count fixed, grow `N`, require the distinct-session count not to move.
+//! What anti-entropy varies is only **which peer is contacted** — every known local peer every
+//! round, a shuffled `remote_fanout` subset across networks (`reconcile`'s
+//! `src/replica/reconciliation.rs`; `RandomProbe` discovers *addresses*, it never picks a partner)
+//! — and never what a contacted pair computes. The standing intuition, "with many peers a bad
+//! comparison merely delays propagation", imports the independence of a *partner draw* into the
+//! *comparison*; on the local network there is not even a draw to import, since `A` meets all
+//! `N - 1` peers every round and computes the same verdict `N - 1` times. So the count of distinct
+//! verdicts a fleet can reach is governed by its number of distinct **content classes**, not by
+//! `N` — which `fleet_size_does_not_change_the_verdict_count` below asserts directly: hold the
+//! class count fixed, grow `N`, require the distinct-session count not to move.
 //!
 //! The consequence is why this is a regression guard and not a benchmark: over a range where a
 //! converged fleet holds one divergence there are **2** classes, so redundancy buys **zero**

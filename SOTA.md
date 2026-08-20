@@ -415,9 +415,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   pair of peers, while `ReplicatedMap` runs a gossip cluster whose per-write amplification is O(N)
   (§1.2, `benches/system.rs::gossip_fanout`). Settled by **derivation, not measurement**: no session
   nonce, peer identity or salt enters `rsos::lift` and `Comparison::agrees` compares whole bundled
-  aggregates, so a verdict is a function of the *content* pair, and anti-entropy randomizes which
-  pair meets (`RandomProbe`), never what the pair computes. "With many peers a bad comparison merely
-  delays propagation" imports the partner draw's independence into the comparison itself; distinct
+  aggregates, so a verdict is a function of the *content* pair. The loop varies only *which* peer is
+  contacted — every known local peer every round, a shuffled `remote_fanout` subset across networks
+  (`src/replica/reconciliation.rs`) — never what a contacted pair computes, so "a bad comparison
+  merely delays propagation" imports a partner draw's independence into the comparison. Distinct
   verdicts are bounded by distinct content classes, never by `N`:
 
   | fleet state | content classes over `r` | retries `N` buys |
@@ -427,9 +428,9 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
   Redundancy buys nothing exactly when the fleet is healthy, and a range two peers wrongly agree on
   stays wrong for everyone who later syncs from either. Derivation and `N`-sweep:
-  `rbsr/tests/fleet_replays_a_false_skip.rs`, which needs no fleet harness and so never reaches
-  `gossip_propagation`'s scheduler ceiling. Multi-party set reconciliation still has a literature no
-  RBSR work cites (Mitzenmacher & Pagh, *Distributed Computing* 2018), and keying the lift
+  `rbsr/tests/fleet_replays_a_false_skip.rs` — no fleet harness, so it never reaches
+  `gossip_propagation`'s scheduler ceiling. The multi-party literature no RBSR work cites is still
+  Mitzenmacher & Pagh, *Distributed Computing* 2018; keying the lift
   ([#337](https://github.com/Akvize/reconcile-rs/issues/337)) does not decorrelate this — a cluster
   key is not a session key. → [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
