@@ -576,8 +576,13 @@ status, so this section never needs an edit when that status changes.
    **every insert writes the root** — a contention point the contract creates, not an implementation
    defect. arXiv:2603.19820 §7.1 scopes its evaluation to single-machine with no concurrency, and no
    RBSR work prices it. The prior art is outside the line: **AB-tree** maintains aggregate metadata
-   in a paginated tree under concurrent updates. Open question:
-   [#359](https://github.com/Akvize/reconcile-rs/issues/359). Numbering starts at 10 so P0–P3's
+   in a paginated tree under concurrent updates — but even its own code leaves the root chain
+   uncollapsed, an admission the hot spot is bounded, not eliminated (`benches/README.md`'s
+   `contention` benchmark, [#359](https://github.com/Akvize/reconcile-rs/issues/359)/#445/#446).
+   **Measured, not just open**: at `N=1` (no lock contention) the root-write contract alone costs
+   ~0.30–0.34× a no-aggregate `BTreeMap`'s throughput under the same lock; from `N=2` to `N=16` the
+   shared `RwLock` dominates both arms and the ratio does not widen — the root write is a real but
+   *bounded* tax here, not the runaway term the thesis predicted. Numbering starts at 10 so P0–P3's
    existing ids stay stable.
 
 **P3 — What makes it *believed* to be SOTA:**
