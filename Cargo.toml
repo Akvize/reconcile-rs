@@ -80,6 +80,15 @@ harness = false
 name = "protocol"
 harness = false
 
+# K-writer contention: write throughput vs writer count, for `FingerprintTreeMap` and for a plain
+# `BTreeMap` control, each behind one shared `parking_lot::RwLock` — isolates the RSOS contract's
+# mandatory root-path write on every insert from the cost of the lock that already serialises
+# writers in `src/replicated_map.rs`. Drives `rsos` directly; no internal seam, so no feature gate.
+# #445, #359.
+[[bench]]
+name = "contention"
+harness = false
+
 [features]
 default = ["mac-blake3"]
 # Per-datagram MAC authentication and payload confidentiality moved to the `gossip` crate together
