@@ -17,7 +17,10 @@
 # fails an unrelated one. rsos/src/fingerprint_tree_map.rs's split (#427) landed every sibling
 # under 250L against a 482L largest-remaining-prod-file floor (src/replica.rs) and a 689L
 # largest-remaining-test-file floor (tests/proptest_fingerprint_tree_map.rs) -- FAIL moved to
-# 490/700, WARN (informational only, never fails the build) to 280/400.
+# 490/700, WARN (informational only, never fails the build) to 280/400. tests/service.rs's split
+# (#427/#452 continuation) landed every sibling under 425L, but doesn't move FAIL/WARN further --
+# tests/proptest_fingerprint_tree_map.rs (689L) was already the binding test-file floor before
+# and after.
 #
 # EXCEPTIONS are files already over FAIL when this gate (or a tightened budget) was introduced,
 # grandfathered rather than split as a side effect -- each is a candidate for its own
@@ -49,7 +52,6 @@ EXCEPTIONS=(
     "lww-register/src/clock.rs"             # 839L prod  -- HLC + AdmittedTime, load-bearing invariants (ARCHITECTURE §5)
     "rsos/src/encoding.rs"                  # 643L prod  -- the canonical encoding every fingerprint is defined over
     "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
-    "tests/service.rs"                      # 1213L test -- top-level end-to-end oracle suite
 )
 
 is_exception() {
