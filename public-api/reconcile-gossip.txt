@@ -10,10 +10,12 @@ pub reconcile_gossip::auth::Authenticator::Disabled
 pub reconcile_gossip::auth::Authenticator::Enabled(reconcile_gossip::auth::Keys)
 impl reconcile_gossip::auth::Authenticator
 pub fn reconcile_gossip::auth::Authenticator::new(core::option::Option<reconcile_gossip::auth::ClusterKey>, bool) -> Self
-pub fn reconcile_gossip::auth::Authenticator::open<'a>(&self, &'a [u8]) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>>
 pub fn reconcile_gossip::auth::Authenticator::overhead(&self) -> usize
-pub fn reconcile_gossip::auth::Authenticator::seal(&self, reconcile_gossip::replay::Seq, reconcile_gossip::replay::Stamp, &[u8]) -> alloc::vec::Vec<u8>
 pub fn reconcile_gossip::auth::Authenticator::with_rotation(core::option::Option<reconcile_gossip::auth::Keys>, bool) -> Self
+impl reconcile_gossip::auth::Authenticator
+pub fn reconcile_gossip::auth::Authenticator::open<'a>(&self, &'a [u8]) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>>
+impl reconcile_gossip::auth::Authenticator
+pub fn reconcile_gossip::auth::Authenticator::seal(&self, reconcile_gossip::replay::Seq, reconcile_gossip::replay::Stamp, &[u8]) -> alloc::vec::Vec<u8>
 impl core::clone::Clone for reconcile_gossip::auth::Authenticator
 pub fn reconcile_gossip::auth::Authenticator::clone(&self) -> reconcile_gossip::auth::Authenticator
 impl core::fmt::Debug for reconcile_gossip::auth::Authenticator
