@@ -339,78 +339,167 @@ record; nothing in CI reads the fixture, and a missing one prints a skip, never 
 ## The `contention` benchmark
 
 ```sh
-cargo bench --bench contention             # printed summary + Criterion groups
+cargo bench --bench contention             # printed report + Criterion groups
 cargo bench --bench contention -- --quick
 
-# The printed summary only (no timed group): give Criterion a filter that matches no benchmark id.
+# The printed report only (no timed group): give Criterion a filter that matches no benchmark id.
 cargo bench --bench contention -- 'no_such_benchmark'
+
+# The counted, machine-independent half needs the test-only seam it reads (#330, AGENTS.md §6).
+RUSTFLAGS='--cfg reconcile_internal_testing' cargo bench --bench contention -- 'no_such_benchmark'
+
+# Every parameter is an environment variable, so other hardware and other sweeps need no source
+# edit (#456), and `CONTENTION_RAW=1` emits one line per trial for pooling across invocations.
+CONTENTION_WRITERS=1,2,4,8,16,32,64,128 CONTENTION_TRIALS=30 CONTENTION_RAW=1 \
+  cargo bench --bench contention -- 'no_such_benchmark'
 ```
 
-Answers [#445](https://github.com/Akvize/reconcile-rs/issues/445), feeding
-[#359](https://github.com/Akvize/reconcile-rs/issues/359): the RSOS contract
-(`rsos/src/fingerprint_tree_map.rs`) must answer `Aggregate(l, u)` in `O(log n)`, which means every
-insert writes the composable summary on every node from the leaf to the root — a write to the
-hottest node in the tree, on every insert, by construction. Today that cost is invisible:
-`src/replicated_map.rs` already serialises every writer behind one global `RwLock`, so the root
-write costs nothing beyond the lock itself. This target isolates the two by running the identical
-`N`-writer harness over two arms, both behind one shared `parking_lot::RwLock<_>` of the exact shape
-`src/replica.rs`'s `map: Arc<RwLock<FingerprintTreeMap<K, V>>>` uses:
+Answers [#445](https://github.com/Akvize/reconcile-rs/issues/445) and
+[#455](https://github.com/Akvize/reconcile-rs/issues/455), feeding
+[#359](https://github.com/Akvize/reconcile-rs/issues/359)/[#454](https://github.com/Akvize/reconcile-rs/issues/454):
+the RSOS contract (`rsos/src/fingerprint_tree_map.rs`) must answer `Aggregate(l, u)` in `O(log n)`,
+which means every insert writes the composable summary on every node from the leaf to the root — a
+write to the hottest node in the tree, on every insert, by construction. Today that cost is
+invisible: `src/replicated_map.rs` already serialises every writer behind one global `RwLock`, so the
+root write costs nothing beyond the lock itself. This target isolates the two by running the
+identical `N`-writer harness over two arms, both behind one shared `parking_lot::RwLock<_>` of the
+exact shape `src/replica.rs`'s `map: Arc<RwLock<FingerprintTreeMap<K, V>>>` uses:
 
 - **`fingerprint_tree_map`** — `RwLock<FingerprintTreeMap<u64, u64>>`, the real contract.
 - **`btree_map`** — `RwLock<BTreeMap<u64, u64>>`, the no-aggregate control: same lock, same insert
   shape, no root-path summary to maintain.
 
-Both arms pre-fill the map to 100 000 entries outside the timed region (`log₁₆ 100 000 ≈ 5` — an
-empty map has no root path worth contending on, which would understate the RSOS arm's cost), then
-spawn `N` writer threads that each insert 20 000 fresh, disjoint keys — one `write()` acquisition per
-key, the same shape a gossip receipt or a local write takes today — starting together via a
-`Barrier` so the timed region is genuinely concurrent rather than staggered by thread-spawn latency.
-`N` sweeps `1, 2, 4, 8, 16`, covering this repository's own CI/dev-container core count (4) and
-pushing past it, since contention beyond the core count is exactly the regime a lock-free redesign
-(#271/#273/#274, out of scope here) would target.
+Both arms pre-fill the map to 100 000 entries outside the timed region (an empty map has no root
+path worth contending on, which would understate the RSOS arm's cost), then spawn `N` writer threads
+that each insert 20 000 fresh, disjoint keys — one `write()` acquisition per key, the same shape a
+gossip receipt or a local write takes today — starting together via a `Barrier` so the timed region
+is genuinely concurrent rather than staggered by thread-spawn latency.
 
-**Comparability caveat (#281).** Unlike `bench`/`protocol`, this target is not deterministic —
-throughput is wall-clock, not counted, so it inherits scheduler noise the way the RTT lane above
-does. Both arms run in the same process, on the same hardware, in the same invocation, so the
-*ratio* between arms at a given `N` is the load-bearing number; absolute ops/s is specific to the
-machine that produced it and is not portable across machines or runs.
+### Method
+
+Reproducible from this section alone; the harness source adds no step that is not stated here.
+
+**The counted half** is deterministic and carries no hardware caveat. `rsos::counters` (behind
+`--cfg reconcile_internal_testing`) counts every write of a node's cached `Aggregate`, at the single setter every
+maintenance path in `rsos` routes through. One single-threaded, untimed pass over a 100 000-entry
+map reports the count per insert. `BTreeMap` scores zero by construction — it performs the same
+descent with no summary to keep — so this is the contract's own work, priced in operations rather
+than in one machine's nanoseconds.
+
+**The timed half** is wall-clock and stays so on purpose: lock waiting *is* elapsed time, and no
+counted proxy exists for it. What #455 replaced is how it is estimated.
+
+| | |
+|---|---|
+| Repetition | 30 trials per `(N, arm)`, after 3 discarded warm-up trials at the widest `N` |
+| Pairing | both arms measured back to back inside one trial, so a machine-wide disturbance moves both and divides out |
+| Arm order | alternated between trials, so each `N` gets each order exactly half the time; the harness reports a bootstrap test for a residual order effect |
+| Trial order | every `(N, trial)` of the whole sweep executed in one seeded shuffle, **not** `N` by `N` |
+| Interval | 95% percentile bootstrap (10 000 resamples, fixed seed) on the mean — not a `t` interval, since throughput is bounded below and left-tailed |
+| Comparison | bootstrap interval on a *difference of means*; two intervals overlapping is not a test, an interval on their difference is |
+
+The shuffled trial order is load-bearing, not hygiene. Running one `N`'s trials consecutively makes
+the block of wall-clock they occupy part of the treatment: a co-tenant spike or a thermal excursion
+lasting tens of seconds lands entirely on whichever `N` held the floor, and is then reported as a
+property of that `N`. Two 30-trial sweeps built the `N`-by-`N` way disagreed here by more than either
+one's interval admitted — 0.32 against 0.57 for the same ratio at `N = 2`, intervals disjoint.
+Interleaving spreads any such episode across all `N`, converting that bias into variance the
+intervals report honestly.
+
+**The experimental unit is the invocation, not the trial.** Trials inside one process share a
+machine phase, so an interval computed from them is silent about drift between processes — which on
+shared hardware is the larger term. Publishable numbers therefore pool several invocations and
+resample **invocations** (a cluster bootstrap), never trials:
+
+```sh
+for i in 1 2 3; do
+  CONTENTION_RAW=1 cargo bench --bench contention -- 'no_such_benchmark' > run$i.txt
+done
+# Each `[contention-raw]` line is `writers,fingerprint_ops_per_sec,btree_ops_per_sec,fingerprint_first`.
+# Pool: group trials by invocation; for each of 10 000 resamples draw len(invocations) invocations
+# with replacement, take every trial of each, and record the mean; report the 2.5th and 97.5th
+# percentiles of those means.
+```
+
+**Which statistic answers which question.** Three are reported, and they are not interchangeable:
+
+| statistic | what it is | what it can answer |
+|---|---|---|
+| per-arm throughput | ops/s, system-wide | how fast this machine goes; not portable (#281) |
+| ratio, `X_fp / X_btree` | paired per trial | the contract's share of the cost *as the lock currently taxes it* |
+| **delta, `1/X_fp − 1/X_btree`** | paired per trial, ns/insert | the contract's **own** cost, with the lock cancelled |
+
+Delta is the one to read. Behind one exclusive lock each arm's system-wide seconds-per-insert is its
+own critical section plus whatever an acquisition costs at that `N`: `1/X_arm = S_arm + H(N)`. The
+lock term is common to both arms — same lock, same acquisition pattern — so subtracting reciprocal
+throughputs cancels it and leaves `S_fp − S_btree`. The ratio moves when *either* term moves and
+cannot say which; delta isolates one.
 
 ### Results
 
-Measured on a 4-core machine (`nproc` = 4), `RUSTFLAGS` unset, release profile, one representative
-run (throughput ops/s, `PREFILL` = 100 000, 20 000 inserts/writer):
+Measured on a 4-core KVM guest (Intel Xeon @ 2.80 GHz, 1 thread/core, 15 GiB), `RUSTFLAGS` unset,
+release profile. Timed figures pool **3 invocations × 30 trials** per point, cluster-bootstrapped
+per the recipe above. The timed half was measured **without** the `--cfg`, so no counter runs
+inside a timed region.
 
-| writers (`N`) | `fingerprint_tree_map` ops/s | `btree_map` ops/s | ratio (fp/btree) | delta ops/s (btree − fp) |
+**Counted** — identical on any machine, and exactly reproducible run to run:
+
+| quantity | `FingerprintTreeMap` | `BTreeMap` |
+|---|---:|---:|
+| cached aggregates written per fresh insert | 6.76 | 0 |
+| cached aggregates written per overwrite | 6.80 | 0 |
+
+The overwrite figure is the root path exactly — one cached aggregate per level, which
+`rsos`'s own test asserts against an independently walked depth. Fresh inserts add the node
+refreshes a split occasions, which is the 6.76 − 6.80 difference in shape rather than a discrepancy.
+
+**Timed**, mean [95% cluster-bootstrap interval]:
+
+| writers (`N`) | `fingerprint_tree_map` ops/s | `btree_map` ops/s | ratio (fp/btree) | delta ns/insert |
 |---:|---:|---:|---:|---:|
-| 1 | 2 613 627 | 7 727 695 | 0.34× | 5 114 067 |
-| 2 | 1 676 253 | 3 117 085 | 0.54× | 1 440 832 |
-| 4 | 1 169 189 | 2 484 360 | 0.47× | 1 315 171 |
-| 8 | 1 003 831 | 2 929 071 | 0.34× | 1 925 240 |
-| 16 | 1 223 793 | 3 096 266 | 0.40× | 1 872 473 |
+| 1 | 2 888 103 [2 823 536, 2 957 004] | 9 762 176 [9 563 855, 10 020 359] | 0.298 [0.297, 0.299] | 258 [240, 288] |
+| 2 | 1 649 710 [1 605 323, 1 673 716] | 4 069 999 [3 964 525, 4 144 117] | 0.457 [0.425, 0.509] | 362 [320, 384] |
+| 4 | 1 403 681 [1 327 699, 1 451 446] | 3 408 950 [3 142 353, 3 598 838] | 0.421 [0.388, 0.465] | 417 [377, 465] |
+| 8 | 964 143 [872 760, 1 011 022] | 3 231 527 [2 970 987, 3 429 929] | 0.301 [0.255, 0.341] | 733 [652, 859] |
+| 16 | 845 546 [725 670, 926 593] | 2 800 533 [2 495 550, 3 114 095] | 0.310 [0.233, 0.376] | 837 [675, 1 065] |
 
-A second run (same machine, same invocation shape) reproduces the pattern rather than the exact
-figures — expected per the caveat above:
+Differences against the uncontended point, as bootstrap intervals — an interval excluding 0 is a
+real move at 95%:
 
-| writers (`N`) | `fingerprint_tree_map` ops/s | `btree_map` ops/s | ratio (fp/btree) |
-|---:|---:|---:|---:|
-| 1 | 2 645 138 | 8 847 671 | 0.30× |
-| 2 | 1 747 919 | 3 145 004 | 0.56× |
-| 4 | 1 380 527 | 2 909 714 | 0.47× |
-| 8 | 960 643 | 3 265 382 | 0.29× |
-| 16 | 1 097 485 | 3 766 965 | 0.29× |
+| `N` | `delta(N) − delta(1)` | | `ratio(N) − ratio(1)` | |
+|---:|---:|---|---:|---|
+| 2 | +104 ns [+73, +143] | grows | +0.159 [+0.128, +0.210] | diluted |
+| 4 | +159 ns [+89, +224] | grows | +0.123 [+0.091, +0.167] | diluted |
+| 8 | +475 ns [+365, +619] | grows | +0.003 [−0.042, +0.043] | indistinguishable |
+| 16 | +579 ns [+387, +825] | grows | +0.012 [−0.063, +0.077] | indistinguishable |
 
-**What this answers for #359.** At `N = 1` (no lock contention at all), `FingerprintTreeMap` runs at
-roughly 0.30–0.34× a bare `BTreeMap`'s throughput under the identical lock — that ratio is the RSOS
-contract's own per-insert cost: the root-path aggregate maintenance, alone. Past `N = 1`, both arms'
-throughput collapses together (the shared `RwLock` serialises every writer, so total throughput does
-not scale with `N` for either arm), and the fingerprint/btree **ratio stays in the same 0.29×–0.56×
-band at every swept `N`** rather than widening as `N` grows. In other words: **the root-path write
-does not become a *larger* share of the cost as writer count increases** — the global `RwLock`
-already flattens both arms to roughly the same, lock-dominated regime the moment a second writer
-shows up, and the RSOS contract's own overhead is priced in per-insert (a roughly constant ~2–3×
-multiplier), not amplified further by contention. No swept `N` up to 16 (4× this machine's core
-count) shows the root-path write "start to dominate" *beyond* what it already costs at `N = 1` — the
-lock is, and remains, the larger term at every `N > 1` measured here.
+### What this answers for #359 — and what it revises
+
+At `N = 1` there is no lock contention at all, so `FingerprintTreeMap` running at 0.298× a bare
+`BTreeMap`'s throughput under the identical lock is the RSOS contract's own per-insert cost, alone:
+258 ns, buying the 6.76 cached-aggregate writes the counted half prices. That part of #359 stands,
+and is now an interval rather than a reading of two runs.
+
+**The rest of #359's conclusion does not survive the sharper statistic.** #359 reported that the
+fingerprint/btree ratio "does not widen" with `N` and concluded that the root-path write "does not
+become a *larger* share of the cost as writer count grows". The ratio does behave that way here —
+0.298 at `N = 1`, 0.310 at `N = 16`, indistinguishable. But the ratio is a quotient of two terms that
+both grow, and it is flat precisely because they grow together. With the lock term cancelled, the
+contract's own cost per insert goes from 258 ns at `N = 1` to 837 ns at `N = 16` — **3.2×, with every
+step's interval excluding zero**. The conclusion to carry forward is therefore:
+
+> The RSOS contract's write cost *does* grow with writer count. #359's flat ratio was not evidence
+> against that; it was the lock's own cost growing at a similar rate and hiding it.
+
+A mechanism consistent with this, and the prediction it makes for many-core hardware, is
+[#457](https://github.com/Akvize/reconcile-rs/issues/457)'s to state and test.
+
+**Comparability caveat (#281).** The timed half is not deterministic — throughput is wall-clock, so
+it inherits scheduler noise the way the RTT lane above does. Both arms run in the same process, on
+the same hardware, in the same invocation, so arm-against-arm at a given `N` is what it supports;
+absolute ops/s is specific to the machine that produced it. Everything past `N = 4` is also past this
+machine's core count, which is exactly why [#456](https://github.com/Akvize/reconcile-rs/issues/456)
+exists. The counted half carries none of this — that is the point of having it.
 
 ## Not covered yet
 
