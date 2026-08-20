@@ -45,7 +45,6 @@ TEST_FAIL=700
 
 EXCEPTIONS=(
     "rbsr/src/protocol.rs"                  # 909L prod  -- the RBSR wire protocol state machine
-    "src/read_replica_map.rs"               # 826L prod  -- read-replica facade, mirrors ReplicatedMap's read half
     "rsos/src/encoding.rs"                  # 643L prod  -- the canonical encoding every fingerprint is defined over
     "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
 )
