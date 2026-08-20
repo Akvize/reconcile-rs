@@ -427,16 +427,17 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
   Redundancy buys nothing exactly when the fleet is healthy. Mechanism, scope, `N`-sweep:
   `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
-- **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
-  column by *stopping early* — and everything it stops on is then shipped as values, almost all of
-  which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
-  them in bytes across value payload sizes (8 B…4 KB) and `threshold_sweep` runs `t` = 1…256 at
-  `b` = 16 against the default. The best-case saving on refinement bytes ships thousands of elements
-  the peer mostly already holds — a trade that only pays off below the cheapest price this wire
-  format can carry an element at, and is a net loss once totalled across payload sizes: worse than
-  the default at every value size but the smallest, and there only by a few percent. Numbers:
-  `benches/README.md`; decision record:
-  [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`'s own rustdoc.
+- **Sweeping `t` lands on not having one *by default*.** The paper's enumeration threshold wins the
+  refinement column by *stopping early* — and everything it stops on is then shipped as values,
+  almost all of which the peer already holds. The two halves are one quantity, so
+  `benches/protocol.rs` totals them in bytes across value payload sizes (8 B…4 KB) and
+  `threshold_sweep` runs `t` = 1…256 at `b` = 16 against the default. Totalled, no `t` pays: worse
+  than the default at every value size but the smallest, and there by a few percent. Untotalled,
+  `t` = 2b — Negentropy's own cutoff, hence the whole of its shorter descent — wins refinement
+  bytes, advertised ranges *and* one-way messages at every measured `(n, d)`, so the verdict is
+  conditional on two measured crossovers, a value size and an RTT
+  ([#468](https://github.com/Akvize/reconcile-rs/issues/468)). Numbers: `benches/README.md`;
+  decisions: [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
   derives `Serialize` and takes `gossip::bincode`'s `DefaultOptions`, which varint-encodes each
