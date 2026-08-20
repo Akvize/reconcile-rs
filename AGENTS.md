@@ -68,13 +68,13 @@ budget it fits, and if it fits none of them it is CI-only by design:
 | [`./pre-commit`](./pre-commit) | `gitleaks protect --staged`, `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh`/`check-file-size.sh` gates above | 0.4 s |
 | [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
+| [`mutants.yml`](./.github/workflows/mutants.yml) `pr-diff` | `./scripts/check-mutation-gate.sh` — in-diff mutation coverage (`.claude/rules/tests.md`); required via `mutants-success`, same as `ci-success` | 2–8 min |
 
-`git commit` triggers tier 1, `git push` triggers tier 2 and — via `main.yml` — tier 3: running any
-of this by hand ahead of that re-plays a check a gate already owns the result of. Both hooks check
-a materialized tree — the index, then the commit being pushed — so what gets recorded or published
-is what has to be green, not whatever is half-finished on disk. `git push --no-verify` skips tier 2
-on purpose; CI is not skippable that way and remains the authority. `main.yml` and this list are
-kept in sync by hand — change one, change both.
+`git commit` triggers tier 1, `git push` triggers tier 2 and — via `main.yml`/`mutants.yml` — tier 3:
+hand-running any of this replays a check a gate already owns. Both hooks check a materialized tree —
+the index, then the commit being pushed — so what gets recorded or published is what has to be
+green, not whatever is half-finished on disk. `git push --no-verify` skips tier 2 on purpose; CI
+stays the authority. `main.yml`/this list are kept in sync by hand — change one, change both.
 
 A gate also never runs on a change nothing in it can affect, at any tier:
 [`./scripts/lib-changed-paths.sh`](./scripts/lib-changed-paths.sh) categorizes every changed path as
