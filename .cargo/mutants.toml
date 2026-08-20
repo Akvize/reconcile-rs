@@ -91,7 +91,7 @@ exclude_globs = ["benches/**", "examples/**"]
 # the real property -- stale peers are dropped, fresh ones kept -- with margins wide enough to
 # survive scheduling jitter; it cannot and is not meant to distinguish this single-instant mutant.
 #
-# `read_replica_map/write.rs:188:36` (`replace != with ==` in the receive loop's
+# `read_replica_map/write.rs:197:36` (`replace != with ==` in the receive loop's
 # `if peer.port() != self.port { warn!(...) }`) genuinely is equivalent, unlike the two entries
 # above: the branch's only effect, either way, is which side of the `if` calls `warn!` -- there
 # is no `continue`/`return`/state write on either arm, so message processing (size check,
@@ -113,7 +113,7 @@ exclude_re = [
     # for real needs `--no-default-features --features mac-hmac`, which this gate does not run.
     "impl Mac for HmacSha256Mac",
     "read_replica_map/membership\\.rs:33:53: replace < with <=",
-    "read_replica_map/write\\.rs:188:36: replace != with ==",
+    "read_replica_map/write\\.rs:197:36: replace != with ==",
     "fingerprint_tree_map/query\\.rs:(36|46):29:",
     "fingerprint_tree_map/query\\.rs:59:19: replace \\+= with \\*=",
     "fingerprint_tree_map/query\\.rs:68:19: replace \\+= with \\*=",
