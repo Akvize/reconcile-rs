@@ -505,6 +505,18 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    trigger it" — they are outside its mechanism entirely. The result's real scope is protocols in
    the **iterative RBSR family with a pluggable split policy** (RBSR itself, GenSync) — that is the
    comparison class a write-up should state, not the wider Merkle-structure family §2.1 tabulates.
+
+   **Liveness fix, 2026-08-20** (#420): the liveness break above is now the *unguarded* mechanism's
+   behavior only. `protocol_round_with_policy` gained a driver-side guard (`ARCHITECTURE.md` §5
+   invariant 13): a `Split` for `span() > 1` that would not narrow the range — exactly the
+   condition this counter-example relies on — is converted to an `Enumerate` before it can hang the
+   driver, whatever policy produced it. Re-measured against the guarded driver,
+   `FingerprintDerivedSplit` now reaches a fixed point on 200,000/200,000 trials at both widths (up
+   from 1,054/200,000 and 1,051/200,000). With termination no longer the bottleneck, the intended
+   soundness comparison is well-powered for the first time: `w=16`, 3/200,000 events, 99% CI
+   `[3.8e-6, 5.9e-5]` against a reported bound of `1.12e-3`; `w=24`, 0/200,000 events, 99% CI
+   `[0, 3.3e-5]` against a reported bound of `4.39e-6`. Neither width shows an excess. Full numbers:
+   `rbsr/tests/oracle_dependent_split_vs_the_union_bound.rs`'s own doc comment.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.

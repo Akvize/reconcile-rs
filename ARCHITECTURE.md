@@ -374,7 +374,7 @@ guarantees whose resolution history §8 tracks.
    converted to an `Enumerate` before it reaches the fan-out loop, so every span a policy actually
    splits strictly shrinks and no range can loop on a content-determined fixed point. #356's
    `FingerprintDerivedSplit` probe hung on ~99.5% of drives before this guard existed; re-measured
-   at near-100% termination afterward (`SOTA.md` §2.3). Guarded by
+   at 200,000/200,000 (both widths) afterward (`SOTA.md` §2.3). Guarded by
    `rbsr/src/protocol.rs::non_progressing_split_is_converted_to_enumerate`, the `NeverNarrows`
    policy exercised through the same convergence matrix as every shipped policy, and pinned for the
    shipped policies themselves by `rbsr/tests/shipped_policies_always_progress.rs`.
