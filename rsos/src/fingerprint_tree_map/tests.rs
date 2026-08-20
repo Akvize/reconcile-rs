@@ -13,7 +13,7 @@ use rand::{seq::SliceRandom, Rng, SeedableRng};
 use crate::aggregate::Aggregate;
 use crate::fingerprint::{lift, Fingerprint};
 
-use super::FingerprintTreeMap;
+use super::{FingerprintTreeMap, Node, MIN_CAPACITY};
 
 #[test]
 fn test_simple() {
@@ -552,4 +552,103 @@ fn aggregate_count_matches_range_count() {
     // an empty tree
     let empty: FingerprintTreeMap<u32, u32> = FingerprintTreeMap::new();
     assert_eq!(empty.aggregate(..), Aggregate::ZERO);
+}
+
+/// A `String`-keyed map's point-query methods accept `&str` directly (`K: Borrow<Q>`), the
+/// same shape `BTreeMap` offers — without this, every lookup on a string-keyed map would have
+/// to allocate an owned `String` just to satisfy `&K`.
+#[test]
+fn borrowed_key_lookup_matches_owned_key_lookup() {
+    let mut map: FingerprintTreeMap<String, u32> = FingerprintTreeMap::new();
+    map.insert("a".to_string(), 1);
+    map.insert("b".to_string(), 2);
+    map.insert("c".to_string(), 3);
+
+    assert_eq!(map.get("b"), Some(&2));
+    assert!(map.contains_key("b"));
+    assert_eq!(map.position("b"), Some(1));
+    assert_eq!(map.rank("b"), 1);
+    assert_eq!(map.rank("ba"), 2);
+
+    assert_eq!(map.remove("b"), Some(2));
+    assert_eq!(map.get("b"), None);
+    assert!(!map.contains_key("b"));
+    map.check_invariants();
+}
+
+/// `or_default` inserts `V::default()` on a vacant entry, and leaves an occupied one alone;
+/// `and_modify` mutates only an occupied entry, in-place, and re-lifts the fingerprint.
+#[test]
+fn entry_or_default_and_and_modify() {
+    let mut map: FingerprintTreeMap<&str, u32> = FingerprintTreeMap::new();
+
+    // Vacant: or_default inserts the type's default.
+    assert_eq!(*map.entry("a").or_default(), 0);
+    assert_eq!(map.get("a"), Some(&0));
+
+    // Occupied: and_modify runs, or_default does not overwrite.
+    map.insert("b", 5);
+    let before = map.aggregate(..);
+    assert_eq!(*map.entry("b").and_modify(|v| *v += 1).or_default(), 6);
+    assert_eq!(map.get("b"), Some(&6));
+    assert_ne!(before.fingerprint(), map.aggregate(..).fingerprint());
+
+    // Vacant: and_modify is a no-op, or_default still inserts.
+    assert_eq!(*map.entry("c").and_modify(|v| *v += 100).or_default(), 0);
+    assert_eq!(map.get("c"), Some(&0));
+
+    map.check_invariants();
+}
+
+/// `check_invariants` must actually detect a broken tree, not just run without asserting
+/// anything: corrupt the cached per-element fingerprint directly (private-field access, same
+/// module) and confirm it panics rather than silently accepting the mismatch.
+#[test]
+#[should_panic(expected = "per-element fingerprint cache invalid")]
+fn check_invariants_catches_a_corrupted_fingerprint_cache() {
+    let mut map: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+    map.insert(1, 10);
+    // Combining with a nonzero fingerprint always changes the value (group addition), so
+    // this is guaranteed to no longer match `lift(&1, &10)`.
+    map.root.fingerprints[0] = map.root.fingerprints[0].combine(Fingerprint([1, 0, 0, 0]));
+    map.check_invariants();
+}
+
+/// The minimum-occupancy invariant applies to every **non-root** node — shrink a leaf below
+/// [`MIN_CAPACITY`] directly (bypassing the safe `remove` path, which would rebalance to
+/// preserve it) and confirm `check_invariants` catches it.
+#[test]
+#[should_panic(expected = "minimum node size invariant violated")]
+fn check_invariants_catches_an_undersized_non_root_node() {
+    let mut map: FingerprintTreeMap<i32, i32> = FingerprintTreeMap::new();
+    for i in 0..200 {
+        map.insert(i, i);
+    }
+    map.check_invariants(); // sanity: valid before corruption
+
+    fn shrink_a_leaf<K, V>(node: &mut Node<K, V>) {
+        if let Some(children) = node.children.as_mut() {
+            shrink_a_leaf(&mut children[0]);
+        } else {
+            while node.keys.len() >= MIN_CAPACITY {
+                node.keys.pop();
+                node.values.pop();
+                node.fingerprints.pop();
+            }
+        }
+    }
+    shrink_a_leaf(&mut map.root);
+
+    map.check_invariants();
+}
+
+/// `Debug` must actually render the map's contents, not just satisfy the trait.
+#[test]
+fn debug_format_shows_every_entry() {
+    let mut map: FingerprintTreeMap<i32, &str> = FingerprintTreeMap::new();
+    map.insert(1, "a");
+    map.insert(2, "b");
+    let rendered = format!("{map:?}");
+    assert!(rendered.contains('1') && rendered.contains("\"a\""));
+    assert!(rendered.contains('2') && rendered.contains("\"b\""));
 }

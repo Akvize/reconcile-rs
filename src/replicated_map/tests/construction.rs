@@ -10,6 +10,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::clock::NodeId;
 use crate::{replicated_map::Config, ReplicatedMap};
 
@@ -62,8 +64,8 @@ async fn stores_converge_over_an_injected_transport() {
     b.engine.peers.write().insert(a_ip, Instant::now());
     a.insert(7, 42);
 
-    let ta = tokio::spawn(a.clone().run());
-    let tb = tokio::spawn(b.clone().run());
+    let ta = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let tb = tokio::spawn(b.clone().run(CancellationToken::new()));
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut converged = false;
     while Instant::now() < deadline {

@@ -58,7 +58,8 @@ Each step maps to a Kubernetes concept worth understanding:
    touches a committed file.
 5. **`kubectl apply -k examples/k8s/kind`** — applies the overlay: the headless Service, the
    ConfigMap, and the StatefulSet scaled to 5 replicas.
-6. **`kubectl rollout status`** — waits until all pods pass their readiness probe (`GET /metrics`).
+6. **`kubectl rollout status`** — waits until all pods pass their readiness probe (`GET /` on the
+   `ready` port — reflects sync state, see below).
 
 ## How the pieces fit together
 
@@ -70,7 +71,9 @@ Each step maps to a Kubernetes concept worth understanding:
   `DnsDiscovery` re-resolves that name every few seconds to find its peers — no Kubernetes API
   access, no RBAC.
 - Pods then **gossip over UDP** (port 8080) and reconcile their `ReplicatedMap<String, String>`
-  contents. Port 9000 serves `/metrics`, which doubles as the readiness/liveness probe.
+  contents. Port 9000 serves `/metrics` (the liveness probe); port 9001 serves the readiness probe,
+  which only answers `200` once the node has completed a reconciliation round — a cold replica no
+  longer reports Ready while still serving empty reads.
 
 ## See reconciliation happen
 

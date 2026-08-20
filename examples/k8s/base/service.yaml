@@ -22,3 +22,7 @@ spec:
       port: 9000
       protocol: TCP
       targetPort: metrics
+    - name: ready
+      port: 9001
+      protocol: TCP
+      targetPort: ready

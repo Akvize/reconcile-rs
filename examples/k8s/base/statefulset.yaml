@@ -51,10 +51,15 @@ spec:
             - name: metrics
               containerPort: 9000
               protocol: TCP
+            - name: ready
+              containerPort: 9001
+              protocol: TCP
           readinessProbe:
+            # Reflects sync state (has this node completed a reconciliation round?), not just
+            # process liveness -- see reconcile::replicated_map::ReplicatedMap::sync_state (#292).
             httpGet:
-              path: /metrics
-              port: metrics
+              path: /
+              port: ready
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:

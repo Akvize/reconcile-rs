@@ -22,6 +22,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{
     replicated_map::Config, InMemoryNetwork, InMemoryTransport, ReplicatedMap, Transport,
 };
@@ -336,7 +338,10 @@ async fn a_replicated_map_converges_over_a_lossy_delayed_link() {
     let target = a.fingerprint(..);
     b.seed_peer(a_addr.ip());
 
-    let tasks = [tokio::spawn(a.clone().run()), tokio::spawn(b.clone().run())];
+    let tasks = [
+        tokio::spawn(a.clone().run(CancellationToken::new())),
+        tokio::spawn(b.clone().run(CancellationToken::new())),
+    ];
     tokio::time::timeout(Duration::from_secs(60), async {
         while b.fingerprint(..) != target {
             tokio::time::sleep(Duration::from_millis(5)).await;

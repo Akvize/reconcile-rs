@@ -133,8 +133,11 @@ impl HlcClock {
         }
     }
 
-    /// Override the clamp threshold (default [`MAX_CLOCK_DRIFT`]).
-    #[allow(dead_code)]
+    /// Override the clamp threshold (default [`MAX_CLOCK_DRIFT`]). Wired from
+    /// [`Config::max_clock_drift`](crate::replicated_map::Config::max_clock_drift) at
+    /// construction (`Replica::new`/`with_transport`) whenever the default [`HlcClock`] adapter is
+    /// in use; a caller-supplied [`Clock`] (`new_with_clock`) is responsible for its own drift
+    /// policy, if any.
     pub fn with_max_clock_drift(mut self, max_clock_drift: ClockDrift) -> HlcClock {
         self.max_clock_drift = max_clock_drift;
         self

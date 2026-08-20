@@ -6,6 +6,7 @@ use rand::{
     distributions::{Alphanumeric, DistString},
     SeedableRng,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use reconcile::{replicated_map::Config, ReplicatedMap};
@@ -58,5 +59,5 @@ async fn main() {
     for seed in seed {
         service = service.with_seed(seed);
     }
-    service.run().await;
+    service.run(CancellationToken::new()).await;
 }

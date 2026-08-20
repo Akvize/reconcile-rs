@@ -6,18 +6,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::ops::{Bound, RangeBounds};
 
 use range_cmp::{RangeOrd, RangeOrdering};
-use serde::Serialize;
 
 use crate::aggregate::Aggregate;
 
 use super::node::Node;
 use super::{element, FingerprintTreeMap};
 
-impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
+impl<K: Ord, V> FingerprintTreeMap<K, V> {
     /// Bundled [`Aggregate`] over a range of keys in one `O(log n)` tree walk;
     /// [`Rsos::aggregate`](crate::Rsos::aggregate)'s realization.
     ///
@@ -90,13 +90,17 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
     /// assert_eq!(map.rank(&15), 1);
     /// assert_eq!(map.rank(&100), map.len());
     /// ```
-    pub fn rank(&self, key: &K) -> usize {
-        fn aux<K: Ord, V>(node: &Node<K, V>, key: &K) -> usize {
+    pub fn rank<Q>(&self, key: &Q) -> usize
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        fn aux<K: Borrow<Q>, V, Q: Ord + ?Sized>(node: &Node<K, V>, key: &Q) -> usize {
             if let Some(children) = node.children.as_ref() {
                 let mut index = 0;
                 for i in 0..node.keys.len() {
-                    let cmp = key.cmp(&node.keys[i]);
-                    if cmp == Ordering::Less {
+                    let cmp = node.keys[i].borrow().cmp(key);
+                    if cmp == Ordering::Greater {
                         return index + aux(&children[i], key);
                     }
                     index += children[i].subtree.size();
@@ -107,7 +111,7 @@ impl<K: Serialize + Ord, V: Serialize> FingerprintTreeMap<K, V> {
                 }
                 index + aux(children.last().unwrap(), key)
             } else {
-                match node.keys.binary_search(key) {
+                match node.keys.binary_search_by(|probe| probe.borrow().cmp(key)) {
                     Ok(index) => index,
                     Err(index) => index,
                 }

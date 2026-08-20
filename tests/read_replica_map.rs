@@ -19,6 +19,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
@@ -75,7 +77,7 @@ async fn read_replica_converges_with_dated_store() {
     }
     dated.insert("doomed".to_string(), "to be deleted".to_string());
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // The read replica receives the latest values, with timestamps dropped.
@@ -87,7 +89,7 @@ async fn read_replica_converges_with_dated_store() {
 
     // The value-only fingerprints converge: the read replica's tree fingerprints identically to
     // the dated store's value-only projection, even though it never stored a single timestamp.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
     assert_eq!(read_replica.len(), 51);
 
     // A fresh write on the dated store propagates to the read replica.
@@ -99,7 +101,7 @@ async fn read_replica_converges_with_dated_store() {
     assert_until!(read_replica.get(&"doomed".to_string()).is_none());
 
     // ...and the value-only fingerprints reconverge after the deletion.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
 
     dated_task.abort();
     read_replica_task.abort();
@@ -140,7 +142,7 @@ async fn read_replica_does_not_block_tombstone_gc() {
     dated.insert(1, 11);
     dated.insert(2, 22);
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // The read replica syncs (and thereby contacts the dated store, the moment it could wrongly
@@ -198,7 +200,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
     }
     dated.insert("doomed".to_string(), "to be deleted".to_string());
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // Values arrive, timestamps dropped.
@@ -208,7 +210,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
         read_replica.get(&"doomed".to_string()).as_deref() == Some(&"to be deleted".to_string())
     );
     // The dateless read replica hashes identically to the dated store's value-only projection.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
     assert_eq!(read_replica.len(), 51);
 
     // A write made after convergence still propagates over the injected transport.
@@ -220,7 +222,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
     dated.remove(&"doomed".to_string());
     assert_until!(read_replica.get(&"doomed".to_string()).is_none());
     assert!(!read_replica.contains_key(&"doomed".to_string()));
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
 
     dated_task.abort();
     read_replica_task.abort();

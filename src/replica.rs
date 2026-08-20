@@ -163,6 +163,10 @@ pub(crate) struct Inner<K, V> {
     max_concurrent_bulk_dumps: usize,
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
     round: Arc<AtomicU32>,
+    /// When the most recently completed reconciliation round started — `None` before the first.
+    /// [`SyncState`](crate::replicated_map::SyncState)'s backing store, alongside
+    /// [`round`](Self::round).
+    last_round_at: Arc<RwLock<Option<Instant>>>,
     rng: Arc<RwLock<StdRng>>,
     /// Speculative peer discovery, behind the [`Discovery`] port. Defaults to [`RandomProbe`] (one
     /// random address per declared network each round); consulted once per reconciliation round and
@@ -291,7 +295,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         let node_id = config
             .node_id
             .unwrap_or_else(|| NodeId::new(rand::random()));
-        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        let clock: Arc<dyn Clock> =
+            Arc::new(HlcClock::new(node_id).with_max_clock_drift(config.max_clock_drift));
         let transport = Self::bind_udp(&config).await?;
         Ok(Self::build(config, transport, clock, node_id_is_random))
     }
@@ -328,7 +333,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         let node_id = config
             .node_id
             .unwrap_or_else(|| NodeId::new(rand::random()));
-        let clock: Arc<dyn Clock> = Arc::new(HlcClock::new(node_id));
+        let clock: Arc<dyn Clock> =
+            Arc::new(HlcClock::new(node_id).with_max_clock_drift(config.max_clock_drift));
         Self::build(config, transport, clock, node_id_is_random)
     }
 
@@ -435,6 +441,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 bulk_dumps_in_flight: Arc::new(AtomicUsize::new(0)),
                 max_concurrent_bulk_dumps: config.max_concurrent_bulk_dumps,
                 round: Arc::new(AtomicU32::new(0)),
+                last_round_at: Arc::new(RwLock::new(None)),
                 rng,
                 probe,
                 peers: Arc::new(RwLock::new(HashMap::new())),

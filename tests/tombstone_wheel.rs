@@ -14,6 +14,8 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
@@ -93,7 +95,7 @@ async fn remove_bulk_same_millisecond_all_gc() {
     // `run()` drives `clear_expired_tombstones()` on a 1-second GC loop; the 5 ms tombstone
     // timeout means they're already expired by the first sweep.
     let store2 = store.clone();
-    let _task = tokio::spawn(store2.run());
+    let _task = tokio::spawn(store2.run(CancellationToken::new()));
 
     assert_until!(store.fingerprint(..) == Fingerprint::ZERO);
 }
@@ -111,7 +113,7 @@ async fn single_remove_gc() {
     assert!(store.get(&99).is_none());
 
     let store2 = store.clone();
-    let _task = tokio::spawn(store2.run());
+    let _task = tokio::spawn(store2.run(CancellationToken::new()));
 
     assert_until!(store.fingerprint(..) == Fingerprint::ZERO);
 }

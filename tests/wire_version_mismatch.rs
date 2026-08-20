@@ -20,6 +20,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+use tokio_util::sync::CancellationToken;
 
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
@@ -92,7 +93,7 @@ async fn mixed_wire_versions_are_reported_not_silently_dropped() {
     let store = ReplicatedMap::<i32, i32>::new(config("127.0.0.210", port))
         .await
         .expect("bind failed");
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let sender = tokio::net::UdpSocket::bind("127.0.0.211:0")

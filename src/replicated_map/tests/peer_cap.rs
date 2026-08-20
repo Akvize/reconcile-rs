@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use tokio_util::sync::CancellationToken;
+
 use crate::{replicated_map::Config, ReplicatedMap};
 
 /// The default cap must be 1024.
@@ -66,7 +68,7 @@ async fn peer_cap_blocks_unknown_sender_at_capacity() {
     store.engine.members.write().insert(peer1);
     store.engine.members.write().insert(peer2);
 
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     // Give the run loop time to enter its receive wait.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -122,7 +124,7 @@ async fn peer_cap_allows_known_member_at_capacity() {
     store.engine.members.write().insert(peer1);
     store.engine.members.write().insert(peer2);
 
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     // Give the run loop time to enter its receive wait.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -244,7 +246,7 @@ async fn peer_cap_no_replay_entry_for_capped_sender() {
     store.engine.members.write().insert(peer1);
     store.engine.members.write().insert(peer2);
 
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     // Craft a sealed (authenticated) dated datagram from the newcomer's IP.
     let payload = dated_comparison_payload();

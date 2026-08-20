@@ -430,3 +430,40 @@ async fn snapshot_periodically_actually_persists() {
         "no snapshot was written after a full SNAPSHOT_INTERVAL"
     );
 }
+
+/// `Config::with_snapshot_interval` (#292) must actually reach
+/// [`snapshot_periodically`](ReplicatedMap::snapshot_periodically), not just the hardcoded
+/// [`SNAPSHOT_INTERVAL`](super::super::persistence::SNAPSHOT_INTERVAL) default — a interval far
+/// shorter than the default must make the periodic task persist well before a full default
+/// interval has elapsed.
+#[tokio::test]
+async fn config_snapshot_interval_actually_changes_the_periodic_cadence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fast_cadence.bin");
+    let short_interval = Duration::from_millis(20);
+    let store =
+        ReplicatedMap::<i32, i32>::new(ephemeral_config().with_snapshot_interval(short_interval))
+            .await
+            .expect("bind failed")
+            .with_persistence(Arc::new(FileSnapshot::new(&path)));
+    store.just_insert(1, 10);
+
+    let store2 = store.clone();
+    let periodic = tokio::spawn(async move { store2.snapshot_periodically().await });
+
+    // Comfortably past several short_interval ticks, but far short of the 5s default: if the
+    // configured interval had not actually been threaded through, nothing would have been
+    // persisted yet by this point.
+    tokio::time::sleep(short_interval * 10).await;
+    periodic.abort();
+
+    let restarted = ReplicatedMap::<i32, i32>::new(ephemeral_config())
+        .await
+        .expect("bind failed")
+        .with_persistence(Arc::new(FileSnapshot::new(&path)));
+    assert_eq!(
+        restarted.get(&1).as_deref(),
+        Some(&10),
+        "the configured short snapshot_interval was not honored by the periodic task"
+    );
+}

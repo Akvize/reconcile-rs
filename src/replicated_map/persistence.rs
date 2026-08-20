@@ -10,7 +10,7 @@ use std::hash::Hash;
 use std::io;
 use std::ops::Bound;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tracing::warn;
 
@@ -151,8 +151,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// Clones the map in [`SNAPSHOT_CHUNK_SIZE`]-entry chunks, releasing the read lock between
     /// chunks, rather than holding it for one continuous `O(map size)` clone — see
     /// [`SNAPSHOT_CHUNK_SIZE`]'s doc for why a non-instantaneous snapshot is an acceptable
-    /// trade-off here.
-    pub(super) fn snapshot(&self) {
+    /// trade-off here. Records [`last_snapshot_at`](super::ReplicatedMap::sync_state) on success.
+    fn snapshot_inner(&self) -> io::Result<()> {
         let mut entries: DatedEntries<K, V> = Vec::new();
         let mut cursor: Option<K> = None;
         loop {
@@ -181,15 +181,37 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             self.engine.members.read().clone(),
             self.engine.tombstone_acks.read().clone(),
         );
-        if let Err(err) = self.persistence.save(&state) {
+        self.persistence.save(&state)?;
+        *self.last_snapshot_at.write() = Some(Instant::now());
+        Ok(())
+    }
+
+    /// As [`snapshot_inner`](Self::snapshot_inner), logging rather than propagating a failure —
+    /// the shape the periodic background task and [`run`](super::ReplicatedMap::run)'s shutdown
+    /// flush both want.
+    pub(super) fn snapshot(&self) {
+        if let Err(err) = self.snapshot_inner() {
             warn!("failed to persist reconcile store snapshot: {err}");
         }
+    }
+
+    /// Force an out-of-band snapshot right now, rather than waiting for the periodic background
+    /// task (cadence: [`Config::snapshot_interval`](super::Config::snapshot_interval)).
+    ///
+    /// # Errors
+    ///
+    /// If the persistence backend's [`save`](Persistence::save) fails. Unlike the periodic task
+    /// (which only logs a failure and keeps running), a caller-triggered flush hands the error
+    /// back, since silently swallowing it here would leave a caller with no signal that the
+    /// snapshot they explicitly asked for did not happen.
+    pub fn snapshot_now(&self) -> io::Result<()> {
+        self.snapshot_inner()
     }
 
     /// Periodically snapshot the full store state to the persistence backend.
     pub(super) async fn snapshot_periodically(&self) {
         loop {
-            tokio::time::sleep(SNAPSHOT_INTERVAL).await;
+            tokio::time::sleep(self.snapshot_interval).await;
             self.snapshot();
         }
     }

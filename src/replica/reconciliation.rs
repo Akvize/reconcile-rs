@@ -46,6 +46,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         let remote_interval = self.remote_interval.load(Ordering::Relaxed).max(1);
         let remote_fanout = self.remote_fanout.load(Ordering::Relaxed);
         let round = self.round.fetch_add(1, Ordering::Relaxed);
+        *self.last_round_at.write() = Some(std::time::Instant::now());
         // Treat an interval of 0 as "every round" to avoid a modulo-by-zero.
         let do_remote = round % remote_interval == 0;
         let known = self.get_peers();
