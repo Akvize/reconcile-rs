@@ -172,20 +172,28 @@ fn check_invariants_panics_on_a_corrupted_fingerprint_cache() {
 /// The minimum-occupancy check only applies once `min` or `max` is `Some` (i.e. not at the true
 /// root) -- along the rightmost spine, `max` stays `None` all the way down and only `min` is
 /// `Some`, so this specifically exercises the `||`, not the `&&` a node could be mutated to.
+///
+/// Repairing every cached [`Aggregate`] back up to the root after truncating the leaf isolates
+/// that one invariant: left alone, the (also real, but different) stale-subtree-aggregate check
+/// would panic first regardless of `||` vs `&&`, and the test would stop telling them apart.
 #[test]
 fn check_invariants_panics_on_an_underfull_non_root_node_on_the_rightmost_spine() {
     let mut tree: FingerprintTreeMap<u64, u64> = (0..200).map(|k| (k, k)).collect();
     tree.check_invariants();
 
-    let mut node = tree.root.as_mut();
-    while let Some(children) = node.children.as_mut() {
-        node = children.last_mut().unwrap().as_mut();
+    fn truncate_rightmost_leaf<K, V>(node: &mut super::Node<K, V>) {
+        if let Some(children) = node.children.as_mut() {
+            truncate_rightmost_leaf(children.last_mut().unwrap());
+        } else {
+            while node.keys.len() >= super::MIN_CAPACITY {
+                node.keys.pop();
+                node.values.pop();
+                node.fingerprints.pop();
+            }
+        }
+        node.refresh_aggregate();
     }
-    while node.keys.len() >= super::MIN_CAPACITY {
-        node.keys.pop();
-        node.values.pop();
-        node.fingerprints.pop();
-    }
+    truncate_rightmost_leaf(tree.root.as_mut());
 
     let panicked =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.check_invariants())).is_err();
