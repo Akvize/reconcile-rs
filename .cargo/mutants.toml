@@ -56,6 +56,18 @@ exclude_globs = ["benches/**", "examples/**"]
 # verdict it would reach in 0s if it never generated the mutant at all. #427/#452 measured this
 # directly: these six alone cost 6*300s = 30 of a ~120-min in-diff run on a large file-move split.
 #
+# `replay/bitmap.rs:75:32` (`SlidingBitmap::advance`'s cross-word-boundary shift, `self.0[i] = lo |
+# hi`): `lo = old[i-word_shift] << bit_shift` occupies exactly bit positions `[bit_shift, 63]`
+# (shifting left drops any overflow past bit 63); `hi = old[i-word_shift-1] >> (64-bit_shift)`
+# occupies exactly `[0, bit_shift-1]` (shifting right by `64-bit_shift` zero-fills everything
+# above). For every `bit_shift` this branch runs with (it's only entered when `bit_shift != 0`,
+# so `1..=63`), those two ranges partition all 64 bit positions with zero overlap -- by
+# construction of the shift amounts, not by anything about `old`'s contents. `lo & hi` is
+# therefore always `0` for *any* input, which makes `lo | hi` and `lo ^ hi` produce identical
+# output always: replacing `|` with `^` here is a genuine equivalent mutant, unlike `|` with `&`
+# at the same site (which zeroes the disjoint-bit invariant's whole point and is correctly
+# caught). #427.
+#
 # `range.rs:28:56` is the same defect shape via *recursion* instead of a `while` loop:
 # `<ItemRange as Iterator>::next` freezes `children_passed` at its current value (`x * 1 == x`)
 # and falls through to `self.next()`, which never converges -- but because that's a genuine
@@ -86,6 +98,7 @@ exclude_re = [
     "fingerprint_tree_map/range\\.rs:28:56: replace \\+ with \\*",
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
+    "replay/bitmap\\.rs:75:32: replace \\| with \\^",
 ]
 
 skip_calls = ["with_capacity", "reserve"]

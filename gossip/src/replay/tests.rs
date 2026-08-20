@@ -8,6 +8,76 @@
 
 use super::*;
 
+// ── SlidingBitmap (direct) ─────────────────────────────────────────────────
+//
+// `PeerState::accept`'s existing tests only ever advance by small deltas (< 64), so
+// `word_shift` (`delta / 64`) is always 0 there and the array-indexing arithmetic in
+// `SlidingBitmap::advance`'s multi-word shift is never exercised for `word_shift > 0`. These two
+// tests advance across whole words (word-aligned and non-word-aligned) and check every offset in
+// the window against the shift-by-`delta` property directly.
+
+/// After `advance(delta)`, offset `j` is marked iff `j == 0` (the new high-water mark, always
+/// (re-)marked) or `j >= delta` and `j - delta` was marked before the shift.
+fn assert_bitmap_shifted_by(
+    bitmap: &super::bitmap::SlidingBitmap,
+    marked_before: &[u64],
+    delta: u64,
+) {
+    for offset in 0..WINDOW_SIZE {
+        let expected =
+            offset == 0 || (offset >= delta && marked_before.contains(&(offset - delta)));
+        assert_eq!(
+            bitmap.is_marked(offset),
+            expected,
+            "offset {offset} marked-state mismatch after advance({delta})"
+        );
+    }
+}
+
+#[test]
+fn sliding_bitmap_word_aligned_advance_shifts_the_whole_window() {
+    let mut bitmap = super::bitmap::SlidingBitmap::new();
+    let marked_before = [0u64, 1, 63, 64, 65, 127, 200, 500, 999, 1023];
+    for &offset in &marked_before {
+        bitmap.mark(offset);
+    }
+    let delta = 128; // word_shift = 2, bit_shift = 0: exercises the word-aligned branch.
+    bitmap.advance(delta);
+    assert_bitmap_shifted_by(&bitmap, &marked_before, delta);
+}
+
+#[test]
+fn sliding_bitmap_non_word_aligned_advance_shifts_the_whole_window() {
+    let mut bitmap = super::bitmap::SlidingBitmap::new();
+    let marked_before = [0u64, 1, 63, 64, 65, 127, 200, 500, 999, 1023];
+    for &offset in &marked_before {
+        bitmap.mark(offset);
+    }
+    let delta = 130; // word_shift = 2, bit_shift = 2: exercises the cross-word-boundary branch.
+    bitmap.advance(delta);
+    assert_bitmap_shifted_by(&bitmap, &marked_before, delta);
+}
+
+// ── Seq/Stamp Display ────────────────────────────────────────────────────
+
+/// `Display` forwards to the wrapped `u64`'s own `Display` — not a literal this
+/// implementation happens to produce today, but the type's one job (it exists so log/error
+/// output shows the sequence number instead of a `Seq(..)` debug tuple).
+#[test]
+fn seq_display_matches_wrapped_value() {
+    for value in [0u64, 1, 42, 1_000_000, u64::MAX] {
+        assert_eq!(format!("{}", Seq::new(value)), value.to_string());
+    }
+}
+
+/// Same property as `seq_display_matches_wrapped_value`, for `Stamp`.
+#[test]
+fn stamp_display_matches_wrapped_value() {
+    for value in [0u64, 1, 1_700_000_000_000, u64::MAX] {
+        assert_eq!(format!("{}", Stamp::new(value)), value.to_string());
+    }
+}
+
 // ── Sender counter ────────────────────────────────────────────────────────
 
 #[test]
