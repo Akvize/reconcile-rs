@@ -316,8 +316,16 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
 
     /// Value-only fingerprint over a range. After convergence this equals the dated peer's
     /// [`value_fingerprint`](crate::ReplicatedMap::value_fingerprint) over the same range.
-    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
+    pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
         self.tree.read().aggregate(range).fingerprint()
+    }
+
+    /// Deprecated alias for [`value_fingerprint`](Self::value_fingerprint) — the name collided
+    /// with [`ReplicatedMap::fingerprint`](crate::ReplicatedMap::fingerprint), which includes the
+    /// timestamp and so never equals this one between converged peers (#294).
+    #[deprecated(since = "1.0.0", note = "renamed to `value_fingerprint`")]
+    pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
+        self.value_fingerprint(range)
     }
 
     /// The smallest live key and its value, or `None` if the read replica holds no live entry.
@@ -440,9 +448,18 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
         }
     }
 
+    /// Run one round of value-only anti-entropy against the configured peers. Normally driven by
+    /// [`run`](Self::run)'s loop; exposed for callers that want to force an out-of-band round
+    /// (e.g. in tests), mirroring [`ReplicatedMap::start_reconciliation`](crate::ReplicatedMap::start_reconciliation).
+    pub async fn start_reconciliation(&self) {
+        let mut send_buf = Vec::new();
+        self.start_reconciliation_inner(&mut send_buf).await;
+    }
+
     /// Send our value-only comparison items to every known peer plus a random address (discovery),
-    /// kicking off / continuing a value-only reconciliation round.
-    pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
+    /// kicking off / continuing a value-only reconciliation round. `send_buf` is caller-owned so
+    /// [`run`](Self::run)'s hot loop can reuse one allocation across rounds.
+    async fn start_reconciliation_inner(&self, send_buf: &mut Vec<u8>) {
         let segments = rbsr::initial_ranges(&*self.tree.read());
         send_buf.clear();
         for segment in segments {
@@ -450,7 +467,7 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
                 &Message::ValueComparisonItem::<K, WireDated<V>, State<V>>(segment),
                 send_buf,
             )
-            .unwrap();
+            .expect("serializing a ValueComparisonItem into an in-memory buffer cannot fail");
         }
         let mut peers = self.get_peers();
         // A random address out of the peer network, for discovery — like the dated store, we do not
@@ -548,12 +565,12 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
     pub async fn run(self) {
         let mut recv_buf = [0; BUFFER_SIZE + 1];
         let mut send_buf = Vec::new();
-        self.start_reconciliation(&mut send_buf).await;
+        self.start_reconciliation_inner(&mut send_buf).await;
         loop {
             match timeout(ACTIVITY_TIMEOUT, self.transport.recv_from(&mut recv_buf)).await {
                 Err(_) => {
                     debug!("read replica: no recent activity; initiating value-only diff");
-                    self.start_reconciliation(&mut send_buf).await;
+                    self.start_reconciliation_inner(&mut send_buf).await;
                 }
                 Ok(Err(err)) => warn!("read replica network error in recv_from: {err}"),
                 Ok(Ok((size, peer))) => {
@@ -803,7 +820,7 @@ mod tests {
         reference.insert(2, State::Tombstone);
 
         assert_eq!(
-            read_replica.fingerprint(..),
+            read_replica.value_fingerprint(..),
             reference.aggregate(..).fingerprint()
         );
     }
@@ -819,5 +836,57 @@ mod tests {
             light < dated,
             "value-only entry ({light} B) should be smaller than dated entry ({dated} B)"
         );
+    }
+
+    /// #294: the deprecated `fingerprint` alias must actually forward to `value_fingerprint`, not
+    /// just compile — a mutant that no-ops it and returns a default `Fingerprint` would pass any
+    /// test that never compares its result to the real one.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_fingerprint_alias_matches_value_fingerprint() {
+        let read_replica = ReadReplicaMap::<i32, String>::new_with_transport(
+            ephemeral_config(),
+            Arc::new(crate::transport::InMemoryNetwork::new().bind("127.0.5.1:1".parse().unwrap())),
+        );
+        read_replica.integrate(vec![(1, State::Present("a".to_string()))]);
+        assert_eq!(
+            read_replica.fingerprint(..),
+            read_replica.value_fingerprint(..)
+        );
+        assert_ne!(read_replica.fingerprint(..), Fingerprint::default());
+    }
+
+    /// #294: `start_reconciliation` (the public, buffer-owning wrapper) must actually send a
+    /// value-only comparison round to the seeded peer — a mutant that no-ops its body would leave
+    /// the peer's socket silent forever, which this test's `recv_from` would then time out on. No
+    /// `run()` loop is spawned on either side, so nothing but this call can produce the datagram.
+    #[tokio::test]
+    async fn start_reconciliation_wrapper_actually_transmits() {
+        use crate::transport::InMemoryNetwork;
+
+        let net = InMemoryNetwork::new();
+        let port = crate::replica::tests::next_ephemeral_test_port();
+        let read_replica_addr: IpAddr = "127.0.5.2".parse().unwrap();
+        let peer_addr: IpAddr = "127.0.5.3".parse().unwrap();
+        let peer_transport = net.bind(SocketAddr::new(peer_addr, port));
+
+        let read_replica = ReadReplicaMap::<i32, String>::new_with_transport(
+            ephemeral_config()
+                .with_port(port)
+                .with_listen_addr(read_replica_addr),
+            Arc::new(net.bind(SocketAddr::new(read_replica_addr, port))),
+        )
+        .with_seed(peer_addr);
+
+        read_replica.start_reconciliation().await;
+
+        let mut buf = [0u8; 65536];
+        let (size, from) =
+            tokio::time::timeout(Duration::from_secs(5), peer_transport.recv_from(&mut buf))
+                .await
+                .expect("start_reconciliation never sent anything to the seeded peer")
+                .expect("recv_from failed");
+        assert!(size > 0, "the datagram sent to the peer was empty");
+        assert_eq!(from.ip(), read_replica_addr);
     }
 }

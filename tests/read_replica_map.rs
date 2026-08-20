@@ -89,7 +89,7 @@ async fn read_replica_converges_with_dated_store() {
 
     // The value-only fingerprints converge: the read replica's tree fingerprints identically to
     // the dated store's value-only projection, even though it never stored a single timestamp.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
     assert_eq!(read_replica.len(), 51);
 
     // A fresh write on the dated store propagates to the read replica.
@@ -101,7 +101,7 @@ async fn read_replica_converges_with_dated_store() {
     assert_until!(read_replica.get(&"doomed".to_string()).is_none());
 
     // ...and the value-only fingerprints reconverge after the deletion.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
 
     dated_task.abort();
     read_replica_task.abort();
@@ -210,7 +210,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
         read_replica.get(&"doomed".to_string()).as_deref() == Some(&"to be deleted".to_string())
     );
     // The dateless read replica hashes identically to the dated store's value-only projection.
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
     assert_eq!(read_replica.len(), 51);
 
     // A write made after convergence still propagates over the injected transport.
@@ -222,7 +222,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
     dated.remove(&"doomed".to_string());
     assert_until!(read_replica.get(&"doomed".to_string()).is_none());
     assert!(!read_replica.contains_key(&"doomed".to_string()));
-    assert_until!(read_replica.fingerprint(..) == dated.value_fingerprint(..));
+    assert_until!(read_replica.value_fingerprint(..) == dated.value_fingerprint(..));
 
     dated_task.abort();
     read_replica_task.abort();
