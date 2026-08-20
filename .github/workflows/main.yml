@@ -162,6 +162,25 @@ jobs:
     - run: cargo build --workspace --no-default-features --features mac-hmac --verbose
     - run: cargo nextest run --workspace --no-default-features --features mac-hmac,internal-testing --retries 4 --flaky-result fail
 
+  # #189: `clippy::incompatible_msrv` (implied by -Dwarnings, every clippy job) already fails a
+  # change that calls an API newer than the declared `rust-version` -- but only against whatever
+  # toolchain this runner happens to have, which tracks `stable` and drifts forward release by
+  # release. That catches "used an API above MSRV" but not "the pinned MSRV toolchain itself can no
+  # longer build this tree" (a syntax/edition feature clippy's lint database doesn't know about).
+  # This job pins the toolchain to the declared floor and actually builds against it, so an MSRV
+  # bump is a deliberate `rust-version` edit reviewers see, not a side effect nobody noticed.
+  msrv:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    # Matches Cargo.toml's `rust-version` (identical across all five manifests, #308/#189) --
+    # update both together, the same discipline as AGENTS.md §3's other paired-number gates.
+    - uses: dtolnay/rust-toolchain@1.85
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo check --workspace --all-targets --all-features --verbose
+
   # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
   docs:
     needs: changes
@@ -317,6 +336,7 @@ jobs:
       - test
       - test-all-features
       - test-mac-hmac
+      - msrv
       - docs
       - bench
       - package
