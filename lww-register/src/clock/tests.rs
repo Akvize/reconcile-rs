@@ -49,6 +49,26 @@ fn total_order_is_physical_then_logical_then_node_id() {
     );
 }
 
+/// Every plain-newtype accessor round-trips the value its constructor was given -- no hidden
+/// default a caller could observe instead of what they actually stored. Multiple, non-adjacent
+/// values (not just `0`/`1`) so a mutant that swaps the accessor for a fixed constant of either
+/// kind still shows up as wrong for at least one of them.
+#[test]
+fn newtype_accessors_round_trip_their_constructor_argument() {
+    for v in [0, 1, 7, u32::MAX] {
+        assert_eq!(LogicalCounter::new(v).get(), v);
+    }
+    for v in [0, 1, 7, u64::MAX] {
+        assert_eq!(NodeId::new(v).get(), v);
+    }
+
+    // `Timestamp::node_id()` specifically: `hlc()`/`physical()`/`logical()` are already exercised
+    // via comparisons above, but nothing else calls `node_id()` and checks what it returns.
+    let stamp = ts(50, 4, 9);
+    assert_eq!(stamp.node_id(), NodeId::new(9));
+    assert_ne!(stamp.node_id(), NodeId::new(0));
+}
+
 /// `next_tick()` never wraps: at `u32::MAX` it rolls physical forward.
 #[test]
 fn next_tick_never_wraps_counter() {
