@@ -896,6 +896,16 @@ pass had already ruled out. Record negative results too.
   https://aljoscha-meyer.de/assets/landing/rbsr_nonhomomorphic.pdf — RBSR over history-independent,
   clamping-invariant trees using conventional hashes. **The direct counter-argument to §2.3 #1**:
   the composable-monoid summary is one design point, not a requirement of the algorithm.
+  **Bears on §2.2 twice more**, both read from the source (2026-08-20). §IV.B states the
+  matched-range property as the *design requirement* — "if they do store the same set in a range,
+  their clamped subtrees will be equal, and hence have equal root hashes" — so §2.2's replay result
+  rests on what makes a range fingerprint work at all, not on the additive combiner, and survives
+  this paper's own construction. §II states RBSR's distinguishing claim against the field: MST
+  "can protect against malicious input only by randomizing the tree construction for each
+  reconciliation session", CPI/IBLT/RIBLT likewise, leaving RBSR "the only algorithm to handle
+  adversarial inputs without resorting to per-session randomization". That is the same property
+  §2.2 prices on the other axis — no per-session randomization is also no independent trial per
+  peer. → §2.2, §2.3, [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - L. Gong, Z. Liu, L. Liu, J. Xu, M. Ogihara, T. Yang, *Space- and computationally-efficient set
   reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
   communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).

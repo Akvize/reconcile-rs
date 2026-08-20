@@ -8,11 +8,17 @@
 
 //! A fleet does not *resample* a summary collision. It replays it.
 //!
-//! The claim under test is an **identity, not a rate**: [`rsos::lift`] is BLAKE3 over the canonical
-//! encoding of `(key, value)` and consults no session nonce, no peer identity and no per-session
-//! salt, while [`rbsr::Comparison::agrees`] is `local == remote` on the whole bundled aggregate. A
-//! verdict is therefore a pure function of `(local content over the range, advertised remote
-//! aggregate)`, and two peers holding identical content are, to the driver, *the same peer*:
+//! The claim under test is an **identity, not a rate**, and it does not rest on this crate's choice
+//! of fingerprint. Every range-fingerprint scheme in the RBSR family guarantees that equal contents
+//! over a range yield equal fingerprints — that is what lets a matched range be recognised, so a
+//! scheme without it could not terminate the recursion. Here it is immediate ([`rsos::lift`] is
+//! BLAKE3 over the canonical encoding of `(key, value)`, folded over the range and consulting
+//! nothing else); Meyer & Scherer's non-homomorphic construction states it as the design
+//! requirement instead ("if they do store the same set in a range, their clamped subtrees will be
+//! equal, and hence have equal root hashes"). With [`rbsr::Comparison::agrees`] comparing the whole
+//! bundled aggregate, a verdict is therefore a pure function of `(local content over the range,
+//! advertised remote aggregate)`, and two peers holding identical content are, to the driver,
+//! *the same peer*:
 //!
 //! ```text
 //! A vs B₁ … B_k, every B_i holding identical content over r
