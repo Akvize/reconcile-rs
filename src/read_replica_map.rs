@@ -837,4 +837,56 @@ mod tests {
             "value-only entry ({light} B) should be smaller than dated entry ({dated} B)"
         );
     }
+
+    /// #294: the deprecated `fingerprint` alias must actually forward to `value_fingerprint`, not
+    /// just compile — a mutant that no-ops it and returns a default `Fingerprint` would pass any
+    /// test that never compares its result to the real one.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_fingerprint_alias_matches_value_fingerprint() {
+        let read_replica = ReadReplicaMap::<i32, String>::new_with_transport(
+            ephemeral_config(),
+            Arc::new(crate::transport::InMemoryNetwork::new().bind("127.0.5.1:1".parse().unwrap())),
+        );
+        read_replica.integrate(vec![(1, State::Present("a".to_string()))]);
+        assert_eq!(
+            read_replica.fingerprint(..),
+            read_replica.value_fingerprint(..)
+        );
+        assert_ne!(read_replica.fingerprint(..), Fingerprint::default());
+    }
+
+    /// #294: `start_reconciliation` (the public, buffer-owning wrapper) must actually send a
+    /// value-only comparison round to the seeded peer — a mutant that no-ops its body would leave
+    /// the peer's socket silent forever, which this test's `recv_from` would then time out on. No
+    /// `run()` loop is spawned on either side, so nothing but this call can produce the datagram.
+    #[tokio::test]
+    async fn start_reconciliation_wrapper_actually_transmits() {
+        use crate::transport::InMemoryNetwork;
+
+        let net = InMemoryNetwork::new();
+        let port = crate::replica::tests::next_ephemeral_test_port();
+        let read_replica_addr: IpAddr = "127.0.5.2".parse().unwrap();
+        let peer_addr: IpAddr = "127.0.5.3".parse().unwrap();
+        let peer_transport = net.bind(SocketAddr::new(peer_addr, port));
+
+        let read_replica = ReadReplicaMap::<i32, String>::new_with_transport(
+            ephemeral_config()
+                .with_port(port)
+                .with_listen_addr(read_replica_addr),
+            Arc::new(net.bind(SocketAddr::new(read_replica_addr, port))),
+        )
+        .with_seed(peer_addr);
+
+        read_replica.start_reconciliation().await;
+
+        let mut buf = [0u8; 65536];
+        let (size, from) =
+            tokio::time::timeout(Duration::from_secs(5), peer_transport.recv_from(&mut buf))
+                .await
+                .expect("start_reconciliation never sent anything to the seeded peer")
+                .expect("recv_from failed");
+        assert!(size > 0, "the datagram sent to the peer was empty");
+        assert_eq!(from.ip(), read_replica_addr);
+    }
 }

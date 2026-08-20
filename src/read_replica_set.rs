@@ -141,6 +141,7 @@ mod read_replica_set_tests {
 
     use crate::read_replica_set::ReadReplicaSet;
     use crate::replicated_map::{Config, MAX_NETS};
+    use rsos::Fingerprint;
 
     fn ephemeral_config() -> Config {
         Config {
@@ -177,5 +178,104 @@ mod read_replica_set_tests {
         assert_eq!(replica.len(), 0);
         assert!(!replica.contains(&1));
         assert!(replica.keys().is_empty());
+    }
+
+    /// #294: after converging with a real dated peer, `value_fingerprint` must actually reflect
+    /// the received members (not a default/zero `Fingerprint`), and the deprecated `fingerprint`
+    /// alias must forward to it — a mutant that no-ops either would pass any test that never
+    /// compares its result to the real, non-default value.
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(deprecated)]
+    async fn value_fingerprint_and_its_deprecated_alias_reflect_converged_content() {
+        use crate::replicated_set::ReplicatedSet;
+        use tokio_util::sync::CancellationToken;
+
+        let port = crate::replica::tests::next_ephemeral_test_port();
+        let net: ipnet::IpNet = "127.0.6.0/24".parse().unwrap();
+        let dated_addr: std::net::IpAddr = "127.0.6.10".parse().unwrap();
+        let replica_addr: std::net::IpAddr = "127.0.6.11".parse().unwrap();
+
+        let dated = ReplicatedSet::<i32>::new(
+            Config::default()
+                .with_port(port)
+                .with_listen_addr(dated_addr)
+                .with_net(net)
+                .with_insecure_no_key(),
+        )
+        .await
+        .expect("bind failed");
+        assert!(!dated.insert(7), "key 7 must be newly inserted");
+
+        let replica = ReadReplicaSet::<i32>::new(
+            Config::default()
+                .with_port(port)
+                .with_listen_addr(replica_addr)
+                .with_net(net)
+                .with_insecure_no_key(),
+        )
+        .await
+        .expect("bind failed")
+        .with_seed(dated_addr);
+
+        let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
+        let replica_task = tokio::spawn(replica.clone().run());
+
+        let mut converged = false;
+        for _ in 0..300 {
+            if replica.contains(&7) {
+                converged = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        dated_task.abort();
+        replica_task.abort();
+        assert!(converged, "replica never observed the dated peer's member");
+
+        let value_fingerprint = replica.value_fingerprint(..);
+        assert_ne!(
+            value_fingerprint,
+            Fingerprint::default(),
+            "a converged, non-empty set must not fingerprint as empty"
+        );
+        assert_eq!(replica.fingerprint(..), value_fingerprint);
+    }
+
+    /// #294: `start_reconciliation` (the public wrapper) must actually send a value-only
+    /// comparison round to the seeded peer — a mutant that no-ops its body would leave the peer's
+    /// socket silent forever, which this test's `recv_from` would then time out on. No `run()`
+    /// loop is spawned on either side, so nothing but this call can produce the datagram.
+    #[tokio::test]
+    async fn start_reconciliation_wrapper_actually_transmits() {
+        let port = crate::replica::tests::next_ephemeral_test_port();
+        let net: ipnet::IpNet = "127.0.6.0/24".parse().unwrap();
+        let replica_addr: std::net::IpAddr = "127.0.6.20".parse().unwrap();
+        let peer_addr: std::net::IpAddr = "127.0.6.21".parse().unwrap();
+
+        let peer_socket = tokio::net::UdpSocket::bind((peer_addr, port))
+            .await
+            .expect("peer bind failed");
+
+        let replica = ReadReplicaSet::<i32>::new(
+            Config::default()
+                .with_port(port)
+                .with_listen_addr(replica_addr)
+                .with_net(net)
+                .with_insecure_no_key(),
+        )
+        .await
+        .expect("bind failed")
+        .with_seed(peer_addr);
+
+        replica.start_reconciliation().await;
+
+        let mut buf = [0u8; 65536];
+        let (size, from) =
+            tokio::time::timeout(Duration::from_secs(5), peer_socket.recv_from(&mut buf))
+                .await
+                .expect("start_reconciliation never sent anything to the seeded peer")
+                .expect("recv_from failed");
+        assert!(size > 0, "the datagram sent to the peer was empty");
+        assert_eq!(from.ip(), replica_addr);
     }
 }
