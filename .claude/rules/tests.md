@@ -6,12 +6,13 @@ globs: ["tests/**/*.rs", "**/tests/**/*.rs", "**/src/**/tests.rs"]
 A test that passes is not evidence the test is worth keeping. The gate is whether
 it *detects a fault*, which is what `./scripts/check-mutation-gate.sh` measures.
 
-Before proposing new tests as done:
-1. `cargo nextest run --workspace --all-features --retries 4 --flaky-result fail`
-   — a test that only passes on retry is a defect, not a pass.
-2. `./scripts/check-mutation-gate.sh` — the changed lines must have no surviving
-   mutants. If a mutant survives, the test asserts the code ran, not that it is
-   correct.
+Both checks are already gated (AGENTS.md §3's tier table) — `pre-push` runs
+`--all-features` nextest, and `mutants.yml`'s `pr-diff` job runs the mutation gate on
+every PR, required via `mutants-success`. Never hand-run either yourself: a check a
+gate already owns the result of is not yours to replay, and hand-running the mutation
+gate against an arbitrary base ref would score against the wrong diff anyway. Push and
+let the gate report; if it fails, that failure — not a local rerun — is what tells you
+whether a test detects a fault.
 
 Assertion rules, in order of preference:
 - Assert a *property* (round-trip, idempotence, associativity, ordering), not a
