@@ -432,7 +432,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   `gossip_propagation`'s scheduler ceiling. The multi-party literature no RBSR work cites is still
   Mitzenmacher & Pagh, *Distributed Computing* 2018; keying the lift
   ([#337](https://github.com/Akvize/reconcile-rs/issues/337)) does not decorrelate this — a cluster
-  key is not a session key. → [#354](https://github.com/Akvize/reconcile-rs/issues/354)
+  key is not a session key. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
