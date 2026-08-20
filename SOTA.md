@@ -416,10 +416,10 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   (§1.2, `benches/system.rs::gossip_fanout`). Settled by **derivation, not measurement**: no session
   nonce, peer identity or salt enters `rsos::lift` and `Comparison::agrees` compares whole bundled
   aggregates, so a verdict is a function of the *content* pair. The loop varies only *which* peer is
-  contacted — every known local peer every round, a shuffled `remote_fanout` subset across networks
-  (`src/replica/reconciliation.rs`) — never what a contacted pair computes, so "a bad comparison
-  merely delays propagation" imports a partner draw's independence into the comparison. Distinct
-  verdicts are bounded by distinct content classes, never by `N`:
+  contacted (`src/replica/reconciliation.rs`: every known local peer every round, a shuffled
+  `remote_fanout` subset across networks), never what a contacted pair computes — so
+  arXiv:2212.13567 §5.1's "would merely delay propagation" imports a partner draw's independence
+  into the comparison. Distinct verdicts are bounded by content classes, never by `N`:
 
   | fleet state | content classes over `r` | retries `N` buys |
   |---|---|---|

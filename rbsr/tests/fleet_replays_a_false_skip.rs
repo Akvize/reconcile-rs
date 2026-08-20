@@ -23,10 +23,14 @@
 //! What anti-entropy varies is only **which peer is contacted** — every known local peer every
 //! round, a shuffled `remote_fanout` subset across networks (`reconcile`'s
 //! `src/replica/reconciliation.rs`; `RandomProbe` discovers *addresses*, it never picks a partner)
-//! — and never what a contacted pair computes. The standing intuition, "with many peers a bad
-//! comparison merely delays propagation", imports the independence of a *partner draw* into the
-//! *comparison*; on the local network there is not even a draw to import, since `A` meets all
-//! `N - 1` peers every round and computes the same verdict `N - 1` times. So the count of distinct
+//! — and never what a contacted pair computes. The intuition this refutes is not folklore: it is
+//! Meyer, arXiv:2212.13567 §5.1, offering as a mitigation that "in systems where nodes repeatedly
+//! synchronize with different other nodes, a single fingerprint collision in a single
+//! synchronization session would merely delay propagation of information rather than stop it
+//! completely". The load-bearing words are *different other nodes* — an assumption about contents,
+//! not about peers. It imports the independence of a *partner draw* into the *comparison*; on the
+//! local network there is not even a draw to import, since `A` meets all `N - 1` peers every round
+//! and computes the same verdict `N - 1` times. So the count of distinct
 //! verdicts a fleet can reach is governed by its number of distinct **content classes**, not by
 //! `N` — which `fleet_size_does_not_change_the_verdict_count` below asserts directly: hold the
 //! class count fixed, grow `N`, require the distinct-session count not to move.
@@ -42,6 +46,13 @@
 //! entered through [`RsosView`]. The plant is a single-element swap found by birthday search
 //! rather than by a k-tree: *how* a collision arises is `wagner_false_convergence.rs`'s subject,
 //! and nothing here depends on it.
+//!
+//! **Scope.** The replay property assumes range boundaries are chosen deterministically from the
+//! peers' states, which is what [`RsosView::select`] does here. Meyer §5.1 also proposes randomly
+//! shifting them per session, which *would* decorrelate — below the outer range, where a collision
+//! is decided before any boundary is drawn. Meyer's §6 pseudorandom treaps do **not** decorrelate:
+//! `priority(u)` is a fixed hash of the item, and the construction relies on the resulting treaps
+//! being unique.
 
 #![forbid(unsafe_code)]
 
