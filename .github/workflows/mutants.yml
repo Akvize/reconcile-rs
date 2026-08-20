@@ -47,6 +47,16 @@ jobs:
   # Gates every PR on the mutants introduced by that PR only. Typical PR: 5-20
   # mutants, 2-8 min. Measured on this repo, a 492-line diff produced 73 mutants.
   #
+  # #427/#452 is the outlier the 45-min timeout this replaced didn't budget for: a wholesale
+  # file-move split (mirroring #421/#425) shows git diff its *entire* moved content as changed,
+  # not just the seams that actually moved, so the in-diff mutant count scales with the file's
+  # size rather than the PR's real logic delta -- 1543 moved lines produced 252 mutants here, an
+  # order of magnitude past "typical". check-mutation-gate.sh pins --jobs 1 (#438: >1 produces
+  # false MISSED verdicts under load), so wall-clock is roughly linear in mutant count with no
+  # parallelism to buy back -- measured at ~70 min for this diff. 90 min leaves headroom for the
+  # next such split without inflating the budget for every ordinary PR that still finishes in
+  # single-digit minutes.
+  #
   # Runs on `merge_group` too (main.yml `changes` job's rationale: the queue validates a
   # *combination* no single pull request tested, so it never filters). `github.base_ref` is only
   # populated for `pull_request`/`pull_request_target` events, so the base ref is resolved per
@@ -56,7 +66,7 @@ jobs:
     needs: changes
     if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
         with:
