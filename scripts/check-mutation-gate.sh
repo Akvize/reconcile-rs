@@ -20,6 +20,9 @@ set -Eeuo pipefail
 export PROPTEST_RNG_SEED
 
 BASE_REF="${1:-origin/main}"
+# Optional "i/n" (0-based, matching mutants.yml's `nightly` job's own convention) to run only one
+# shard of the in-diff mutant set -- see the --shard block below for why pr-diff needs this.
+SHARD="${2:-}"
 
 GIT_ROOT=$(git rev-parse --show-toplevel)
 cd "$GIT_ROOT"
@@ -34,7 +37,7 @@ if [ ! -s "$DIFF" ]; then
 fi
 
 echo "check-mutation-gate: mutating lines changed against ${BASE_REF}"
-echo "                     PROPTEST_RNG_SEED=${PROPTEST_RNG_SEED}"
+echo "                     PROPTEST_RNG_SEED=${PROPTEST_RNG_SEED}${SHARD:+, shard=$SHARD}"
 
 # cargo-mutants tests mutants one at a time by default. This gate ran --jobs 3 for a
 # while (parallel build+test copies), capped and derived from nproc the same way this
@@ -67,9 +70,55 @@ JOBS=1
 # only (the root `reconcile` crate), so a diff touching rsos/rbsr/lww-register/gossip
 # would silently match zero mutants there instead of gating them. Verified empirically —
 # `cargo mutants --in-diff` on a diff to lww-register/src/clock.rs reports "No mutants to
-# filter" without --workspace, and finds the mutant with it.
-cargo mutants --workspace --no-shuffle -vV --in-diff "$DIFF" --timeout 300 --jobs "$JOBS" --copy-target=false
+# filter" without --workspace, and finds the mutant there.
+#
+# cargo-mutants' own exit code is non-zero for *any* mutant that isn't caught or unviable --
+# that includes TIMEOUT, not just MISSED. .cargo/mutants.toml already documents the intended
+# policy ("a mutant that breaks convergence can hang rather than fail... timeouts count as
+# caught") but that comment only describes what a human reading the nightly sweep should
+# conclude; nothing enforced it here. #427's fingerprint_tree_map split surfaced the gap: a
+# handful of `i += 1`-style loop counters mutated to `i *= 1` (starting from `i == 0`) hang
+# forever by construction -- no test, however thorough, can turn a genuine infinite loop into
+# a finite assertion, so treating a TIMEOUT exactly like a MISSED here would make this gate
+# permanently unpassable for that code shape. Score on `missed` specifically instead of the
+# raw exit code, so a hang still counts as a detected fault (matching the mutants.toml
+# comment) while an actual survivor still fails the gate.
+#
+# SHARD_ARGS: a large mechanical split (#427/#452) can put 200+ mutants in one diff -- git diff
+# shows moved code as changed regardless of whether any logic in it actually did (AGENTS.md §10's
+# "a rule enforced by eye" problem, here applied to cargo-mutants' own scope). At --jobs 1 (the
+# only setting #438 has verified doesn't produce false MISSED under load) that serialized into a
+# 2+ hour run, twice cut off mid-run by the CI runner with zero mutants missed either time --
+# wasted compute, not a real gate failure. Splitting the *same* mutant set across parallel shards
+# (mutants.yml's `pr-diff` matrix) keeps each shard's wall-clock low without raising --jobs (so
+# #438's risk stays closed) and without paying for more total CPU-time than one successful serial
+# run would have -- unlike the timeout-minutes bumps this replaced, which paid for repeated
+# failed attempts at the same serial run. Empty on a normal PR (5-20 mutants): one shard gets
+# everything, sharding is a no-op.
+SHARD_ARGS=()
+if [ -n "$SHARD" ]; then
+    SHARD_ARGS=(--shard "$SHARD" --sharding round-robin)
+fi
 
-# cargo-mutants exits non-zero when mutants survive, so reaching here means the
-# changed lines are covered by fault-detecting tests.
+set +e
+cargo mutants --workspace --no-shuffle -vV --in-diff "$DIFF" --timeout 300 --jobs "$JOBS" --copy-target=false "${SHARD_ARGS[@]}"
+mutants_status=$?
+set -e
+
+if [ ! -f mutants.out/outcomes.json ]; then
+    echo "check-mutation-gate: cargo-mutants produced no mutants.out/outcomes.json (exit $mutants_status)" >&2
+    exit "${mutants_status:-1}"
+fi
+
+missed=$(jq '.missed' mutants.out/outcomes.json)
+if [ "$missed" -gt 0 ]; then
+    echo "check-mutation-gate: $missed mutant(s) survived (missed) in the diff" >&2
+    exit 1
+fi
+
+if [ "$mutants_status" -ne 0 ]; then
+    echo "check-mutation-gate: cargo-mutants exited $mutants_status with 0 missed (e.g. a timeout) --" \
+        "treating as pass, per the policy above."
+fi
+
 echo "check-mutation-gate: no surviving mutants in the diff"

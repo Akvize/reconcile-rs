@@ -9,12 +9,15 @@
 # get a looser budget than prod on purpose -- a wide table of small, similar cases legitimately
 # runs longer than the production code it exercises.
 #
-# PROD_FAIL=500/PROD_WARN=300 target what a *newly written* file should look like, not a
-# retroactive claim that every current file already fits -- it is deliberately tighter than
-# this repo's own recent split output (#425's run.rs, called out in that PR as the one seam
-# that doesn't decompose further, is 503L: three lines over). TEST_WARN/TEST_FAIL are unscaled
-# from that same starting point pending its own pass; #421/#425's test split-siblings landed
-# under ~460 (replicated_map/tests/membership.rs, 459).
+# PROD_FAIL/PROD_WARN and TEST_FAIL/TEST_WARN started at 500/300 and 900/600 respectively --
+# tight enough for a *newly written* file, not a retroactive claim every current file already
+# fit. #427's file-by-file EXCEPTIONS split (largest-file-first) ratchets these down as each
+# entry clears: every clearance lowers both budgets by as much as is safe -- never past the
+# largest remaining *non-exception* file for that category, so clearing one file never silently
+# fails an unrelated one. rsos/src/fingerprint_tree_map.rs's split (#427) landed every sibling
+# under 250L against a 482L largest-remaining-prod-file floor (src/replica.rs) and a 689L
+# largest-remaining-test-file floor (tests/proptest_fingerprint_tree_map.rs) -- FAIL moved to
+# 490/700, WARN (informational only, never fails the build) to 280/400.
 #
 # EXCEPTIONS are files already over FAIL when this gate (or a tightened budget) was introduced,
 # grandfathered rather than split as a side effect -- each is a candidate for its own
@@ -32,22 +35,21 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR/.."
 
-PROD_WARN=300
-PROD_FAIL=500
-TEST_WARN=600
-TEST_FAIL=900
+PROD_WARN=280
+PROD_FAIL=490
+TEST_WARN=400
+TEST_FAIL=700
 
 EXCEPTIONS=(
-    "rsos/src/fingerprint_tree_map.rs"      # 1426L prod -- order-statistics tree
     "rsos/src/fingerprint_tree_map_iter.rs" # 907L prod  -- its iterator family
-    "rbsr/src/protocol.rs"                  # 854L prod  -- the RBSR wire protocol state machine
-    "gossip/src/auth.rs"                    # 820L prod  -- MAC backends + wire auth, security-sensitive
-    "src/read_replica_map.rs"               # 752L prod  -- read-replica facade, mirrors ReplicatedMap's read half
+    "rbsr/src/protocol.rs"                  # 909L prod  -- the RBSR wire protocol state machine
+    "gossip/src/auth.rs"                    # 977L prod  -- MAC backends + wire auth, security-sensitive
+    "src/read_replica_map.rs"               # 826L prod  -- read-replica facade, mirrors ReplicatedMap's read half
     "gossip/src/replay.rs"                  # 749L prod  -- replay-window bookkeeping, security-sensitive
-    "lww-register/src/clock.rs"             # 734L prod  -- HLC + AdmittedTime, load-bearing invariants (ARCHITECTURE §5)
-    "rsos/src/encoding.rs"                  # 611L prod  -- the canonical encoding every fingerprint is defined over
-    "rbsr/src/policy.rs"                    # 573L prod  -- RBSR split/recursion policy
-    "tests/service.rs"                      # 1214L test -- top-level end-to-end oracle suite
+    "lww-register/src/clock.rs"             # 839L prod  -- HLC + AdmittedTime, load-bearing invariants (ARCHITECTURE §5)
+    "rsos/src/encoding.rs"                  # 643L prod  -- the canonical encoding every fingerprint is defined over
+    "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
+    "tests/service.rs"                      # 1213L test -- top-level end-to-end oracle suite
 )
 
 is_exception() {
