@@ -366,6 +366,18 @@ guarantees whose resolution history §8 tracks.
    by a fingerprint byte instead would void that bound silently. `rbsr::Comparison` exposes
    `span()`/`remote_size()`/`agrees()`/`children_emitted()` only — no accessor returns a
    fingerprint or a full `Aggregate` — so the violation is structural, not merely documented.
+13. **A `RefinementPolicy` cannot stall the driver** (#420) — `RefinementPolicy`'s progress law is
+   that a `Decision::Split` for `span() > 1` must choose a stride below the span; a stride at or
+   above it emits one child equal to the parent, legitimate only for `span() <= 1` (`Decision::Split`'s
+   docs, invariant 10's partition argument). `protocol_round_with_policy` does not trust a
+   plugged-in policy to hold that: a `Split` for `span() > 1` that would not narrow the range is
+   converted to an `Enumerate` before it reaches the fan-out loop, so every span a policy actually
+   splits strictly shrinks and no range can loop on a content-determined fixed point. #356's
+   `FingerprintDerivedSplit` probe hung on ~99.5% of drives before this guard existed; re-measured
+   at 200,000/200,000 (both widths) afterward (`SOTA.md` §2.3). Guarded by
+   `rbsr/src/protocol.rs::non_progressing_split_is_converted_to_enumerate`, the `NeverNarrows`
+   policy exercised through the same convergence matrix as every shipped policy, and pinned for the
+   shipped policies themselves by `rbsr/tests/shipped_policies_always_progress.rs`.
 
 ---
 

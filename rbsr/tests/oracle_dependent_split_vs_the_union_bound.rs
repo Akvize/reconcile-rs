@@ -52,6 +52,20 @@
 //! underlying claim: making the split boundary a function of the summary oracle does not only
 //! risk the soundness bound, it can break the protocol's basic termination guarantee.
 //!
+//! **#420 update, 2026-08-20**: the mechanism above is exactly what `ARCHITECTURE.md` §5
+//! invariant 13 now guards against — `protocol_round_with_policy` converts a non-progressing
+//! `Split` (`span() > 1`, stride `>= span()`) into an `Enumerate` before it can hang the driver,
+//! whatever policy produced it. Re-run against the guarded driver, [`FingerprintDerivedSplit`]
+//! now reaches a fixed point on 200,000/200,000 trials at both widths (up from 1,054 and 1,051
+//! respectively). The finding above still describes what the *unguarded* mechanism does — that is
+//! the [`RefinementPolicy`] progress law this policy violates — it is just no longer what a drive
+//! through this crate's own driver does. With termination no longer the bottleneck, the soundness
+//! comparison this module set out to make is well-powered for the first time: at `w=16`,
+//! 3/200,000 events, 99% CI `[3.8e-6, 5.9e-5]`, comfortably under the reported bound `1.12e-3`; at
+//! `w=24`, 0/200,000 events, 99% CI `[0, 3.3e-5]` against a reported bound of `4.39e-6` — zero
+//! events, but (like the rank-cut control's own `w=24` row in #356) a CI built on zero successes
+//! at this sample size is too wide to confirm that on its own.
+//!
 //! [#355]: https://github.com/Akvize/reconcile-rs/issues/355
 
 #![forbid(unsafe_code)]
@@ -192,6 +206,12 @@ type DriveResult<K> = (Vec<EnumerationRange<K>>, Vec<EnumerationRange<K>>, u64);
 /// *because the peer refines it*, which every rank-cut policy here does for a small span), but
 /// that termination argument assumes progress on at least one side each round, a property this
 /// module's whole point is that an oracle-dependent stride is not obliged to keep.
+///
+/// **#420 update**: since `protocol_round_with_policy` now forces progress on `span() > 1`
+/// itself (`ARCHITECTURE.md` §5 invariant 13), `None` is unreachable for *any* policy driven
+/// through this crate's own driver, not only the shipped ones — this module's own measurement
+/// below is what confirms that empirically for [`FingerprintDerivedSplit`]. Kept as an `Option`
+/// regardless: it is what caught #356's finding before that guard existed.
 fn drive_with_policy<K: Clone + Ord, B: RsosView<K>, P: RefinementPolicy>(
     a: &B,
     b: &B,
@@ -365,6 +385,12 @@ fn rank_cut_false_convergence_rate() {
 /// width has no effect on it (see this module's docs) and only a handful of trials among the
 /// survivors will ever be at risk of a *false-convergence* event on top of that, so this is not
 /// sized to catch one.
+///
+/// **#420 update**: that calibration predates the driver-side progress guard this policy's own
+/// mechanism led to (`ARCHITECTURE.md` §5 invariant 13) — re-run against the guarded driver, both
+/// widths terminate 200,000/200,000. The count stays fixed at this value regardless: it was never
+/// really chosen for termination odds, and now doubles as the sample size the false-convergence
+/// comparison itself needs.
 const ORACLE_DEPENDENT_TRIALS: u64 = 200_000;
 
 #[test]
