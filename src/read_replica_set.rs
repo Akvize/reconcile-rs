@@ -104,10 +104,17 @@ impl<K: Key> ReadReplicaSet<K> {
         self.0.is_empty()
     }
 
-    /// Fingerprint over a key range. See [`ReadReplicaMap::fingerprint`].
+    /// Fingerprint over a key range. See [`ReadReplicaMap::value_fingerprint`].
+    #[must_use]
+    pub fn value_fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
+        self.0.value_fingerprint(range)
+    }
+
+    /// Deprecated alias for [`value_fingerprint`](Self::value_fingerprint) (#294).
+    #[deprecated(since = "1.0.0", note = "renamed to `value_fingerprint`")]
     #[must_use]
     pub fn fingerprint<R: RangeBounds<K>>(&self, range: R) -> Fingerprint {
-        self.0.fingerprint(range)
+        self.value_fingerprint(range)
     }
 
     /// The current members. See [`ReadReplicaMap::keys`].
@@ -118,8 +125,8 @@ impl<K: Key> ReadReplicaSet<K> {
 
     /// Start an out-of-cadence reconciliation round. See
     /// [`ReadReplicaMap::start_reconciliation`].
-    pub async fn start_reconciliation(&self, send_buf: &mut Vec<u8>) {
-        self.0.start_reconciliation(send_buf).await;
+    pub async fn start_reconciliation(&self) {
+        self.0.start_reconciliation().await;
     }
 
     /// Run the reconciliation loop. See [`ReadReplicaMap::run`].

@@ -102,8 +102,9 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
-pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
+pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::to_vec(&self) -> alloc::vec::Vec<(K, V)>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::value_fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::values(&self) -> alloc::vec::Vec<V>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K, V> core::clone::Clone for reconcile::read_replica_map::ReadReplicaMap<K, V>
@@ -128,7 +129,8 @@ pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::new(reconcile::repl
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::run(self)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_net(&self, ipnet::ipnet::IpNet)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
-pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
+pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self)
+pub fn reconcile::read_replica_set::ReadReplicaSet<K>::value_fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K> core::clone::Clone for reconcile::read_replica_set::ReadReplicaSet<K>
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::clone(&self) -> Self
@@ -416,8 +418,9 @@ pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::range_to_vec<R: core::
 pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::run(self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_net(&self, ipnet::ipnet::IpNet)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<V>) + 'static>(&self, F)
-pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
+pub async fn reconcile::read_replica_map::ReadReplicaMap<K, V>::start_reconciliation(&self)
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::to_vec(&self) -> alloc::vec::Vec<(K, V)>
+pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::value_fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::values(&self) -> alloc::vec::Vec<V>
 pub fn reconcile::read_replica_map::ReadReplicaMap<K, V>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K, V> core::clone::Clone for reconcile::read_replica_map::ReadReplicaMap<K, V>
@@ -441,7 +444,8 @@ pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::new(reconcile::repl
 pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::run(self)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_net(&self, ipnet::ipnet::IpNet)
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::set_on_update<F: core::marker::Send + core::marker::Sync + core::ops::function::Fn(&K, &lww_register::entry::State<()>) + 'static>(&self, F)
-pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self, &mut alloc::vec::Vec<u8>)
+pub async fn reconcile::read_replica_set::ReadReplicaSet<K>::start_reconciliation(&self)
+pub fn reconcile::read_replica_set::ReadReplicaSet<K>::value_fingerprint<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::fingerprint::Fingerprint
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::with_seed(self, core::net::ip_addr::IpAddr) -> Self
 impl<K> core::clone::Clone for reconcile::read_replica_set::ReadReplicaSet<K>
 pub fn reconcile::read_replica_set::ReadReplicaSet<K>::clone(&self) -> Self
