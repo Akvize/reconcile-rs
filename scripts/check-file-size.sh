@@ -49,7 +49,6 @@ EXCEPTIONS=(
     "gossip/src/auth.rs"                    # 977L prod  -- MAC backends + wire auth, security-sensitive
     "src/read_replica_map.rs"               # 826L prod  -- read-replica facade, mirrors ReplicatedMap's read half
     "gossip/src/replay.rs"                  # 749L prod  -- replay-window bookkeeping, security-sensitive
-    "lww-register/src/clock.rs"             # 839L prod  -- HLC + AdmittedTime, load-bearing invariants (ARCHITECTURE §5)
     "rsos/src/encoding.rs"                  # 643L prod  -- the canonical encoding every fingerprint is defined over
     "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
 )
