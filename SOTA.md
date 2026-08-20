@@ -269,7 +269,9 @@ copy-on-write B+-tree addressed by page number.
     this makes it "probabilistically sound rather than information-theoretically exact" and leaves
     the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
     256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
-    the injectivity of Σ with no truncation term. The price is 44 B/range against 16 B — see §2.2.
+    the injectivity of Σ with no truncation term. The price is ~2.4× the bytes per advertised range,
+    measured against Negentropy rather than derived
+    ([#362](https://github.com/Akvize/reconcile-rs/issues/362)) — see §2.2.
     What the exact count buys, and what it does not: a range whose peers hold **different
     cardinalities** can never be SKIPped — probability 1, no assumption on the hash — so a dropped
     write or an unreplicated tombstone is structurally covered. A **same-key/different-value
@@ -426,10 +428,15 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   `benches/README.md`; decision record:
   [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`'s own rustdoc.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
-  `usize` count — 44 B per advertised range, against Negentropy's 16 B truncated comparison value
-  (§2.1). That 44 B is 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
+  `usize` count — 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
   derives `Serialize` and takes `gossip::bincode`'s `DefaultOptions`, which varint-encodes each
-  random 64-bit limb at up to 9 B rather than a fixed-width `[u8; 32]`) plus an 8 B count. That is
+  random 64-bit limb at up to 9 B rather than a fixed-width `[u8; 32]`) plus an 8 B count. Those
+  44 B are the aggregate alone; a range also carries its `KeyRange` bounds, so a per-range figure
+  derived from the aggregate understates both sides of any comparison. Measured against the
+  reference implementation instead ([#362](https://github.com/Akvize/reconcile-rs/issues/362),
+  numbers in `benches/README.md`): the cost per range is ~2.4× Negentropy's and **rises with `n`**,
+  bound encoding is comparable on both sides, and the gap is therefore almost entirely summary
+  width — §2.1's trade, confirmed with every one of its previous figures corrected. That is
   the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per round it dominates
   the bytes above. The two decisions are only separable if the fan-out shrinks — which, now that the
   fan-out is a swappable policy, is a one-line change to a caller rather than an edit to the protocol
