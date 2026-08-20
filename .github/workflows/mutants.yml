@@ -47,18 +47,25 @@ jobs:
   # Gates every PR on the mutants introduced by that PR only. Typical PR: 5-20
   # mutants, 2-8 min. Measured on this repo, a 492-line diff produced 73 mutants.
   #
-  # #427/#452 is the outlier the 45-min timeout this replaced didn't budget for: a wholesale
-  # file-move split (mirroring #421/#425) shows git diff its *entire* moved content as changed,
-  # not just the seams that actually moved, so the in-diff mutant count scales with the file's
-  # size rather than the PR's real logic delta -- 1543 moved lines produced 252 mutants here, an
-  # order of magnitude past "typical". check-mutation-gate.sh pins --jobs 1 (#438: >1 produces
-  # false MISSED verdicts under load), so wall-clock is roughly linear in mutant count with no
-  # parallelism to buy back. Measured on this repo's own dev sandbox at ~70 min for this diff, but
-  # the hosted runner ran consistently slower per mutant (~22s vs ~10s build+test) -- a first
-  # 90-min bump still wasn't enough (killed mid-run, 205/252 mutants in). Extrapolating the
-  # runner's own observed rate puts the real requirement near 120 min; 180 leaves real headroom
-  # rather than risking a third slow round-trip, without inflating the budget for every ordinary
-  # PR that still finishes in single-digit minutes.
+  # #427/#452 is the outlier a single serial job doesn't budget for: a wholesale file-move split
+  # (mirroring #421/#425) shows git diff its *entire* moved content as changed, not just the
+  # seams that actually moved, so the in-diff mutant count scales with the file's size rather
+  # than the PR's real logic delta -- 1543 moved lines produced 247 mutants here, an order of
+  # magnitude past "typical". check-mutation-gate.sh pins --jobs 1 (#438: >1 produces false
+  # MISSED verdicts under load), so a single job's wall-clock is linear in mutant count with no
+  # parallelism to buy back -- and raising timeout-minutes doesn't actually buy more either: two
+  # separate attempts (90 min, then 180 min) both died at ~90-94 min via an identical "runner has
+  # received a shutdown signal", stopped at nearly the same mutant both times, with zero missed
+  # either time -- wasted compute for no verdict, and Actions minutes aren't free to keep
+  # re-spending on the same guess. The fix is the one `nightly` below already uses for the same
+  # problem at 8x this diff's scale: shard the *same* --in-diff mutant set across parallel jobs.
+  # Each shard stays well under any single-job ceiling, --jobs stays at 1 within each shard (so
+  # #438's risk never reopens), and total CPU-time is roughly what one successful serial run
+  # would have cost anyway -- unlike the timeout bumps this replaces, which paid twice for zero
+  # result. 4 shards, not 8: this diff is 1/6 of nightly's full-sweep size, and matrix legs carry
+  # their own checkout/cache/toolchain-install overhead that a normal 5-20-mutant PR shouldn't
+  # pay 8x for. Round-robin (not the default `slice`) spreads slow and fast mutants evenly, same
+  # rationale as `nightly`'s own comment.
   #
   # Runs on `merge_group` too (main.yml `changes` job's rationale: the queue validates a
   # *combination* no single pull request tested, so it never filters). `github.base_ref` is only
@@ -69,7 +76,14 @@ jobs:
     needs: changes
     if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # 45 min leaves ~2x headroom over a normal PR's 2-8 min and over a #452-scale diff's ~20-25
+    # min/shard at the CI runner's observed per-mutant rate, while staying well clear of the
+    # ~90-94 min mark both single-job attempts died at.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -90,13 +104,13 @@ jobs:
       # scripts/check-mutation-gate.sh is the single source of truth for this command (AGENTS.md
       # §10: a rule enforced by eye, or reimplemented ad hoc in a workflow, belongs in a script
       # both this job and a contributor's local run call) -- it also carries the `--workspace`
-      # rationale (in-diff otherwise scopes to the root `reconcile` package only) and the
-      # PROPTEST_RNG_SEED hermeticity note.
-      - run: ./scripts/check-mutation-gate.sh "${{ steps.base.outputs.ref }}"
+      # rationale (in-diff otherwise scopes to the root `reconcile` package only), the
+      # PROPTEST_RNG_SEED hermeticity note, and the shard argument's own reasoning.
+      - run: ./scripts/check-mutation-gate.sh "${{ steps.base.outputs.ref }}" "${{ matrix.shard }}/4"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutants-incremental
+          name: mutants-incremental-${{ matrix.shard }}
           path: mutants.out
 
   # Mirrors main.yml's `ci-success`, for the same reason: branch protection pins a required

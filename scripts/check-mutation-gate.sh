@@ -20,6 +20,9 @@ set -Eeuo pipefail
 export PROPTEST_RNG_SEED
 
 BASE_REF="${1:-origin/main}"
+# Optional "i/n" (0-based, matching mutants.yml's `nightly` job's own convention) to run only one
+# shard of the in-diff mutant set -- see the --shard block below for why pr-diff needs this.
+SHARD="${2:-}"
 
 GIT_ROOT=$(git rev-parse --show-toplevel)
 cd "$GIT_ROOT"
@@ -34,7 +37,7 @@ if [ ! -s "$DIFF" ]; then
 fi
 
 echo "check-mutation-gate: mutating lines changed against ${BASE_REF}"
-echo "                     PROPTEST_RNG_SEED=${PROPTEST_RNG_SEED}"
+echo "                     PROPTEST_RNG_SEED=${PROPTEST_RNG_SEED}${SHARD:+, shard=$SHARD}"
 
 # cargo-mutants tests mutants one at a time by default. This gate ran --jobs 3 for a
 # while (parallel build+test copies), capped and derived from nproc the same way this
@@ -80,8 +83,25 @@ JOBS=1
 # permanently unpassable for that code shape. Score on `missed` specifically instead of the
 # raw exit code, so a hang still counts as a detected fault (matching the mutants.toml
 # comment) while an actual survivor still fails the gate.
+#
+# SHARD_ARGS: a large mechanical split (#427/#452) can put 200+ mutants in one diff -- git diff
+# shows moved code as changed regardless of whether any logic in it actually did (AGENTS.md §10's
+# "a rule enforced by eye" problem, here applied to cargo-mutants' own scope). At --jobs 1 (the
+# only setting #438 has verified doesn't produce false MISSED under load) that serialized into a
+# 2+ hour run, twice cut off mid-run by the CI runner with zero mutants missed either time --
+# wasted compute, not a real gate failure. Splitting the *same* mutant set across parallel shards
+# (mutants.yml's `pr-diff` matrix) keeps each shard's wall-clock low without raising --jobs (so
+# #438's risk stays closed) and without paying for more total CPU-time than one successful serial
+# run would have -- unlike the timeout-minutes bumps this replaced, which paid for repeated
+# failed attempts at the same serial run. Empty on a normal PR (5-20 mutants): one shard gets
+# everything, sharding is a no-op.
+SHARD_ARGS=()
+if [ -n "$SHARD" ]; then
+    SHARD_ARGS=(--shard "$SHARD" --sharding round-robin)
+fi
+
 set +e
-cargo mutants --workspace --no-shuffle -vV --in-diff "$DIFF" --timeout 300 --jobs "$JOBS" --copy-target=false
+cargo mutants --workspace --no-shuffle -vV --in-diff "$DIFF" --timeout 300 --jobs "$JOBS" --copy-target=false "${SHARD_ARGS[@]}"
 mutants_status=$?
 set -e
 
