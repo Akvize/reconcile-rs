@@ -34,7 +34,10 @@
 //! One-way messages stay a separate column on purpose: no byte total prices a round trip. This
 //! target runs at RTT ≈ 0, so weigh that column by your own — at the rate `benches/system.rs`'s
 //! injected-RTT lane measures, one RTT per round trip with no hidden multiplier
-//! (`benches/README.md`).
+//! (`benches/README.md`). `threshold_sweep` does that weighing for the reader (#468): beside every
+//! total it prints the refinement half alone, the message delta, the payload size at which the two
+//! totals cross, and the RTT at which the saved round trips outweigh the added bytes — the columns
+//! that separate "loses on bytes" from "loses".
 //!
 //! **Why one drive prices every `V`.** Both peers assign the same value to the same key, so equal
 //! key sets have equal aggregates whatever the payload is, and every SKIP/IDLIST/SPLIT decision
@@ -157,7 +160,12 @@ const FAN_OUTS: &[usize] = &[2, 3, 4, 8, 16, 32, 64, 128, 256];
 /// floor (`t = 0` is unrepresentable, and would split a range into itself forever); 256 is eight
 /// doublings past it and four past the paper's 32, far enough for the amplification to be a curve
 /// rather than a point.
-const THRESHOLDS: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
+///
+/// `t` = 31 is the one non-doubling value, and it is here for the same reason `b` = 3 is in
+/// [`FAN_OUTS`]: it is where an external implementation actually sits. Negentropy's cutoff is
+/// `t = 2b - 1` ([`negentropy_cutoff`]), one rung below the paper's `t = 2b = 32`, and the two can
+/// only differ on a span of exactly `2b` — swept rather than argued (#468).
+const THRESHOLDS: &[usize] = &[1, 2, 4, 8, 16, 31, 32, 64, 128, 256];
 
 /// `(store size, difference sizes)` for the parameter sweeps, grouped so each store is built
 /// once. Small `n` carries only `d = 1`: too few levels for the rounds-vs-ranges trade to show.
@@ -600,6 +608,150 @@ fn break_even_bytes(cost: &Cost, baseline: &Cost) -> Option<f64> {
         .then(|| (baseline.refinement_bytes as f64 - cost.refinement_bytes as f64) / extra as f64)
 }
 
+/// Negentropy's enumeration cutoff, in this crate's `t` (#468).
+///
+/// Its `splitRange` ships an IdList as soon as `numElems < 2 * buckets`, where
+/// [`EnumerateBelowThreshold`] enumerates at `span <= t`: the same rule is `t = 2b - 1`, one below
+/// the paper's `t = 2b`. They can differ on exactly one span — a range holding `2b` elements — so
+/// [`THRESHOLDS`] carries both and the anchor drives this one.
+const fn negentropy_cutoff(fan_out: FanOut) -> usize {
+    2 * fan_out.get() - 1
+}
+
+/// The refinement half alone, read against `baseline`'s: what the Negentropy anchor compares, and
+/// what an RTT-bound deployment feels (#468).
+///
+/// A total-bytes ratio hides both, being dominated by the values an enumeration ships — which is
+/// why a policy can be a byte loss and a refinement/round-trip win at the same time.
+fn refinement_against(cost: &Cost, baseline: &Cost) -> String {
+    let ratio = |value: usize, base: usize| {
+        if base == 0 {
+            f64::NAN
+        } else {
+            value as f64 / base as f64
+        }
+    };
+    format!(
+        "refine {bytes:>9} B {byte_ratio:>5.2}x / {ranges:>6} r {range_ratio:>5.2}x \
+         / {messages:>3} msgs {delta:>+3}",
+        bytes = cost.refinement_bytes,
+        byte_ratio = ratio(cost.refinement_bytes, baseline.refinement_bytes),
+        ranges = cost.ranges,
+        range_ratio = ratio(cost.ranges, baseline.ranges),
+        messages = cost.messages,
+        delta = cost.messages as isize - baseline.messages as isize,
+    )
+}
+
+/// The link rate the round-trip break-even is quoted at, in bytes per millisecond: 1 Gb/s, the rate
+/// `benches/README.md` already prices `b` = 4's two extra round trips at. Stated rather than
+/// measured — this harness runs at RTT = 0 and over no link at all.
+const LINK_RATE_BYTES_PER_MS: f64 = 125_000.0;
+
+/// The RTT above which `cost`'s saved round trips outweigh the extra bytes they cost, one figure
+/// per [`VALUE_SIZES`] payload size (#468).
+///
+/// The threshold question in the unit an RTT-bound deployment budgets in: a policy that ships more
+/// bytes in fewer messages wins the wall clock exactly where the round trips it saves are dearer
+/// than the transmission time it adds, `extra_bytes / rate / saved_round_trips`. Two one-way
+/// messages make one round trip, at the measured 1.00 × RTT with no hidden multiplier
+/// (`benches/system.rs`'s injected-RTT lane, #280).
+///
+/// Four outcomes, so the sign is never left to the reader: `any` — dearer in neither column, so it
+/// wins at every RTT; `never` — dearer in both, so it wins at none; `>=x` — the ordinary trade,
+/// extra bytes for saved round trips, won above `x`; `<=x` — the reverse (cheaper bytes, *more*
+/// round trips), won below `x`.
+fn rtt_break_even(cost: &Cost, baseline: &Cost) -> String {
+    let saved_round_trips = (baseline.messages as f64 - cost.messages as f64) / 2.0;
+    let figures = cost
+        .total_bytes()
+        .iter()
+        .zip(baseline.total_bytes())
+        .map(|(&total, base)| {
+            let extra = total as f64 - base as f64;
+            let break_even = extra / LINK_RATE_BYTES_PER_MS / saved_round_trips;
+            if extra <= 0.0 && saved_round_trips >= 0.0 {
+                "any".to_string()
+            } else if extra > 0.0 && saved_round_trips <= 0.0 {
+                "never".to_string()
+            } else if saved_round_trips > 0.0 {
+                format!(">={break_even:.1}")
+            } else {
+                // Cheaper in bytes but dearer in round trips: the same quotient, read downwards.
+                format!("<={break_even:.1}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("rtt break-even [{figures}] ms @1 Gb/s")
+}
+
+/// Where `cost`'s total crosses `baseline`'s as the payload grows: [`break_even_bytes`] restated in
+/// the unit a deployment knows about itself, its own value size (#468).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Crossover {
+    /// Both ship the same *number* of elements, so the gap between the totals does not move with
+    /// `V` at all: whichever is ahead at one payload size is ahead at every payload size.
+    Flat,
+    /// `cost` is cheaper below this payload size and dearer above it.
+    WinsBelow(f64),
+    /// `cost` ships *fewer* elements, so the sign is reversed: it is cheaper above this payload
+    /// size and dearer below it.
+    WinsAbove(f64),
+}
+
+impl Crossover {
+    /// One printed cell, in bytes of payload — the same unit as [`VALUE_SIZES`].
+    ///
+    /// A crossover outside `0..=250` is reported as such rather than as a payload size: a negative
+    /// one is a trade no representable value can pay for (absence, stated as a figure), and one
+    /// past 250 leaves the regime [`value_crossover`] fits.
+    fn describe(self) -> String {
+        match self {
+            Crossover::Flat => "V crossover        — same element count".to_string(),
+            Crossover::WinsBelow(v) => {
+                format!("V crossover {v:>8.1} B, wins below{}", Crossover::note(v))
+            }
+            Crossover::WinsAbove(v) => {
+                format!("V crossover {v:>8.1} B, wins above{}", Crossover::note(v))
+            }
+        }
+    }
+
+    /// Whether the figure is a payload size a caller could actually choose.
+    fn note(crossover: f64) -> &'static str {
+        if crossover < 0.0 {
+            " (no such payload: it loses at every value size)"
+        } else if crossover > 250.0 {
+            " (extrapolated past the 1 B length varint)"
+        } else {
+            ""
+        }
+    }
+}
+
+/// The crossover, from two priced points rather than from a model of the encoder.
+///
+/// A total is affine in `V` as long as the payload's length varint stays one byte (`V <= 250`,
+/// [`dated_cell`]), so the totals at `VALUE_SIZES[0]` and `VALUE_SIZES[1]` — 8 B and 64 B, both
+/// inside that regime — determine the line exactly and the root of their difference is the
+/// crossover. Nothing here is fitted: two measurements and one linear solve.
+fn value_crossover(cost: &Cost, baseline: &Cost) -> Crossover {
+    let gap =
+        |index: usize| cost.total_bytes()[index] as f64 - baseline.total_bytes()[index] as f64;
+    let (low, high) = (VALUE_SIZES[0] as f64, VALUE_SIZES[1] as f64);
+    let slope = (gap(1) - gap(0)) / (high - low);
+    if slope == 0.0 {
+        return Crossover::Flat;
+    }
+    let crossover = low - gap(0) / slope;
+    if slope > 0.0 {
+        Crossover::WinsBelow(crossover)
+    } else {
+        Crossover::WinsAbove(crossover)
+    }
+}
+
 /// The measured price of one enumerated element, at both ends of the swept key space — the floor
 /// every [`break_even_bytes`] is read against, and the reason it is a floor: the key, the stamp and
 /// the framing are spent before the payload contributes a byte.
@@ -663,6 +815,11 @@ fn print_negentropy_anchor() {
         let full = store(n, &[]);
         let holed = store(n, &missing_keys(n, d, Clustering::Scattered));
         let ours = counted_reconcile(&full, &holed, &FixedFanOut::default());
+        // The same descent under *their* enumeration cutoff, the fan-out held at `b` = 16 both
+        // ways: what the ranges/messages gap above is actually made of (#468).
+        let their_cutoff =
+            EnumerateBelowThreshold::new(negentropy_cutoff(FanOut::NEGENTROPY), FanOut::NEGENTROPY);
+        let ours_their_cutoff = counted_reconcile(&full, &holed, &their_cutoff);
 
         let per_range = |bytes: usize, ranges: usize| {
             if ranges == 0 {
@@ -683,6 +840,19 @@ fn print_negentropy_anchor() {
             ours_r = ours.ranges,
             ours_m = ours.messages,
             ratio = mine / theirs,
+        );
+        println!(
+            "[protocol]            under their cutoff (t={t}=2b-1, b=16, #468): \
+             {cut_b:>7} B / {cut_r:>5} r / {cut_m:>2} msgs = {cut:>6.2} B/r \
+             | against negentropy's {their_ranges:>5} r / {their_messages:>2} msgs \
+             | costing {elements:>7} enumerated elements against the default's {base_elements}",
+            t = negentropy_cutoff(FanOut::NEGENTROPY),
+            cut_b = ours_their_cutoff.refinement_bytes,
+            cut_r = ours_their_cutoff.ranges,
+            cut_m = ours_their_cutoff.messages,
+            cut = per_range(ours_their_cutoff.refinement_bytes, ours_their_cutoff.ranges),
+            elements = ours_their_cutoff.enumerated_elements,
+            base_elements = ours.enumerated_elements,
         );
     }
 }
@@ -823,15 +993,26 @@ fn fan_out_sweep(c: &mut Criterion) {
 /// same trade as a single number: the element price at which it would come out even, to be read
 /// against the element price printed by `reconciliation_cost`.
 ///
+/// **And what to read next to it (#468).** A total-bytes ratio answers one question and hides two:
+/// a `t` that loses on bytes can still advertise fewer ranges in fewer messages, which is what an
+/// RTT-bound deployment pays in. Each row therefore also carries [`refinement_against`] — the
+/// refinement half alone, plus the one-way-message delta — and the two crossovers that make the
+/// verdict conditional rather than flat: [`value_crossover`], the payload size at which the totals
+/// cross, and [`rtt_break_even`], the round-trip time at which the messages saved outweigh the
+/// bytes added.
+///
 /// `t` is not a continuous knob. A range's span walks the ladder `n / b^k`, so every `t` between
 /// two rungs picks the same rung and costs exactly the same — the plateaus in the table are the
-/// ladder, not noise.
+/// ladder, not noise. [`negentropy_cutoff`]'s `t = 2b - 1` and the paper's `t = 2b` are one such
+/// pair, which is why both are swept.
 fn threshold_sweep(c: &mut Criterion) {
     println!(
         "[threshold] EnumerateBelowThreshold, enumeration threshold only, b=16 throughout, \
          u64 keys, differences scattered.\n\
-         [threshold] each row is total wire bytes and its ratio to FixedFanOut(16), today's \
-         default; below 1.00x, `t` pays for itself."
+         [threshold] first row is total wire bytes and its ratio to FixedFanOut(16), today's \
+         default; below 1.00x, `t` pays for itself.\n\
+         [threshold] second row is the refinement half alone, the message delta, and the two \
+         crossovers a total hides: the value size, and the RTT (#468)."
     );
     for &(n, diffs) in SWEEP_CASES {
         let full = store(n, &[]);
@@ -852,6 +1033,13 @@ fn threshold_sweep(c: &mut Criterion) {
                         // No extra element shipped: this `t` reaches the default's own cutoffs.
                         None => "       — same elements".to_string(),
                     }
+                );
+                println!(
+                    "[threshold]   {:<11} {} | {} | {}",
+                    "",
+                    refinement_against(&cost, &baseline),
+                    value_crossover(&cost, &baseline).describe(),
+                    rtt_break_even(&cost, &baseline),
                 );
                 println!("[threshold]   {:<11} {}", "", breakdown(&cost));
             }

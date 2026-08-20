@@ -290,6 +290,38 @@ default's bytes at 8-byte values, 36× at 4 KB. No swept `t` saves more than 4 %
 at 8-byte values, and none beats the default at 64 B or above. The outcome, and why the default did
 not move: [#315](https://github.com/Akvize/reconcile-rs/issues/315).
 
+**That is the byte column; the other two say the opposite**
+([#468](https://github.com/Akvize/reconcile-rs/issues/468)). Each `t` row also carries the
+refinement half alone against the same baseline, the one-way-message delta, the value size at which
+the two totals cross, and the RTT at which the round trips it saves outweigh the bytes it adds
+(`refinement_against`, `value_crossover`, `rtt_break_even`). At `t` = 2b = 32 — Negentropy's own
+cutoff, `t` = 31 measuring identical to it — over the eight swept `(n, d)`:
+
+| `n` | `d` | refine | ranges | msgs | wins on total bytes below `V` = | RTT break-even @1 Gb/s, `V` = 8 B … 4 KB (`any` = wins at every RTT, costing no extra bytes) |
+|---:|---:|---:|---:|---:|---:|---|
+| 10³ | 1 | 0.87× | 0.87× | 6 → 4 | 13.5 B | any, ≥0.0, ≥0.0, ≥0.2 ms |
+| 10⁴ | 1 | 0.69× | 0.69× | 6 → 4 | — (−10.5 B) | ≥0.0, ≥0.0, ≥0.2, ≥1.6 ms |
+| 10⁵ | 1 | 0.82× | 0.82× | 6 → 5 | 0.8 B | ≥0.0, ≥0.0, ≥0.2, ≥1.3 ms |
+| 10⁵ | 10 | 0.69× | 0.68× | 8 → 5 | — (−9.8 B) | ≥0.0, ≥0.2, ≥1.4, ≥11.0 ms |
+| 10⁵ | 100 | 0.54× | 0.55× | 8 → 5 | — (−9.7 B) | ≥0.5, ≥1.9, ≥13.8, ≥108.1 ms |
+| 10⁶ | 1 | 0.85× | 0.85× | 8 → 6 | 3.4 B | ≥0.0, ≥0.0, ≥0.1, ≥0.7 ms |
+| 10⁶ | 10 | 0.75× | 0.75× | 8 → 6 | 1.8 B | ≥0.0, ≥0.1, ≥1.2, ≥9.8 ms |
+| 10⁶ | 100 | 0.68× | 0.68× | 8 → 6 | 1.8 B | ≥0.1, ≥1.5, ≥12.1, ≥96.6 ms |
+
+Read it as three findings:
+
+| | |
+|---|---|
+| refinement and rounds | `t` = 2b wins **everywhere**: 0.54–0.87× the refinement bytes, 0.55–0.87× the ranges, and 1–3 fewer one-way messages at every `(n, d)` — one descent level, the gap the Negentropy anchor below shows |
+| the `V` crossover | a figure, not a verdict: 13.5 B at `n` = 10³, ≤ 3.4 B at `n` ≥ 10⁵, negative at three of eight cases. Only a set-shaped or single-byte-valued store wins on total bytes, which is the band #315 was already reading when it found the smallest value size closest |
+| the RTT crossover | 0.0–0.5 ms at 8-byte values, so any WAN link flips it; at 4 KB it is `d` that decides — 0.2–1.6 ms at `d` = 1 against 96–108 ms at `d` = 100 |
+
+Both crossovers assume a lossless link at line rate and count two one-way messages as one round trip
+(the measured 1.00 × RTT, above). `LINK_RATE_BYTES_PER_MS` states the rate; nothing here measures a
+link. #315's recommendation therefore stands **for total bytes and becomes conditional otherwise** —
+`EnumerateBelowThreshold` for small-value, small-`d`, RTT-bound deployments, the default elsewhere;
+the caller-facing form is on `EnumerateBelowThreshold`'s rustdoc.
+
 The split rule itself is pinned by unit tests in `rbsr/src/protocol.rs`
 (`default_split_fan_out_is_constant_at_sixteen`, `sqrt_fan_out_is_still_the_square_root_of_the_range_size`,
 `split_children_partition_the_parent_range`), so changing the *default* fails CI rather than
@@ -320,7 +352,7 @@ What it supersedes, and what it leaves open:
 | superseded | `SOTA.md`'s "44 B/range against 16 B" — both figures were payload-only, and a range does not travel without its bound and framing |
 | our per-range cost | not a constant: 43.6 B → 49.2 B as `n` grows, since `KeyRange` bounds cost more varint bytes as keys grow |
 | where the gap is | bound encoding is ~5 B here against ~4 B there, so the gap is summary width — §2.1's trade, confirmed |
-| open | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 3.0× against 2.46× per range. Unexplained; not attributable to summary width |
+| explained | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 3.0× against 2.46× per range. It is the **enumeration cutoff**, not the fan-out: [#468](https://github.com/Akvize/reconcile-rs/issues/468), below |
 
 Commensurability, before summing anything against the totals above:
 
@@ -329,6 +361,31 @@ Commensurability, before summing anything against the totals above:
 | compares | the fixture's `fp_ranges`/`fp_bytes` (mode=1 ranges) against `Cost::ranges`/`Cost::refinement_bytes` |
 | does not compare | the IDLIST halves — a Negentropy element is a timestamp + a 256-bit id, ours is a key + an HLC + a value |
 | instance | modelled, not shared: item `k` gets timestamp `k` and a deterministic 32-byte id, so both refine over the same logical ordering of the same `n` items |
+
+#### The descent gap is their enumeration cutoff ([#468](https://github.com/Akvize/reconcile-rs/issues/468))
+
+Negentropy's `splitRange` carries one size-based cutoff — `numElems < 2 · buckets` ships an IdList,
+anything wider splits into `buckets` children — where `shared_cutoffs` has none, so `FixedFanOut`
+keeps descending where Negentropy has already stopped. In this crate's vocabulary that rule is
+`EnumerateBelowThreshold` at `t = 2b − 1` = 31, one rung below the paper's `t = 2b` = 32 and
+measured identical to it at every swept `(n, d)` (the span walks the `m / b^k` ladder, so neither
+`t` picks a different rung). `print_negentropy_anchor` drives that policy beside the default on
+every anchor row; the third column is what the first two are being compared through:
+
+| `n` | `d` | default `b`=16 | under their cutoff (`t`=31, `b`=16) | Negentropy |
+|---:|---:|---:|---:|---:|
+| 10³ | 1 | 39 r / 6 msgs | 34 r / 4 msgs | 32 r / 4 msgs |
+| 10⁴ | 1 | 49 r / 6 msgs | 34 r / 4 msgs | 48 r / 4 msgs |
+| 10⁵ | 1 | 61 r / 6 msgs | 50 r / 5 msgs | 48 r / 4 msgs |
+| 10⁶ | 1 | 78 r / 8 msgs | 66 r / 6 msgs | 64 r / 6 msgs |
+| 10⁶ | 100 | 5 247 r / 8 msgs | 3 573 r / 6 msgs | 3 472 r / 6 msgs |
+
+Adopting their cutoff closes the message gap outright on four of the five rows (the 10⁵ row lands
+one message above) and 71–94 % of the range gap; at 10⁴ it goes past them. What it costs is the
+other half of the same trade — 7, 51, 21, 21 and 3 048 enumerated elements against the default's 1,
+1, 1, 1 and 100 — which is exactly what [#315](https://github.com/Akvize/reconcile-rs/issues/315)
+priced and rejected, and what the `threshold_sweep` section above now reports in the two columns
+that trade decides. The remaining per-range 2.46× is summary width, unchanged.
 
 `benches/fixtures/negentropy-drive.js` parses Negentropy's emitted messages against its
 [protocol v1 spec](https://github.com/hoytech/negentropy/blob/master/docs/negentropy-protocol-v1.md)

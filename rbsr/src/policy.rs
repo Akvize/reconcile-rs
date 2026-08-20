@@ -292,7 +292,7 @@ pub struct FixedFanOut {
 /// `t` trades refinement bytes for *values*: a range of `t` local elements ships wholesale,
 /// including everything the peer already has.
 ///
-/// # Shipped, but not the default
+/// # Shipped, not the default — but the verdict is conditional (#468)
 ///
 /// Both halves of that trade, totalled in one unit against [`FixedFanOut`] at the same `b`, over
 /// `t` = 1…256 and value payloads of 8 B…4 KB (`benches/protocol.rs`'s `threshold_sweep`). At
@@ -308,9 +308,37 @@ pub struct FixedFanOut {
 /// 8-byte payload, and beats the default nowhere from 64 B up; `t` = 32 runs 0.98–1.52× the
 /// default's total bytes at 8 B and 5.2–36× at 4 KB.
 ///
-/// In bytes, that is. What they buy is round trips — one fewer descent level — and a round trip has
-/// a price too, so on a link fast and far enough a threshold can win the wall clock it loses on
-/// bytes. Both crossovers, and why the default answers the byte question: `SOTA.md` §2.2.
+/// **That is a verdict about bytes, and it does not carry to the columns a round trip is paid in.**
+/// Against the same baseline, over the eight `(n, d)` `threshold_sweep` covers, `t` = 2b = 32:
+///
+/// | column | `t` = 2b against the default |
+/// |---|---|
+/// | refinement bytes | 0.54–0.87× — a win at every `(n, d)` |
+/// | advertised ranges | 0.55–0.87× — a win at every `(n, d)` |
+/// | one-way messages | 1 to 3 fewer, at every `(n, d)`: one descent level less |
+/// | total wire bytes | 0.98–1.52× at `V` = 8 B, 5.2–36× at 4 KB — a loss almost everywhere |
+///
+/// This is also, exactly, what Negentropy ships: its `splitRange` enumerates as soon as
+/// `numElems < 2 · b`, i.e. `t = 2b − 1`, which costs the same as `t = 2b` at every swept case
+/// (the span walks the `m / b^k` ladder, so neither `t` picks a different rung). Its counted
+/// descent — fewer ranges in fewer messages at the same nominal `b` — is that cutoff and nothing
+/// else: `benches/README.md`, "The Negentropy anchor".
+///
+/// So the choice is bandwidth against latency, and both crossovers are measured rather than
+/// argued:
+///
+/// | crossover | measured figure |
+/// |---|---|
+/// | the payload `V` below which `t` = 2b wins on **total bytes** | 13.5 B at n = 10³, ≤ 3.4 B at n ≥ 10⁵, and negative — no such payload — at three of the eight cases |
+/// | the **RTT** above which the round trips it saves outweigh the bytes it adds, at 1 Gb/s | 0.0–0.5 ms at `V` = 8 B; 0.2–1.6 ms at 4 KB with `d` = 1; 96–108 ms at 4 KB with `d` = 100 |
+///
+/// **Reach for it when the elements are cheap or the link is dear**: below the first crossover it
+/// wins on bytes outright — a set-shaped store (`V = ()`) or a few-byte payload, five of the eight
+/// cases here. Above it, it still wins the wall clock past the second crossover — every swept case
+/// at 8-byte values, any payload while `d` stays small. **Keep the default when values are large
+/// *and* differences are many**: extra elements cost more transmission time than the round trips
+/// they buy, and `d`, not `n`, decides it. Both figures assume a lossless link at line rate; under
+/// loss the binding term is `reconcile_interval` per lost datagram instead (`SOTA.md` §2.2).
 ///
 /// It ships because the arithmetic, not the conclusion, is what generalizes: a narrower
 /// conflict-resolution stamp, a set-shaped store (`V = ()`) or keys dearer than values move the
