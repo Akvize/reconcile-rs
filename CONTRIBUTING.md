@@ -115,7 +115,7 @@ Measured on this workspace, four cores, warm `target/`.
   (criterion, proptest and friends — against 47 without dev-dependencies) into the path of every
   commit, which is why it moved to tier 2.
 - **Tier 2 (push), ~20 s.** Dominated by the test binaries — building them when stale, running them
-  either way (`tests/service.rs` alone spends ~5 s on real sockets and timers) — not by clippy,
+  either way (`tests/service/` alone spends ~5 s on real sockets and timers) — not by clippy,
   which is ~4 s of it. One feature variant only.
 - **Tier 3 (CI), minutes.** The second feature variant, `cargo bench --no-run`, `cargo doc` ×2 and
   `cargo package`: together they roughly double the wall clock to re-check what tier 2 already
