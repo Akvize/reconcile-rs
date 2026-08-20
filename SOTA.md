@@ -416,9 +416,16 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   collision rather than resampling one.** RBSR, PSR, CPI and RIBLT state their bounds for one pair
   of peers, while `ReplicatedMap` runs a gossip cluster at O(N) write amplification (§1.2,
   `benches/system.rs::gossip_fanout`). A fixed `lift` makes a verdict a function of the *content*
-  pair, so distinct verdicts are bounded by content classes and never by `N`: a converged fleet
-  buys **0** retries. Refutes arXiv:2212.13567 §5.1 by derivation; mechanism, scope and the
-  `N`-sweep in `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
+  pair, so distinct verdicts are bounded by content classes and never by `N` — refuting
+  arXiv:2212.13567 §5.1 by derivation, and inverting which regime is dangerous:
+
+  | fleet state | content classes over `r` | retries `N` buys |
+  |---|---|---|
+  | freshly partitioned, divergent | many | ≈ `N` |
+  | converged but for one divergence | **2** | **0** |
+
+  Redundancy buys nothing exactly when the fleet is healthy. Mechanism, scope and the `N`-sweep:
+  `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals

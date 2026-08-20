@@ -40,7 +40,7 @@ export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; wit
                                                              # is a warning locally and an error
                                                              # in CI — run the list as CI runs it
 cargo fmt --check
-./scripts/check-doc-budget.sh                     # AGENTS.md + CLAUDE.md ≤ 200 lines, SOTA.md ≤ 1100
+./scripts/check-doc-budget.sh              # AGENTS.md + CLAUDE.md ≤ 200, SOTA.md §1-§2 prose ≤ 700
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
 ./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
 ./scripts/check-test-file-naming.sh                # split #[cfg(test)] modules named tests.rs
