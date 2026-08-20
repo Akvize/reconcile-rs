@@ -39,9 +39,33 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use reconcile::{replicated_map::Config, ClusterKey, NodeId, ReplicatedMap};
+
+/// Serve a bare-bones readiness probe on `addr`: `200 OK` once `store` has completed at least one
+/// reconciliation round, `503` before that. Unlike `/metrics` (always `200` once the process is
+/// up), this answers "is this node synced", the gap #292 calls out — a cold replica no longer
+/// reports Ready while still serving empty reads.
+async fn serve_readiness(addr: SocketAddr, store: ReplicatedMap<String, String>) {
+    let listener = TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|err| panic!("failed to bind readiness probe to {addr}: {err}"));
+    loop {
+        let Ok((mut socket, _)) = listener.accept().await else {
+            continue;
+        };
+        let response = if store.sync_state().rounds > 0 {
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n"
+        } else {
+            "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n"
+        };
+        let _ = socket.write_all(response.as_bytes()).await;
+    }
+}
 
 /// Read a required environment variable or exit with a clear message.
 fn required(name: &str) -> String {
@@ -89,6 +113,9 @@ async fn main() {
     let metrics_addr: SocketAddr = optional("RECONCILE_METRICS_ADDR", "0.0.0.0:9000")
         .parse()
         .expect("RECONCILE_METRICS_ADDR must be host:port");
+    let ready_addr: SocketAddr = optional("RECONCILE_READY_ADDR", "0.0.0.0:9001")
+        .parse()
+        .expect("RECONCILE_READY_ADDR must be host:port");
     // How often this pod refreshes its own heartbeat key.
     let heartbeat_interval = Duration::from_secs(
         optional("RECONCILE_HEARTBEAT_SECS", "5")
@@ -162,6 +189,11 @@ async fn main() {
     });
     // --- end demo ---------------------------------------------------------------------------
 
+    tokio::spawn(serve_readiness(ready_addr, store.clone()));
+
     info!(%pod_ip, %pod_name, port, "reconcile k8s node starting; writing heartbeats; discovering peers over DNS");
-    store.run().await;
+    // No signal wired to `shutdown` here: the demo runs until the pod is killed, same as before
+    // this API existed. A production node ties this token to its own shutdown signal (e.g.
+    // SIGTERM) to flush a final snapshot before exiting.
+    store.run(CancellationToken::new()).await;
 }

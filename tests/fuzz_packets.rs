@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use rand::{Rng, SeedableRng};
 use tokio::net::UdpSocket;
+use tokio_util::sync::CancellationToken;
 
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
@@ -71,7 +72,7 @@ async fn malformed_datagrams_do_not_panic_or_corrupt_state() {
         .expect("bind failed");
     store.load_bulk(&[(0, "legit".to_string())]);
 
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     let attacker = UdpSocket::bind("127.0.0.71:0").await.unwrap();
     let target = format!("{victim_addr}:{port}");

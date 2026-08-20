@@ -15,7 +15,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use reconcile::{replicated_map::Config, ReplicatedMap};
+use tokio_util::sync::CancellationToken;
+
+use reconcile::{
+    replicated_map::{Config, RunOutcome},
+    ReplicatedMap,
+};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
     for _ in 0..300 {
@@ -115,8 +120,8 @@ async fn converged_pair(
 ) -> (
     ReplicatedMap<i32, i32>,
     ReplicatedMap<i32, i32>,
-    tokio::task::JoinHandle<()>,
-    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<RunOutcome>,
+    tokio::task::JoinHandle<RunOutcome>,
 ) {
     let store1 = ReplicatedMap::<i32, i32>::new(config(port, a1))
         .await
@@ -129,8 +134,8 @@ async fn converged_pair(
     for k in 1..=5 {
         store1.insert(k, k * 10);
     }
-    let t1 = tokio::spawn(store1.clone().run());
-    let t2 = tokio::spawn(store2.clone().run());
+    let t1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let t2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
     (store1, store2, t1, t2)
 }
 
@@ -204,8 +209,8 @@ async fn load_bulk_seeds_locally_then_converges() {
     assert_eq!(store1.get(&4).as_deref(), Some(&40));
 
     // Converges to the peer through the periodic anti-entropy round once both run.
-    let t1 = tokio::spawn(store1.clone().run());
-    let t2 = tokio::spawn(store2.clone().run());
+    let t1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let t2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
     assert_until!((1..=4).all(|k| store2.get(&k).as_deref() == Some(&(k * 10))));
 
     t1.abort();

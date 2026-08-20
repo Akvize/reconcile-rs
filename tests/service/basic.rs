@@ -14,6 +14,8 @@ use rand::{
     Rng, SeedableRng,
 };
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{clock::NodeId, replicated_map::Config, Fingerprint, ReplicatedMap};
 
 use crate::support::assert_until;
@@ -57,8 +59,8 @@ async fn test() {
     // receiving these asserts would race with reconciliation.
     assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
     assert_eq!(store1.fingerprint(..), start_fingerprint);
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     assert_until!(store2.fingerprint(..) == start_fingerprint);
 
@@ -155,8 +157,8 @@ async fn get_mut_edit_propagates_to_peers() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     let key = "k".to_string();
     let before = "before".to_string();
@@ -213,8 +215,8 @@ async fn concurrent_writes_converge() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // Hammer the same key from both nodes with different values, back to back, so that some
     // writes race closely in time.

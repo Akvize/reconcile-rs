@@ -11,6 +11,8 @@
 
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, Fingerprint, ReplicatedMap};
 
 use crate::support::{assert_until, wait_until};
@@ -55,8 +57,8 @@ async fn cross_net_reconciliation() {
         .with_seed(addr1);
     assert_eq!(store2.fingerprint(..), Fingerprint::ZERO);
 
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     // The remote-network peer eventually receives the value over cross-network anti-entropy.
     assert_until!(store2.get(&"key".to_string()).as_deref() == Some(&"value".to_string()));
@@ -104,8 +106,8 @@ async fn cross_net_discovery_without_seed() {
         .await
         .expect("bind failed");
 
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     assert_until!(store2.fingerprint(..) == start_fingerprint);
 
@@ -147,8 +149,8 @@ async fn runtime_add_net_enables_discovery_and_convergence() {
         .await
         .expect("bind failed");
 
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     assert!(
         !wait_until(|| store2.fingerprint(..) == start_fingerprint).await,
@@ -204,8 +206,8 @@ async fn unclassified_peer_is_still_reconciled() {
     // Local net of last resort is each node's own host route (peer is not local).
     assert_eq!(store1.local_net(), "127.0.6.1/32".parse().unwrap());
 
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     // Converges purely through the unclassified-peer repair bucket.
     assert_until!(store2.fingerprint(..) == start_fingerprint);

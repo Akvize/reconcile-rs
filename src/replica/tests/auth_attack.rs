@@ -12,6 +12,7 @@ use bincode::{DefaultOptions, Serializer};
 use chrono::Utc;
 use serde::Serialize;
 use tokio::net::UdpSocket;
+use tokio_util::sync::CancellationToken;
 
 use super::super::Message;
 use crate::clock::{Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
@@ -52,7 +53,7 @@ async fn forged_datagram_is_ignored() {
         .await
         .expect("bind failed");
     store.just_insert(0, "legit".to_string());
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     let attacker = UdpSocket::bind("127.0.0.49:0").await.unwrap();
     let target = format!("{victim_addr}:{port}");

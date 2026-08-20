@@ -29,9 +29,10 @@ RUN cargo build --release --example k8s --features metrics-prometheus \
 FROM gcr.io/distroless/cc-debian12 AS runtime
 COPY --from=builder /usr/local/bin/reconcile-node /usr/local/bin/reconcile-node
 
-# Gossip (UDP) and metrics/probes (TCP). Match examples/k8s/base/ (and .../kind/) and the env.
+# Gossip (UDP) and metrics/readiness (TCP). Match examples/k8s/base/ (and .../kind/) and the env.
 EXPOSE 8080/udp
 EXPOSE 9000/tcp
+EXPOSE 9001/tcp
 
 # Run as the distroless non-root user.
 USER 65532:65532

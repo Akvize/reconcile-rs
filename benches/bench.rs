@@ -14,6 +14,8 @@ mod imp {
         Throughput,
     };
 
+    use tokio_util::sync::CancellationToken;
+
     use reconcile::{
         replicated_map::Config, Entry, FingerprintTreeMap, Hlc, LogicalCounter, NodeId,
         PhysicalTime, ReplicatedMap, State, Timestamp,
@@ -340,8 +342,8 @@ mod imp {
                         .expect("bind failed")
                         .with_seed(addr1);
                     store2.insert_bulk(&key_values[..size]);
-                    let task1 = tokio::spawn(store1.clone().run());
-                    let task2 = tokio::spawn(store2.clone().run());
+                    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+                    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
                     b.iter(|| {
                         let k: u32 = rng.gen();
@@ -407,8 +409,8 @@ mod imp {
                         .expect("bind failed")
                         .with_seed(addr1);
                     store2.insert_bulk(&key_values[..size]);
-                    let task1 = tokio::spawn(store1.clone().run());
-                    let task2 = tokio::spawn(store2.clone().run());
+                    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+                    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
                     b.iter(|| {
                         let k: u32 = rng.gen();

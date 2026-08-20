@@ -14,6 +14,8 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::discovery::{DiscoverFuture, Discovery, DiscoveryKind};
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
@@ -100,8 +102,8 @@ async fn vanished_peer_is_decommissioned_and_tombstone_collected() {
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // Establish mutual membership by exchanging a value in each direction.
     store1.insert(1, 11);

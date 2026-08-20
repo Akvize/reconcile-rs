@@ -16,6 +16,8 @@ use rand::{
     SeedableRng,
 };
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, ClusterKey, ReplicatedMap};
 
 use crate::support::assert_until;
@@ -59,8 +61,8 @@ async fn authenticated_nodes_converge() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     // store2 should receive all of store1's values across the authenticated channel
     assert_until!(store2.fingerprint(..) == start_fingerprint);
@@ -102,8 +104,8 @@ async fn test_malformed_datagram_does_not_crash() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // 0x02 is an invalid bincode enum tag for `Message`; before the fix this panicked the
     // receive loop. Send it to both nodes' protocol sockets from an unrelated socket.
@@ -161,8 +163,8 @@ async fn encrypted_nodes_converge() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     // store2 should receive all of store1's values across the encrypted channel
     assert_until!(store2.fingerprint(..) == start_fingerprint);
@@ -210,8 +212,8 @@ async fn encrypted_node_with_wrong_key_is_rejected() {
         .await
         .expect("bind failed")
         .with_seed(addr1);
-    let task2 = tokio::spawn(store2.clone().run());
-    let task1 = tokio::spawn(store1.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
 
     // store2 must NOT be able to read store1's data: with a wrong key every datagram fails
     // authentication and is dropped, so it never reaches store1's fingerprint.
@@ -246,7 +248,7 @@ async fn stale_datagram_outside_freshness_window_is_rejected() {
         .await
         .expect("bind failed");
     store.just_insert(0, 99);
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -306,7 +308,7 @@ async fn replayed_sealed_datagram_is_rejected() {
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
         .expect("bind failed");
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     // Give the run loop time to start before injecting traffic.
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -369,7 +371,7 @@ async fn decommissioned_peer_replay_is_rejected() {
     let store = ReplicatedMap::<i32, i32>::new(cfg)
         .await
         .expect("bind failed");
-    let task = tokio::spawn(store.clone().run());
+    let task = tokio::spawn(store.clone().run(CancellationToken::new()));
 
     tokio::time::sleep(Duration::from_millis(20)).await;
 

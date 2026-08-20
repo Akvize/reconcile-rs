@@ -64,6 +64,7 @@ pub use ipnet;
 pub use parking_lot;
 pub use rand;
 pub use tokio;
+pub use tokio_util;
 
 /// Optional Prometheus integration (enabled by the `metrics-prometheus` feature).
 #[cfg(feature = "metrics-prometheus")]
@@ -75,7 +76,9 @@ pub(crate) mod replica;
 pub(crate) mod timeout_wheel;
 
 pub use bounds::{Key, Value};
-pub use clock::{Clock, Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp};
+pub use clock::{
+    Clock, ClockDrift, Hlc, LogicalCounter, NodeId, PhysicalTime, Timestamp, MAX_CLOCK_DRIFT,
+};
 pub use discovery::{
     DiscoverFuture, Discovery, DiscoveryError, DiscoveryKind, DnsDiscovery, DnsDiscoveryError,
     RandomProbe,

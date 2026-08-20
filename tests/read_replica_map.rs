@@ -19,6 +19,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, InMemoryNetwork, ReadReplicaMap, ReplicatedMap};
 
 async fn wait_until<F: FnMut() -> bool>(mut f: F) -> bool {
@@ -75,7 +77,7 @@ async fn read_replica_converges_with_dated_store() {
     }
     dated.insert("doomed".to_string(), "to be deleted".to_string());
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // The read replica receives the latest values, with timestamps dropped.
@@ -140,7 +142,7 @@ async fn read_replica_does_not_block_tombstone_gc() {
     dated.insert(1, 11);
     dated.insert(2, 22);
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // The read replica syncs (and thereby contacts the dated store, the moment it could wrongly
@@ -198,7 +200,7 @@ async fn read_replica_converges_with_dated_store_over_in_memory_transport() {
     }
     dated.insert("doomed".to_string(), "to be deleted".to_string());
 
-    let dated_task = tokio::spawn(dated.clone().run());
+    let dated_task = tokio::spawn(dated.clone().run(CancellationToken::new()));
     let read_replica_task = tokio::spawn(read_replica.clone().run());
 
     // Values arrive, timestamps dropped.

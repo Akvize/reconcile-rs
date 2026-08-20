@@ -17,7 +17,7 @@
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! // Installs the recorder and spawns a background HTTP server exposing `/metrics`.
 //! reconcile::prometheus::serve("0.0.0.0:9000".parse()?).await?;
-//! // ... then start your store: `store.run().await;`
+//! // ... then start your store: `store.run(shutdown).await;`
 //! # Ok(())
 //! # }
 //! ```
