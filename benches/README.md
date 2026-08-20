@@ -297,51 +297,44 @@ silently changing every cluster's bandwidth profile — this benchmark quantifie
 does not guard it. `split_children_partition_the_parent_range` is policy-independent and must hold
 under any fan-out rule.
 
-### The Negentropy anchor — the one column that is not us against ourselves
+### The Negentropy anchor
 
-Every other comparison in this target is `reconcile-rs` against `reconcile-rs`: policy against
-policy, `b` against `b`. [#362](https://github.com/Akvize/reconcile-rs/issues/362) adds one external
-column, from the reference implementation of the same algorithm family at a pinned commit. It is
-printed by `print_negentropy_anchor` on every `cargo bench --bench protocol` run, read from
-`benches/fixtures/negentropy-counted.tsv` — whose header carries the provenance, the generating
-command, and the caveats below in full. Both sides run `b` = 16, `Clustering::Scattered`.
+The one column here not produced by `reconcile-rs`
+([#362](https://github.com/Akvize/reconcile-rs/issues/362)). `print_negentropy_anchor` prints it on
+every run of this target, reading `benches/fixtures/negentropy-counted.tsv`, whose header carries the
+provenance and the generating command. Refinement columns only; `b` = 16 and `Clustering::Scattered`
+both sides.
 
-| `n` | `d` | reconcile-rs | | | Negentropy | | | ratio |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| | | B | ranges | msgs | B | ranges | msgs | B/range |
-| 10³ | 1 | 1 701 | 39 | 6 | 608 | 32 | 4 | 2.30× |
-| 10⁴ | 1 | 2 195 | 49 | 6 | 927 | 48 | 4 | 2.32× |
-| 10⁵ | 1 | 2 789 | 61 | 6 | 943 | 48 | 4 | 2.33× |
-| 10⁶ | 1 | 3 834 | 78 | 8 | 1 278 | 64 | 6 | 2.46× |
-| 10⁶ | 100 | 253 153 | 5 247 | 8 | 67 853 | 3 472 | 6 | 2.47× |
+| `n` | `d` | B | ranges | msgs | B/range | Negentropy B | ranges | msgs | B/range | ratio |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10³ | 1 | 1 701 | 39 | 6 | 43.62 | 608 | 32 | 4 | 19.00 | 2.30× |
+| 10⁴ | 1 | 2 195 | 49 | 6 | 44.80 | 927 | 48 | 4 | 19.31 | 2.32× |
+| 10⁵ | 1 | 2 789 | 61 | 6 | 45.72 | 943 | 48 | 4 | 19.65 | 2.33× |
+| 10⁶ | 1 | 3 834 | 78 | 8 | 49.15 | 1 278 | 64 | 6 | 19.97 | 2.46× |
+| 10⁶ | 100 | 253 153 | 5 247 | 8 | 48.25 | 67 853 | 3 472 | 6 | 19.54 | 2.47× |
 
-**What it corrected.** `SOTA.md` quoted "44 B/range against Negentropy's 16 B" — arithmetic, from
-each side's *payload* alone. A range cannot travel without its bound and framing, and once those are
-priced the figures are 43.6–49.2 B against 19.0–20.0 B, a ratio of 2.30×–2.47× rather than 2.75×.
-Our per-range cost is also **not a constant**: it rises with `n`, because the `KeyRange` bounds cost
-more varint bytes as keys grow. The bound overhead itself is comparable on both sides (~5 B here,
-~4 B there), so the gap is almost entirely summary width — which is the exactness trade `SOTA.md`
-§2.1 claims. The anchor confirms that claim and corrects both of its numbers.
+What it supersedes, and what it leaves open:
 
-**A second finding, not an error bar.** At the *same* nominal `b` = 16, Negentropy advertises fewer
-ranges (64 against 78 at `n` = 10⁶, `d` = 1) in fewer one-way messages (6 against 8), so the total
-refinement gap (3.0×) is wider than the per-range gap. Why the two descents differ at equal fan-out
-is unexplained here and is not attributable to the summary width.
+| | |
+|---|---|
+| superseded | `SOTA.md`'s "44 B/range against 16 B" — both figures were payload-only, and a range does not travel without its bound and framing |
+| our per-range cost | not a constant: 43.6 B → 49.2 B as `n` grows, since `KeyRange` bounds cost more varint bytes as keys grow |
+| where the gap is | bound encoding is ~5 B here against ~4 B there, so the gap is summary width — §2.1's trade, confirmed |
+| open | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 3.0× against 2.46× per range. Unexplained; not attributable to summary width |
 
-**Commensurability — do not sum these against our own totals.** Only the refinement columns compare:
-`fp_ranges`/`fp_bytes` in the fixture are Negentropy's mode=1 (Fingerprint) ranges, which is what
-`Cost::ranges`/`Cost::refinement_bytes` count here. The IDLIST halves are **not** commensurable — a
-Negentropy element is a 64-bit timestamp plus a 256-bit id, ours is a key plus an HLC plus a value of
-arbitrary size. The instance is *modelled*, not shared: the driver gives item `k` timestamp `k` and a
-deterministic 32-byte id so both refine over the same logical ordering of the same `n` items, which
-is the same instance shape, not the same bytes.
+Commensurability, before summing anything against the totals above:
 
-**Regenerating is manual, by design.** `benches/fixtures/negentropy-drive.js` is committed beside the
-fixture; it parses Negentropy's emitted messages against the published grammar in its
+| | |
+|---|---|
+| compares | the fixture's `fp_ranges`/`fp_bytes` (mode=1 ranges) against `Cost::ranges`/`Cost::refinement_bytes` |
+| does not compare | the IDLIST halves — a Negentropy element is a timestamp + a 256-bit id, ours is a key + an HLC + a value |
+| instance | modelled, not shared: item `k` gets timestamp `k` and a deterministic 32-byte id, so both refine over the same logical ordering of the same `n` items |
+
+`benches/fixtures/negentropy-drive.js` parses Negentropy's emitted messages against its
 [protocol v1 spec](https://github.com/hoytech/negentropy/blob/master/docs/negentropy-protocol-v1.md)
-rather than reading its internals, so it doubles as a conformance check on our reading of that spec. Nothing in CI reads the fixture, and a plain `cargo bench` cannot
-reproduce it — the accepted cost named in #362, the same posture as `img/perf-*.png`. A missing
-fixture prints a skip line, never a failure.
+rather than its internals, and asserts it consumes each message to the byte — a conformance check on
+our reading of that spec. Regeneration is manual and out of band, the cost #362 accepts on the
+record; nothing in CI reads the fixture, and a missing one prints a skip, never a failure.
 
 ## The `contention` benchmark
 

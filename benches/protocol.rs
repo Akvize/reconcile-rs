@@ -615,19 +615,16 @@ fn print_element_price() {
     }
 }
 
-/// The one column in this file that is not reconcile-rs against reconcile-rs (#362).
+/// The one column here not produced by this crate (#362): Negentropy's counted refinement columns,
+/// from `benches/fixtures/negentropy-counted.tsv`, printed beside this harness's own for the same
+/// `(n, d)` at `b` = 16 both sides.
 ///
-/// Reads `benches/fixtures/negentropy-counted.tsv` — counts produced by the reference Negentropy
-/// implementation, out of band, at a pinned commit — and prints them beside this harness's own for
-/// the same `(n, d)`. Both run `b = 16`.
+/// Provenance and the generating command are in the fixture header; the commensurability limits and
+/// what the anchor superseded are in `benches/README.md`, "The Negentropy anchor". Read one of the
+/// two before quoting this block.
 ///
-/// **Only the refinement columns are commensurable**, and only per range: a Negentropy element is a
-/// timestamp + a 256-bit id, ours is a key + an HLC + a value, so the IDLIST halves do not compare
-/// and are not printed here. The fixture's header carries the full caveat list; read it before
-/// quoting anything from this block.
-///
-/// Missing or malformed fixture is a skip, never a panic: the file is a manual artifact by design,
-/// and a `cargo bench` that cannot find it is not a failing benchmark.
+/// A missing or unparsable fixture skips, never panics: it is a manual artifact by design, so a
+/// `cargo bench` that cannot find it is not a failing benchmark.
 fn print_negentropy_anchor() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -639,9 +636,8 @@ fn print_negentropy_anchor() {
     };
 
     println!(
-        "[protocol] negentropy anchor (#362): refinement columns only, b=16 both sides. \
-         `bytes` prices each range *including* its bound and framing, which is the whole point — \
-         a per-range figure that omits them is arithmetic, not a measurement."
+        "[protocol] negentropy anchor (#362): refinement columns only, b=16 both sides, bytes \
+         inclusive of each range's bound and framing. Limits: benches/README.md."
     );
     for line in fixture.lines() {
         let line = line.trim();
