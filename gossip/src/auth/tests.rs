@@ -177,6 +177,33 @@ fn open_too_short() {
     assert!(auth.open(&[]).is_none());
 }
 
+/// The flip side of `open_too_short`: a datagram of exactly `TAG_LEN + REPLAY_HEADER_LEN` bytes
+/// (a valid tag over a replay header with no trailing message bytes at all) must still open —
+/// the length check is a strict `<`, not `<=`.
+#[test]
+fn open_accepts_the_exact_minimum_length_datagram() {
+    let k = key(0x11);
+    let seq = Seq::new(7);
+    let stamp = Stamp::new(9);
+    let mut protected = Vec::new();
+    protected.extend_from_slice(&seq.to_le_bytes());
+    protected.extend_from_slice(&stamp.to_le_bytes());
+    assert_eq!(protected.len(), REPLAY_HEADER_LEN);
+    let tag = ClusterMac::tag(&k, &protected);
+    let mut datagram = Vec::new();
+    datagram.extend_from_slice(tag.as_bytes());
+    datagram.extend_from_slice(&protected);
+    assert_eq!(datagram.len(), TAG_LEN + REPLAY_HEADER_LEN);
+
+    let auth = Authenticator::new(Some(k), false);
+    let opened = auth
+        .open(&datagram)
+        .expect("exactly TAG_LEN + REPLAY_HEADER_LEN bytes with a valid tag must open");
+    assert_eq!(opened.seq, seq);
+    assert_eq!(opened.stamp, stamp);
+    assert!(opened.bytes.is_empty());
+}
+
 #[test]
 fn open_wrong_key() {
     let sealed = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false).seal(
@@ -189,6 +216,14 @@ fn open_wrong_key() {
             .open(&sealed)
             .is_none()
     );
+}
+
+/// `overhead()` for `Enabled` is a plain sum of three independent constants — assert the exact
+/// value (not just that it is `> 0`) so a `+`/`-` slip in any one term is caught.
+#[test]
+fn enabled_overhead_is_the_sum_of_tag_version_and_replay_header() {
+    let auth = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false);
+    assert_eq!(auth.overhead(), TAG_LEN + VERSION_LEN + REPLAY_HEADER_LEN);
 }
 
 /// Disabled still frames — the wire-version byte is present regardless of
@@ -296,6 +331,17 @@ mod encryption {
         assert_eq!(p.as_bytes(), payload);
         assert_eq!(p.seq, Seq::new(1));
         assert_eq!(p.stamp, Stamp::new(555));
+    }
+
+    /// The flip side of `truncated_is_rejected`: a datagram of exactly `AEAD_NONCE_LEN +
+    /// AEAD_TAG_LEN` bytes — an encrypted *empty* payload, nonce + tag and nothing else — must
+    /// still decrypt. The length check in `encryption::open` is a strict `<`, not `<=`.
+    #[test]
+    fn open_accepts_the_exact_minimum_length_datagram() {
+        let k = key(0x11);
+        let sealed = crate::auth::encryption::seal(&k, b"");
+        assert_eq!(sealed.len(), super::AEAD_NONCE_LEN + super::AEAD_TAG_LEN);
+        assert_eq!(crate::auth::encryption::open(&k, &sealed), Some(Vec::new()));
     }
 
     #[test]
