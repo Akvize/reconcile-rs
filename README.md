@@ -46,7 +46,7 @@ In code, this would look like this:
 let mut store = ReplicatedMap::new(Config::new(8080).with_insecure_no_key())
     .await
     .unwrap();
-tokio::spawn(store.clone().run());
+tokio::spawn(store.clone().run(CancellationToken::new()));
 // use the reconciliation store as a key-value store in the API
 ```
 
@@ -166,7 +166,8 @@ controls.
 
 Two consequences of a far-future stamp are bounded even without a key, because neither depends on
 trusting the sender. The stamp cannot pin this node's Hybrid Logical Clock into the future — a
-remote reading more than `MAX_CLOCK_DRIFT` (1 hour) ahead of local physical time is clamped before
+remote reading more than `MAX_CLOCK_DRIFT` (1 hour by default; retune with
+`Config::with_max_clock_drift`) ahead of local physical time is clamped before
 it reaches the clock state — and it cannot postpone a tombstone's expiry indefinitely, because the
 wall-clock instant the expiry wheel ages a tombstone from is derived from the stored stamp through
 that same bound. Both log a `warn!`, and the tombstone case also increments
@@ -288,11 +289,39 @@ let store = ReplicatedMap::new(Config::new(8080).with_insecure_no_key())
     .await
     .unwrap()
     .with_persistence(Arc::new(FileSnapshot::new("/var/lib/myapp/reconcile.snapshot")));
-tokio::spawn(store.clone().run()); // periodically snapshots in the background
+tokio::spawn(store.clone().run(CancellationToken::new())); // periodically snapshots in the background
 ```
 
 The backend is pluggable: implement the `Persistence` trait to store snapshots in `redb`, `sled`,
 S3, or any other medium.
+
+## Lifecycle and readiness
+
+`run` takes a [`tokio_util::sync::CancellationToken`](https://docs.rs/tokio-util) and returns once
+it fires, flushing a final snapshot first — the caller decides what triggers the token (a signal
+handler, a shutdown channel, …) and gets a `RunOutcome` reporting whether that final flush
+succeeded:
+
+```rust
+use tokio_util::sync::CancellationToken;
+
+let shutdown = CancellationToken::new();
+let handle = tokio::spawn(store.clone().run(shutdown.clone()));
+// ... elsewhere, e.g. on SIGTERM: shutdown.cancel();
+let outcome = handle.await.unwrap();
+outcome.final_snapshot.expect("final snapshot should succeed");
+```
+
+A few more accessors answer questions a production deployment needs that `/metrics` alone can't —
+notably telling apart "the process is up" from "this node is actually synchronizing" (a
+Kubernetes readiness probe should check the latter; see `examples/k8s/`):
+
+- `sync_state()` — rounds completed, when the last round/snapshot happened, and the current peer
+  count, bundled as one `SyncState` snapshot.
+- `peers()` / `members()` — the gossip-routing peer set and the causal-stability membership set.
+- `local_addr()` — the transport's actual bound address (useful when `Config::port` is `0`).
+- `snapshot_now()` — force an out-of-band snapshot instead of waiting for
+  `Config::with_snapshot_interval` (default 5 s) to elapse.
 
 ## Observability
 
@@ -481,7 +510,7 @@ let store = ReplicatedMap::<String, String>::new(config)
     .await
     .unwrap()
     .with_dns_discovery("reconcile-headless.default.svc.cluster.local", 8080);
-store.run().await;
+store.run(CancellationToken::new()).await;
 ```
 
 While `run()`ning, a background task resolves the name every `with_discovery_interval` (default

@@ -10,6 +10,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::{
     replicated_map::{ConfigError, MAX_NETS},
     ReplicatedMap,
@@ -75,8 +77,8 @@ async fn start_reconciliation_actually_drives_a_round() {
     // drives, not from the immediate push every `insert` also performs.
     a.insert(99, 42);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     // `run()` fires an unconditional round-0 comparison the instant it starts, independent of
     // `start_reconciliation` ever being called explicitly again — seed the peers only *after*
     // that has already happened with nobody to reach, or it alone would converge this test
@@ -175,8 +177,8 @@ async fn replay_filter_len_reflects_the_engine_replay_filter() {
     assert_eq!(b.replay_filter_len(), 0);
     a.insert(1, 1);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     let mut seen = false;
     for _ in 0..300 {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -236,8 +238,8 @@ async fn bulk_dumps_in_flight_count_reflects_a_dump_actually_in_progress() {
     a.just_insert_bulk(&entries);
     assert_eq!(a.bulk_dumps_in_flight_count(), 0);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     let mut seen_in_flight = false;
     for _ in 0..400 {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -299,8 +301,8 @@ async fn set_remote_interval_actually_retunes_the_cross_network_cadence() {
     // only the round-based comparison can deliver it, which is what `remote_interval` gates.
     a.insert(7, 42);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     // `run()` fires round 0 synchronously, before `reconcile_interval` is ever consulted — with
     // no peer known yet, that round reaches nobody. Only *after* letting several rounds tick
     // past (advancing the round counter well past 0, which `round % remote_interval == 0`
@@ -392,8 +394,8 @@ async fn set_remote_fanout_actually_retunes_the_cross_network_sample_size() {
     a.set_remote_interval(1); // never the blocker here
     a.set_remote_fanout(0);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         b.get(&7).is_none(),
@@ -458,8 +460,8 @@ async fn set_reconcile_interval_actually_retunes_the_round_cadence() {
     a.set_reconcile_interval(Duration::from_millis(5));
     a.insert(7, 42);
 
-    let task_a = tokio::spawn(a.clone().run());
-    let task_b = tokio::spawn(b.clone().run());
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
     // A only learns of B after round 0 (fires unconditionally and instantly on `run()` entry)
     // has already happened with no peer to reach; B never learns of A at all, so B can never
     // independently pull — the only path is A pushing on its own retuned cadence.

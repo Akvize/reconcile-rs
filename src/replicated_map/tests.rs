@@ -13,6 +13,7 @@ use crate::replicated_map::{Config, MAX_NETS};
 mod config;
 mod construction;
 mod discovery;
+mod lifecycle;
 mod membership;
 mod peer_cap;
 mod persistence;
@@ -40,5 +41,7 @@ fn ephemeral_config() -> Config {
         freshness_window: gossip::replay::FRESHNESS_WINDOW_DEFAULT,
         max_peers: super::config::DEFAULT_MAX_PEERS,
         max_concurrent_bulk_dumps: super::config::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
+        snapshot_interval: super::persistence::SNAPSHOT_INTERVAL,
+        max_clock_drift: crate::clock::MAX_CLOCK_DRIFT,
     }
 }

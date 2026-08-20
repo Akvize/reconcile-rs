@@ -164,6 +164,10 @@ rbsr = { version = "0.1.0", path = "rbsr" }
 rsos = { version = "0.3.0", path = "rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["net", "time", "rt", "macros", "sync"] }
+# `CancellationToken`, `ReplicatedMap::run`'s shutdown signal (#292). Re-exported (`src/lib.rs`)
+# under the same #297 reasoning as `tokio`/`ipnet`/`rand`/`parking_lot`: it names a type in a
+# public signature, so a dependent must never need its own independently-versioned copy.
+tokio-util = { version = "0.7", default-features = false }
 tracing = "0.1.40"
 
 [dev-dependencies]
@@ -180,5 +184,7 @@ rand = "0.8.5"
 # lives in `gossip` (which keeps it as a real dependency, for SO_RCVBUF/SO_SNDBUF sizing, #169).
 socket2 = "0.5"
 tempfile = "3"
-tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread"] }
+# `io-util` is only for the `k8s` example's bare-bones readiness-probe TCP responder
+# (`examples/k8s/main.rs`) writing its response bytes.
+tokio = { version = "1.33.0", features = ["macros", "rt-multi-thread", "io-util"] }
 tracing-subscriber = "0.3.17"

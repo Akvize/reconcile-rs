@@ -1323,6 +1323,7 @@ dependencies = [
  "socket2",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

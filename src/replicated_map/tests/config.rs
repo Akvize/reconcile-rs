@@ -102,4 +102,26 @@ fn config_builders_actually_set_their_field() {
 
     let cfg = Config::default().with_freshness_window(Duration::from_secs(42));
     assert_eq!(cfg.freshness_window, Duration::from_secs(42));
+
+    let cfg = Config::default().with_snapshot_interval(Duration::from_secs(99));
+    assert_eq!(cfg.snapshot_interval, Duration::from_secs(99));
+
+    let drift = crate::clock::ClockDrift::from_millis(123);
+    let cfg = Config::default().with_max_clock_drift(drift);
+    assert_eq!(cfg.max_clock_drift, drift);
+}
+
+/// The new #292 fields default to the documented values: [`SNAPSHOT_INTERVAL`] (5 s) and
+/// [`MAX_CLOCK_DRIFT`](crate::clock::MAX_CLOCK_DRIFT) (1 h) — not e.g. `Duration::ZERO`, which
+/// would make every write pay a snapshot or silently disable the drift clamp.
+///
+/// [`SNAPSHOT_INTERVAL`]: super::super::persistence::SNAPSHOT_INTERVAL
+#[test]
+fn snapshot_interval_and_max_clock_drift_default_correctly() {
+    let cfg = Config::default();
+    assert_eq!(
+        cfg.snapshot_interval,
+        super::super::persistence::SNAPSHOT_INTERVAL
+    );
+    assert_eq!(cfg.max_clock_drift, crate::clock::MAX_CLOCK_DRIFT);
 }

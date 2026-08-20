@@ -15,6 +15,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::RwLock;
+
 use crate::bounds::{Key, Value};
 use crate::clock::NodeId;
 use crate::discovery::Discovery;
@@ -35,6 +37,7 @@ pub(crate) use config::MIN_BULK_SEND_RATE;
 pub use config::{Config, ConfigError, MAX_NETS};
 #[cfg(test)]
 pub(crate) use discovery::MemberPresence;
+pub use membership::{RunOutcome, SyncState};
 
 /// Default cadence of the dynamic-discovery task (see [`ReplicatedMap::with_discovery_interval`]).
 const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
@@ -77,6 +80,13 @@ where
     /// additionally clear before it is decommissioned (see
     /// [`with_discovery_decommission_floor`](Self::with_discovery_decommission_floor)).
     discovery_decommission_floor: Duration,
+    /// How often [`snapshot_periodically`](Self::snapshot_periodically) writes a full snapshot.
+    /// See [`Config::snapshot_interval`].
+    snapshot_interval: Duration,
+    /// When the last snapshot (periodic or [`snapshot_now`](Self::snapshot_now)) completed
+    /// successfully. Shared across clones — the background snapshot task runs on a clone of the
+    /// handle a caller queries [`sync_state`](Self::sync_state) through.
+    last_snapshot_at: Arc<RwLock<Option<Instant>>>,
 }
 
 impl<K, V> Clone for ReplicatedMap<K, V>
@@ -93,6 +103,8 @@ where
             discovery_interval: self.discovery_interval,
             discovery_miss_threshold: self.discovery_miss_threshold,
             discovery_decommission_floor: self.discovery_decommission_floor,
+            snapshot_interval: self.snapshot_interval,
+            last_snapshot_at: self.last_snapshot_at.clone(),
         }
     }
 }
@@ -117,7 +129,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// # }
     /// ```
     pub async fn new(config: Config) -> io::Result<Self> {
-        Ok(Self::from_engine(Replica::<K, V>::new(config).await?))
+        let snapshot_interval = config.snapshot_interval;
+        Ok(Self::from_engine(
+            Replica::<K, V>::new(config).await?,
+            snapshot_interval,
+        ))
     }
 
     /// Create a `ReplicatedMap` over a caller-supplied [`Transport`] instead of the default UDP
@@ -139,7 +155,11 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// );
     /// ```
     pub fn new_with_transport(config: Config, transport: Arc<dyn Transport>) -> Self {
-        Self::from_engine(Replica::<K, V>::with_transport(config, transport))
+        let snapshot_interval = config.snapshot_interval;
+        Self::from_engine(
+            Replica::<K, V>::with_transport(config, transport),
+            snapshot_interval,
+        )
     }
 
     /// Create a `ReplicatedMap` over the default UDP transport, but a caller-supplied
@@ -198,15 +218,17 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         config: Config,
         clock: Arc<dyn crate::clock::Clock>,
     ) -> io::Result<Self> {
+        let snapshot_interval = config.snapshot_interval;
         Ok(Self::from_engine(
             Replica::<K, V>::new_with_clock(config, clock).await?,
+            snapshot_interval,
         ))
     }
 
     /// Wrap a constructed engine in the store's own bookkeeping (tombstone wheel, persistence,
     /// discovery defaults). The single place those defaults are spelled out, so the constructors
     /// above cannot drift apart.
-    fn from_engine(engine: Replica<K, V>) -> Self {
+    fn from_engine(engine: Replica<K, V>, snapshot_interval: Duration) -> Self {
         let svc = ReplicatedMap {
             engine,
             tombstones: TimeoutWheel::new(),
@@ -215,6 +237,8 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
             discovery_miss_threshold: DEFAULT_DISCOVERY_MISS_THRESHOLD,
             discovery_decommission_floor: DEFAULT_DISCOVERY_DECOMMISSION_FLOOR,
+            snapshot_interval,
+            last_snapshot_at: Arc::new(RwLock::new(None)),
         };
         svc.set_pre_insert(|_, _| {});
         svc

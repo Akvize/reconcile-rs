@@ -8,7 +8,8 @@
 
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::net::IpAddr;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -153,5 +154,38 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// This node's configured listen address, used by discovery to never decommission itself.
     pub(crate) fn listen_addr(&self) -> IpAddr {
         self.listen_addr
+    }
+
+    /// The transport's actual bound local address — what port was assigned, not just what was
+    /// requested (see [`Config::port`](crate::replicated_map::Config::port)'s docs on why the two
+    /// can differ).
+    pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.transport.local_addr()
+    }
+
+    /// Reconciliation rounds completed so far. Monotonic, shared across clones — wraps at `u32`
+    /// like the counter backing it.
+    pub(crate) fn round(&self) -> u32 {
+        self.round.load(Ordering::Relaxed)
+    }
+
+    /// When the most recently completed reconciliation round started, or `None` before the first
+    /// one. Updated at [`start_reconciliation`](super::Replica::start_reconciliation).
+    pub(crate) fn last_round_at(&self) -> Option<Instant> {
+        *self.last_round_at.read()
+    }
+
+    /// The gossip-routing peer set: addresses seen recently enough to still be gossip targets
+    /// (bounded by [`Config::freshness_window`](crate::replicated_map::Config::freshness_window)-
+    /// adjacent expiry, unlike [`members`](Self::members_snapshot), which never expires).
+    pub(crate) fn peers_vec(&self) -> Vec<IpAddr> {
+        self.peers.read().keys().copied().collect()
+    }
+
+    /// The causal-stability membership set, as a `Vec` — see
+    /// [`members_snapshot`](Self::members_snapshot) for the `HashSet` form
+    /// `internal-testing` assertions use.
+    pub(crate) fn members_vec(&self) -> Vec<IpAddr> {
+        self.members.read().iter().copied().collect()
     }
 }

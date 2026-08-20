@@ -33,6 +33,7 @@ use criterion::{
     SamplingMode, Throughput,
 };
 use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 
 use reconcile::{
     replicated_map::Config, Entry, FileSnapshot, Hlc, InMemoryNetwork, InMemoryTransport,
@@ -214,8 +215,8 @@ fn cold_sync(c: &mut Criterion) {
                             .with_seed(addr_a);
 
                         let start = Instant::now();
-                        let ta = tokio::spawn(a.clone().run());
-                        let tb = tokio::spawn(b_store.clone().run());
+                        let ta = tokio::spawn(a.clone().run(CancellationToken::new()));
+                        let tb = tokio::spawn(b_store.clone().run(CancellationToken::new()));
                         while b_store.fingerprint(..) != target {
                             tokio::time::sleep(Duration::from_millis(1)).await;
                         }
@@ -426,7 +427,7 @@ fn gossip_propagation(c: &mut Criterion) {
             stores
                 .iter()
                 .cloned()
-                .map(|store| tokio::spawn(store.run()))
+                .map(|store| tokio::spawn(store.run(CancellationToken::new())))
                 .collect::<Vec<_>>()
         });
 
@@ -599,8 +600,8 @@ async fn cold_sync_over(kvs: &[(u32, u32)], link: Link, iters: u64) -> Duration 
 
         let start = Instant::now();
         let tasks = [
-            tokio::spawn(full.clone().run()),
-            tokio::spawn(empty.clone().run()),
+            tokio::spawn(full.clone().run(CancellationToken::new())),
+            tokio::spawn(empty.clone().run(CancellationToken::new())),
         ];
         // Yield rather than sleep: tokio rounds a sleep up to a millisecond, which is half of what
         // this whole benchmark costs in the RTT-0 lane the deltas are taken against.
@@ -679,7 +680,7 @@ fn gossip_propagation_rtt(c: &mut Criterion) {
             let tasks: Vec<_> = stores
                 .iter()
                 .cloned()
-                .map(|store| tokio::spawn(store.run()))
+                .map(|store| tokio::spawn(store.run(CancellationToken::new())))
                 .collect();
             (stores, tasks)
         });

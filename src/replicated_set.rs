@@ -24,12 +24,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ipnet::IpNet;
+use tokio_util::sync::CancellationToken;
 
 use crate::bounds::Key;
 use crate::clock::{NodeId, Timestamp};
 use crate::entry::Entry;
 use crate::persistence::Persistence;
-use crate::replicated_map::{Config, ConfigError};
+use crate::replicated_map::{Config, ConfigError, RunOutcome};
 use crate::{Discovery, ReplicatedMap};
 use rsos::Fingerprint;
 
@@ -292,9 +293,9 @@ impl<K: Key + Hash> ReplicatedSet<K> {
         self.0.set_reconcile_interval(interval);
     }
 
-    /// Run the reconciliation loop. See [`ReplicatedMap::run`].
-    pub async fn run(self) {
-        self.0.run().await;
+    /// Run the reconciliation loop until `shutdown` fires. See [`ReplicatedMap::run`].
+    pub async fn run(self, shutdown: CancellationToken) -> RunOutcome {
+        self.0.run(shutdown).await
     }
 }
 
@@ -323,6 +324,8 @@ mod replicated_set_tests {
             freshness_window: gossip::replay::FRESHNESS_WINDOW_DEFAULT,
             max_peers: 1024,
             max_concurrent_bulk_dumps: 4,
+            snapshot_interval: Duration::from_secs(5),
+            max_clock_drift: crate::clock::MAX_CLOCK_DRIFT,
         }
     }
 

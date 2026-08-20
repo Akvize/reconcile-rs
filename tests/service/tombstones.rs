@@ -12,6 +12,8 @@
 
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use reconcile::{replicated_map::Config, ReplicatedMap};
 
 use crate::support::{assert_until, assert_until_slow};
@@ -52,8 +54,8 @@ async fn tombstone_is_retained_until_peer_acknowledges() {
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // Establish mutual membership by exchanging a value in each direction.
     store1.insert(1, 11);
@@ -121,8 +123,8 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
         .with_seed(addr1)
         .with_tombstone_timeout(Duration::from_millis(50));
 
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // Both replicas hold key 1 = v, and become members of each other.
     store1.insert(1, 11);
@@ -142,7 +144,7 @@ async fn deleted_value_is_not_resurrected_by_returning_peer() {
     assert!(store1.get(&1).is_none());
 
     // store2 returns with the stale value and reconciles.
-    let task2 = tokio::spawn(store2.clone().run());
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
 
     // The deletion propagates to store2; crucially, the stale value never resurrects on store1.
     assert_until!(store2.get(&1).is_none());
@@ -200,9 +202,9 @@ async fn tombstone_gc_converges_in_3_node_cluster_mesh() {
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(200));
 
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
-    let task3 = tokio::spawn(store3.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task3 = tokio::spawn(store3.clone().run(CancellationToken::new()));
 
     // Each node writes a distinct live key; once all keys are visible everywhere, every pair has
     // exchanged dated messages, so all three are mutual causal-stability members.
@@ -275,9 +277,9 @@ async fn tombstone_gc_converges_in_3_node_cluster_line() {
         .with_seed(addr2)
         .with_tombstone_timeout(Duration::from_millis(200));
 
-    let task1 = tokio::spawn(store1.clone().run());
-    let task2 = tokio::spawn(store2.clone().run());
-    let task3 = tokio::spawn(store3.clone().run());
+    let task1 = tokio::spawn(store1.clone().run(CancellationToken::new()));
+    let task2 = tokio::spawn(store2.clone().run(CancellationToken::new()));
+    let task3 = tokio::spawn(store3.clone().run(CancellationToken::new()));
 
     store1.insert(1, 11);
     store3.insert(3, 33);
