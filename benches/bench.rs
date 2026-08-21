@@ -3,9 +3,22 @@
 // seam, the bench body needs no feature gate at all.
 use imp::main;
 
+// `service_reconcile_rtt` below composes `just_insert`/`just_remove` (`reconcile_internal_testing`
+// seams, AGENTS.md §6) with the injected-RTT decorator, so it lives here rather than in
+// `system.rs`, which is deliberately feature-gate-free (`benches/README.md` "Pricing that
+// end-to-end..."). Included the same way `system.rs` includes it — a `#[path]` `mod` rather than
+// `benches/*/main.rs` auto-discovery, so cargo does not mistake it for a fifth target;
+// `tests/netem.rs` is where it is tested.
+#[path = "netem/mod.rs"]
+mod netem;
+
 mod imp {
     use std::collections::BTreeMap;
-    use std::time::Duration;
+    use std::io;
+    use std::net::{IpAddr, SocketAddr};
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use rand::{distributions::Standard, Rng, SeedableRng};
 
@@ -17,9 +30,11 @@ mod imp {
     use tokio_util::sync::CancellationToken;
 
     use reconcile::{
-        replicated_map::Config, Entry, FingerprintTreeMap, Hlc, LogicalCounter, NodeId,
-        PhysicalTime, ReplicatedMap, State, Timestamp,
+        replicated_map::Config, Entry, FingerprintTreeMap, Hlc, InMemoryNetwork, LogicalCounter,
+        NodeId, PhysicalTime, ReplicatedMap, State, Timestamp, Transport,
     };
+
+    use super::netem::{Link, Netem, NetemTransport, Rtt, Seed};
 
     fn fingerprint_tree_map_new(c: &mut Criterion) {
         let mut group = c.benchmark_group("FingerprintTreeMap::new");
@@ -440,6 +455,292 @@ mod imp {
         }
     }
 
+    /// RTT sweep for `service_reconcile_rtt`: the same grid `system.rs`'s injected-RTT lane
+    /// sweeps (`rtt_sweep` there — duplicated here rather than shared, like `netem/mod.rs` itself:
+    /// each bench binary is a separate compilation unit, and no target here imports another's).
+    fn rtt_sweep() -> Vec<Rtt> {
+        [0.0, 0.1, 1.0, 10.0, 50.0]
+            .into_iter()
+            .map(Rtt::from_millis)
+            .collect()
+    }
+
+    /// Store sizes for `service_reconcile_rtt`: #461's grid, `n` = 10³…10⁶ — the same range
+    /// `benches/protocol.rs`'s counted tables sweep, so the measured and counted columns line up.
+    const RECONCILE_RTT_SIZES: &[usize] = &[1_000, 10_000, 100_000, 1_000_000];
+
+    /// How the `d` differing keys are laid out — the same two layouts `benches/protocol.rs`'s
+    /// (private) `Clustering` sweeps, duplicated here for the reason `rtt_sweep` above states.
+    #[derive(Clone, Copy, Debug)]
+    enum Clustering {
+        /// Spread evenly, so every subtree refines.
+        Scattered,
+        /// One contiguous block, centred in the key space.
+        Clustered,
+    }
+
+    impl Clustering {
+        fn label(self) -> &'static str {
+            match self {
+                Clustering::Scattered => "scattered",
+                Clustering::Clustered => "clustered",
+            }
+        }
+    }
+
+    /// `(d, clustering)` pairs #461 asks for. `d = 0` is the in-sync baseline — no layout to vary.
+    /// `d = 1` only scatters, as in `protocol.rs::DIFFERENCES` — a single key has no layout either
+    /// way. 10/100/1000 sweep both, past a 256-cell sketch's capacity at the top end.
+    const D_CLUSTERINGS: &[(usize, Clustering)] = &[
+        (0, Clustering::Scattered),
+        (1, Clustering::Scattered),
+        (10, Clustering::Scattered),
+        (10, Clustering::Clustered),
+        (100, Clustering::Scattered),
+        (100, Clustering::Clustered),
+        (1_000, Clustering::Scattered),
+        (1_000, Clustering::Clustered),
+    ];
+
+    /// The `d` keys (out of `0..n`) one peer diverges on, laid out per `clustering` — the same
+    /// layout `benches/protocol.rs::missing_keys` uses, so a round here and a round there refine
+    /// over the same-shaped difference.
+    fn diverging_keys(n: usize, d: usize, clustering: Clustering) -> Vec<u32> {
+        if d == 0 {
+            return Vec::new();
+        }
+        match clustering {
+            Clustering::Scattered => (1..=d as u64)
+                .map(|i| ((n as u64 / (d as u64 + 1)) * i) as u32)
+                .collect(),
+            // Centred so the block is not adjacent to either end of the key space, where a
+            // partition's outermost child would absorb it for free.
+            Clustering::Clustered => {
+                let start = (n / 2 - d / 2) as u64;
+                (start..start + d as u64).map(|k| k as u32).collect()
+            }
+        }
+    }
+
+    /// A fresh loopback address pair per `(n, rtt)` build — one build per combination, not per
+    /// Criterion sample, so a handful suffice; a fresh pair still avoids any rebind collision.
+    fn fresh_reconcile_rtt_pair() -> (IpAddr, IpAddr) {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let i = N.fetch_add(1, Ordering::Relaxed);
+        let hi = ((i >> 6) & 0xff) as u8;
+        let lo = ((i & 0x3f) as u8) * 2 + 1;
+        (
+            format!("127.6.{hi}.{lo}").parse().unwrap(),
+            format!("127.6.{hi}.{}", lo + 1).parse().unwrap(),
+        )
+    }
+
+    /// Tallies datagrams a wrapped transport has *received*. The `d = 0` baseline round is
+    /// otherwise unobservable: a root-fingerprint match makes `rbsr::protocol_round` return no
+    /// comparison items and no differences (`src/replica/dispatch.rs`), so the responder sends
+    /// nothing back and no local state changes anywhere — the only sign a round happened at all is
+    /// that the initiator's message arrived at the responder's transport.
+    struct RecvCountingTransport<T> {
+        inner: T,
+        received: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl<T: Transport> Transport for RecvCountingTransport<T> {
+        async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+            let result = self.inner.recv_from(buf).await;
+            if result.is_ok() {
+                self.received.fetch_add(1, Ordering::Relaxed);
+            }
+            result
+        }
+
+        async fn send_to(&self, buf: &[u8], dst: &SocketAddr) -> io::Result<usize> {
+            self.inner.send_to(buf, dst).await
+        }
+
+        fn local_addr(&self) -> io::Result<SocketAddr> {
+            self.inner.local_addr()
+        }
+    }
+
+    /// The refinement chain, timed, over an injected-RTT link: composes
+    /// `ReplicatedMap::new_with_transport`, `netem::NetemTransport` and the existing `rtt_sweep`
+    /// (`system.rs`'s, duplicated above) with `service_reconcile`'s own divergence mechanism — the
+    /// only one that exercises refinement rather than the outer-range mismatch `cold_sync_rtt`
+    /// builds (`benches/README.md` "Pricing that end-to-end...").
+    ///
+    /// Both peers load the identical `n`-entry corpus independently, before any peer is seeded:
+    /// the reconciliation fingerprint is a function of `(key, value)` alone (`version_hash` hashes
+    /// the value, not the stamp — `src/replica/gc.rs`), so two separately timestamped copies of the
+    /// same corpus already agree at the root, and nothing is broadcast in doing so (`cold_sync`'s
+    /// "no peer yet" discipline). `reconcile_interval` is set far longer than any sample, so every
+    /// round below is the one `start_reconciliation` explicitly triggers, not a background tick.
+    ///
+    /// Per sample: `just_remove` the `d` chosen keys on the initiator (a genuine content
+    /// difference, not a timestamp race), trigger one round, poll until the responder reflects the
+    /// removal; then `just_insert` them back and repeat, so the pair returns to baseline for the
+    /// next sample. `d = 0` has no keys to remove — its round finds nothing to refine, so it is
+    /// timed via `RecvCountingTransport` instead (see that type's docs).
+    fn service_reconcile_rtt(c: &mut Criterion) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let net = "127.0.0.1/8".parse().unwrap();
+        let port = 9_990;
+
+        let mut group = c.benchmark_group("service_reconcile_rtt");
+        group.sample_size(10);
+        group.sampling_mode(SamplingMode::Flat);
+        group.warm_up_time(Duration::from_millis(500));
+        // Criterion's 5 s default `measurement_time` is sized for a handful of benchmark ids;
+        // `RECONCILE_RTT_SIZES × rtt_sweep() × D_CLUSTERINGS` is 160 of them, so left at the
+        // default this group alone would take at least 160 × 5 s ≈ 13 minutes regardless of how
+        // cheap any one round is. 1 s keeps `sample_size(10)`'s ten samples meaningful without
+        // padding a microsecond-scale round (the `d = 0` baseline at `rtt = 0ms`) out to 5 s.
+        group.measurement_time(Duration::from_millis(1_000));
+
+        for &n in RECONCILE_RTT_SIZES {
+            let key_values: Vec<(u32, u32)> = (0..n as u32)
+                .map(|k| (k, k.wrapping_mul(2_654_435_761)))
+                .collect();
+
+            for rtt in rtt_sweep() {
+                let link = Link::at(rtt);
+                let (addr1, addr2) = fresh_reconcile_rtt_pair();
+                let cfg = |addr: IpAddr| {
+                    Config::default()
+                        .with_port(port)
+                        .with_listen_addr(addr)
+                        .with_net(net)
+                        .with_insecure_no_key()
+                        .with_reconcile_interval(Duration::from_secs(3600))
+                };
+
+                let (store1, store2, _received1, received2, tasks) = rt.block_on(async {
+                    let network = InMemoryNetwork::new();
+                    let received1 = Arc::new(AtomicU64::new(0));
+                    let transport1 = RecvCountingTransport {
+                        inner: NetemTransport::new(
+                            Arc::new(network.bind(SocketAddr::new(addr1, port))),
+                            Netem::uniform(link, Seed::DEFAULT),
+                        ),
+                        received: Arc::clone(&received1),
+                    };
+                    let received2 = Arc::new(AtomicU64::new(0));
+                    let transport2 = RecvCountingTransport {
+                        inner: NetemTransport::new(
+                            Arc::new(network.bind(SocketAddr::new(addr2, port))),
+                            Netem::uniform(link, Seed::DEFAULT),
+                        ),
+                        received: Arc::clone(&received2),
+                    };
+                    let store1 = ReplicatedMap::<u32, u32>::new_with_transport(
+                        cfg(addr1),
+                        Arc::new(transport1),
+                    );
+                    let store2 = ReplicatedMap::<u32, u32>::new_with_transport(
+                        cfg(addr2),
+                        Arc::new(transport2),
+                    );
+                    store1.insert_bulk(&key_values);
+                    store2.insert_bulk(&key_values);
+                    store1.seed_peer(addr2);
+                    store2.seed_peer(addr1);
+                    let tasks = [
+                        tokio::spawn(store1.clone().run(CancellationToken::new())),
+                        tokio::spawn(store2.clone().run(CancellationToken::new())),
+                    ];
+                    // `Replica::run` fires one reconciliation round unconditionally before
+                    // entering its receive loop (`src/replica/run.rs`), so each side sends one
+                    // round to the other the instant its task starts — settle that transient
+                    // before timing anything, or the first sample below would race it.
+                    while received1.load(Ordering::Relaxed) < 1
+                        || received2.load(Ordering::Relaxed) < 1
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    (store1, store2, received1, received2, tasks)
+                });
+
+                for &(d, clustering) in D_CLUSTERINGS {
+                    let missing = diverging_keys(n, d, clustering);
+                    let restored: Vec<u32> = missing
+                        .iter()
+                        .map(|&k| k.wrapping_mul(2_654_435_761))
+                        .collect();
+                    let id = if d == 0 {
+                        format!("n={n}/d=0")
+                    } else {
+                        format!("n={n}/d={d}/{}", clustering.label())
+                    };
+
+                    group.bench_with_input(BenchmarkId::new(&id, rtt.label()), &rtt, |b, _| {
+                        b.iter_custom(|iters| {
+                            rt.block_on(async {
+                                let mut total = Duration::ZERO;
+                                for _ in 0..iters {
+                                    if missing.is_empty() {
+                                        let before = received2.load(Ordering::Relaxed);
+                                        let start = Instant::now();
+                                        let clone = store1.clone();
+                                        let task = tokio::spawn(async move {
+                                            clone.start_reconciliation().await
+                                        });
+                                        while received2.load(Ordering::Relaxed) <= before {
+                                            tokio::task::yield_now().await;
+                                        }
+                                        total += start.elapsed();
+                                        task.abort();
+                                        continue;
+                                    }
+
+                                    let start = Instant::now();
+                                    for &k in &missing {
+                                        store1.just_remove(&k);
+                                    }
+                                    let clone = store1.clone();
+                                    let task =
+                                        tokio::spawn(
+                                            async move { clone.start_reconciliation().await },
+                                        );
+                                    while missing.iter().any(|k| store2.get(k).is_some()) {
+                                        tokio::task::yield_now().await;
+                                    }
+                                    task.abort();
+
+                                    for (&k, &v) in missing.iter().zip(restored.iter()) {
+                                        store1.just_insert(k, v);
+                                    }
+                                    let clone = store1.clone();
+                                    let task =
+                                        tokio::spawn(
+                                            async move { clone.start_reconciliation().await },
+                                        );
+                                    while missing
+                                        .iter()
+                                        .zip(restored.iter())
+                                        .any(|(k, &v)| store2.get_cloned(k) != Some(v))
+                                    {
+                                        tokio::task::yield_now().await;
+                                    }
+                                    task.abort();
+                                    total += start.elapsed();
+                                }
+                                total
+                            })
+                        });
+                    });
+                }
+
+                rt.block_on(async {
+                    for task in tasks {
+                        task.abort();
+                    }
+                });
+            }
+        }
+        group.finish();
+    }
+
     criterion_group!(
         benches,
         fingerprint_tree_map_new,
@@ -450,6 +751,7 @@ mod imp {
         read_replica_memory,
         service_send,
         service_reconcile,
+        service_reconcile_rtt,
     );
     // Equivalent to `criterion_main!(benches)`, but exposed as a named fn so the top-level `main`
     // (defined outside this feature-gated module) can drive it.
