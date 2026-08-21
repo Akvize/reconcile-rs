@@ -6,6 +6,12 @@ on:
   pull_request:
   merge_group:
 
+# Every job only checks out and builds/lints/tests; nothing here writes to the repo or opens a
+# PR/issue comment (Codecov upload authenticates with its own secret, not GITHUB_TOKEN). Matches
+# the explicit-minimal-permissions convention already used in pr-issue-references.yml/labels.yml.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
