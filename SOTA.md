@@ -381,7 +381,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
 
   | | Result | Bears on |
   |---|---|---|
-  | Mathys & Flajolet 1985 | `Q` ∈ {2, 3} preferred; throughput for `Q` > 3 "quickly degrades" | lands on the same arity as the derivation above — and, now that the derivation exists, for a visible reason rather than a mysterious one: any scheme paying `q` per level while gaining `ln q` per level minimises `q`/ln `q` at `e`. Common algebra, not a hidden correspondence. Weaker evidence than it first looked, and clearer |
+  | Mathys & Flajolet 1985 | fair (uniform) coins only: free access peaks at `Q` = 3 (throughput .4016 vs .3602 binary) and falls *gradually* past it — `Q` = 4 (.3992) still beats binary, `Q` = 10 ≈ .3246 | the optimum still lands next to `e`, where the `q`/ln `q` algebra above puts it — common algebra, not a hidden correspondence. But "degrades quickly past 3" was this file's gloss, not the paper's data, and the analysis never optimises over the splitting distribution — precisely the axis Vogel et al. reopen below |
   | Vogel et al. 2024 | **disproves** binary-optimality: maximal throughput is reachable at *any* `d` ≥ 2 **given suitable splitting probabilities** | the binding axis may be the split *distribution*, not the arity |
 
   Two cautions before either is quoted as support. The objectives differ — channel throughput
@@ -896,6 +896,7 @@ pass had already ruled out. Record negative results too.
 | 2026-08-17 | post-2026-08-14 sweep: new arXiv/venue results on range-based/partitioned set reconciliation, rateless IBLT/CertainSync follow-ups, multi-party reconciliation, prolly/Merkle tree updates, Willow/Earthstar changes, GenSync follow-ups, PODC 2026 accepted-papers list | `cs.DC`/`cs.CR`/`cs.IT` + venue programs, via WebSearch (WebFetch could not reach `arxiv.org`, `dl.acm.org`, `ceur-ws.org`, `semanticscholar.org` or `podc.org` from this session — network egress proxy blocked all five; findings below are WebSearch-summary-sourced, not read from the primer PDF) | One finding, §2.1: Rawat et al. 2026 (§4.4) bounds prolly trees' cascading-rechunking cost. Nothing new found on the other axes — RIBLT/CertainSync/ConflictSync/Rateless-Bloom-Filters lineage, multi-party reconciliation (still 2013–2021), and Willow/Earthstar are unchanged since the last pass over each |
 | 2026-08-19 | citation-tracking pass on the two pivot papers: `"<title>" cited by`/`follow-up` per Meyer arXiv:2212.13567 and Yang et al. arXiv:2402.02668 | targeted, via WebSearch only (`arxiv.org`, `api.semanticscholar.org`, `api.openalex.org` all confirmed egress-blocked this session — no programmatic citation graph available, summaries only) | Confirmed arXiv:2603.19820 (already §4.4) is Meyer's direct RBSR heir. CertainSync and ConflictSync (already §4.4) confirmed as RIBLT's real follow-ups; ConflictSync's venue resolved to PaPoC 2026. No new reference found beyond what §4.4 already held |
 | 2026-08-21 | primary-source reading campaign: 36 PDFs supplied by upload (egress still blocked) and read in full — both pivots (arXiv:2212.13567v2, arXiv:2603.19820v1), the `cs.IT` group (MTZ 2003, BU TR 2002-01, EPSR, Vogel arXiv:2302.08145, Janssen–de Jong 2000, RIBLT v3, CertainSync, MET-IBLT v2, Eppstein SIGCOMM'11, Goodrich–Mitzenmacher arXiv:1101.2245), the security group (Wagner, Bellare–Micciancio EUROCRYPT'97, Clarke ASIACRYPT'03, LtHash ePrint 2019/227), `cs.DS` (Chan–Larsen–Pătraşcu arXiv:1103.5510, BGJS TCS 2011, and the six already-read range-query papers), AB-tree (paper + code), Demers PODC'87, HLC, DVV, the Negentropy primer; `negentropy`, `gensync-core`, `gensync-benchmarking`, `abtree_public` cloned and checked at source | targeted, uploads + git proxy | This section's `cs.IT` abstract-sourced warning is discharged for the papers listed. Corrections folded into §2.1 (varint attribution), §4.1 (Allerton caveat resolved), §4.4 (AB-tree mechanism); #185's RIBLT row corrected (incremental encoder mode documented in the primary source); #468's `t = 2b` cutoff confirmed in Negentropy source (`splitRange`: `buckets = 16`, IdList below `buckets * 2`) |
+| 2026-08-21 (second wave) | three further supplied documents, same campaign: Mathys–Flajolet in full (the free/blocked-access throughput tables), `arXiv:1604.03030v1` (Weinstein–Yu, FOCS 2016), the AFP entry *A Set Reconciliation Algorithm* (Hofmeier & Karayel) | targeted, uploads | Three verdicts. §2.2's M–F row corrected — "quickly degrades" was this file's gloss: free access peaks at `Q` = 3, `Q` = 4 still beats binary, and fair coins are fixed throughout, so the split distribution is never optimised (the ground Vogel et al. reopen); §4.4's Capetanakis/M–F entry aligned. Weinstein–Yu Thm 1: **amortized, randomized** `Ω((lg n/lg lg n)²)` for dynamic *weighted* 2-D orthogonal range counting (weights in `[n]`, cell probe, `w = Θ(lg n)`) — [#360](https://github.com/Akvize/reconcile-rs/issues/360)'s summarization lower bound is no worst-case artefact; the bibliography entry belongs beside Larsen in the `cs.DS` group [PR #485](https://github.com/Akvize/reconcile-rs/pull/485) introduces, so it is recorded here rather than in §4.4 to avoid a cross-branch collision. The AFP entry identified: it mechanizes MTZ 2003's CPI, not range-based reconciliation — §4.4's MTZ entry now carries the reference and its scope |
 
 ### 4.4 Bibliography
 
@@ -966,9 +967,11 @@ sourced from abstracts and search summaries — read before quoting a number fro
   algorithms in random-access systems with free or blocked channel access*,
   `doi:10.1109/TIT.1985.1057013` (IEEE Trans. Inf. Theory 31(2), 1985)
   **Bears on:** the founding and the `Q`-ary analyses of splitting when conflict locations are
-  unknown — `Q` ∈ {2,3} preferred, degrading past 3, which is where this repo's measured `b`/ln `b`
-  optimum also lands. Different objective (channel throughput), so a convergence to investigate, not
-  a transferable bound. → [#257](https://github.com/Akvize/reconcile-rs/issues/257), §2.2
+  unknown — free-access throughput peaks at `Q` = 3 and falls only gradually past it (§2.2's
+  corrected row), near where this repo's measured `b`/ln `b` optimum also lands; fair coins
+  throughout, so the split *distribution* is never optimised. Different objective (channel
+  throughput), so a convergence to investigate, not a transferable bound.
+  → [#257](https://github.com/Akvize/reconcile-rs/issues/257), §2.2
 - **Q. Vogel, Y. Deshpande, Č. Stefanović, W. Kellerer**, *Analysis of d-ary tree algorithms with
   successive interference cancellation*, `doi:10.1017/jpr.2023.107` (J. Applied Prob. 61(3), 2024;
   preprint `arXiv:2302.08145`) — https://arxiv.org/abs/2302.08145
@@ -983,7 +986,12 @@ sourced from abstracts and search summaries — read before quoting a number fro
 - **Y. Minsky, A. Trachtenberg, R. Zippel**, *Set reconciliation with nearly optimal communication
   complexity*, `doi:10.1109/TIT.2003.815784` (IEEE Trans. Inf. Theory 49(9), 2003)
   **Bears on:** CPI, the primitive PSR partitions down to and the `≈ b·d` optimum §2.2's table
-  quotes through minisketch. → §2.2
+  quotes through minisketch. Mechanized: the AFP entry *A Set Reconciliation Algorithm* (Hofmeier &
+  Karayel — https://www.isa-afp.org/entries/Set_Reconciliation.html) proves CPI's decode∘encode
+  round-trip in Isabelle/HOL (`decode_encode_correct`, its single top-level theorem). Functional
+  correctness only: the abstract's "nearly optimal communication complexity" quotes this paper's
+  title, no cost theorem is formalized, and nothing in it touches range-based splitting — a
+  mechanized-RBSR effort would start from zero above the polynomial libraries. → §2.2
 - **M. Mitzenmacher, R. Pagh**, *Simple multi-party set reconciliation*,
   `doi:10.1007/s00446-017-0316-0` (Distributed Computing 31(6), 2018; preprint `arXiv:1311.2037`) —
   https://arxiv.org/abs/1311.2037
