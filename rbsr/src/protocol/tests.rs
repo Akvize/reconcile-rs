@@ -457,6 +457,33 @@ fn round_outcome_accounts_for_every_segment() {
     assert_eq!(enumeration_ranges.len(), outcome.enumerated());
 }
 
+/// `RoundOutcome` is otherwise only ever constructed fresh by `protocol_round` (never combined
+/// with `+=` internally), so its `AddAssign` — accumulating a whole reconciliation across rounds
+/// — needs its own direct witness, not just the fresh-construction totals above.
+#[test]
+fn add_assign_sums_every_field() {
+    let mut a = RoundOutcome {
+        skipped: 1,
+        enumerated: 2,
+        split: 3,
+        children: 4,
+        dropped_malformed: 5,
+    };
+    let b = RoundOutcome {
+        skipped: 10,
+        enumerated: 20,
+        split: 30,
+        children: 40,
+        dropped_malformed: 50,
+    };
+    a += b;
+    assert_eq!(a.skipped(), 11);
+    assert_eq!(a.enumerated(), 22);
+    assert_eq!(a.split(), 33);
+    assert_eq!(a.children(), 44);
+    assert_eq!(a.dropped_malformed(), 55);
+}
+
 /// Matching fingerprints with mismatched sizes must refine, not conclude in sync.
 #[test]
 fn matching_fingerprint_but_wrong_size_is_refined() {
