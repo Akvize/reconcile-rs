@@ -177,6 +177,18 @@ fn open_too_short() {
     assert!(auth.open(&[]).is_none());
 }
 
+/// `open_too_short`'s `TAG_LEN + REPLAY_HEADER_LEN - 1` case sits just below the real threshold
+/// (48), too close to also catch the sum itself going wrong: `TAG_LEN - REPLAY_HEADER_LEN` (16)
+/// rejects the same way for every length this crate's other tests use. A length strictly between
+/// the two (16..48, here 20) is short enough that a correct datagram must still be rejected by
+/// the length check alone, but long enough that a broken sum would let it fall through to
+/// `datagram.split_at(TAG_LEN)` and panic on the out-of-bounds split instead of returning `None`.
+#[test]
+fn open_rejects_a_datagram_between_the_two_length_thresholds() {
+    let auth = Authenticator::new(Some(ClusterKey::new([0x11; KEY_LEN])), false);
+    assert!(auth.open(&[0u8; 20]).is_none());
+}
+
 /// The flip side of `open_too_short`: a datagram of exactly `TAG_LEN + REPLAY_HEADER_LEN` bytes
 /// (a valid tag over a replay header with no trailing message bytes at all) must still open —
 /// the length check is a strict `<`, not `<=`.
@@ -342,6 +354,18 @@ mod encryption {
         let sealed = crate::auth::encryption::seal(&k, b"");
         assert_eq!(sealed.len(), super::AEAD_NONCE_LEN + super::AEAD_TAG_LEN);
         assert_eq!(crate::auth::encryption::open(&k, &sealed), Some(Vec::new()));
+    }
+
+    /// As `open_rejects_a_datagram_between_the_two_length_thresholds` (the plaintext-MAC path's
+    /// own version of this): `AEAD_NONCE_LEN - AEAD_TAG_LEN` (8) rejects a too-short datagram for
+    /// the same reason `AEAD_NONCE_LEN + AEAD_TAG_LEN` (40) does whenever the length used is
+    /// below both, so a length strictly between them (8..40, here 15) is needed to catch the sum
+    /// itself going wrong — a broken `-` would let it fall through to
+    /// `datagram.split_at(AEAD_NONCE_LEN)` and panic instead of returning `None`.
+    #[test]
+    fn open_rejects_a_datagram_between_the_two_length_thresholds() {
+        let k = key(0x11);
+        assert_eq!(crate::auth::encryption::open(&k, &[0u8; 15]), None);
     }
 
     #[test]
