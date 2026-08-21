@@ -143,3 +143,15 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `max()` reflects the constructed value — its only call site today is a `trace!` format
+    /// string, so nothing else in the crate would catch a mutant hardcoding a constant return.
+    #[test]
+    fn peer_cap_max_reflects_the_constructed_value() {
+        assert_eq!(PeerCap::new(5).max(), 5);
+    }
+}

@@ -79,3 +79,21 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the exact formula (`rsos::digest`'s low limb), not just "some function of the
+    /// value" — a mutant hardcoding a constant return has no other caller in this crate that
+    /// would catch it (every existing test only compares `version_hash` against itself).
+    #[test]
+    fn version_hash_matches_the_digest_low_limb() {
+        assert_eq!(version_hash(&42u32), rsos::digest(&42u32).0[0]);
+    }
+
+    #[test]
+    fn version_hash_differs_for_different_values() {
+        assert_ne!(version_hash(&1u32), version_hash(&2u32));
+    }
+}
