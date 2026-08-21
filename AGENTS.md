@@ -36,8 +36,7 @@ ln -sf ../../pre-push .git/hooks/pre-push
 In CI's order (`.github/workflows/main.yml`):
 
 ```bash
-export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint is a
-                                                             # warning locally, an error in CI
+export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings   # what CI sets; without it a lint warns locally, errors in CI
 cargo fmt --check
 ./scripts/check-doc-budget.sh                     # AGENTS.md + CLAUDE.md ≤ 200 lines, SOTA.md ≤ 1100
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
@@ -57,6 +56,7 @@ cargo doc --workspace --all-features                          # feature-gated it
 cargo package --workspace --allow-dirty                       # release packaging, §11
 cargo deny check                                              # advisories/licenses/sources, deny.toml
 ./scripts/check-public-api.sh                                 # public-API snapshot + 0.x-leak gate, §11
+./scripts/check-mutant-count.sh   # repo-gates' 6th check; also CI-only, omitted above: test-mac-hmac's clippy/build/nextest trio with `--no-default-features --features mac-hmac[,internal-testing]` (§6), and coverage's `cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info` → Codecov (§7)
 ```
 
 `--workspace`, never `--all`. This list is what CI runs and what "done" means — gated automatically
