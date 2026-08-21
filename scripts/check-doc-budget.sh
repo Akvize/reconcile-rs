@@ -22,6 +22,18 @@
 # with nothing tracking the result (978 -> 1021 lines in that one change). The cap
 # exists so that keeps being a decision made in the open, not untracked drift.
 #
+# But that failure mode is *prose* drift, and until #472 the budget was one number over a
+# file that is 39% glossary, bibliography and index. Those sections are supposed to grow
+# monotonically as the literature is surveyed, so a whole-file cap taxes them for the
+# prose's sins: the first thing it blocks is adding a reference, which is the last thing
+# this repository should make expensive. #472 hit exactly that — the cap fired on a merge
+# and the cheapest way out would have been to drop a citation.
+#
+# So the cap is scoped to what it was always about: §1–§2, everything above the reference
+# half. §3 (glossary), §4 (bibliography) and §5 (index) are *reported every run but never
+# capped* — that keeps "growth is fine, silent growth is not" without ever standing
+# between a reader and a citation.
+#
 # When either budget fires, the fix is to *move* prose, not to compress it into denser
 # prose:
 #   - rationale, measurements and worked examples  -> CONTRIBUTING.md or ARCHITECTURE.md
@@ -31,7 +43,12 @@
 set -Eeuo pipefail
 
 AGENTS_MAX_LINES=200
-SOTA_MAX_LINES=1100
+# §1–§2 only. See the header: the reference half is reported, never capped.
+SOTA_PROSE_MAX_LINES=700
+
+# The heading that opens the reference half. Load-bearing: if it is renamed, this script
+# fails loudly rather than silently budgeting the whole file again.
+SOTA_REFERENCE_HEADING="## 3. Glossary"
 
 # Resolve the repo root from the script's own location (not `git rev-parse`, since the
 # pre-commit hook runs this against a bare `git checkout-index` copy with no `.git`).
@@ -83,18 +100,33 @@ if [ "$total" -gt "$AGENTS_MAX_LINES" ]; then
 fi
 
 echo
-echo "SOTA.md (durable reference, own cap):"
+echo "SOTA.md (durable reference; prose capped, reference half reported):"
 if check_missing SOTA.md; then
-    n=$(wc -l <SOTA.md)
-    printf '  %-12s %4d / %d\n' "SOTA.md" "$n" "$SOTA_MAX_LINES"
-    if [ "$n" -gt "$SOTA_MAX_LINES" ]; then
+    total=$(wc -l <SOTA.md)
+    # `|| true`: under `set -e` a failing grep in a command substitution aborts the script
+    # outright, which would make a renamed heading exit 1 with no diagnostic at all --
+    # the silent failure this branch exists to replace.
+    boundary=$(grep -n -m1 -F -x "$SOTA_REFERENCE_HEADING" SOTA.md | cut -d: -f1) || true
+    if [ -z "$boundary" ]; then
+        echo "check-doc-budget: SOTA.md has no '$SOTA_REFERENCE_HEADING' heading — the prose/reference" >&2
+        echo "boundary this budget is scoped to is gone. Fix the heading or update the script." >&2
+        exit 1
+    fi
+    prose=$((boundary - 1))
+    reference=$((total - prose))
+    printf '  %-22s %4d / %d\n' "§1-§2 prose" "$prose" "$SOTA_PROSE_MAX_LINES"
+    printf '  %-22s %4d   (uncapped)\n' "§3-§5 reference" "$reference"
+    printf '  %-22s %4d\n' "total" "$total"
+    if [ "$prose" -gt "$SOTA_PROSE_MAX_LINES" ]; then
         echo >&2
-        echo "check-doc-budget: SOTA.md is $n lines, over the $SOTA_MAX_LINES-line budget by" >&2
-        echo "$((n - SOTA_MAX_LINES))." >&2
+        echo "check-doc-budget: SOTA.md's §1-§2 prose is $prose lines, over the" >&2
+        echo "$SOTA_PROSE_MAX_LINES-line budget by $((prose - SOTA_PROSE_MAX_LINES))." >&2
         echo >&2
-        echo "Either move content that isn't a durable positioning/glossary/bibliography entry" >&2
-        echo "elsewhere (AGENTS.md §1/§9), or raise SOTA_MAX_LINES above and say why in the" >&2
-        echo "commit — growth is fine, silent growth is not." >&2
+        echo "Move it rather than compressing it: a measurement or worked example belongs in" >&2
+        echo "ARCHITECTURE.md or a test's module docs, a live status belongs in the tracker" >&2
+        echo "(AGENTS.md §1/§9). Adding a glossary, bibliography or index entry is never what" >&2
+        echo "fires this — those sections are deliberately uncapped. Raising the constant is a" >&2
+        echo "deliberate decision: change it above and say why in the commit." >&2
         echo >&2
         status=1
     fi
