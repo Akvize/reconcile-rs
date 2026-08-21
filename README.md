@@ -247,8 +247,9 @@ distinguishable, countable reason (`reconcile_datagrams_dropped_total{reason="ve
 `metrics` feature) rather than being silently misread or indistinguishable from a malformed or
 forged datagram. A mixed-version cluster (a rolling upgrade, for instance) does not converge for
 the pairs that disagree until every node is rebuilt against the same wire version — plan upgrades
-as a coordinated rollout, not a rolling one, until a version window is introduced (tracked by
-issue #309, which also gates whether one ever is).
+as a coordinated rollout, not a rolling one. #309 landed the version byte itself and deliberately
+did not build an accepted-version window; whether one is worth building later is undecided, tracked
+by #463 for the one wire change (a reserved, skippable tag) that would need it before the 1.0 freeze.
 
 ### Metrics endpoint exposure
 
