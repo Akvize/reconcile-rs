@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1505
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1504
 # mutants with this config (1540 without the exclusions below) -- the delta between them (currently
-# 35) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 36) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -80,6 +80,21 @@ exclude_globs = ["benches/**", "examples/**"]
 # VM rather than just the subprocess -- matching three consecutive "runner has received a shutdown
 # signal" failures of `pr-diff`'s shard 0, each stopped at nearly this same mutant.
 #
+# `policy/params.rs:35:9` (`SplitStride::get`, replaced with a hardcoded `0`) is the same defect
+# shape as `range.rs:28:56` above, but via unbounded memory growth instead of a CPU spin:
+# `protocol.rs`'s SPLIT loop advances `cur_index` using this exact accessor, and its `span > 1`
+# progress-law guard (`ARCHITECTURE.md` §5 invariant 13) only fires above `span == 1` -- a
+# `span <= 1` SPLIT with a lying `get()` slips past that guard into the loop itself, where
+# `cur_index` never advances yet every iteration still pushes a fresh `RangeAggregate` onto
+# `child_ranges`: unbounded allocation, not a bounded spin, so nothing waits for cargo-mutants'
+# own 300s `--timeout` to get a chance to fire before the runner's own memory limit does.
+# Reproduced locally: hardcoding `SplitStride::get` to always return `0` hangs `cargo nextest run
+# -p rbsr` indefinitely on `rbsr/tests/balance_under_position_map.rs` and
+# `rbsr/tests/pure_deletion_is_never_falsely_skipped.rs`, each independently, with zero output
+# before a 25s bound. Matches `range.rs:28:56`'s CI history exactly: three consecutive `pr-diff`
+# shard-1 runs on #427's `policy.rs` split died with "the runner has received a shutdown signal"
+# at nearly this same mutant. #427.
+#
 # `read_replica_map/membership.rs:33:53` (`replace < with <=` in `get_peers`'s
 # `instant.elapsed() < PEER_EXPIRATION` retain predicate) differs from every mutant above: it is
 # not equivalent (the two operators genuinely disagree, for one instant, at the exact expiration
@@ -131,6 +146,7 @@ exclude_re = [
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
     "replay/bitmap\\.rs:75:32: replace \\| with \\^",
+    "params\\.rs:35:9: replace SplitStride::get -> usize with 0",
     "protocol/rank\\.rs:117:30: replace != with ==",
     "protocol/rank\\.rs:117:43: replace \\|\\| with &&",
     "protocol/rank\\.rs:117:62: replace != with ==",

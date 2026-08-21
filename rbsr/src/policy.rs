@@ -8,8 +8,28 @@
 
 //! The refinement-policy seam: [`RefinementPolicy`], the [`Comparison`] it is shown, the
 //! [`Decision`] it returns, and the three shipped instantiations.
+//!
+//! Split across siblings by concern: `params` owns the two tunable width primitives
+//! ([`SplitStride`], [`FanOut`]); `comparison` owns what a policy is shown ([`Comparison`]);
+//! `cutoffs` owns the enumeration-cutoff logic [`SqrtFanOut`] and [`FixedFanOut`] share;
+//! `sqrt_fan_out`, `fixed_fan_out` and `enumerate_below_threshold` each own one shipped policy's
+//! [`RefinementPolicy`] impl; `forwarding` owns the blanket `&P` impl;
+//! `fingerprint_derived_split` (`cfg(reconcile_internal_testing)`) owns the test-only oracle-dependent
+//! probe. This file keeps the public type definitions (their module location is their
+//! `cargo public-api`-visible path — see AGENTS.md §11) plus the module doc above every sibling
+//! shares.
 
 use rsos::Aggregate;
+
+mod comparison;
+mod cutoffs;
+mod enumerate_below_threshold;
+#[cfg(reconcile_internal_testing)]
+mod fingerprint_derived_split;
+mod fixed_fan_out;
+mod forwarding;
+mod params;
+mod sqrt_fan_out;
 
 /// How wide a [`Decision::Split`] cuts: elements **per child range**.
 ///
@@ -32,28 +52,6 @@ use rsos::Aggregate;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SplitStride(usize);
 
-impl SplitStride {
-    /// One element per child. Over a span of one or fewer this is the degenerate split — see
-    /// [`Decision::Split`].
-    pub const ONE: SplitStride = SplitStride(1);
-
-    /// Cut every `elements` keys. `0` is raised to `1` — see the type-level note.
-    pub const fn per_child(elements: usize) -> SplitStride {
-        SplitStride(if elements == 0 { 1 } else { elements })
-    }
-
-    /// `⌈span / b⌉`: the stride cutting `span` elements into **at most** `fan_out` children —
-    /// integer division loses one whenever `span` is not a multiple of the stride.
-    pub fn for_fan_out(span: usize, fan_out: FanOut) -> SplitStride {
-        SplitStride::per_child(span.div_ceil(fan_out.get()))
-    }
-
-    /// The stride, as a plain count of elements. Never zero.
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
-
 /// The paper's branching factor `b` (Algorithm 2, arXiv:2603.19820).
 ///
 /// A fan-out of one is the identity partition and would never terminate; [`new`](Self::new) raises
@@ -69,24 +67,6 @@ impl SplitStride {
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FanOut(usize);
-
-impl FanOut {
-    /// `b = 16`: what Negentropy ships and arXiv:2603.19820 §6 measures against.
-    pub const NEGENTROPY: FanOut = FanOut(16);
-
-    /// `b = 2`: the smallest fan-out that refines.
-    pub const BINARY: FanOut = FanOut(2);
-
-    /// A branching factor. `0` and `1` are raised to `2` — see the type-level note.
-    pub const fn new(fan_out: usize) -> FanOut {
-        FanOut(if fan_out < 2 { 2 } else { fan_out })
-    }
-
-    /// The branching factor, as a plain count of children. Never below two.
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
 
 /// Everything a [`RefinementPolicy`] is shown about one active range: two [`Aggregate`]s reduced
 /// to what a policy may soundly read, plus a counter.
@@ -126,46 +106,6 @@ pub struct Comparison {
     local: Aggregate,
     remote: Aggregate,
     children_emitted: usize,
-}
-
-impl Comparison {
-    /// Build a comparison. Public so a policy can be unit-tested without a driver.
-    pub const fn new(local: Aggregate, remote: Aggregate, children_emitted: usize) -> Comparison {
-        Comparison {
-            local,
-            remote,
-            children_emitted,
-        }
-    }
-
-    /// `|X ∩ [l, u)|`: **local** elements covered — what `t` is compared against, and what a
-    /// [`Decision::Split`] cuts, since a split is by local rank.
-    pub const fn span(&self) -> usize {
-        self.local.size()
-    }
-
-    /// `|Y ∩ [l, u)|`: **remote** elements covered, as advertised. Unauthenticated peer input —
-    /// readable, never to be assumed true.
-    pub const fn remote_size(&self) -> usize {
-        self.remote.size()
-    }
-
-    /// Whether the range is already resolved.
-    ///
-    /// Compares the **whole** aggregate, never the fingerprint alone (`ARCHITECTURE.md` §5
-    /// invariant 3). Owned here so no policy can re-derive it wrongly.
-    pub fn agrees(&self) -> bool {
-        self.local == self.remote
-    }
-
-    /// Child ranges already emitted this round: the round-budget seam
-    /// (`SOTA.md` §2.4 P3-9).
-    ///
-    /// Counted in ranges, not bytes — this crate owns no encoding. No shipped policy reads it;
-    /// [`RefinementPolicy`] carries a worked capping example.
-    pub const fn children_emitted(&self) -> usize {
-        self.children_emitted
-    }
 }
 
 /// What a [`RefinementPolicy`] decides for one active range: Algorithm 1's three outcomes
@@ -263,32 +203,10 @@ pub trait RefinementPolicy {
     fn decide(&self, comparison: Comparison) -> Decision;
 }
 
-/// The cutoffs [`SqrtFanOut`] and [`FixedFanOut`] share, where a cut by rank cannot help: the peer
-/// holds nothing, we hold nothing, or both hold exactly one element. `None` when the fan-out
-/// actually matters. [`EnumerateBelowThreshold`] reaches the same outcomes through `t`.
-fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
-    let local = comparison.span();
-    let remote = comparison.remote_size();
-    if comparison.agrees() {
-        Some(Decision::Skip)
-    } else if remote == 0 {
-        Some(Decision::Enumerate)
-    } else if local == 0 {
-        Some(Decision::Split(SplitStride::ONE))
-    } else if local == 1 && remote == 1 {
-        Some(Decision::Enumerate)
-    } else if local == 1 {
-        // One local element cannot be cut by rank: let the peer, which holds more, cut.
-        Some(Decision::Split(SplitStride::ONE))
-    } else {
-        None
-    }
-}
-
 /// Cut every `⌊√m⌋` elements: `Θ(√m)` children, still a rank-balanced partition.
 ///
-/// Enumeration cutoffs are [`FixedFanOut`]'s (`shared_cutoffs`), plus a lone local element facing
-/// a larger remote range, which is re-advertised for the peer to cut.
+/// Enumeration cutoffs are [`FixedFanOut`]'s (`cutoffs::shared_cutoffs`), plus a lone local
+/// element facing a larger remote range, which is re-advertised for the peer to cut.
 ///
 /// **Cost.** A size-derived stride makes the first SPLIT of a whole-store round emit `~√n`
 /// children whatever `d` is: communication is `Θ(√n)`, not `O(d log n)`, and the paper's
@@ -313,17 +231,6 @@ fn shared_cutoffs(comparison: Comparison) -> Option<Decision> {
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SqrtFanOut;
-
-impl RefinementPolicy for SqrtFanOut {
-    fn decide(&self, comparison: Comparison) -> Decision {
-        if let Some(decision) = shared_cutoffs(comparison) {
-            return decision;
-        }
-        // `f32` and truncation are part of the rule: past f32's mantissa `f64` would disagree.
-        let stride = (comparison.span() as f32).sqrt() as usize;
-        Decision::Split(SplitStride::per_child(stride))
-    }
-}
 
 /// **The default policy**: `SPLITBYRANK(O_X, l, u, b)` at a constant `b`, with this crate's
 /// enumeration cutoffs.
@@ -364,33 +271,6 @@ impl RefinementPolicy for SqrtFanOut {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FixedFanOut {
     fan_out: FanOut,
-}
-
-impl FixedFanOut {
-    /// A policy splitting into at most `fan_out` children per range.
-    pub const fn new(fan_out: FanOut) -> FixedFanOut {
-        FixedFanOut { fan_out }
-    }
-
-    /// The branching factor this policy splits at.
-    pub const fn fan_out(&self) -> FanOut {
-        self.fan_out
-    }
-}
-
-impl Default for FixedFanOut {
-    fn default() -> FixedFanOut {
-        FixedFanOut::new(FanOut::NEGENTROPY)
-    }
-}
-
-impl RefinementPolicy for FixedFanOut {
-    fn decide(&self, comparison: Comparison) -> Decision {
-        if let Some(decision) = shared_cutoffs(comparison) {
-            return decision;
-        }
-        Decision::Split(SplitStride::for_fan_out(comparison.span(), self.fan_out))
-    }
 }
 
 /// **IDLIST when `|X ∩ [l, u)| ≤ t`, `SPLITBYRANK(b)` otherwise** — Algorithm 1 of
@@ -457,61 +337,6 @@ pub struct EnumerateBelowThreshold {
     fan_out: FanOut,
 }
 
-impl EnumerateBelowThreshold {
-    /// arXiv:2603.19820 §6's experimental parameters: `t = 32`, `b = 16`.
-    pub const PAPER: EnumerateBelowThreshold = EnumerateBelowThreshold {
-        threshold: 32,
-        fan_out: FanOut::NEGENTROPY,
-    };
-
-    /// Enumerate ranges of at most `threshold` local elements, split the rest into at most
-    /// `fan_out` children. `0` is raised to `1`.
-    pub const fn new(threshold: usize, fan_out: FanOut) -> EnumerateBelowThreshold {
-        EnumerateBelowThreshold {
-            threshold: if threshold == 0 { 1 } else { threshold },
-            fan_out,
-        }
-    }
-
-    /// `t`: the largest local subset this policy enumerates rather than splits. Never zero.
-    pub const fn threshold(&self) -> usize {
-        self.threshold
-    }
-
-    /// `b`: the branching factor this policy splits at.
-    pub const fn fan_out(&self) -> FanOut {
-        self.fan_out
-    }
-}
-
-impl Default for EnumerateBelowThreshold {
-    fn default() -> EnumerateBelowThreshold {
-        EnumerateBelowThreshold::PAPER
-    }
-}
-
-impl RefinementPolicy for EnumerateBelowThreshold {
-    fn decide(&self, comparison: Comparison) -> Decision {
-        if comparison.agrees() {
-            // SKIP: `f_X = f_Y`, on the whole aggregate rather than the fingerprint alone.
-            Decision::Skip
-        } else if comparison.span() <= self.threshold {
-            // IDLIST: `|X ∩ [l, u)| ≤ t`, which subsumes `shared_cutoffs` since `t ≥ 1`.
-            Decision::Enumerate
-        } else {
-            // SPLIT: `span > t ≥ 1`, so the stride is below the span and really refines.
-            Decision::Split(SplitStride::for_fan_out(comparison.span(), self.fan_out))
-        }
-    }
-}
-
-/// Blanket forwarding, so a policy behind a smart pointer is itself a policy.
-impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
-    fn decide(&self, comparison: Comparison) -> Decision {
-        (**self).decide(comparison)
-    }
-}
-
 /// **Test-only probe (#356), `cfg(reconcile_internal_testing)`-gated.** Deliberately violates the law
 /// [`Comparison`]'s docs state: it derives its split stride from the **local** aggregate's
 /// fingerprint instead of from the range alone, reintroducing the oracle dependence rank-cut
@@ -523,169 +348,12 @@ impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
 /// measurement harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this
 /// crate's `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
 ///
-/// Enumeration cutoffs match [`FixedFanOut`]'s (`shared_cutoffs`), so the only variable this
-/// isolates is *how the split stride is chosen*, never *when* a range is enumerated instead of
-/// split.
+/// Enumeration cutoffs match [`FixedFanOut`]'s (`cutoffs::shared_cutoffs`), so the only variable
+/// this isolates is *how the split stride is chosen*, never *when* a range is enumerated instead
+/// of split.
 #[cfg(reconcile_internal_testing)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FingerprintDerivedSplit;
 
-#[cfg(reconcile_internal_testing)]
-impl RefinementPolicy for FingerprintDerivedSplit {
-    fn decide(&self, comparison: Comparison) -> Decision {
-        if let Some(decision) = shared_cutoffs(comparison) {
-            return decision;
-        }
-        // (A5)-violating on purpose (#356): the stride comes from `local`'s fingerprint, the same
-        // oracle the skip rule's per-comparison collision probability is stated over.
-        let stride = 1 + comparison.local.fingerprint().0[0] as usize % 32;
-        Decision::Split(SplitStride::per_child(stride))
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use rsos::Fingerprint;
-
-    /// Two aggregates of the given sizes guaranteed not to agree, plus a fresh round budget.
-    fn mismatch(local: usize, remote: usize) -> Comparison {
-        Comparison::new(
-            Aggregate::new(local, Fingerprint([1, 0, 0, 0])),
-            Aggregate::new(remote, Fingerprint([2, 0, 0, 0])),
-            0,
-        )
-    }
-
-    /// How many children a stride emits over a span, mirroring the driver's loop.
-    fn children(span: usize, stride: SplitStride) -> usize {
-        span.div_ceil(stride.get()).max(1)
-    }
-
-    #[test]
-    fn agreeing_aggregates_are_skipped_by_every_policy() {
-        let aggregate = Aggregate::new(1_000, Fingerprint([9, 9, 9, 9]));
-        let agreed = Comparison::new(aggregate, aggregate, 0);
-        assert_eq!(SqrtFanOut.decide(agreed), Decision::Skip);
-        assert_eq!(FixedFanOut::default().decide(agreed), Decision::Skip);
-        assert_eq!(
-            EnumerateBelowThreshold::PAPER.decide(agreed),
-            Decision::Skip
-        );
-    }
-
-    /// Matching fingerprints with mismatched sizes must not be read as agreement.
-    #[test]
-    fn matching_fingerprint_with_wrong_size_does_not_agree() {
-        let comparison = Comparison::new(Aggregate::new(2, Fingerprint::ZERO), Aggregate::ZERO, 0);
-        assert!(!comparison.agrees());
-        assert_ne!(SqrtFanOut.decide(comparison), Decision::Skip);
-    }
-
-    #[test]
-    fn sqrt_fan_out_emits_root_m_children() {
-        for span in [100usize, 400, 2_500, 1_000_000] {
-            let Decision::Split(stride) = SqrtFanOut.decide(mismatch(span, span)) else {
-                panic!("a mismatching range of {span} elements must split");
-            };
-            assert_eq!(stride.get(), (span as f32).sqrt() as usize);
-            let emitted = children(span, stride);
-            let root = (span as f64).sqrt() as usize;
-            assert!(
-                emitted >= root / 2 && emitted <= root * 2,
-                "span={span}: {emitted} children, expected ~√span = {root}"
-            );
-        }
-    }
-
-    /// The child count must stop growing with the range.
-    #[test]
-    fn fixed_fan_out_is_constant_in_the_range_size() {
-        let policy = FixedFanOut::default();
-        for span in [100usize, 400, 2_500, 1_000_000] {
-            let Decision::Split(stride) = policy.decide(mismatch(span, span)) else {
-                panic!("a mismatching range of {span} elements must split");
-            };
-            assert!(
-                children(span, stride) <= policy.fan_out().get(),
-                "span={span}: {} children exceeds b={}",
-                children(span, stride),
-                policy.fan_out().get()
-            );
-            assert!(stride.get() < span, "span={span}: the split must refine");
-        }
-    }
-
-    #[test]
-    fn algorithm1_enumerates_at_or_below_the_threshold_and_splits_above() {
-        let policy = EnumerateBelowThreshold::new(32, FanOut::NEGENTROPY);
-        for span in [0usize, 1, 31, 32] {
-            assert_eq!(policy.decide(mismatch(span, 64)), Decision::Enumerate);
-        }
-        let Decision::Split(stride) = policy.decide(mismatch(33, 64)) else {
-            panic!("a range above the threshold must split");
-        };
-        assert!(stride.get() < 33);
-    }
-
-    /// Neither a zero stride nor a fan-out of one is representable, so neither can hang the
-    /// protocol.
-    #[test]
-    fn degenerate_parameters_are_unrepresentable() {
-        assert_eq!(SplitStride::per_child(0), SplitStride::ONE);
-        assert_eq!(
-            SplitStride::for_fan_out(0, FanOut::BINARY),
-            SplitStride::ONE
-        );
-        assert_eq!(FanOut::new(0), FanOut::BINARY);
-        assert_eq!(FanOut::new(1), FanOut::BINARY);
-        assert_eq!(
-            EnumerateBelowThreshold::new(0, FanOut::BINARY).threshold(),
-            1
-        );
-    }
-
-    #[test]
-    fn for_fan_out_never_exceeds_the_requested_branching_factor() {
-        for span in [2usize, 3, 5, 9, 10, 17, 1_000, 999_983] {
-            for b in [2usize, 3, 16, 64] {
-                let fan_out = FanOut::new(b);
-                let stride = SplitStride::for_fan_out(span, fan_out);
-                assert!(
-                    children(span, stride) <= b,
-                    "span={span}, b={b}: {} children",
-                    children(span, stride)
-                );
-                assert!(stride.get() < span, "span={span}, b={b}: must refine");
-            }
-        }
-    }
-
-    /// Pins [`FingerprintDerivedSplit`]'s exact stride formula (`1 + limb % 32`) against known
-    /// fingerprint limbs, not just "differs from a rank-cut policy somewhere" — the mutation gate
-    /// (`AGENTS.md` `.claude/rules/tests.md`) needs a witness for `+`, not `*` or another operator
-    /// combining the `1`, and for `%`, not `/`, dividing by `32`.
-    #[cfg(reconcile_internal_testing)]
-    #[test]
-    fn fingerprint_derived_split_stride_is_one_plus_limb_mod_32() {
-        // (fingerprint low limb, expected stride): 0 and 32 both reduce to remainder 0 (stride 1,
-        // pinning `%` over `/`, which would instead give 0 and 1); 31 and 63 both reduce to 31
-        // (stride 32, pinning `+` over `*`, which would instead give 0 and 0).
-        for (limb, expected_stride) in [(0u64, 1usize), (31, 32), (32, 1), (63, 32)] {
-            let comparison = Comparison::new(
-                Aggregate::new(1_000, Fingerprint([limb, 0, 0, 0])),
-                Aggregate::new(2_000, Fingerprint([9, 9, 9, 9])),
-                0,
-            );
-            let Decision::Split(stride) = FingerprintDerivedSplit.decide(comparison) else {
-                panic!("span={}, remote={}: must split", comparison.span(), 2_000);
-            };
-            assert_eq!(
-                stride.get(),
-                expected_stride,
-                "fingerprint limb {limb}: expected stride {expected_stride}"
-            );
-        }
-    }
-}
+mod tests;
