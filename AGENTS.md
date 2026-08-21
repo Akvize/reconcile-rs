@@ -120,7 +120,7 @@ bugs; `--all-features` no longer implies the `--cfg` above (#330).
 ## 7. Testing
 
 New behavior needs a test: `tests/*.rs` for public-API-crossing changes, `#[cfg(test)]` for internal
-invariants. `tests/proptest_fingerprint_tree_map.rs` / `tests/fuzz_packets.rs` are property/fuzz
+invariants. `tests/proptest_fingerprint_tree_map/` / `tests/fuzz_packets.rs` are property/fuzz
 oracles for the tree and the wire format — extend these over narrow examples when touching parsing
 or `FingerprintTreeMap` invariants. Codecov (`codecov.yml`) warns below 100% project coverage and
 gates at 90%; per-PR patch coverage stays informational — README "Testing and coverage".

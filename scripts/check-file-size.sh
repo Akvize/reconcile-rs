@@ -20,7 +20,10 @@
 # 490/700, WARN (informational only, never fails the build) to 280/400. tests/service.rs's split
 # (#427/#452 continuation) landed every sibling under 425L, but doesn't move FAIL/WARN further --
 # tests/proptest_fingerprint_tree_map.rs (689L) was already the binding test-file floor before
-# and after.
+# and after. That file's own split (#427 continuation) landed every sibling under 320L; the
+# largest-remaining-test-file floor is now rsos/src/fingerprint_tree_map/tests.rs (654L) --
+# still above TEST_WARN, so FAIL/WARN aren't moved by this split alone (a deliberate follow-up,
+# not a side effect of splitting).
 #
 # EXCEPTIONS are files already over FAIL when this gate (or a tightened budget) was introduced,
 # grandfathered rather than split as a side effect -- each is a candidate for its own
