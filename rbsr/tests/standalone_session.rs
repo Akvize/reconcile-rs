@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! End-to-end sessions built entirely from `rbsr`'s public API: no `internal-testing`, no
+//! End-to-end sessions built entirely from `rbsr`'s public API: no `reconcile_internal_testing`, no
 //! `reconcile`. #289's acceptance criteria — a stable public constructor plus accessors on
 //! [`RangeAggregate`], and a subspace session that could not have been written before them.
 
@@ -54,7 +54,7 @@ fn differing_keys_in(
 }
 
 /// The crate-root doc example's loop, over two full stores that start 50 keys apart —
-/// no `internal-testing`, no `reconcile`: `rbsr` + `rsos` alone.
+/// no `reconcile_internal_testing`, no `reconcile`: `rbsr` + `rsos` alone.
 #[test]
 fn a_full_session_finds_every_difference() {
     let mut a = FingerprintTreeMap::new();

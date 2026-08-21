@@ -106,11 +106,15 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    # `--features internal-testing` exposes the `reconcile::testing` seam so the external
-    # integration oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`) and the
-    # benchmarks, which reach now-`pub(crate)` reconciliation internals, still compile.
-    - run: cargo clippy --workspace --features internal-testing --all-targets
+    # `--cfg reconcile_internal_testing` (#330; AGENTS.md §6) exposes the `reconcile::testing` seam
+    # so the external integration oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`)
+    # and the benchmarks, which reach now-`pub(crate)` reconciliation internals, still compile.
+    - run: cargo clippy --workspace --all-targets
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
     - run: cargo clippy --workspace --all-features --all-targets
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # Cognitive-complexity and duplication trend, informational only (CONTRIBUTING.md "Code quality
   # trend"). Deliberately absent from ci-success's `needs:` below -- it can never block a merge.
@@ -136,8 +140,12 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - uses: taiki-e/install-action@cargo-nextest
     - run: cargo build --workspace --verbose
-    - run: cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
-    - run: cargo test --doc --workspace --features internal-testing --verbose
+    - run: cargo nextest run --workspace --retries 4 --flaky-result fail
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
+    - run: cargo test --doc --workspace --verbose
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # AGENTS.md §6 gates the two feature variants separately on purpose: feature interactions hide
   # bugs. A different feature set is a different `target/` fingerprint, so this shares no compiled
@@ -150,7 +158,11 @@ jobs:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
     - uses: taiki-e/install-action@cargo-nextest
+    # `--all-features` no longer implies the `reconcile::testing` seam (#330: it was a Cargo
+    # feature, now a `--cfg`) -- add it explicitly or the integration oracles fail to compile here.
     - run: cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # #203: the default feature set and `--all-features` both resolve to `mac-blake3` (it takes
   # precedence when both MAC backends are enabled, per Cargo.toml), so `mac-hmac` — a published,
@@ -164,9 +176,13 @@ jobs:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
     - uses: taiki-e/install-action@cargo-nextest
-    - run: cargo clippy --workspace --no-default-features --features mac-hmac,internal-testing --all-targets
+    - run: cargo clippy --workspace --no-default-features --features mac-hmac --all-targets
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
     - run: cargo build --workspace --no-default-features --features mac-hmac --verbose
-    - run: cargo nextest run --workspace --no-default-features --features mac-hmac,internal-testing --retries 4 --flaky-result fail
+    - run: cargo nextest run --workspace --no-default-features --features mac-hmac --retries 4 --flaky-result fail
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # #189: `clippy::incompatible_msrv` (implied by -Dwarnings, every clippy job) already fails a
   # change that calls an API newer than the declared `rust-version` -- but only against whatever
@@ -185,7 +201,12 @@ jobs:
     # update both together, the same discipline as AGENTS.md §3's other paired-number gates.
     - uses: dtolnay/rust-toolchain@1.85
     - uses: Swatinem/rust-cache@v2
+    # `--all-features` no longer implies `reconcile_internal_testing` (#330: it was a Cargo
+    # feature, now a `--cfg`) -- without it, `tests/read_api.rs` (built by `--all-targets`) fails
+    # to compile against the `just_insert`/`just_remove` seam.
     - run: cargo check --workspace --all-targets --all-features --verbose
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
   docs:
@@ -208,7 +229,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
-    - run: cargo bench --no-run --features internal-testing
+    - run: cargo bench --no-run
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # Packaging check for the whole workspace -- all five members, the release path end to end (#204,
   # AGENTS.md §11). `--workspace` is what makes that possible: cargo strips `path` at publish time
@@ -307,10 +330,14 @@ jobs:
       run: rustup component add llvm-tools-preview
     - uses: taiki-e/install-action@cargo-llvm-cov
     - uses: Swatinem/rust-cache@v2
-    # `--all-features`: `internal-testing`-gated seams (e.g. `just_insert`) are what the
-    # integration-test oracles build against; without it this job fails to compile.
+    # `--all-features` no longer implies the `reconcile::testing` seam (#330: it was a Cargo
+    # feature, now a `--cfg` -- see AGENTS.md §6): `--cfg reconcile_internal_testing` is what the
+    # integration-test oracles (e.g. `just_insert`) build against; without it this job fails to
+    # compile.
     - name: Generate code coverage
       run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:

@@ -32,12 +32,12 @@ rand = "0.8.5"
 # `tests/proptest_fingerprint_tree_map.rs`.
 proptest = "1.11.0"
 
-[features]
-# Exposes `RangeAggregate::for_testing`, the seam `reconcile`'s `tests/wire_format.rs` golden
-# vector is built through. Same role and same name as `reconcile`'s own `internal-testing`: a
-# test-only door, never reachable from non-test code, and not public API. `reconcile` turns it on
-# via its own `internal-testing = ["rbsr/internal-testing"]` unification entry.
-#
-# This is what keeps `rbsr` free of a codec dependency: the crate owns no encoding, so the
-# byte-level test lives where the codec is actually chosen (the adapter layer) rather than here.
-internal-testing = []
+# #330: `RangeAggregate::for_testing` — the seam `reconcile`'s `tests/wire_format.rs` golden vector
+# is built through — used to be a normal Cargo feature of this name, reachable by any dependent's
+# `Cargo.toml`. Reached now only via `--cfg reconcile_internal_testing` (AGENTS.md §6), which a
+# dependent's build cannot set; `check-cfg` below stops that `#[cfg(...)]` from tripping
+# `unexpected_cfgs` under `-Dwarnings`. This is what keeps `rbsr` free of a codec dependency: the
+# crate owns no encoding, so the byte-level test lives where the codec is actually chosen (the
+# adapter layer) rather than here.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(reconcile_internal_testing)"] }

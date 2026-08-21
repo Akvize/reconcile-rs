@@ -642,6 +642,6 @@ cargo llvm-cov --workspace --all-features --html     # browsable HTML report und
 `--all-features` is required, not optional, despite `mac-blake3`/`mac-hmac` being mutually
 exclusive at runtime: exactly one backend compiles in either way (`mac-blake3` takes precedence),
 so this measures the same MAC backend a default-features run would. What actually needs
-`--all-features` is the integration tests, which build against `internal-testing`-gated seams and
-fail to compile without it — `cargo llvm-cov --workspace` alone errors on this crate. This matches
-CI's own coverage job exactly.
+`--all-features` is the integration tests, which build against `--cfg reconcile_internal_testing`-gated
+seams (AGENTS.md §6) and fail to compile without both that `--cfg` and `--all-features` — `cargo
+llvm-cov --workspace` alone errors on this crate. This matches CI's own coverage job exactly.

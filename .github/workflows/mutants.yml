@@ -172,7 +172,12 @@ jobs:
       # that restoration is ever added, keep a periodic run with no `--iterate` alongside it
       # (upstream cargo-mutants recommends this), since an always-iterating job never re-checks
       # a mutant it once caught.
-      - run: >
+      # #330: `--all-features` (via .cargo/mutants.toml's `all_features = true`) no longer implies
+      # the `reconcile::testing` seam -- internal-testing is a `--cfg`, not a Cargo feature; see
+      # main.yml's equivalent RUSTFLAGS additions from the same migration.
+      - env:
+          RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
+        run: >
           cargo mutants --workspace
           --shard ${{ matrix.shard }}/8 --sharding round-robin
           --baseline=skip --timeout 300

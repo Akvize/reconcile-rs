@@ -620,13 +620,13 @@ proptest! {
 /// including past `size()`, which `RsosView`'s rank-within-store law forbids. `select` indexes a
 /// `Vec`, so it panics
 /// out of bounds: the trap the driver must not spring.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 struct HostileRanks {
     keys: Vec<u64>,
     rank_answers: Vec<usize>,
 }
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 impl rbsr::RsosView<u64> for HostileRanks {
     fn size(&self) -> usize {
         self.keys.len()
@@ -649,7 +649,7 @@ impl rbsr::RsosView<u64> for HostileRanks {
     }
 }
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 proptest! {
     #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
 

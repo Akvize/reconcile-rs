@@ -43,20 +43,20 @@ cargo fmt --check
 ./scripts/check-doc-structure.sh                             # doc links/anchors/paths, SOTA §4.2
 ./scripts/check-test-file-naming.sh                # split #[cfg(test)] modules named tests.rs
 ./scripts/check-file-size.sh                    # prod/test line-count budgets, warn + hard-fail
-cargo clippy --workspace --features internal-testing --all-targets
-cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo clippy --workspace --all-targets
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo clippy --workspace --all-features --all-targets
 cargo build --workspace
-cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
-cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
-cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
-cargo test --doc --workspace --features internal-testing  # nextest doesn't run doctests
-cargo bench --no-run --features internal-testing              # benches must compile
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo nextest run --workspace --retries 4 --flaky-result fail
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo test --doc --workspace  # nextest doesn't run doctests
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo bench --no-run    # benches must compile
 cargo doc --workspace                                         # both matter: an intra-doc link to a
 cargo doc --workspace --all-features                          # feature-gated item dangles in only one
 cargo package --workspace --allow-dirty                       # release packaging, §11
 cargo deny check                                              # advisories/licenses/sources, deny.toml
 ./scripts/check-public-api.sh                                 # public-API snapshot + 0.x-leak gate, §11
-./scripts/check-mutant-count.sh   # repo-gates' 6th check; also CI-only, omitted above: test-mac-hmac's clippy/build/nextest trio with `--no-default-features --features mac-hmac[,internal-testing]` (§6), and coverage's `cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info` → Codecov (§7)
+./scripts/check-mutant-count.sh   # repo-gates' 6th check; also CI-only, omitted above: test-mac-hmac's clippy/build/nextest trio with `--no-default-features --features mac-hmac` (+ the same `--cfg`, §6), and coverage's `cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info` → Codecov (§7)
 ```
 
 `--workspace`, never `--all`. This list is what CI runs and what "done" means — gated automatically
@@ -66,7 +66,7 @@ budget it fits, and if it fits none of them it is CI-only by design:
 | tier | what runs | cost |
 |---|---|---|
 | [`./pre-commit`](./pre-commit) | `gitleaks protect --staged`, `cargo fmt --check`, the `./scripts/check-doc-*.sh`/`check-domain-purity.sh`/`check-test-file-naming.sh`/`check-file-size.sh` gates above | 0.4 s |
-| [`./pre-push`](./pre-push) | the two `internal-testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
+| [`./pre-push`](./pre-push) | the two `--cfg reconcile_internal_testing` lines above, `clippy` first | ~20 s, skipped per commit with no Rust-affecting change |
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 | [`mutants.yml`](./.github/workflows/mutants.yml) `pr-diff` | `./scripts/check-mutation-gate.sh` — in-diff mutation coverage (`.claude/rules/tests.md`); required via `mutants-success`, same as `ci-success` | 2–8 min |
 
@@ -99,23 +99,23 @@ Worked examples and the reasoning behind them: [`ARCHITECTURE.md`](./ARCHITECTUR
   it onto any new crate root.
 - `cargo fmt` and `cargo clippy --deny warnings` (§3) are gated, not suggestions.
 - §4's strong-typing convention is not yet mechanically gated — hold the line in review.
-- `internal-testing`-gated `crate::testing` is test-only, never reachable from non-test code.
+- `crate::testing` is `#[cfg(reconcile_internal_testing)]`-gated, test-only, non-test code never reaches it (§6).
 
 ## 6. Feature flags
 
 `mac-blake3` (default) vs `mac-hmac` — exactly one wins, build fails if neither. `zeroize`,
-`encryption`, `metrics`, `metrics-prometheus`, `dns-hickory` are opt-in. `internal-testing` exposes
-test-only seams (`reconcile::testing`, `rbsr::RangeAggregate::for_testing`) — not public API.
+`encryption`, `metrics`, `metrics-prometheus`, `dns-hickory` are opt-in. Test-only seams
+(`reconcile::testing`, `rbsr::RangeAggregate::for_testing`) are reached only via `--cfg
+reconcile_internal_testing` in RUSTFLAGS (#330: not a Cargo feature, unsettable from a dependent's build).
 
 `mac-blake3`/`mac-hmac`/`zeroize`/`encryption`/`dns-hickory` are declared on `gossip` (owns
 `auth.rs`/`discovery.rs`) and re-exposed from `reconcile` as unification entries
 (`mac-blake3 = ["gossip/mac-blake3"]`); `metrics`/`metrics-prometheus` stay on `reconcile`
-(`observability.rs`/`prometheus.rs`); `internal-testing` is declared on both `reconcile` and `rbsr`,
-forwarded the same way. `reconcile` depends on `gossip` with `default-features = false`, so its own
-`default = ["mac-blake3"]` is the single place the MAC backend gets chosen.
+(`observability.rs`/`prometheus.rs`). `reconcile` depends on `gossip` with `default-features = false`,
+so its own `default = ["mac-blake3"]` is the single place the MAC backend gets chosen.
 
-Touching feature-gated code: run **both** clippy/test variants (§3) — CI gates them separately
-because feature interactions hide bugs.
+Touching feature-gated code: run **both** clippy/test variants (§3) — feature interactions hide
+bugs; `--all-features` no longer implies the `--cfg` above (#330).
 
 ## 7. Testing
 

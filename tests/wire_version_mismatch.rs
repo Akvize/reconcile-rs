@@ -14,7 +14,7 @@
 //! Own binary (a plain `tests/*.rs` file), so installing the recorder globally once here cannot
 //! collide with another test file's own global install.
 
-#![cfg(all(feature = "internal-testing", feature = "metrics"))]
+#![cfg(all(reconcile_internal_testing, feature = "metrics"))]
 
 use std::net::IpAddr;
 use std::time::Duration;

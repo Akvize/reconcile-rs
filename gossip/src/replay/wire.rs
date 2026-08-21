@@ -23,7 +23,7 @@ impl Seq {
     pub const NONE: Seq = Seq(0);
 
     /// Wrap a raw sequence number.
-    #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
+    #[allow(dead_code)] // used by cfg(test) unit tests and the `reconcile_internal_testing` cfg seam
     pub const fn new(value: u64) -> Seq {
         Seq(value)
     }
@@ -60,7 +60,7 @@ impl Stamp {
     pub const NONE: Stamp = Stamp(0);
 
     /// Wrap a raw millisecond-since-epoch value.
-    #[allow(dead_code)] // used by cfg(test) unit tests and the `internal-testing` feature seam
+    #[allow(dead_code)] // used by cfg(test) unit tests and the `reconcile_internal_testing` cfg seam
     pub const fn new(value: u64) -> Stamp {
         Stamp(value)
     }

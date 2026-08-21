@@ -50,14 +50,17 @@ run ./scripts/check-domain-purity.sh
 run ./scripts/check-doc-structure.sh
 
 if [ "$RUST" -eq 1 ]; then
+    # #330: `internal-testing` is no longer a Cargo feature -- the seam it used to gate is reached
+    # via `--cfg reconcile_internal_testing` (AGENTS.md §6), scoped to just the commands below that
+    # need it (same set as before the migration), not exported for the whole script.
     run cargo fmt --check
-    run cargo clippy --workspace --features internal-testing --all-targets
-    run cargo clippy --workspace --all-features --all-targets
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo clippy --workspace --all-targets
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo clippy --workspace --all-features --all-targets
     run cargo build --workspace
-    run cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
-    run cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
-    run cargo test --doc --workspace --features internal-testing
-    run cargo bench --no-run --features internal-testing
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo nextest run --workspace --retries 4 --flaky-result fail
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo test --doc --workspace
+    RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" run cargo bench --no-run
     run cargo doc --workspace
     run cargo doc --workspace --all-features
     run cargo package --workspace --allow-dirty

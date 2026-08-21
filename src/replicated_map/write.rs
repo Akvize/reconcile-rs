@@ -95,7 +95,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Local-only and off the published API: [`load_bulk`](Self::load_bulk) for no-broadcast
     /// seeding, [`insert`](Self::insert) for a propagating write.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn just_insert(&self, key: K, value: V) -> Option<V> {
         let ret = self
             .engine
@@ -148,7 +148,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     ///
     /// Local-only and off the published API; [`load_bulk`](Self::load_bulk) is the public
     /// no-broadcast seeding path.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn just_insert_bulk(&self, key_values: &[(K, V)]) {
         self.load_bulk(key_values);
     }
@@ -193,9 +193,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         );
     }
 
-    /// Local-only single removal; off the published API (test/`internal-testing` only). Use
+    /// Local-only single removal; off the published API (test/`cfg(reconcile_internal_testing)` only). Use
     /// [`remove`](Self::remove) for a propagating deletion.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn just_remove(&self, key: &K) -> Option<V> {
         let ret = self
             .engine
@@ -233,9 +233,9 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         ret.and_then(|t| t.state.into())
     }
 
-    /// Local-only bulk removal; off the published API (test/`internal-testing` only). Use
+    /// Local-only bulk removal; off the published API (test/`cfg(reconcile_internal_testing)` only). Use
     /// [`remove_bulk`](Self::remove_bulk) for propagating deletions.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn just_remove_bulk(&self, keys: &[K]) {
         self.engine.just_insert_bulk(
             &keys

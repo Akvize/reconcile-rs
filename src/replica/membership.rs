@@ -121,32 +121,32 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// Number of entries currently in the peers gossip-routing map.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn peers_map_len(&self) -> usize {
         self.peers.read().len()
     }
 
     /// Number of entries currently in the per-peer replay filter.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn replay_filter_len(&self) -> usize {
         self.replay_filter.len()
     }
 
     /// Number of keys currently tracked in the tombstone-acknowledgment map.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn tombstone_acks_len(&self) -> usize {
         self.tombstone_acks.read().len()
     }
 
     /// Number of bulk dump tasks currently in flight across all peers.
     ///
-    /// Exposed for test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub(crate) fn bulk_dumps_in_flight_count(&self) -> usize {
         self.bulk_dumps_in_flight.load(Ordering::Acquire)
     }
@@ -184,7 +184,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     /// The causal-stability membership set, as a `Vec` — see
     /// [`members_snapshot`](Self::members_snapshot) for the `HashSet` form
-    /// `internal-testing` assertions use.
+    /// `cfg(reconcile_internal_testing)` assertions use.
     pub(crate) fn members_vec(&self) -> Vec<IpAddr> {
         self.members.read().iter().copied().collect()
     }
