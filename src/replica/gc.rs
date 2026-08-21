@@ -9,11 +9,22 @@
 use std::hash::Hash;
 use std::net::IpAddr;
 
+use serde::Serialize;
+
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::Entry;
 
-use super::{version_hash, Replica};
+use super::Replica;
+
+/// A deterministic, cross-node version token for a value: the low 64 bits of `rsos::digest`
+/// (`ARCHITECTURE.md` §5 invariant 7).
+///
+/// A peer acknowledges the exact tombstone version it holds, so a stale ack cannot authorize GC of
+/// a newer one.
+pub(crate) fn version_hash<V: Serialize>(value: &V) -> u64 {
+    rsos::digest(value).0[0]
+}
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Remove a key from the dated `map`, its value-only projection, and the live-tombstone
