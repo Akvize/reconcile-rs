@@ -29,7 +29,7 @@ tracing = "0.1.40"
 rand = "0.8.5"
 # `tests/shipped_policies_always_progress.rs` pins `RefinementPolicy`'s progress law (#420) over
 # arbitrary `Comparison`s, the same crate the workspace root already uses for
-# `tests/proptest_fingerprint_tree_map.rs`.
+# `tests/proptest_fingerprint_tree_map/`.
 proptest = "1.11.0"
 
 # #330: `RangeAggregate::for_testing` — the seam `reconcile`'s `tests/wire_format.rs` golden vector

@@ -19,7 +19,7 @@
 #
 #   test_workspace — by default each mutant only runs its own package's tests.
 #                    rsos/, gossip/ and lww-register/ have no tests/ directory; their
-#                    real oracles are tests/proptest_fingerprint_tree_map.rs and
+#                    real oracles are tests/proptest_fingerprint_tree_map/ and
 #                    tests/service/ in the root package. Without this, the score is
 #                    measured against the wrong suite and flatters those crates.
 
