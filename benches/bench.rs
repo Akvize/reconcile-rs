@@ -658,6 +658,29 @@ mod imp {
                     {
                         tokio::task::yield_now().await;
                     }
+                    // The first couple of content-divergence round trips a fresh pair ever
+                    // exchanges — one for a tombstoning round, one for a live-value round, each
+                    // the first time that *kind* of round happens on this pair — pay a one-time
+                    // warm-up cost of a few seconds, decaying to the steady-state hundreds of
+                    // microseconds every round costs after; a boundary key (one past the corpus,
+                    // becoming the tree's new rightmost entry) made it far worse still. Left in a
+                    // timed sample it would dominate that sample's mean, so pay it here, untimed,
+                    // once per `(n, rtt)` pair, removing and restoring an interior corpus key well
+                    // away from anything `D_CLUSTERINGS` touches.
+                    let warm_up_key = (n / 2 + n / 4) as u32;
+                    let warm_up_value = warm_up_key.wrapping_mul(2_654_435_761);
+                    for _ in 0..4 {
+                        store1.just_remove(&warm_up_key);
+                        store1.start_reconciliation().await;
+                        while store2.get(&warm_up_key).is_some() {
+                            tokio::task::yield_now().await;
+                        }
+                        store1.just_insert(warm_up_key, warm_up_value);
+                        store1.start_reconciliation().await;
+                        while store2.get_cloned(&warm_up_key) != Some(warm_up_value) {
+                            tokio::task::yield_now().await;
+                        }
+                    }
                     (store1, store2, received1, received2, tasks)
                 });
 
