@@ -415,11 +415,18 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   GenSync's headline reappears at this smaller scale — inside this one implementation the binding
   cost moves from local CPU at RTT ≈ 0, to round trips at 50 ms, to `reconcile_interval` under loss,
   so a ranking taken at one network point does not transfer to another.
-- **Every cost model on this page is two-party; the system is N-party.** RBSR, PSR, CPI and RIBLT
-  all state their bounds for one pair of peers, while `ReplicatedMap` runs a gossip cluster whose
-  per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
-  reconciliation has its own literature (Mitzenmacher & Pagh, *Distributed Computing* 2018) that no
-  RBSR work cites. Unexamined axis, not a known-good one.
+- **Every cost model on this page is two-party; the system is N-party — and a fleet *replays* a
+  collision rather than resampling one.** RBSR, PSR, CPI and RIBLT bound one pair of peers, while
+  `ReplicatedMap` runs a cluster at O(N) write amplification (§1.2, `gossip_fanout`). A fixed `lift`
+  makes a verdict a function of the *content* pair, refuting arXiv:2212.13567 §5.1 by derivation:
+
+  | fleet state | content classes over `r` | retries `N` buys |
+  |---|---|---|
+  | freshly partitioned, divergent | many | ≈ `N` |
+  | converged but for one divergence | **2** | **0** |
+
+  Redundancy buys nothing exactly when the fleet is healthy. Mechanism, scope, `N`-sweep:
+  `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
 - **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
   column by *stopping early* — and everything it stops on is then shipped as values, almost all of
   which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
@@ -634,7 +641,6 @@ per issue, none of them a 1.0 gate; the claim and the evidence live in the issue
 | Is the refinement tree's comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
 | What is the false-convergence rate at reduced fingerprint width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
 | Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
-| Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
 | Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
 | The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
 
@@ -659,6 +665,8 @@ split rule does not cleanly exceed the bound — the sharper, statistically unam
 that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
 ([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
 grounding for the split-boundary half of this claim").
+[#354](https://github.com/Akvize/reconcile-rs/issues/354) left it the other way: opened as a
+question, closed by derivation rather than the campaign it proposed (§2.2).
 
 **SOTA target by axis:**
 
@@ -909,6 +917,16 @@ pass had already ruled out. Record negative results too.
   https://aljoscha-meyer.de/assets/landing/rbsr_nonhomomorphic.pdf — RBSR over history-independent,
   clamping-invariant trees using conventional hashes. **The direct counter-argument to §2.3 #1**:
   the composable-monoid summary is one design point, not a requirement of the algorithm.
+  **Bears on §2.2 twice more**, both read from the source (2026-08-20). §IV.B states the
+  matched-range property as the *design requirement* — "if they do store the same set in a range,
+  their clamped subtrees will be equal, and hence have equal root hashes" — so §2.2's replay result
+  rests on what makes a range fingerprint work at all, not on the additive combiner, and survives
+  this paper's own construction. §II states RBSR's distinguishing claim against the field: MST
+  "can protect against malicious input only by randomizing the tree construction for each
+  reconciliation session", CPI/IBLT/RIBLT likewise, leaving RBSR "the only algorithm to handle
+  adversarial inputs without resorting to per-session randomization". That is the same property
+  §2.2 prices on the other axis — no per-session randomization is also no independent trial per
+  peer. → §2.2, §2.3, [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - L. Gong, Z. Liu, L. Liu, J. Xu, M. Ogihara, T. Yang, *Space- and computationally-efficient set
   reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
   communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).
@@ -985,8 +1003,8 @@ sourced from abstracts and search summaries — read before quoting a number fro
   `doi:10.1007/s00446-017-0316-0` (Distributed Computing 31(6), 2018; preprint `arXiv:1311.2037`) —
   https://arxiv.org/abs/1311.2037
   **Bears on:** the only entry here that is not two-party. Every cost model on this page is stated
-  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — an
-  unexamined axis with an existing literature. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174)
+  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — the
+  literature §2.2's fleet result is answered against. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174), [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - **F. Lázaro, B. Matuz**, *A rate-compatible solution to the set reconciliation problem*,
   `arXiv:2211.05472v2` (IEEE Trans. Commun. 71(10), 2023 — v2 is the accepted revision) —
   https://arxiv.org/abs/2211.05472
