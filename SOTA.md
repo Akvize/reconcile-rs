@@ -285,7 +285,11 @@ copy-on-write B+-tree addressed by page number.
     away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint. This
     boundary is also a **policy** signal, not only a correctness one:
     [#318](https://github.com/Akvize/reconcile-rs/issues/318)'s divergence-adaptive fan-out keys off
-    the same count delta and inherits the same blind spot, and owns what that costs the decision.
+    the same count delta and inherits the same blind spot — settling #318's frequency question by
+    the same fact: the delta reads zero on the regime "an LWW register produces continuously"
+    (above) and nonzero only on the rarer one, where the shipped default already sits within single
+    digits of `SqrtFanOut` (§2.2). **Decision: not built** — record and evidence in
+    `rbsr/src/policy.rs`'s own rustdoc, pinned by `rbsr/tests/balance_under_position_map.rs`.
 - The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
   durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
   RSOS with a secure fingerprint" — persistence is the gap that remains.**
