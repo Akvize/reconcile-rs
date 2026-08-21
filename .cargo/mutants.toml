@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1504
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1503
 # mutants with this config (1540 without the exclusions below) -- the delta between them (currently
-# 36) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 37) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -116,6 +116,17 @@ exclude_globs = ["benches/**", "examples/**"]
 # falls. No test capturing log output exists in this codebase, and none should be added just to
 # pin an operator that gates nothing but which log line fires.
 #
+# `replica/construct.rs:194:33` (`replace < with <=` in `build`'s bulk-send-rate clamp,
+# `if rate > 0 && rate < MIN_BULK_SEND_RATE { warn!(...); MIN_BULK_SEND_RATE } else { rate }`)
+# is equivalent at exactly this one operator: `<` and `<=` disagree only when `rate ==
+# MIN_BULK_SEND_RATE`, and at that point clamping to the floor and leaving `rate` unclamped
+# produce the identical value (the floor itself) either way -- the only difference is whether
+# `warn!` fires. Every *other* mutation to this same condition (`>` flipped, `&&` to `||`, `<`
+# to `==` or `>`) genuinely changes the clamped value for some input and is caught; this is the
+# single boundary point where the two comparisons coincide. No test capturing log output exists
+# in this codebase, and none should be added just to pin an operator that gates nothing but
+# which log line fires.
+#
 # `protocol/rank.rs:117-118` (`BoundedRange::parse`'s
 # `if start_index.get() != raw_start || end_index.get() != raw_end { let offender = ...; debug!(...) }`)
 # is the same pattern: `offender` and the shadowed `size` feed only the `debug!` call, and the
@@ -151,6 +162,7 @@ exclude_re = [
     "protocol/rank\\.rs:117:43: replace \\|\\| with &&",
     "protocol/rank\\.rs:117:62: replace != with ==",
     "protocol/rank\\.rs:118:49: replace != with ==",
+    "replica/construct\\.rs:194:33: replace < with <=",
 ]
 
 skip_calls = ["with_capacity", "reserve"]

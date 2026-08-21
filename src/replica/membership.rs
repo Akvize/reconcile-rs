@@ -16,10 +16,30 @@ use std::time::{Duration, Instant};
 use ipnet::IpNet;
 use tracing::warn;
 
+use gossip::gen_ip::{host_net, net_of};
+
 use crate::bounds::{Key, Value};
 use crate::replicated_map::{ConfigError, MAX_NETS};
 
-use super::{derive_local_net, Replica};
+use super::Replica;
+
+/// Derive a node's **local network** — whichever declared net contains `listen_addr`, and the one
+/// reconciled with every round.
+///
+/// With no match, falls back to the node's own host route, so every peer is treated as remote
+/// rather than mis-qualified. Called at construction and on each `nets` mutation, so the warning
+/// fires only there.
+pub(crate) fn derive_local_net(nets: &[IpNet], listen_addr: IpAddr) -> IpNet {
+    net_of(nets, listen_addr).unwrap_or_else(|| {
+        warn!(
+            "listen address {listen_addr} is contained in none of the configured networks \
+             {nets:?}; cannot identify the local network — treating only this node as local, so \
+             every peer is remote and reconciled on the throttled cross-network cadence. Declare \
+             the network containing {listen_addr} via Config::with_net or ReplicatedMap::add_net.",
+        );
+        host_net(listen_addr)
+    })
+}
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// (runtime) Replace the declared networks wholesale and re-derive the local network.

@@ -15,7 +15,23 @@ use tracing::{debug, instrument, trace, warn};
 use crate::bounds::{Key, Value};
 use crate::observability;
 
-use super::{Replica, BUFFER_SIZE};
+use super::{PeerCap, Replica, BUFFER_SIZE};
+
+impl PeerCap {
+    pub(crate) fn new(max_peers: usize) -> Self {
+        PeerCap(max_peers)
+    }
+
+    /// Whether a datagram from a sender should be admitted, given whether the sender is already
+    /// tracked and how many distinct peers are currently tracked.
+    pub(crate) fn admits(self, known: bool, current_len: usize) -> bool {
+        known || current_len < self.0
+    }
+
+    pub(crate) fn max(self) -> usize {
+        self.0
+    }
+}
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Drive the gossip and reconciliation loops forever.
@@ -125,5 +141,17 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `max()` reflects the constructed value — its only call site today is a `trace!` format
+    /// string, so nothing else in the crate would catch a mutant hardcoding a constant return.
+    #[test]
+    fn peer_cap_max_reflects_the_constructed_value() {
+        assert_eq!(PeerCap::new(5).max(), 5);
     }
 }
