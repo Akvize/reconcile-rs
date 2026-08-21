@@ -201,7 +201,12 @@ jobs:
     # update both together, the same discipline as AGENTS.md §3's other paired-number gates.
     - uses: dtolnay/rust-toolchain@1.85
     - uses: Swatinem/rust-cache@v2
+    # `--all-features` no longer implies `reconcile_internal_testing` (#330: it was a Cargo
+    # feature, now a `--cfg`) -- without it, `tests/read_api.rs` (built by `--all-targets`) fails
+    # to compile against the `just_insert`/`just_remove` seam.
     - run: cargo check --workspace --all-targets --all-features --verbose
+      env:
+        RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
   # Both variants matter: an intra-doc link to a feature-gated item dangles in only one of them.
   docs:

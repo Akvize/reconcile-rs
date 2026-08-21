@@ -46,7 +46,7 @@ cargo fmt --check
 RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo clippy --workspace --all-targets
 RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo clippy --workspace --all-features --all-targets
 cargo build --workspace
-cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
+RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
 RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo nextest run --workspace --retries 4 --flaky-result fail
 RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
 RUSTFLAGS="$RUSTFLAGS --cfg reconcile_internal_testing" cargo test --doc --workspace  # nextest doesn't run doctests
