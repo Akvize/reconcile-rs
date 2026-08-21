@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1515
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1509
 # mutants with this config (1540 without the exclusions below) -- the delta between them (currently
-# 25) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 31) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -56,6 +56,18 @@ exclude_globs = ["benches/**", "examples/**"]
 # verdict it would reach in 0s if it never generated the mutant at all. #427/#452 measured this
 # directly: these six alone cost 6*300s = 30 of a ~120-min in-diff run on a large file-move split.
 #
+# `replay/bitmap.rs:75:32` (`SlidingBitmap::advance`'s cross-word-boundary shift, `self.0[i] = lo |
+# hi`): `lo = old[i-word_shift] << bit_shift` occupies exactly bit positions `[bit_shift, 63]`
+# (shifting left drops any overflow past bit 63); `hi = old[i-word_shift-1] >> (64-bit_shift)`
+# occupies exactly `[0, bit_shift-1]` (shifting right by `64-bit_shift` zero-fills everything
+# above). For every `bit_shift` this branch runs with (it's only entered when `bit_shift != 0`,
+# so `1..=63`), those two ranges partition all 64 bit positions with zero overlap -- by
+# construction of the shift amounts, not by anything about `old`'s contents. `lo & hi` is
+# therefore always `0` for *any* input, which makes `lo | hi` and `lo ^ hi` produce identical
+# output always: replacing `|` with `^` here is a genuine equivalent mutant, unlike `|` with `&`
+# at the same site (which zeroes the disjoint-bit invariant's whole point and is correctly
+# caught). #427.
+#
 # `range.rs:28:56` is the same defect shape via *recursion* instead of a `while` loop:
 # `<ItemRange as Iterator>::next` freezes `children_passed` at its current value (`x * 1 == x`)
 # and falls through to `self.next()`, which never converges -- but because that's a genuine
@@ -65,10 +77,43 @@ exclude_globs = ["benches/**", "examples/**"]
 # verdict. On a resource-constrained hosted runner the same spike plausibly takes down the whole
 # VM rather than just the subprocess -- matching three consecutive "runner has received a shutdown
 # signal" failures of `pr-diff`'s shard 0, each stopped at nearly this same mutant.
+#
+# `read_replica_map/membership.rs:33:53` (`replace < with <=` in `get_peers`'s
+# `instant.elapsed() < PEER_EXPIRATION` retain predicate) differs from every mutant above: it is
+# not equivalent (the two operators genuinely disagree, for one instant, at the exact expiration
+# boundary) and not a hang -- it is provably untestable without flakiness. `peers` stores real
+# `std::time::Instant`s with no clock-injection seam (unlike `lww-register`'s `Hlc`/`AdmittedTime`,
+# ARCHITECTURE.md §4), so hitting `elapsed() == PEER_EXPIRATION` exactly would need either that
+# seam (out of scope for #427's pure structural split) or a real-time race between computing the
+# target `Instant` and the `retain` closure evaluating it -- exactly the "do not add a test that
+# binds a fixed port"-style non-determinism `.claude/rules/tests.md` rules out, just for a clock
+# instead of a port. `get_peers_drops_expired_entries_but_keeps_fresh_ones` (added for #479) proves
+# the real property -- stale peers are dropped, fresh ones kept -- with margins wide enough to
+# survive scheduling jitter; it cannot and is not meant to distinguish this single-instant mutant.
+#
+# `read_replica_map/write.rs:197:36` (`replace != with ==` in the receive loop's
+# `if peer.port() != self.port { warn!(...) }`) genuinely is equivalent, unlike the two entries
+# above: the branch's only effect, either way, is which side of the `if` calls `warn!` -- there
+# is no `continue`/`return`/state write on either arm, so message processing (size check,
+# `authenticator.open`, `handle_messages`, ...) proceeds identically whichever way the condition
+# falls. No test capturing log output exists in this codebase, and none should be added just to
+# pin an operator that gates nothing but which log line fires.
 exclude_re = [
     "testing::",
     "impl Debug",
     "impl Display",
+    # `HmacSha256Mac` (`gossip/src/auth/mac.rs`) is `#[cfg(all(feature = "mac-hmac", not(feature =
+    # "mac-blake3")))]` — with `all_features = true` above, this gate always builds and tests with
+    # both MAC features on, so `not(feature = "mac-blake3")` is false and the entire impl is
+    # compiled out: it is not merely untested, it is *absent from the binary*, so no mutation to it
+    # can ever change test behaviour under this gate's own build config. Pre-existing on `main`
+    # (unchanged since before #427's `gossip/src/auth.rs` split): the split just made these lines
+    # newly show up in `git diff` as "added" (a pure code move, scored the same as new code) and
+    # surfaced a gap the gate was already structurally incapable of closing. Exercising this backend
+    # for real needs `--no-default-features --features mac-hmac`, which this gate does not run.
+    "impl Mac for HmacSha256Mac",
+    "read_replica_map/membership\\.rs:33:53: replace < with <=",
+    "read_replica_map/write\\.rs:197:36: replace != with ==",
     "fingerprint_tree_map/query\\.rs:(36|46):29:",
     "fingerprint_tree_map/query\\.rs:59:19: replace \\+= with \\*=",
     "fingerprint_tree_map/query\\.rs:68:19: replace \\+= with \\*=",
@@ -76,6 +121,7 @@ exclude_re = [
     "fingerprint_tree_map/range\\.rs:28:56: replace \\+ with \\*",
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
+    "replay/bitmap\\.rs:75:32: replace \\| with \\^",
 ]
 
 skip_calls = ["with_capacity", "reserve"]
