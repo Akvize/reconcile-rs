@@ -265,7 +265,8 @@ copy-on-write B+-tree addressed by page number.
     end instead — BLAKE3 over the canonical encoding of (key, value) — so it summarizes the
     **value**, not merely an identity the caller vouches for.
   - **The comparison map is exact here, probabilistic there.** Negentropy's `f_p` is
-    `SHA-256(Σ ‖ varint(count))` truncated to **128 bits**; the paper (§6.1) states plainly that
+    `SHA-256(Σ ‖ varint(count))` truncated to **128 bits** (format per the Negentropy protocol-v1
+    spec in the reference repo — the paper's §6.1 carries no varint); the paper states plainly that
     this makes it "probabilistically sound rather than information-theoretically exact" and leaves
     the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
     256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
@@ -846,9 +847,10 @@ work, and arXiv:2509.02373's 25 references carry **no** Meyer, Amparore, Negentr
                     └──────── no citations either way ────────┘
 ```
 
-*Bibliographic caveat:* that root is cited as **Scalable** set reconciliation (arXiv:2603.19820 [16],
-and this page) and as **Practical** set reconciliation (arXiv:2509.02373 [10], same venue and year).
-Unresolved — check the proceedings before citing either form.
+*Bibliographic caveat, resolved 2026-08-21 (BU TR 2002-01 read as PDF):* both forms name the same
+work — the BU technical report is titled **Practical Set Reconciliation**, and its own title page
+states that a version appeared as **Scalable Set Reconciliation** at Allerton 2002. Cite
+"Scalable" for the Allerton version, "Practical" for the TR.
 
 | Community | Venues | Terms to search |
 |---|---|---|
@@ -883,6 +885,7 @@ pass had already ruled out. Record negative results too.
 | 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not found, and not needed.** The search assumed the law had to be borrowed; it derives in four lines from the protocol itself (§2.2), so this row is closed by derivation rather than by citation |
 | 2026-08-17 | post-2026-08-14 sweep: new arXiv/venue results on range-based/partitioned set reconciliation, rateless IBLT/CertainSync follow-ups, multi-party reconciliation, prolly/Merkle tree updates, Willow/Earthstar changes, GenSync follow-ups, PODC 2026 accepted-papers list | `cs.DC`/`cs.CR`/`cs.IT` + venue programs, via WebSearch (WebFetch could not reach `arxiv.org`, `dl.acm.org`, `ceur-ws.org`, `semanticscholar.org` or `podc.org` from this session — network egress proxy blocked all five; findings below are WebSearch-summary-sourced, not read from the primer PDF) | One finding, §2.1: Rawat et al. 2026 (§4.4) bounds prolly trees' cascading-rechunking cost. Nothing new found on the other axes — RIBLT/CertainSync/ConflictSync/Rateless-Bloom-Filters lineage, multi-party reconciliation (still 2013–2021), and Willow/Earthstar are unchanged since the last pass over each |
 | 2026-08-19 | citation-tracking pass on the two pivot papers: `"<title>" cited by`/`follow-up` per Meyer arXiv:2212.13567 and Yang et al. arXiv:2402.02668 | targeted, via WebSearch only (`arxiv.org`, `api.semanticscholar.org`, `api.openalex.org` all confirmed egress-blocked this session — no programmatic citation graph available, summaries only) | Confirmed arXiv:2603.19820 (already §4.4) is Meyer's direct RBSR heir. CertainSync and ConflictSync (already §4.4) confirmed as RIBLT's real follow-ups; ConflictSync's venue resolved to PaPoC 2026. No new reference found beyond what §4.4 already held |
+| 2026-08-21 | primary-source reading campaign: 36 PDFs supplied by upload (egress still blocked) and read in full — both pivots (arXiv:2212.13567v2, arXiv:2603.19820v1), the `cs.IT` group (MTZ 2003, BU TR 2002-01, EPSR, Vogel arXiv:2302.08145, Janssen–de Jong 2000, RIBLT v3, CertainSync, MET-IBLT v2, Eppstein SIGCOMM'11, Goodrich–Mitzenmacher arXiv:1101.2245), the security group (Wagner, Bellare–Micciancio EUROCRYPT'97, Clarke ASIACRYPT'03, LtHash ePrint 2019/227), `cs.DS` (Chan–Larsen–Pătraşcu arXiv:1103.5510, BGJS TCS 2011, and the six already-read range-query papers), AB-tree (paper + code), Demers PODC'87, HLC, DVV, the Negentropy primer; `negentropy`, `gensync-core`, `gensync-benchmarking`, `abtree_public` cloned and checked at source | targeted, uploads + git proxy | This section's `cs.IT` abstract-sourced warning is discharged for the papers listed. Corrections folded into §2.1 (varint attribution), §4.1 (Allerton caveat resolved), §4.4 (AB-tree mechanism); #185's RIBLT row corrected (incremental encoder mode documented in the primary source); #468's `t = 2b` cutoff confirmed in Negentropy source (`splitRange`: `buckets = 16`, IdList below `buckets * 2`) |
 
 ### 4.4 Bibliography
 
@@ -899,7 +902,8 @@ pass had already ruled out. Record negative results too.
 - L. Gong, Z. Liu, L. Liu, J. Xu, M. Ogihara, T. Yang, *Space- and computationally-efficient set
   reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
   communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).
-- Y. Minsky, A. Trachtenberg, *Scalable set reconciliation*, Allerton 2002 — the divide-and-conquer
+- Y. Minsky, A. Trachtenberg, *Scalable set reconciliation*, Allerton 2002 (= BU TR 2002-01,
+  *Practical Set Reconciliation* — same work, two titles; §4.1) — the divide-and-conquer
   ancestry of range-based refinement, predating the RBSR framing. **Also the root of the PSR line**
   ([§4.1](#41-cross-community-vocabulary)): the one paper both dialects cite, and the reason this
   page held the ancestor for months without ever reaching its `cs.IT` continuation.
@@ -989,6 +993,13 @@ sourced from abstracts and search summaries — read before quoting a number fro
 - Cassandra repair / over-streaming — https://www.pythian.com/blog/effective-anti-entropy-repair-cassandra
 - Willow 3d-RBSR (fingerprint security) — https://willowprotocol.org/specs/3d-range-based-set-reconciliation/index.html ; Negentropy — https://github.com/hoytech/negentropy
 - Demers et al., *Epidemic Algorithms*, PODC 1987 ; SWIM — https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf ; memberlist — https://github.com/hashicorp/memberlist
+- **B. Doerr, A. Kostrygin**, *Randomized Rumor Spreading Revisited*, `arXiv:2303.11150v1` (full
+  version of ICALP 2017) — https://arxiv.org/abs/2303.11150
+  **Bears on:** the sharpest gossip round counts to additive constants (push-pull:
+  `log₃n + log₂ln n ± O(1)`), and the theorem that constant per-message loss destroys the
+  double-exponential end phase — message complexity degrades from `Θ(n log log n)` to
+  `Θ(n log n)` — a published anchor for loss, not RTT, being the binding term on an unreliable
+  transport. → [#336](https://github.com/Akvize/reconcile-rs/issues/336), §1.3
 - A. Rawat, T. K. Vangani, H. Cornelius, V. Daza, *Accelerating Prolly Trees: Simplified Chunking for
   Rapid Updates*, DLT 2024 workshop (CEUR-WS Vol-3791, paper 8) — https://ceur-ws.org/Vol-3791/paper8.pdf
   ; journal version `doi:10.1145/3785142` (ACM Distributed Ledger Technologies: Research and
@@ -1007,11 +1018,15 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
   `doi:10.14778/3538598.3538606` (VLDB 15(9), 2022) — https://vldb.org/pvldb/vol15/p1835-zhao.pdf ;
   code (primary source read for this entry — `vldb.org` was egress-blocked) via
   https://github.com/zzy7896321/abtree_public.
-  **Bears on:** the mechanism is not root-path locking — writers CAS-append immutable weight deltas
-  (tagged by inserting xmin) into a lock-free, per-page MVCC version-store chain instead of writing
-  an absolute aggregate in place; readers sum the snapshot-visible deltas, and a background GC
-  consolidates each chain once no live snapshot needs it, *except the root's*, deliberately left
-  uncollapsed because that is exactly where contention concentrates. →
+  **Bears on:** the mechanism is not root-path locking — writers update the in-page aggregate in
+  place with atomic Fetch-And-Add (weight updates commute, §3.1) *and* prepend immutable delta
+  records (tagged by inserting xmin) to a lock-free per-child-page version chain, which snapshot
+  readers use to **subtract invisible deltas** from the in-place value (§4.4); stored weights are
+  deliberately inexact upper bounds corrected by rejection sampling (Def. 1) — AB-tree buys
+  concurrency by relaxing the exactness a sound SKIP cannot relax. An epoch-based GC reclaims dead
+  chain nodes; the root's entry is deliberately not removed on the hot path — that detail is in the
+  code alone (`_abt_install_version_chain`'s comment; vacuum collects it when the tree quiesces),
+  not in the paper (corrected 2026-08-21, paper + code read). →
   [#359](https://github.com/Akvize/reconcile-rs/issues/359), §2.4 item 10.
 - F. Li, M. Hadjieleftheriou, G. Kollios, L. Reyzin, *Dynamic authenticated index structures for
   outsourced databases* (Embedded Merkle B-tree), SIGMOD 2006 — twenty years of prior art on
@@ -1032,6 +1047,26 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
 - Shapiro et al., *CRDTs*, INRIA RR-7506 / SSS 2011 — https://inria.hal.science/inria-00555588/en/
 - Preguiça et al., *Dotted Version Vectors*, arXiv:1011.5808 — https://arxiv.org/abs/1011.5808
 - Clarke et al., *Incremental Multiset Hash Functions*, ASIACRYPT 2003 — https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
+  **Bears on** *(no arXiv/doi pinnable offline — supplied-PDF read; pin when next touched, §4.2)*:
+  MSet-Add-Hash is the one short-output additive construction with a security proof —
+  keyed by a PRF whose key is **secret to the verifier** (bound `u²/2^m + (d/n)^l`); with the key
+  known and the nonce fixed, security degrades to exactly the weighted-knapsack problem Wagner's
+  k-tree attacks — so a cluster-shared key protects against outsiders only, never key holders.
+  → [#337](https://github.com/Akvize/reconcile-rs/issues/337), #471
+- **M. Bellare, D. Micciancio**, *A New Paradigm for Collision-free Hashing: Incrementality at
+  Reduced Cost*, EUROCRYPT 1997 — https://cseweb.ucsd.edu/~mihir/papers.html
+  **Bears on** *(no arXiv/doi pinnable offline — supplied-PDF read; pin when next touched, §4.2)*:
+  defines the randomize-then-combine paradigm (AdHASH/MuHASH/LtHASH) and reduces
+  AdHASH collisions to the weighted-knapsack problem — the security framework a keyed lift argues
+  in; its pre-Wagner "a few hundred bits" sizing is exactly what Wagner broke.
+  → [#337](https://github.com/Akvize/reconcile-rs/issues/337), §2.4 P0-1
+- **K. Lewi, W. Kim, I. Maykov, S. Weis**, *Securing Update Propagation with Homomorphic Hashing*
+  (LtHash), IACR ePrint 2019/227 — https://eprint.iacr.org/2019/227.pdf
+  **Bears on** *(ePrint carries no doi; id pinned as 2019/227 — §4.2 exception, declared)*:
+  the deployed post-Wagner unkeyed additive hash pays 16384 bits for ~200-bit
+  security (lthash16 = 1024 × 16-bit lanes), and its §1.3 disputes [MGS15]'s smaller sizings —
+  the quantified case that an unkeyed lift cannot stay at 256 bits, keying can.
+  → [#337](https://github.com/Akvize/reconcile-rs/issues/337), §2.4 P0-1
 - **D. Wagner**, *A Generalized Birthday Problem*, `doi:10.1007/3-540-45708-9_19` (CRYPTO 2002,
   LNCS 2442, pp. 288–303) — https://www.iacr.org/archive/crypto2002/24420288/24420288.pdf
   **Bears on:** the k-tree solves the balance problem over `ℤ/2^w` in subexponential time, so a wide
