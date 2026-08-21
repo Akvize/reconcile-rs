@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1511
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1509
 # mutants with this config (1540 without the exclusions below) -- the delta between them (currently
-# 29) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 31) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -77,6 +77,27 @@ exclude_globs = ["benches/**", "examples/**"]
 # verdict. On a resource-constrained hosted runner the same spike plausibly takes down the whole
 # VM rather than just the subprocess -- matching three consecutive "runner has received a shutdown
 # signal" failures of `pr-diff`'s shard 0, each stopped at nearly this same mutant.
+#
+# `read_replica_map/membership.rs:33:53` (`replace < with <=` in `get_peers`'s
+# `instant.elapsed() < PEER_EXPIRATION` retain predicate) differs from every mutant above: it is
+# not equivalent (the two operators genuinely disagree, for one instant, at the exact expiration
+# boundary) and not a hang -- it is provably untestable without flakiness. `peers` stores real
+# `std::time::Instant`s with no clock-injection seam (unlike `lww-register`'s `Hlc`/`AdmittedTime`,
+# ARCHITECTURE.md §4), so hitting `elapsed() == PEER_EXPIRATION` exactly would need either that
+# seam (out of scope for #427's pure structural split) or a real-time race between computing the
+# target `Instant` and the `retain` closure evaluating it -- exactly the "do not add a test that
+# binds a fixed port"-style non-determinism `.claude/rules/tests.md` rules out, just for a clock
+# instead of a port. `get_peers_drops_expired_entries_but_keeps_fresh_ones` (added for #479) proves
+# the real property -- stale peers are dropped, fresh ones kept -- with margins wide enough to
+# survive scheduling jitter; it cannot and is not meant to distinguish this single-instant mutant.
+#
+# `read_replica_map/write.rs:197:36` (`replace != with ==` in the receive loop's
+# `if peer.port() != self.port { warn!(...) }`) genuinely is equivalent, unlike the two entries
+# above: the branch's only effect, either way, is which side of the `if` calls `warn!` -- there
+# is no `continue`/`return`/state write on either arm, so message processing (size check,
+# `authenticator.open`, `handle_messages`, ...) proceeds identically whichever way the condition
+# falls. No test capturing log output exists in this codebase, and none should be added just to
+# pin an operator that gates nothing but which log line fires.
 exclude_re = [
     "testing::",
     "impl Debug",
@@ -91,6 +112,8 @@ exclude_re = [
     # surfaced a gap the gate was already structurally incapable of closing. Exercising this backend
     # for real needs `--no-default-features --features mac-hmac`, which this gate does not run.
     "impl Mac for HmacSha256Mac",
+    "read_replica_map/membership\\.rs:33:53: replace < with <=",
+    "read_replica_map/write\\.rs:197:36: replace != with ==",
     "fingerprint_tree_map/query\\.rs:(36|46):29:",
     "fingerprint_tree_map/query\\.rs:59:19: replace \\+= with \\*=",
     "fingerprint_tree_map/query\\.rs:68:19: replace \\+= with \\*=",
