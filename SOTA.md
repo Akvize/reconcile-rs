@@ -277,7 +277,9 @@ copy-on-write B+-tree addressed by page number.
     cardinalities** can never be SKIPped — probability 1, no assumption on the hash — so a dropped
     write or an unreplicated tombstone is structurally covered. A **same-key/different-value
     conflict is not**: both records share a key, so no rank split ever separates them and every
-    range containing that key is count-balanced at every depth. The failure mode `f_p = id` covers
+    range containing that key is count-balanced at every depth. Re-ordering the store does not
+    rescue it, and *injectivity* is not the lever that would —
+    [§2.4.1](#241-open-research-questions). The failure mode `f_p = id` covers
     outright is the rarer one; the one an LWW register produces continuously falls back on Σ's
     injectivity alone. Truncating a count-folding hash (Negentropy) trades the probability-1 half
     away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint. This
@@ -639,18 +641,25 @@ per issue, none of them a 1.0 gate; the claim and the evidence live in the issue
 | Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
 | Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
 | Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
-| The analysis is dimension-free; the RSOS contract is not — what does `δ > 1` actually need? | [#360](https://github.com/Akvize/reconcile-rs/issues/360) |
 | The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
 
-Four results landed with this index rather than as open issues, because they close rather than open
+Five results landed with this index rather than as open issues, because they close rather than open
 a question: a divergence-adaptive policy is confined to the count, and the count is blind exactly
 where the exact-count guarantee has already run out (folded into
 [#318](https://github.com/Akvize/reconcile-rs/issues/318)); re-ordering the store does not rescue
 that signal — `rbsr/tests/balance_under_position_map.rs` shows only an order whose leading
 component is the one that changed makes a divergence visible, so "make `π` injective" is the wrong
-rule, relocation is; `Comparison` no longer hands a policy the fingerprint at all — narrowed to
-`span()`/`remote_size()`/`agrees()`, making the violation structurally unspellable rather than
-merely bounded ([#352](https://github.com/Akvize/reconcile-rs/issues/352)); and a hash-derived
+rule, relocation is; the multidimensional extension is settled on paper as a **no-go**, read against
+`arXiv:2603.19820v1` itself — its §8 asks for a theory of *balancing **and** summarization* beyond
+one dimension, and the two part company: balancing breaks at one line of its Algorithm 2 and
+recovers, the box `Aggregate` Def. 3.9 already carries meets an unconditional cell-probe floor, so
+the obstruction is the summary rather than the dimension, and the protocol side transports verbatim
+([#360](https://github.com/Akvize/reconcile-rs/issues/360); mechanism and bounds in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) §7, the primary-source corrections in §4.3 below, and the
+write-up itself a preprint this repository deliberately does not version); `Comparison` no longer hands a policy the fingerprint
+at all — narrowed to `span()`/`remote_size()`/`agrees()`, making the violation structurally
+unspellable rather than merely bounded
+([#352](https://github.com/Akvize/reconcile-rs/issues/352)); and a hash-derived
 split rule does not cleanly exceed the bound — the sharper, statistically unambiguous result is
 that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
 ([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
@@ -885,8 +894,13 @@ pass had already ruled out. Record negative results too.
 | 2026-08-14 | `q`-ary trie / digital-tree space law, `q`/ln `q` | analysis of algorithms | **Not found, and not needed.** The search assumed the law had to be borrowed; it derives in four lines from the protocol itself (§2.2), so this row is closed by derivation rather than by citation |
 | 2026-08-17 | post-2026-08-14 sweep: new arXiv/venue results on range-based/partitioned set reconciliation, rateless IBLT/CertainSync follow-ups, multi-party reconciliation, prolly/Merkle tree updates, Willow/Earthstar changes, GenSync follow-ups, PODC 2026 accepted-papers list | `cs.DC`/`cs.CR`/`cs.IT` + venue programs, via WebSearch (WebFetch could not reach `arxiv.org`, `dl.acm.org`, `ceur-ws.org`, `semanticscholar.org` or `podc.org` from this session — network egress proxy blocked all five; findings below are WebSearch-summary-sourced, not read from the primer PDF) | One finding, §2.1: Rawat et al. 2026 (§4.4) bounds prolly trees' cascading-rechunking cost. Nothing new found on the other axes — RIBLT/CertainSync/ConflictSync/Rateless-Bloom-Filters lineage, multi-party reconciliation (still 2013–2021), and Willow/Earthstar are unchanged since the last pass over each |
 | 2026-08-19 | citation-tracking pass on the two pivot papers: `"<title>" cited by`/`follow-up` per Meyer arXiv:2212.13567 and Yang et al. arXiv:2402.02668 | targeted, via WebSearch only (`arxiv.org`, `api.semanticscholar.org`, `api.openalex.org` all confirmed egress-blocked this session — no programmatic citation graph available, summaries only) | Confirmed arXiv:2603.19820 (already §4.4) is Meyer's direct RBSR heir. CertainSync and ConflictSync (already §4.4) confirmed as RIBLT's real follow-ups; ConflictSync's venue resolved to PaPoC 2026. No new reference found beyond what §4.4 already held |
+| 2026-08-20 | range selection, range median, orthogonal range searching — static and dynamic, with their cell-probe lower bounds | `cs.DS` / `cs.CG`, a **third dialect** entered for the first time, for [#360](https://github.com/Akvize/reconcile-rs/issues/360)'s go/no-go; via WebSearch only (WebFetch egress-blocked for `users-cs.au.dk`, `people.csail.mit.edu` and every other academic host tried — nothing read as a PDF) | **§4.4's `cs.DS` group**, and the go/no-go itself: the range-restricted `Select` is a named, tight, solved problem, and at `δ` = 2 it is *cheaper* than the aggregate beside it. **Two boundaries recorded rather than crossed:** whether the `(lg lg n)²` gap between a buildable `O(lg² n)` and the `Ω((lg n/lg lg n)²)` floor closes for a *group-valued* box aggregate — the weighted lower bound is confirmed, no matching upper bound was found — and a linear-space Chan–Wilkinson range-selection result, cited secondhand in several summaries, which could not be confirmed and was deliberately held out — **both resolved 2026-08-20, next row but one** |
+| 2026-08-20 | `arXiv:2603.19820v1` read as a PDF, first time end to end (supplied directly — egress still blocks `arxiv.org`) | primary source, targeted at every claim this page and [#360](https://github.com/Akvize/reconcile-rs/issues/360) make about it | **Four corrections.** (a) The §8 line about balancing counts is Amparore *reporting Willow*, not his own requirement, and the wording circulated here was a paraphrase presented as a quote. (b) His actual future-work sentence names **composite-key** reconciliation and asks for a theory of *balancing **and** summarization* — both halves, which is what the note now answers. (c) Def. 3.9 has **five** queries plus `Insert`/`Delete`; `Enumerate` was missing from this repo's count, fixed in `rbsr`'s docs. (d) The paper states **no** `log_b(n/t)` depth bound and no laminar/signature-collapse argument — those belong to Meyer, not here; its own bounds are execution-sensitive (`T_loc = O(Qh)`, Lemma B.2 / Thm B.3). **Confirmed unchanged:** §6.1's SHA-256-truncated-to-128 `f_p` and its "probabilistically sound rather than information-theoretically exact" wording (verbatim), the out-of-scope collision analysis, Def. 3.4's monoid lift, and Negentropy's `(timestamp, identifier)` order — §2.1 needed no change |
+| 2026-08-20 | `arXiv:2212.13567` (Meyer) read as a PDF, first time end to end (supplied directly) | primary source, targeted at the depth/round bound this repo quotes as `log_b n` | **The bound is §3.2.2's**, not Amparore's: tree height `≤ 2·⌈log_b(n_min)⌉`, lowered by `⌊log_b(t)⌋`, so rounds are `2 + 2·⌈log_b(n_min)⌉ − ⌊log_b(t)⌋ ∈ O(lg n)` — the factor 2 is the peer alternation, which the `log_b(n/t)` shorthand drops. §4.3 realizes the cut as *"looking up items by index in an order-statistic tree"*, i.e. Algorithm 2 four years early, and prices one range fingerprint at `O(lg n_i)`. Two findings beyond the check: §3.2.1 fn. 2 says correctness needs only that subranges **cover** the parent, not partition it (disjointness is what the *exact-count* argument needs); and **§5.1 answers half of [#360](https://github.com/Akvize/reconcile-rs/issues/360)'s last open question** — boundaries "randomly shift[ed] by a small number of items" preserve the worst-case round bound and boundaries "chosen fully at random" give `O(lg n)` w.h.p., so Def. 3.8's exactness is not load-bearing. Note the tension with [#356](https://github.com/Akvize/reconcile-rs/issues/356): a *hash-derived* split breaks termination in ~99.5% of drives while a *random* one is fine — the difference is independence from protocol state, worth stating wherever #356 is cited |
+| 2026-08-20 | the six `cs.DS` papers §4.4 cites for bounds, read as primary documents (supplied directly) | primary source, targeted at every quantifier `ARCHITECTURE.md` §7 and [#360](https://github.com/Akvize/reconcile-rs/issues/360) rest on | **Bounds confirmed, three qualifications.** (a) Larsen's query is a **dominance** sum over points carrying `Θ(lg n)`-bit weights, with `t_u` **worst case** and `t_q` expected-average — a box aggregate answers dominance and a 256-bit group summary pads to `Θ(lg n)` bits, so the reduction holds, but the worst-case hypothesis is now stated rather than assumed. (b) He–Munro–Nicholson's Thm 1 exposes range **selection** only; the range-rank half the box reduction needs is Brodal–Jørgensen's, at `O(n lg n/lg lg n)` space — so "linear space" applies to the selection half alone. (c) Their query leaves the cut axis free (semi-bounded); RBSR refines fully-bounded boxes, which contain that case, so the cited cost lower-bounds rather than settles it. **Two findings:** Chan–Wilkinson **does** exist (SODA 2011, added to §4.4) and states the selection/3-sided-counting link the reduction uses; and static `δ=2` is *cheaper than dynamic `δ=1`* — linear-space `O(lg_w n)` box counting, `Θ(lg n/lg lg n)` selection — which sharpens #360's per-session-snapshot question into its most promising one. Pătraşcu STOC'07 arrived as a scan and is attributed through Larsen's account |
+| 2026-08-20 | Willow's *3d Range-Based Set Reconciliation* spec read as a PDF (supplied directly; `willowprotocol.org/specs/3d-range-based-set-reconciliation/` 404s — the live path is `/specs/rbsr/`, which is what arXiv:2603.19820 ref. [25] gives) | primary source, targeted at the split rule | **It settles the question in one sentence, and the answer commits it:** *"it is crucial for overall efficiency to **not split based on volume** […] but to split into subranges in which the peer holds **roughly the same number** of AuthorisedEntries"*. So the one deployed 3D RBSR rejects the geometric cut by name, is committed to a box-restricted order statistic and to the aggregate lower bound, and states neither. Its "roughly" is the *approximate* form — the primitive [#360](https://github.com/Akvize/reconcile-rs/issues/360) leaves as its one open question — so a shipped protocol already depends on a cost nobody has established. Separately: the spec states a fingerprint collision *requirement* ("even when facing maliciously crafted input sets") and defers the hash choice to Meyer §5B, a **1-D** survey; #360's transport result is what justifies that borrowing, and Willow does not argue it |
 | 2026-08-21 | primary-source reading campaign: 36 PDFs supplied by upload (egress still blocked) and read in full — both pivots (arXiv:2212.13567v2, arXiv:2603.19820v1), the `cs.IT` group (MTZ 2003, BU TR 2002-01, EPSR, Vogel arXiv:2302.08145, Janssen–de Jong 2000, RIBLT v3, CertainSync, MET-IBLT v2, Eppstein SIGCOMM'11, Goodrich–Mitzenmacher arXiv:1101.2245), the security group (Wagner, Bellare–Micciancio EUROCRYPT'97, Clarke ASIACRYPT'03, LtHash ePrint 2019/227), `cs.DS` (Chan–Larsen–Pătraşcu arXiv:1103.5510, BGJS TCS 2011, and the six already-read range-query papers), AB-tree (paper + code), Demers PODC'87, HLC, DVV, the Negentropy primer; `negentropy`, `gensync-core`, `gensync-benchmarking`, `abtree_public` cloned and checked at source | targeted, uploads + git proxy | This section's `cs.IT` abstract-sourced warning is discharged for the papers listed. Corrections folded into §2.1 (varint attribution), §4.1 (Allerton caveat resolved), §4.4 (AB-tree mechanism); #185's RIBLT row corrected (incremental encoder mode documented in the primary source); #468's `t = 2b` cutoff confirmed in Negentropy source (`splitRange`: `buckets = 16`, IdList below `buckets * 2`) |
-| 2026-08-21 (second wave) | three further supplied documents, same campaign: Mathys–Flajolet in full (the free/blocked-access throughput tables), `arXiv:1604.03030v1` (Weinstein–Yu, FOCS 2016), the AFP entry *A Set Reconciliation Algorithm* (Hofmeier & Karayel) | targeted, uploads | Three verdicts. §2.2's M–F row corrected — "quickly degrades" was this file's gloss: free access peaks at `Q` = 3, `Q` = 4 still beats binary, and fair coins are fixed throughout, so the split distribution is never optimised (the ground Vogel et al. reopen); §4.4's Capetanakis/M–F entry aligned. Weinstein–Yu Thm 1: **amortized, randomized** `Ω((lg n/lg lg n)²)` for dynamic *weighted* 2-D orthogonal range counting (weights in `[n]`, cell probe, `w = Θ(lg n)`) — [#360](https://github.com/Akvize/reconcile-rs/issues/360)'s summarization lower bound is no worst-case artefact; the bibliography entry belongs beside Larsen in the `cs.DS` group [PR #485](https://github.com/Akvize/reconcile-rs/pull/485) introduces, so it is recorded here rather than in §4.4 to avoid a cross-branch collision. The AFP entry identified: it mechanizes MTZ 2003's CPI, not range-based reconciliation — §4.4's MTZ entry now carries the reference and its scope |
+| 2026-08-21 (second wave) | three further supplied documents, same campaign: Mathys–Flajolet in full (the free/blocked-access throughput tables), `arXiv:1604.03030v1` (Weinstein–Yu, FOCS 2016), the AFP entry *A Set Reconciliation Algorithm* (Hofmeier & Karayel) | targeted, uploads | Three verdicts. §2.2's M–F row corrected — "quickly degrades" was this file's gloss: free access peaks at `Q` = 3, `Q` = 4 still beats binary, and fair coins are fixed throughout, so the split distribution is never optimised (the ground Vogel et al. reopen); §4.4's Capetanakis/M–F entry aligned. Weinstein–Yu Thm 1: **amortized, randomized** `Ω((lg n/lg lg n)²)` for dynamic *weighted* 2-D orthogonal range counting (weights in `[n]`, cell probe, `w = Θ(lg n)`) — [#360](https://github.com/Akvize/reconcile-rs/issues/360)'s summarization lower bound is no worst-case artefact; the bibliography entry belongs beside Larsen in the `cs.DS` group [PR #485](https://github.com/Akvize/reconcile-rs/pull/485) introduces, and is now carried there — recorded here first only to avoid a cross-branch collision. The AFP entry identified: it mechanizes MTZ 2003's CPI, not range-based reconciliation — §4.4's MTZ entry now carries the reference and its scope |
 
 ### 4.4 Bibliography
 
@@ -1048,6 +1062,62 @@ surfaced by arXiv:2603.19820's related work — §2.4 P1/P2 and issues #257/#271
   lock-free MVCC readers and a single writer. Named here because that *is* the property epic
   [#271](https://github.com/Akvize/reconcile-rs/issues/271) sets out to build in safe Rust: the
   build-vs-adopt comparison should be made against it explicitly rather than by default.
+
+**Range selection and orthogonal range searching (`cs.DS` / `cs.CG`)** *(a third dialect, opened
+2026-08-20 for [#360](https://github.com/Akvize/reconcile-rs/issues/360): the operation a `δ > 1` RSOS
+needs beyond Def. 3.9 is this literature's central object, and its bounds are settled. **`δ` is the
+dimension throughout this group and [`ARCHITECTURE.md`](./ARCHITECTURE.md) §7, not [§4.1](#41-cross-community-vocabulary)'s
+PSR difference size** — the one symbol the three dialects genuinely collide on. Umbrella survey:
+P. K. Agarwal, *Range searching*, Handbook of Discrete and Computational Geometry 3rd ed. ch. 41 —
+https://users.cs.duke.edu/~pankaj/publications/surveys/rs3ed.pdf . Sourced from search summaries, §4.3.)*
+
+- **M. He, J. I. Munro, P. K. Nicholson**, *Dynamic range selection in linear space*, `arXiv:1106.5076`
+  · `doi:10.1007/978-3-642-25591-5_18` (ISAAC 2011, LNCS 7074, pp. 160–169) —
+  https://arxiv.org/abs/1106.5076
+  **Bears on:** its problem statement *is* the missing operation — the `k`-th smallest `y` among the
+  points whose `x` lies in a query range — at `O((lg n/lg lg n)²)` query and amortized update in
+  **linear** space. The primitive #360 expected to be the blocker is the affordable half.
+  → [#360](https://github.com/Akvize/reconcile-rs/issues/360), [`ARCHITECTURE.md`](./ARCHITECTURE.md) §7
+- **A. G. Jørgensen, K. G. Larsen**, *Range selection and median: tight cell probe lower bounds and
+  adaptive data structures*, `doi:10.1137/1.9781611973082.63` (SODA 2011, pp. 805–813) —
+  https://cs.au.dk/~larsen/papers/range_median.pdf
+  **Bears on:** `Ω(lg n/lg lg n)` for *static* range selection in `n·lg^O(1) n` bits, matched by
+  Brodal & Jørgensen (ISAAC 2009, https://users-cs.au.dk/gerth/papers/isaac09median.pdf) — so the
+  primitive's price is **tight**, not merely unimproved.
+  → [#360](https://github.com/Akvize/reconcile-rs/issues/360)
+- **K. G. Larsen**, *The cell probe complexity of dynamic range counting*, `arXiv:1105.5933` ·
+  `doi:10.1145/2213977.2213987` (STOC 2012, pp. 85–94) — https://arxiv.org/abs/1105.5933 ;
+  strengthening **M. Pătraşcu**, *Lower bounds for 2-dimensional range counting*,
+  `doi:10.1145/1250790.1250797` (STOC 2007, pp. 40–46)
+  **Bears on:** the load-bearing citation of the no-go. `t_q = Ω((lg n/lg(w·t_u))²)`, i.e.
+  `Ω((lg n/lg lg n)²)` at cell size `w = Θ(lg n)` under any polylog update, for **weighted** 2D range
+  counting — and `Aggregate` carries a 256-bit `Fingerprint`. It therefore binds the operation Def. 3.9
+  **already has**, which is why `δ > 1` is priced by the dimension and not by the new primitive.
+  → [#360](https://github.com/Akvize/reconcile-rs/issues/360), §2.1
+- **O. Weinstein, H. Yu**, *Amortized dynamic cell-probe lower bounds from four-party communication*,
+  `arXiv:1604.03030v1` (FOCS 2016) — https://arxiv.org/abs/1604.03030
+  **Bears on:** closes the escape hatch the row above leaves open. Larsen's `t_u` is **worst case**, so an
+  amortized structure was the one way a `δ = 2` box aggregate could still have been cheap; its Thm 1 gives
+  the same `Ω((lg n/lg lg n)²)` **amortized and randomized**, for dynamic weighted 2-D orthogonal range
+  counting (weights in `[n]`, `w = Θ(lg n)`). The `δ = 1` baseline two rows down already allows
+  amortization, so the two ends of §7's comparison are now quantified alike. Read in [§4.3](#43-search-log)'s
+  2026-08-21 second wave, not on this page's own pass.
+  → [#360](https://github.com/Akvize/reconcile-rs/issues/360), [`ARCHITECTURE.md`](./ARCHITECTURE.md) §7
+- **T. M. Chan, B. T. Wilkinson**, *Adaptive and Approximate Orthogonal Range Counting*,
+  `doi:10.1137/1.9781611973082.19` (SODA 2011) — http://tmc.web.engr.illinois.edu/orcount_soda.pdf
+  **Bears on:** held out of this page on 2026-08-20 as unconfirmable from summaries, then read: it
+  exists, it gives linear-space range selection at `O(1 + lg_w k)` — matching [JL11]'s lower bound
+  exactly — and it states in one line the link #360's box reduction runs on, that range selection
+  "is closely related to 2-D 3-sided orthogonal range counting". Its static linear-space
+  `O(lg_w n)` box counting is why the per-session-snapshot question is #360's live one.
+  → [#360](https://github.com/Akvize/reconcile-rs/issues/360)
+- **M. Pătraşcu, E. D. Demaine**, *Tight bounds for the partial-sums problem*,
+  `doi:10.5555/982792.982796` (SODA 2004; journal version *Logarithmic lower bounds in the cell-probe
+  model*, SIAM J. Comput. 35(4), 2006, pp. 932–963)
+  **Bears on:** the one-dimensional baseline the row above is measured against — dynamic partial sums cost
+  `Θ(1 + lg n/lg(w/s))` for cell size `w` and summary width `s`, hence `Θ(lg n)` once the summary is a
+  word wide. `FingerprintTreeMap`'s `O(lg n)` aggregate is **optimal**, not merely adequate, so the
+  `δ > 1` comparison is tight on both sides. → [#360](https://github.com/Akvize/reconcile-rs/issues/360), §2.3
 
 **Consistency & conflict resolution**
 - Kingsbury (Jepsen), *The trouble with timestamps* — https://aphyr.com/posts/299-the-trouble-with-timestamps ; *Jepsen: Cassandra* — https://aphyr.com/posts/294-jepsen-cassandra
