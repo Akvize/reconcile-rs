@@ -9,7 +9,7 @@ Four Criterion targets, all `harness = false`, none feature-gated:
 | `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — total wire bytes at four value sizes, then messages, advertised ranges, refinement bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 | `contention` | `K`-writer write throughput vs writer count, `FingerprintTreeMap` against a `BTreeMap` no-aggregate control, both behind one shared `parking_lot::RwLock` of the exact shape `src/replica.rs` uses (below). |
 
-No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run --features internal-testing`). Run them locally when you want numbers.
+No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run` with `--cfg reconcile_internal_testing` in RUSTFLAGS, AGENTS.md §6). Run them locally when you want numbers.
 
 ## Running the system benchmarks
 
@@ -144,8 +144,8 @@ Both deltas are constants in RTT, and both are integer numbers of one-way hops:
   against 3.8 kB of traffic.
 - Pricing that end-to-end rather than by composition needs a difference the two peers disagree on
   *without* disagreeing on timestamps, which only `just_insert`/`just_remove` can build. Those are
-  `internal-testing` seams, and `system.rs` is deliberately feature-gate-free — so that lane belongs
-  next to `service_reconcile` in the `bench` target, not here.
+  `reconcile_internal_testing` seams, and `system.rs` is deliberately feature-gate-free — so that
+  lane belongs next to `service_reconcile` in the `bench` target, not here.
 
 ### Results: loss, at `rtt=1ms`
 

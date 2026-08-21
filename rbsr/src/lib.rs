@@ -79,7 +79,7 @@ mod policy;
 mod protocol;
 mod rsos_view;
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 pub use policy::FingerprintDerivedSplit;
 pub use policy::{
     Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,

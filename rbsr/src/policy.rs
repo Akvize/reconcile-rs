@@ -512,25 +512,25 @@ impl<P: RefinementPolicy + ?Sized> RefinementPolicy for &P {
     }
 }
 
-/// **Test-only probe (#356), `internal-testing`-gated.** Deliberately violates the law
+/// **Test-only probe (#356), `cfg(reconcile_internal_testing)`-gated.** Deliberately violates the law
 /// [`Comparison`]'s docs state: it derives its split stride from the **local** aggregate's
 /// fingerprint instead of from the range alone, reintroducing the oracle dependence rank-cut
 /// refinement exists to avoid — the index set this produces is no longer a deterministic function
 /// of the data alone.
 ///
 /// Since #352, `Comparison`'s public API carries no accessor returning a fingerprint, so this
-/// cannot be built from outside the crate; it exists only under `internal-testing`, so a
+/// cannot be built from outside the crate; it exists only under `cfg(reconcile_internal_testing)`, so a
 /// measurement harness in `rbsr/tests/` can still reach it. Never a shipped policy — see this
 /// crate's `tests/oracle_dependent_split_vs_the_union_bound.rs` for what it measures.
 ///
 /// Enumeration cutoffs match [`FixedFanOut`]'s (`shared_cutoffs`), so the only variable this
 /// isolates is *how the split stride is chosen*, never *when* a range is enumerated instead of
 /// split.
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FingerprintDerivedSplit;
 
-#[cfg(feature = "internal-testing")]
+#[cfg(reconcile_internal_testing)]
 impl RefinementPolicy for FingerprintDerivedSplit {
     fn decide(&self, comparison: Comparison) -> Decision {
         if let Some(decision) = shared_cutoffs(comparison) {
@@ -666,7 +666,7 @@ mod tests {
     /// fingerprint limbs, not just "differs from a rank-cut policy somewhere" — the mutation gate
     /// (`AGENTS.md` `.claude/rules/tests.md`) needs a witness for `+`, not `*` or another operator
     /// combining the `1`, and for `%`, not `/`, dividing by `32`.
-    #[cfg(feature = "internal-testing")]
+    #[cfg(reconcile_internal_testing)]
     #[test]
     fn fingerprint_derived_split_stride_is_one_plus_limb_mod_32() {
         // (fingerprint low limb, expected stride): 0 and 32 both reduce to remainder 0 (stride 1,

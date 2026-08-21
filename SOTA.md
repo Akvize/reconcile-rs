@@ -528,11 +528,17 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    condition this counter-example relies on — is converted to an `Enumerate` before it can hang the
    driver, whatever policy produced it. Re-measured against the guarded driver,
    `FingerprintDerivedSplit` now reaches a fixed point on 200,000/200,000 trials at both widths (up
-   from 1,054/200,000 and 1,051/200,000). With termination no longer the bottleneck, the intended
-   soundness comparison is well-powered for the first time: `w=16`, 3/200,000 events, 99% CI
-   `[3.8e-6, 5.9e-5]` against a reported bound of `1.12e-3`; `w=24`, 0/200,000 events, 99% CI
-   `[0, 3.3e-5]` against a reported bound of `4.39e-6`. Neither width shows an excess. Full numbers:
-   `rbsr/tests/oracle_dependent_split_vs_the_union_bound.rs`'s own doc comment.
+   from 1,054/200,000 and 1,051/200,000).
+
+   **Soundness comparison, correction pending** ([#473](https://github.com/Akvize/reconcile-rs/pull/473)):
+   termination was never what starved the soundness comparison — "well-powered for the first time"
+   does not follow from the liveness fix alone. The reported false-convergence bound it was measured
+   against is itself ~49× too tight (`Comparison::agrees` tests the whole `Aggregate`, so only a
+   same-size range can falsely agree at any width), and at `d = 1` the only reliably
+   collision-capable comparison runs before any split decision exists, making a
+   coupled-vs-rank-cut rate comparison there policy-independent by construction. Both flaws predate
+   #420 and were invisible while termination masked the measurement. #473 restates the comparison
+   against the corrected bound and at `d > 1`, where the policies do separate — not yet on `main`.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
@@ -607,10 +613,14 @@ status, so this section never needs an edit when that status changes.
    in a paginated tree under concurrent updates — but even its own code leaves the root chain
    uncollapsed, an admission the hot spot is bounded, not eliminated (`benches/README.md`'s
    `contention` benchmark, [#359](https://github.com/Akvize/reconcile-rs/issues/359)/#445/#446).
-   **Measured, not just open**: at `N=1` (no lock contention) the root-write contract alone costs
-   ~0.30–0.34× a no-aggregate `BTreeMap`'s throughput under the same lock; from `N=2` to `N=16` the
-   shared `RwLock` dominates both arms and the ratio does not widen — the root write is a real but
-   *bounded* tax here, not the runaway term the thesis predicted. Numbering starts at 10 so P0–P3's
+   **Measured, then found ambiguous** ([#454](https://github.com/Akvize/reconcile-rs/issues/454)):
+   at `N=1` (no lock contention) the root-write contract alone costs ~0.30–0.34× a no-aggregate
+   `BTreeMap`'s throughput under the same lock; from `N=2` to `N=16` the shared `RwLock` dominates
+   both arms and their ratio does not widen. Reading that flat ratio as a *bounded* tax does not
+   follow: both arms sit behind the same lock, so `1/X = S + H(N)` for each, and a ratio of two
+   terms that grow together is flat *because* they grow together, not because the root-write share
+   is capped. Correction pending in [#480](https://github.com/Akvize/reconcile-rs/pull/480), which
+   subtracts the shared lock term instead of dividing it out. Numbering starts at 10 so P0–P3's
    existing ids stay stable.
 
 **P3 — What makes it *believed* to be SOTA:**

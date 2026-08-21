@@ -14,7 +14,7 @@
 //! catching it as a forced-`Enumerate` fallback at the driver.
 //!
 //! `FingerprintDerivedSplit` (#356) is deliberately excluded — it exists precisely to violate this
-//! law, `internal-testing`-gated so it can never ship. `oracle_dependent_split_vs_the_union_bound.rs`
+//! law, `cfg(reconcile_internal_testing)`-gated so it can never ship. `oracle_dependent_split_vs_the_union_bound.rs`
 //! measures it.
 
 #![forbid(unsafe_code)]

@@ -1,8 +1,8 @@
 # cargo-mutants configuration for reconcile-rs.
 #
-# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1509
+# Verified against this workspace: `cargo mutants --list --workspace --all-features` yields 1505
 # mutants with this config (1540 without the exclusions below) -- the delta between them (currently
-# 31) is what proves the exclusions still do what the comments below claim. The baseline itself
+# 35) is what proves the exclusions still do what the comments below claim. The baseline itself
 # moves with every commit that adds or removes mutable code; `scripts/check-mutant-count.sh` (wired
 # into `repo-gates` in main.yml) re-measures both numbers on every push instead of asking a human to
 # notice and update them by hand (AGENTS.md §10) -- if it fails, update the two numbers above to
@@ -10,10 +10,12 @@
 #
 # Two settings are NOT optional here:
 #
-#   all_features   — cargo-mutants builds per package. `--features internal-testing`
-#                    fails outright because lww-register/rsos/gossip do not define
-#                    that feature:
-#                      error: the package 'lww-register' does not contain this feature
+#   all_features   — cargo-mutants builds per package. The `reconcile::testing` /
+#                    `RangeAggregate::for_testing` seam the integration-test oracles need is no
+#                    longer reachable through a Cargo feature at all (#330): it is gated behind
+#                    `--cfg reconcile_internal_testing`, set via RUSTFLAGS by whoever invokes
+#                    cargo-mutants (scripts/check-mutation-gate.sh, mutants.yml's `nightly` job),
+#                    not by this config.
 #
 #   test_workspace — by default each mutant only runs its own package's tests.
 #                    rsos/, gossip/ and lww-register/ have no tests/ directory; their
@@ -34,7 +36,7 @@ copy_target = true
 
 exclude_globs = ["benches/**", "examples/**"]
 
-# `testing::` accessors exist only under the internal-testing feature: they are test
+# `testing::` accessors exist only under `--cfg reconcile_internal_testing` (#330): they are test
 # seams, not behaviour. Mutating them yields MISSED results that are noise, not gaps.
 #
 # `aggregate::aux`'s two fence checks (`key < lower_bound`, `key > upper_bound`) decide whether
@@ -98,6 +100,13 @@ exclude_globs = ["benches/**", "examples/**"]
 # `authenticator.open`, `handle_messages`, ...) proceeds identically whichever way the condition
 # falls. No test capturing log output exists in this codebase, and none should be added just to
 # pin an operator that gates nothing but which log line fires.
+#
+# `protocol/rank.rs:117-118` (`BoundedRange::parse`'s
+# `if start_index.get() != raw_start || end_index.get() != raw_end { let offender = ...; debug!(...) }`)
+# is the same pattern: `offender` and the shadowed `size` feed only the `debug!` call, and the
+# function's `Ok(BoundedRange { .. })` return is unconditional and unaffected by this branch either
+# way. No test capturing log output exists in this codebase, and none should be added just to pin
+# an operator that gates nothing but which log line fires.
 exclude_re = [
     "testing::",
     "impl Debug",
@@ -122,6 +131,10 @@ exclude_re = [
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
     "replay/bitmap\\.rs:75:32: replace \\| with \\^",
+    "protocol/rank\\.rs:117:30: replace != with ==",
+    "protocol/rank\\.rs:117:43: replace \\|\\| with &&",
+    "protocol/rank\\.rs:117:62: replace != with ==",
+    "protocol/rank\\.rs:118:49: replace != with ==",
 ]
 
 skip_calls = ["with_capacity", "reserve"]

@@ -68,7 +68,7 @@ impl ReplayFilter {
         }
     }
 
-    /// Number of peers currently tracked. For test assertions; the `internal-testing` gate sits
+    /// Number of peers currently tracked. For test assertions; the `reconcile_internal_testing` gate sits
     /// on `reconcile::testing::replay_filter_len`.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
