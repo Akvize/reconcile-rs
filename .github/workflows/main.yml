@@ -107,7 +107,7 @@ jobs:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
     # `--cfg reconcile_internal_testing` (#330; AGENTS.md §6) exposes the `reconcile::testing` seam
-    # so the external integration oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map.rs`)
+    # so the external integration oracles (`tests/diff.rs`, `tests/proptest_fingerprint_tree_map/`)
     # and the benchmarks, which reach now-`pub(crate)` reconciliation internals, still compile.
     - run: cargo clippy --workspace --all-targets
       env:

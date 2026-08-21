@@ -159,7 +159,7 @@ It earns a seam for a different reason than a port does: the choice is **purely 
 negotiated**. A peer answers whatever segmentation it is asked about, `RangeAggregate` carries no
 policy, and Proposition 4.1's soundness argument uses only that a SPLIT's children are pairwise
 disjoint with union the parent — which `protocol_round` guarantees regardless of policy. So two
-peers running *different* policies converge (`tests/proptest_fingerprint_tree_map.rs`'s
+peers running *different* policies converge (`tests/proptest_fingerprint_tree_map/diff_convergence.rs`'s
 `convergence_holds_under_any_policy_and_any_mixed_pair`, and `rbsr`'s own
 `peers_running_different_policies_still_converge`), which is what makes swapping one cheap.
 Advertising or negotiating a policy would turn that free experiment into a protocol break, and is
@@ -343,7 +343,7 @@ guarantees whose resolution history §8 tracks.
    out-of-range position. The laws are stated where they are enforceable — inter-method laws on
    `rbsr`'s `RsosView` (with an enforcement column), the interop law on `rsos::Rsos::aggregate`.
    Guarded by `no_backend_answer_can_drive_the_protocol_out_of_bounds`
-   (`tests/proptest_fingerprint_tree_map.rs`) and, as a worked example,
+   (`tests/proptest_fingerprint_tree_map/adversarial_rsos.rs`) and, as a worked example,
    `rbsr/src/protocol.rs::backend_with_unclamped_rank_is_defended_against_not_trusted`.
 10. **A SPLIT's children partition their parent** — consecutive, pairwise disjoint, union the parent
    range — whatever `RefinementPolicy` chose the width, and whatever policy the *peer* is running.
@@ -496,17 +496,17 @@ current status; this table is the historical record of the first, closed audit o
 | F8 | High | `DefaultHasher` unstable on the wire | ✅ | #111 + `rsos::encoding` (§6) — wire fingerprint is BLAKE3 over an owned canonical byte encoding |
 | F9 | High | UDP amplification / reflection | ◐ | mitigated by #108 (auth) + #106; rate-limiting / path validation still open |
 | F10 | High | IP-scan discovery, O(N²) membership | ◐ | `Discovery` port + `DnsDiscovery` (§3.2) lands a cloud-native path; bounded-fan-out membership (SWIM/HyParView) still open — [#147](https://github.com/Akvize/reconcile-rs/issues/147)/[#190](https://github.com/Akvize/reconcile-rs/issues/190) |
-| F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_fingerprint_tree_map.rs`, `tests/fuzz_packets.rs` |
+| F11 | High | no property-testing / fuzzing | ✅ | #113 — `tests/proptest_fingerprint_tree_map/`, `tests/fuzz_packets.rs` |
 | F12 | Medium | debug `println!` in the hot path | ✅ | #113 — removed |
 | F13 | Medium | panic-only API (no `Result`) | ✅ | #148 — fallible `new` constructors; no network send can panic the run loops |
 | F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | #149 — hook runs outside the write lock on both paths, regression-tested |
 | F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
 | F16 | Medium | loopback benches + README inconsistency | ✅ | [#280](https://github.com/Akvize/reconcile-rs/issues/280) — seeded delay/loss/reordering `Transport` decorator, RTT sweep and loss lane; numbers in `benches/README.md` |
-| F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
+| F17 | Medium/Low | maturity signals | ✅ | clippy clean; MSRV declared (`rust-version = "1.85"`, pinned CI lane) — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps (#151); `peers` map bounded by `Config::max_peers` (default 1024) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) |
 | F19 | Low | dependency hygiene | ✅ | bincode `with_limit` (#151); `overflow-checks = true` + `cargo deny` CI lane — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 16 resolved · 3 partial (F9, F10, F17) · 0 open. All Critical resolved; all but one High
+**Score:** 17 resolved · 2 partial (F9, F10) · 0 open. All Critical resolved; all but one High
 resolved or mitigated. Live release-readiness status (the 2026-06 and 2026-08-10 audits, and every
 open maturity/roadmap item) is tracked by the `v1.0.0` milestone and
 [issue #206](https://github.com/Akvize/reconcile-rs/issues/206); this table does not duplicate it.

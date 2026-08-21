@@ -27,7 +27,7 @@
 //! key applies a signed `new_fp - old_fp` delta rather than a blind `combine` (the type's sole
 //! mutation sink for the cached aggregate), so update-in-place, persistence reload and duplicate
 //! wire delivery all stay single-fold; the latter is pinned by
-//! `tests/proptest_fingerprint_tree_map.rs`'s duplicate-delivery property. Under a genuine
+//! `tests/proptest_fingerprint_tree_map/btreemap_oracle.rs`'s duplicate-delivery property. Under a genuine
 //! multiplicity (an element folded `c` times without a matching retraction) the bound degrades to
 //! `2^-(w - v₂(c))`, and vanishes outright under a `GF(2)`-linear combiner.
 //!
