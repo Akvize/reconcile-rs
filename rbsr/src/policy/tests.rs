@@ -107,6 +107,15 @@ fn degenerate_parameters_are_unrepresentable() {
     );
 }
 
+/// `threshold()` reflects the constructed value, not just the degenerate `0 -> 1` case above.
+#[test]
+fn threshold_accessor_returns_the_constructed_value() {
+    assert_eq!(
+        EnumerateBelowThreshold::new(32, FanOut::BINARY).threshold(),
+        32
+    );
+}
+
 #[test]
 fn for_fan_out_never_exceeds_the_requested_branching_factor() {
     for span in [2usize, 3, 5, 9, 10, 17, 1_000, 999_983] {
