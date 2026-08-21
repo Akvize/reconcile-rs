@@ -43,9 +43,7 @@ PROD_FAIL=490
 TEST_WARN=400
 TEST_FAIL=700
 
-EXCEPTIONS=(
-    "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
-)
+EXCEPTIONS=()
 
 is_exception() {
     local f=$1 e
