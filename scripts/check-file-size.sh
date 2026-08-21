@@ -44,7 +44,6 @@ TEST_WARN=400
 TEST_FAIL=700
 
 EXCEPTIONS=(
-    "rbsr/src/protocol.rs"                  # 909L prod  -- the RBSR wire protocol state machine
     "rbsr/src/policy.rs"                    # 674L prod  -- RBSR split/recursion policy
 )
 
