@@ -19,7 +19,7 @@
 //! exercise the `Included`/`Excluded` encodings — nor catch a reordering of `StartBound`/
 //! `EndBound`'s variants, which bincode writes positionally.
 
-#![cfg(feature = "internal-testing")]
+#![cfg(reconcile_internal_testing)]
 
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use serde::{Deserialize, Serialize};

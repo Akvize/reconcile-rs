@@ -69,39 +69,39 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
 
     /// The current membership set: peers that have sent a dated, authenticated datagram, and that
     /// gate tombstone GC.
-    #[cfg(any(test, feature = "internal-testing"))]
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn members_snapshot(&self) -> std::collections::HashSet<std::net::IpAddr> {
         self.engine.members_snapshot()
     }
 
     /// Number of entries in the peers gossip-routing map.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn peers_map_len(&self) -> usize {
         self.engine.peers_map_len()
     }
 
     /// Number of entries in the per-peer replay filter.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn replay_filter_len(&self) -> usize {
         self.engine.replay_filter_len()
     }
 
     /// Number of keys currently tracked in the tombstone-acknowledgment map.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn tombstone_acks_len(&self) -> usize {
         self.engine.tombstone_acks_len()
     }
 
     /// Number of bulk dump tasks currently in flight across all peers.
     ///
-    /// Exposed for integration-test assertions under the `internal-testing` feature gate.
-    #[cfg(any(test, feature = "internal-testing"))]
+    /// Exposed for integration-test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
     pub fn bulk_dumps_in_flight_count(&self) -> usize {
         self.engine.bulk_dumps_in_flight_count()
     }
@@ -200,7 +200,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     }
 
     /// The current causal-stability membership set — see `members_snapshot` (gated behind
-    /// `internal-testing`) for the `HashSet` form test assertions use.
+    /// `cfg(reconcile_internal_testing)`) for the `HashSet` form test assertions use.
     pub fn members(&self) -> Vec<IpAddr> {
         self.engine.members_vec()
     }

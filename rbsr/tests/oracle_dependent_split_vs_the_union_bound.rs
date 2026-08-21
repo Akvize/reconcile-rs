@@ -14,7 +14,7 @@
 //! because the index set — which ranges get compared — is a deterministic function of the data
 //! (cut by rank, `Select`); [`rbsr::Comparison`]'s docs state this as a law, and #352 made a
 //! fingerprint-derived decision structurally unspellable from outside the crate for exactly this
-//! reason. [`FingerprintDerivedSplit`] is the `internal-testing`-gated counter-example the law
+//! reason. [`FingerprintDerivedSplit`] is the `cfg(reconcile_internal_testing)`-gated counter-example the law
 //! anticipates: same enumeration cutoffs as [`FixedFanOut`], but the split stride is read off the
 //! *local* fingerprint instead of a constant, so the sequence of ranges an execution compares is
 //! now correlated with the very oracle the collision probability is stated over.
@@ -38,7 +38,7 @@
 //!
 //! Trials are independently seeded from a recorded counter (`StdRng::seed_from_u64`), matching
 //! [#355]. Run with:
-//! `cargo test --release -p rbsr --features internal-testing --test oracle_dependent_split_vs_the_union_bound -- --ignored --nocapture`
+//! `RUSTFLAGS="--cfg reconcile_internal_testing" cargo test --release -p rbsr --test oracle_dependent_split_vs_the_union_bound -- --ignored --nocapture`
 //!
 //! ## A second finding this method surfaced unasked: liveness, not just soundness
 //!
@@ -69,7 +69,7 @@
 //! [#355]: https://github.com/Akvize/reconcile-rs/issues/355
 
 #![forbid(unsafe_code)]
-#![cfg(feature = "internal-testing")]
+#![cfg(reconcile_internal_testing)]
 
 use std::collections::HashSet;
 use std::ops::{Bound, RangeBounds};

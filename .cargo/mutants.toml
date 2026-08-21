@@ -10,10 +10,12 @@
 #
 # Two settings are NOT optional here:
 #
-#   all_features   — cargo-mutants builds per package. `--features internal-testing`
-#                    fails outright because lww-register/rsos/gossip do not define
-#                    that feature:
-#                      error: the package 'lww-register' does not contain this feature
+#   all_features   — cargo-mutants builds per package. The `reconcile::testing` /
+#                    `RangeAggregate::for_testing` seam the integration-test oracles need is no
+#                    longer reachable through a Cargo feature at all (#330): it is gated behind
+#                    `--cfg reconcile_internal_testing`, set via RUSTFLAGS by whoever invokes
+#                    cargo-mutants (scripts/check-mutation-gate.sh, mutants.yml's `nightly` job),
+#                    not by this config.
 #
 #   test_workspace — by default each mutant only runs its own package's tests.
 #                    rsos/, gossip/ and lww-register/ have no tests/ directory; their
@@ -34,7 +36,7 @@ copy_target = true
 
 exclude_globs = ["benches/**", "examples/**"]
 
-# `testing::` accessors exist only under the internal-testing feature: they are test
+# `testing::` accessors exist only under `--cfg reconcile_internal_testing` (#330): they are test
 # seams, not behaviour. Mutating them yields MISSED results that are noise, not gaps.
 #
 # `aggregate::aux`'s two fence checks (`key < lower_bound`, `key > upper_bound`) decide whether

@@ -99,12 +99,12 @@ pub use read_replica_set::ReadReplicaSet;
 pub use replicated_map::ReplicatedMap;
 pub use replicated_set::ReplicatedSet;
 
-/// Internal seam for the integration tests, behind `cfg(test)` or `internal-testing`.
+/// Internal seam for the integration tests, behind `cfg(test)` or `cfg(reconcile_internal_testing)`.
 ///
 /// Carries only what stays crate-internal: `rbsr`/`rsos` primitives are `pub` on their own crates
 /// and are imported directly.
 #[doc(hidden)]
-#[cfg(any(test, feature = "internal-testing"))]
+#[cfg(any(test, reconcile_internal_testing))]
 pub mod testing {
     /// Seal `payload` with MAC authentication: `tag(32) || seq(8 LE) || stamp(8 LE) ||
     /// version(1) || payload` (the wire-version byte).

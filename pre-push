@@ -52,8 +52,8 @@ for commit in ${commits[@]+"${commits[@]}"}; do
   git archive "$commit" | tar -x -C "$tree"
 
   echo "Running cargo clippy on $commit"
-  (cd "$tree"; cargo clippy --workspace --features internal-testing --all-targets -- --deny warnings)
+  (cd "$tree"; RUSTFLAGS="${RUSTFLAGS:-} --cfg reconcile_internal_testing" cargo clippy --workspace --all-targets -- --deny warnings)
 
   echo "Running cargo nextest on $commit"
-  (cd "$tree"; cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail)
+  (cd "$tree"; RUSTFLAGS="${RUSTFLAGS:-} --cfg reconcile_internal_testing" cargo nextest run --workspace --retries 4 --flaky-result fail)
 done

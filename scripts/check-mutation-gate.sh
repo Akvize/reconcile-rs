@@ -19,6 +19,12 @@ set -Eeuo pipefail
 : "${PROPTEST_RNG_SEED:=20260817}"
 export PROPTEST_RNG_SEED
 
+# #330: `all_features = true` in .cargo/mutants.toml no longer implies the `reconcile::testing` /
+# `RangeAggregate::for_testing` seam -- internal-testing stopped being a Cargo feature, so the
+# integration-test oracles cargo-mutants runs need this `--cfg` set explicitly, same as every other
+# `--all-features` build in main.yml after that migration.
+export RUSTFLAGS="${RUSTFLAGS:-} --cfg reconcile_internal_testing"
+
 BASE_REF="${1:-origin/main}"
 # Optional "i/n" (0-based, matching mutants.yml's `nightly` job's own convention) to run only one
 # shard of the in-diff mutant set -- see the --shard block below for why pr-diff needs this.
