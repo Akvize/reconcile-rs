@@ -131,7 +131,7 @@ impl<K: Clone + Ord> Store<K> {
     }
 }
 
-/// The four Def. 3.9 operations, once per concrete position type.
+/// The four Def. 3.9 queries [`RsosView`] carries, once per concrete position type.
 ///
 /// Written out rather than `impl<K> RsosView<K> for Store<K>`, which is E0119 against the blanket
 /// impl covering every [`rsos::Rsos`] — the trait's own docs call this out. Each body forwards to

@@ -9,11 +9,22 @@
 use std::hash::Hash;
 use std::net::IpAddr;
 
+use serde::Serialize;
+
 use crate::bounds::{Key, Value};
 use crate::clock::Timestamp;
 use crate::entry::Entry;
 
-use super::{version_hash, Replica};
+use super::Replica;
+
+/// A deterministic, cross-node version token for a value: the low 64 bits of `rsos::digest`
+/// (`ARCHITECTURE.md` §5 invariant 7).
+///
+/// A peer acknowledges the exact tombstone version it holds, so a stale ack cannot authorize GC of
+/// a newer one.
+pub(crate) fn version_hash<V: Serialize>(value: &V) -> u64 {
+    rsos::digest(value).0[0]
+}
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Remove a key from the dated `map`, its value-only projection, and the live-tombstone
@@ -66,5 +77,23 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
             let version = version_hash(entry);
             acks.get(key).and_then(|peer_acks| peer_acks.get(&peer)) != Some(&version)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the exact formula (`rsos::digest`'s low limb), not just "some function of the
+    /// value" — a mutant hardcoding a constant return has no other caller in this crate that
+    /// would catch it (every existing test only compares `version_hash` against itself).
+    #[test]
+    fn version_hash_matches_the_digest_low_limb() {
+        assert_eq!(version_hash(&42u32), rsos::digest(&42u32).0[0]);
+    }
+
+    #[test]
+    fn version_hash_differs_for_different_values() {
+        assert_ne!(version_hash(&1u32), version_hash(&2u32));
     }
 }

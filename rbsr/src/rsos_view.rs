@@ -12,8 +12,10 @@ use std::ops::RangeBounds;
 
 use rsos::{Aggregate, Rsos};
 
-/// The four Def. 3.9 operations RBSR performs against a local set: `size`, `Aggregate`, `Rank`,
-/// `Select`.
+/// Four of Def. 3.9's five queries, the ones RBSR performs against a local set: `size`,
+/// `Aggregate`, `Rank`, `Select`. The fifth, `Enumerate`, stays with the caller — the driver
+/// reports an enumeration range and never reads contents itself. `Insert`/`Delete` are Def. 3.9's
+/// too, and belong to [`Rsos`], not here.
 ///
 /// Narrower than [`Rsos`], and carrying no value type at all — RBSR never touches a stored value.
 /// Never implemented by hand: the blanket impl below covers every [`Rsos`]; a direct impl on a

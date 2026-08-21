@@ -39,7 +39,8 @@
 //! (`⌊√m⌋`, `Θ(√n)` communication, `Θ(log log n)` rounds) and [`EnumerateBelowThreshold`]
 //! (Algorithm 1 as written) ship, priced against each other in `benches/protocol.rs`.
 //!
-//! [`RsosView`] is the four read-only Def. 3.9 operations RBSR needs, blanket-implemented for
+//! [`RsosView`] is four of Def. 3.9's five queries -- `Enumerate` stays with the caller, see the
+//! IDLIST row above -- blanket-implemented for
 //! every [`rsos::Rsos`], so any backend works with no per-type code here.
 //!
 //! ```

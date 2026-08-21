@@ -449,6 +449,73 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   subtree summary, which is the `O(log n)` `Aggregate` the RSOS contract exists to provide. The
   randomisation seam is in the driver (cut points), not in `RefinementPolicy`, so §5 invariant 12
   is untouched; §5 invariant 10 is the one a shifted cut can break.
+- **A multidimensional (product-order) RSOS** — reconciling *boxes* in `δ > 1` dimensions instead of
+  intervals in one ([#360](https://github.com/Akvize/reconcile-rs/issues/360)). **Decided: no-go**,
+  and not for the reason the extension was expected to fail. The full argument was written up
+  separately, as a preprint responding to arXiv:2603.19820 §8; it is deliberately **not** versioned
+  here — this section is the decision record, not the paper.
+
+  **Checked against `arXiv:2603.19820v1` itself**, not a paraphrase of it. §8 asks for "a clearer
+  theory of **balancing and summarization** beyond the one-dimensional setting", naming both halves;
+  they behave in opposite ways.
+
+  The *protocol* side is dimension-free. Prop. 4.1 transports **verbatim** — its proof invokes only
+  that a SPLIT's children are pairwise disjoint with union the parent — as do termination and
+  Def. B.1/Eq. (1). The paper states **no** depth bound: its cost model is execution-sensitive,
+  `T_loc = O(Qh)`, and §B.4 factors it explicitly into a protocol side (`Q`, the queried-range count)
+  and a storage side (`h`). What fails is the storage side, and Lemma B.2 localizes it: of the four
+  line items it charges a SPLIT (`1 Aggregate`, `1 Rank(l)`, `b−1 Select`, `b Aggregate`, each
+  `O(h)`), two stop being `O(h)` in a product order, for two different reasons.
+
+  **Balancing breaks at a nameable line and recovers.** Algorithm 2 cuts at
+  `Select(Rank(l) + ⌊jm/b⌋)` — correct in 1D because a range is a contiguous run of the total order,
+  so range rank and global rank differ by the constant offset `Rank(l)`. A box is a contiguous run of
+  no order, so that offset does not exist and the composition is not even well-defined. Its
+  replacement is a named, solved problem rather than an open one: *"given `n`
+  points in the plane, an `x`-range `Q` and an integer `k`, report the `k`-th smallest `y`-coordinate
+  among the points whose `x`-coordinate lies in `Q`"* is verbatim He–Munro–Nicholson
+  ([`SOTA.md`](./SOTA.md) §4.4). Priced per operation against what Def. 3.9 already demands, cell
+  size `w = Θ(lg n)`:
+
+  | operation | `δ = 1` (shipped) | `δ = 2` |
+  |---|---|---|
+  | `Aggregate` — group-valued summary over the range | `Θ(lg n)`, **tight** (Pătraşcu–Demaine, amortization allowed; a 256-bit summary is `≫ w`, so the bound applies a fortiori) | `Ω((lg n / lg lg n)²)` **lower bound** — cell-probe, weighted dominance, any polylog update: **worst-case** (Larsen), and **amortized + randomized** too (Weinstein–Yu), so amortization is no escape at either `δ` |
+  | `Rank`/`Select` → range-restricted `Select` | `O(lg n)`, counted B-tree | `O((lg n / lg lg n)²)` queries *and* updates, `O(n lg n/lg lg n)` space for both halves (Brodal–Jørgensen); **linear** for the selection half alone (He–Munro–Nicholson) |
+
+  **Summarization does not recover, and that is the no-go.** At `δ = 2` the primitive Def. 3.9
+  *lacks* is cheaper than the one it *has*: range selection's best known upper bound sits exactly on
+  the box aggregate's unconditional lower bound, in less space than a range tree. The bound is for **weighted**
+  counting, and matching it for unweighted counting is open (Pătraşcu) — so the obstruction is
+  attributable to the summary, not to dimension as such, and RBSR cannot drop the summary (Def. 3.6's
+  `f_p` consumes it). Of §8's two halves, balancing has an answer and summarization has a floor.
+
+  So the go/no-go — does `O(lg n)` survive — resolves **no**, with the cost in the build rather than
+  in the theory:
+
+  | | factor on `T_loc` vs `δ = 1`, at `n` = 10⁶ / 10⁹ | space |
+  |---|---|---|
+  | the cell-probe floor, `(lg n/lg lg n)²` | 1.1× / 1.2× — negligible | — |
+  | a dynamic 2D range tree carrying `Aggregate` in its internal nodes — the direct `δ = 2` lift of `FingerprintTreeMap`, and what this workspace would actually write | `lg n`, i.e. **20× / 30×** | `O(n lg n)`, so **~20× / ~30×** |
+
+  Whether that `(lg lg n)²` gap closes for a *group-valued* box aggregate this pass did **not**
+  settle ([`SOTA.md`](./SOTA.md) §4.3), and the decision does not turn on it: the floor is already
+  superlogarithmic, so no `δ > 1` RSOS is an `O(lg n)` RSOS, and an `O(n lg n)`-space in-memory
+  store forfeits ([`SOTA.md`](./SOTA.md) §1.6) the one unambiguous advantage exactly as a
+  disk-backed one does (#186).
+
+  **Willow settles the deployed-systems question, and it commits them.** Its spec says peers must
+  "not split based on volume […] but split into subranges in which the peer holds **roughly the same
+  number** of AuthorisedEntries" — so the one shipped 3D RBSR rejects the geometric cut by name and
+  is committed to both the box-restricted order statistic and the aggregate lower bound, without
+  stating either. Its *"roughly"* is the approximate variant whose cost is the note's one open
+  question, so that question is not speculative.
+
+  **And the cheap alternative is not one.** A lexicographic composite key keeps the store
+  1-dimensional and every operation at `Θ(lg n)` — but a lex interval is not a box, so it answers no
+  `δ > 1` query at all. `rbsr/tests/balance_under_position_map.rs` arm 2 is that same fact seen from
+  the protocol side: `π = (key, version)` *is* that order, and the exact count sees nothing under it
+  that it did not already see under `π = (key)`. Its corollary — "make `π` injective" is the wrong
+  rule, **relocation** is — is recorded in [`SOTA.md`](./SOTA.md) §2.4.1.
 - **Pluggable per-value conflict resolution** — CRDT values beyond LWW-Register
   ([#184](https://github.com/Akvize/reconcile-rs/issues/184)). **Decided: deferred**, no trigger has
   fired.
