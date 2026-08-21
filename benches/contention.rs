@@ -34,8 +34,9 @@
 //! 3. **A statistic that answers the actual question.** #359 read the fp/btree *ratio*, which is a
 //!    quotient of two terms that both grow with `N` and so cannot say which moved. Both arms sit
 //!    behind the same lock, so `1/X_arm = S_arm + H(N)` and the difference of reciprocal
-//!    throughputs cancels the shared lock term: `Δ = 1/X_fp − 1/X_btree = S_fp − S_btree`, the
-//!    contract's own per-insert cost. Δ is what the report leads with (#457).
+//!    throughputs cancels the shared lock term: `Δ = 1/X_fp − 1/X_btree ≥ S_fp − S_btree`, an
+//!    upper bound on the contract's own per-insert cost — exact at `N = 1`, where nothing waits.
+//!    Δ is what the report leads with (#457).
 //!
 //! Throughput stays wall-clock on purpose: lock waiting *is* elapsed time, and there is no counted
 //! proxy for it. The counted line prices the contract's own work; the timed lines price what the
@@ -132,6 +133,12 @@ fn env_or<T: FromStr>(name: &str, default: T) -> T {
             .parse()
             .unwrap_or_else(|_| panic!("{name}={raw:?} could not be parsed")),
     }
+}
+
+/// Cores this machine will actually run threads on, for flagging the writer counts that exceed it.
+/// Falls back to 1 — the conservative reading, flagging every contended row rather than none.
+fn available_parallelism() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| cores.get())
 }
 
 /// The `N` sweep: `CONTENTION_WRITERS` as a comma-separated list, else [`WRITER_COUNTS`].
@@ -246,11 +253,13 @@ struct Point {
     ///
     /// Both arms sit behind the same lock, so each arm's seconds-per-insert is its own critical
     /// section plus whatever that lock costs per acquisition at this `N`:
-    /// `1/X_arm = S_arm + H(N)`. The lock term is common to the two arms, so **the difference
-    /// cancels it**: `Δ = S_fp − S_btree`, the RSOS contract's own per-insert cost with the lock
-    /// divided out. That makes Δ, not the ratio, the quantity that answers "does contention make
-    /// the contract itself more expensive" — the ratio moves when *either* term moves and cannot
-    /// say which (#457).
+    /// `1/X_arm = S_arm + H(N)`. The lock term is near-common to the two arms, so **the difference
+    /// cancels it**: `Δ ≥ S_fp − S_btree`, the RSOS contract's own per-insert cost bounded from
+    /// above. Near-common, not common: a longer critical section parks waiters more often, so the
+    /// RSOS arm plausibly pays a slightly larger `H` and Δ inherits it — which is why the bound has
+    /// a direction, and why the model fits its one parameter at `N = 1`, where nothing waits at all.
+    /// Even bounded, Δ answers what the ratio cannot: the ratio moves when *either* term moves and
+    /// never says which (#457).
     delta_ns: Vec<f64>,
 }
 
@@ -353,9 +362,17 @@ fn run_sweep(counts: &[usize], trials: usize, ops: usize, prefill: usize) -> Vec
 
 /// The per-`N` table: both arms and the paired ratio, each with its bootstrap interval.
 fn print_throughput_table(points: &[Point], trials: usize, ops: usize, prefill: usize) {
+    let cores = available_parallelism();
     println!(
         "[contention] {trials} trials per (N, arm), {ops} inserts/writer, map pre-filled to \
-         {prefill} entries."
+         {prefill} entries; {cores} cores available."
+    );
+    println!(
+        "[contention] Rows marked `!` run more writers than there are cores. Past that point a \
+         thread can be preempted while *holding* the lock, stalling every other writer -- and the \
+         longer critical section is preempted mid-section more often, so delta inflates for a \
+         reason that is the scheduler's, not the contract's. Read those rows as an upper bound \
+         only (#456)."
     );
     println!(
         "[contention] Mean with a 95% percentile-bootstrap interval. `delta` is \
@@ -377,10 +394,11 @@ fn print_throughput_table(points: &[Point], trials: usize, ops: usize, prefill: 
         let ratio = summarize(&point.ratio);
         let delta = summarize(&point.delta_ns);
         println!(
-            "[contention] {n:>7} | {fp_mean:>9.0} [{fp_lo:.0}, {fp_hi:.0}] | \
+            "[contention] {n:>6}{oversubscribed} | {fp_mean:>9.0} [{fp_lo:.0}, {fp_hi:.0}] | \
              {bt_mean:>9.0} [{bt_lo:.0}, {bt_hi:.0}] | {r_mean:>6.3} [{r_lo:.3}, {r_hi:.3}] | \
              {r_median:>6.3} | {d_mean:>6.0} [{d_lo:.0}, {d_hi:.0}]",
             n = point.n,
+            oversubscribed = if point.n > cores { "!" } else { " " },
             fp_mean = fingerprint.mean,
             fp_lo = fingerprint.lo,
             fp_hi = fingerprint.hi,
@@ -436,8 +454,8 @@ fn print_ratio_trend(points: &[Point]) {
     }
 
     println!(
-        "[contention] And the sharper question -- does the contract's OWN cost grow, with the lock \
-         term divided out (delta = 1/X_fp - 1/X_btree)?"
+        "[contention] And the sharper question -- does the gap grow with the lock term cancelled \
+         (delta = 1/X_fp - 1/X_btree, an upper bound on the contract's own cost)?"
     );
     for point in points.iter().skip(1) {
         let difference = diff_ci(&point.delta_ns, &baseline.delta_ns);
@@ -450,9 +468,9 @@ fn print_ratio_trend(points: &[Point]) {
             if !excludes_zero(&difference) {
                 "indistinguishable"
             } else if difference.mean > 0.0 {
-                "the contract costs MORE under contention"
+                "the gap GROWS with contention"
             } else {
-                "the contract costs LESS under contention"
+                "the gap SHRINKS with contention"
             },
         );
     }
@@ -504,6 +522,56 @@ fn print_ratio_trend(points: &[Point]) {
         } else {
             disjoint.join(", ")
         }
+    );
+}
+
+/// #457's model, checked against the data it is meant to explain.
+///
+/// **Assumptions.** `N` writers in a closed loop, each acquiring one exclusive lock, doing the whole
+/// operation inside it, releasing and immediately retrying — no think time. The lock is a single
+/// server, so system-wide seconds per operation is the critical section plus whatever an
+/// acquisition costs at that writer count: `1/X_arm(N) = S_arm(N) + H(N)`. `H` is a property of the
+/// lock and the contention level, not of what runs inside — the two arms use the same lock type
+/// and the same acquisition pattern — so it is common to both.
+///
+/// **The null this tests.** Take `S_fp − S_btree` to be constant in `N`: the contract does a fixed
+/// amount of extra work per insert, and contention only adds lock time on top. Measure that
+/// constant where nothing waits and the cancellation is exact (`Δ` at the lowest `N`), then
+/// *predict* the RSOS arm from the control arm at every other `N`:
+///
+/// ```text
+/// X_fp_predicted(N) = 1 / ( 1/X_btree(N) + Δ(N_min) )
+/// ```
+///
+/// One parameter, fitted at one point, extrapolated everywhere else — so a residual is a statement
+/// about the model, not a fit artefact. Nothing here names `FingerprintTreeMap`: it applies to any
+/// structure whose per-operation critical section is longer than a baseline's by a fixed amount,
+/// under any global lock.
+fn print_model_fit(points: &[Point]) {
+    let Some(baseline) = points.first() else {
+        return;
+    };
+    let fixed_cost_secs = summarize(&baseline.delta_ns).mean * 1e-9;
+    println!(
+        "[contention] Model (#457): predict the RSOS arm from the control arm assuming the \
+         contract's own cost is the constant {:.0} ns measured at N={}.",
+        fixed_cost_secs * 1e9,
+        baseline.n
+    );
+    for point in points.iter().skip(1) {
+        let btree = summarize(&point.btree).mean;
+        let measured = summarize(&point.fingerprint).mean;
+        let predicted = 1.0 / (1.0 / btree + fixed_cost_secs);
+        println!(
+            "[contention] {:>34} predicted {predicted:>9.0}  measured {measured:>9.0}  \
+             residual {:>+6.1}%",
+            format!("N={}", point.n),
+            100.0 * (measured - predicted) / predicted,
+        );
+    }
+    println!(
+        "[contention] A residual growing more negative with N falsifies the null: the gap between \
+         the arms is not a constant, it rises with writer count."
     );
 }
 
@@ -605,6 +673,7 @@ fn print_contention_report() {
 
     print_throughput_table(&points, trials, ops, prefill);
     print_ratio_trend(&points);
+    print_model_fit(&points);
     print_order_effect(&points);
 }
 
