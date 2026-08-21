@@ -320,6 +320,33 @@ jobs:
     - run: cargo install cargo-public-api --locked
     - run: ./scripts/check-public-api.sh
 
+  # #311 rule 1: `cargo-semver-checks` diffs each crate's current API against its last published
+  # version on crates.io, catching an actual semver violation (not just an unreviewed API change,
+  # which `public-api` above already catches). Sequenced after rules 2/3 landed, and only once a
+  # registry baseline exists to diff against -- all five crates are on crates.io as of `v0.3.0`/
+  # `rbsr`'s `v0.1.0` (AGENTS.md §11), so that precondition is now met.
+  #
+  # `continue-on-error`, and deliberately absent from `ci-success`'s `needs:` below (same shape as
+  # `mutants.yml`'s `nightly` job): Gate A's still-open issues reshape the public surface on
+  # purpose and have kept landing since `v0.3.0` published, with no new release cut to re-baseline
+  # against yet -- gating on this today would fail every PR on already-merged, intentional
+  # breakage, not on that PR's own diff. Flip to required (drop both) once a release is tagged that
+  # captures the accumulated breaking changes, so the baseline this compares against is current.
+  #
+  # `--workspace` checks every publishable member in one pass, each against its own registry
+  # baseline; `gossip`'s manifest name (`reconcile-gossip`) already matches its published name, so
+  # no per-crate renaming is needed here the way `Cargo.toml`'s dependency table does.
+  semver-checks:
+    needs: changes
+    if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
+    - uses: taiki-e/install-action@cargo-semver-checks
+    - run: cargo semver-checks --workspace
+
   coverage:
     needs: changes
     if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
