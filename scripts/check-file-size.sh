@@ -23,7 +23,16 @@
 # and after. That file's own split (#427 continuation) landed every sibling under 320L; the
 # largest-remaining-test-file floor is now rsos/src/fingerprint_tree_map/tests.rs (654L) --
 # still above TEST_WARN, so FAIL/WARN aren't moved by this split alone (a deliberate follow-up,
-# not a side effect of splitting).
+# not a side effect of splitting). That follow-up: five more #427 splits (rbsr/src/policy.rs,
+# rbsr/src/protocol.rs, rsos/src/encoding.rs, tests/proptest_fingerprint_tree_map.rs,
+# src/replica.rs) cleared every remaining EXCEPTIONS entry, leaving rsos/src/fingerprint.rs
+# (441L) and rsos/src/fingerprint_tree_map/tests.rs (654L) as the new largest-remaining floors;
+# splitting those two (into rsos/src/fingerprint/tests.rs and
+# rsos/src/fingerprint_tree_map/tests/{basic,aggregate,invariants,query}.rs respectively, every
+# sibling under 260L) moved the floors down to 379L prod (src/replicated_set.rs) and 498L test
+# (rbsr/src/protocol/tests.rs) -- FAIL moved to 400/600, WARN left at 280/400 (WARN is a nudge,
+# not floor-bound, and most files sitting in the old 280-400/400-600 warn band would just add
+# noise if WARN moved too).
 #
 # EXCEPTIONS are files already over FAIL when this gate (or a tightened budget) was introduced,
 # grandfathered rather than split as a side effect -- each is a candidate for its own
@@ -42,9 +51,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR/.."
 
 PROD_WARN=280
-PROD_FAIL=490
+PROD_FAIL=400
 TEST_WARN=400
-TEST_FAIL=700
+TEST_FAIL=600
 
 EXCEPTIONS=()
 
