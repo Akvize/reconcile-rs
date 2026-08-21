@@ -14,7 +14,13 @@ env:
   RUSTDOCFLAGS: -Dwarnings
 
 jobs:
-  release:
+  # Runs the instant the tag is pushed, no human involved: everything here is either read-only or
+  # a dry-run (`cargo package` compiles the packaged tree but uploads nothing). Splitting this out
+  # from `publish` below is what lets the *checks* stay fast-fail-automatic while only the
+  # irreversible step (an actual `cargo publish`, which cannot be undone — only yanked) waits on a
+  # human. A single `environment:`-gated job would pause here too, since environment protection
+  # blocks a job's first step, not a chosen line inside it.
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +30,9 @@ jobs:
       # (AGENTS.md §11): `rsos`/`lww-register`/`reconcile-gossip` are in `reconcile`'s public API,
       # so their version line moves with it — bump all four together in the PR that cuts the tag.
       # `rbsr` is not re-exported and stays independently versioned at `0.x`, published only when
-      # its own version changed (`publish_crate` below skips a version already on crates.io, which
-      # is the normal, frequent case for `rbsr` alone once the other three are in lockstep).
+      # its own version changed (`publish_crate` in the `publish` job skips a version already on
+      # crates.io, which is the normal, frequent case for `rbsr` alone once the other three are in
+      # lockstep).
       - name: Check the tag matches the reconcile version in Cargo.toml
         run: |
           set -euo pipefail
@@ -37,12 +44,42 @@ jobs:
             exit 1
           fi
 
+      # #310: a release with no changelog entry ships silently undocumented. `CHANGELOG.md` is
+      # Keep-a-Changelog (`## [X.Y.Z] - date`), so the tag's version is a section heading —
+      # matched literally, not as a semver range, since a released version is an exact string here.
+      - name: Check the tag has a matching CHANGELOG.md section
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF##*/v}"
+          if ! grep -qF "## [$tag_version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$tag_version]' section for tag v$tag_version" >&2
+            exit 1
+          fi
+
       # Cheap pre-flight: package (and compile) every member together before touching the registry.
       # `--workspace` resolves the intra-workspace `path` + `version` dependencies against a local
       # temporary registry, so it verifies crates that a per-crate `cargo package` cannot until
       # their dependencies are actually on crates.io. Same check main.yml runs on every PR.
       - name: Verify the whole workspace packages cleanly
         run: cargo package --workspace
+
+  # The one job that touches crates.io. Gated on the `production` GitHub Environment: a repo admin
+  # must configure it once (Settings → Environments → New environment named `production` → Required
+  # reviewers) for this to actually pause — until then `environment:` is a label with no enforced
+  # wait. With it configured, the job stops here and a human has to click Approve in the Actions run
+  # before `cargo login`/`cargo publish` execute; `verify` above already ran unattended and would
+  # have failed fast on a bad tag, so the human is confirming a build that's already known-good, not
+  # re-discovering problems.
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    # `contents: write` only for the GitHub Release step at the end — `cargo login`/`cargo publish`
+    # authenticate against crates.io with CARGO_REGISTRY_TOKEN, not GITHUB_TOKEN.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Login on crates repository
         run: echo ${{ secrets.CARGO_REGISTRY_TOKEN }} | cargo login
@@ -133,3 +170,34 @@ jobs:
           publish_crate lww-register
           publish_crate reconcile-gossip
           publish_crate reconcile
+
+      # #310: reuse the same body the `verify` job already confirmed exists, instead of writing
+      # release notes by hand a second time in the GitHub UI — one fact (what changed in this
+      # release), one place (CHANGELOG.md) it's written down. Extraction stops at the next `## [`
+      # heading, or (for the very first Keep-a-Changelog entry, which has no earlier section) at
+      # the `[x.y.z]: https://...` reference-link block Keep a Changelog puts after the last entry.
+      - name: Extract this version's CHANGELOG.md section
+        id: changelog
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF##*/v}"
+          awk -v ver="$tag_version" '
+            $0 ~ ("^## \\[" ver "\\]") { found=1; next }
+            found && /^## \[/ { exit }
+            found && /^\[[0-9]/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          # Trim leading/trailing blank lines so the release body doesn't start/end with empty gaps.
+          sed -i -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}' /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error::extracted an empty CHANGELOG.md section for v$tag_version" >&2
+            exit 1
+          fi
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF##*/}"
+          gh release create "$tag" --title "$tag" --notes-file /tmp/release-notes.md

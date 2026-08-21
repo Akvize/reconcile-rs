@@ -14,7 +14,7 @@ unbounded either.
 
 Five-crate Cargo workspace, dependency order `rsos → rbsr → lww-register`, `gossip` (independent
 sibling) `→ reconcile` (facade). See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §2 for the module table
-and diagram. Edition 2021, no MSRV pin.
+and diagram. Edition 2021, MSRV 1.85 (`rust-version`, all five manifests, README "MSRV").
 
 Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/deployment),
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) (module map, ports & adapters, invariants, audit history),
@@ -36,9 +36,7 @@ ln -sf ../../pre-push .git/hooks/pre-push
 In CI's order (`.github/workflows/main.yml`):
 
 ```bash
-export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint
-                                                             # is a warning locally and an error
-                                                             # in CI — run the list as CI runs it
+export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings   # what CI sets; without it a lint warns locally, errors in CI
 cargo fmt --check
 ./scripts/check-doc-budget.sh              # AGENTS.md + CLAUDE.md ≤ 200, SOTA.md §1-§2 prose ≤ 700
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
@@ -48,6 +46,7 @@ cargo fmt --check
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
+cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
 cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
 cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
 cargo test --doc --workspace --features internal-testing  # nextest doesn't run doctests
@@ -57,6 +56,7 @@ cargo doc --workspace --all-features                          # feature-gated it
 cargo package --workspace --allow-dirty                       # release packaging, §11
 cargo deny check                                              # advisories/licenses/sources, deny.toml
 ./scripts/check-public-api.sh                                 # public-API snapshot + 0.x-leak gate, §11
+./scripts/check-mutant-count.sh   # repo-gates' 6th check; also CI-only, omitted above: test-mac-hmac's clippy/build/nextest trio with `--no-default-features --features mac-hmac[,internal-testing]` (§6), and coverage's `cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info` → Codecov (§7)
 ```
 
 `--workspace`, never `--all`. This list is what CI runs and what "done" means — gated automatically
