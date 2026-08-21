@@ -485,11 +485,11 @@ current status; this table is the historical record of the first, closed audit o
 | F14 | Medium | `pre_insert` hook under the write-lock (net path) | ✅ | #149 — hook runs outside the write lock on both paths, regression-tested |
 | F15 | Medium | no persistence | ✅ | #122 — pluggable `Persistence` (`InMemory`, `FileSnapshot`) |
 | F16 | Medium | loopback benches + README inconsistency | ✅ | [#280](https://github.com/Akvize/reconcile-rs/issues/280) — seeded delay/loss/reordering `Transport` decorator, RTT sweep and loss lane; numbers in `benches/README.md` |
-| F17 | Medium/Low | maturity signals | ◐ | clippy clean; MSRV still undeclared — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
+| F17 | Medium/Low | maturity signals | ✅ | clippy clean; MSRV declared (`rust-version = "1.85"`, pinned CI lane) — [#189](https://github.com/Akvize/reconcile-rs/issues/189) |
 | F18 | Medium | resource exhaustion (`peers` map, bincode bomb) | ✅ | per-datagram message/segment caps (#151); `peers` map bounded by `Config::max_peers` (default 1024) — [#150](https://github.com/Akvize/reconcile-rs/issues/150) |
 | F19 | Low | dependency hygiene | ✅ | bincode `with_limit` (#151); `overflow-checks = true` + `cargo deny` CI lane — [#312](https://github.com/Akvize/reconcile-rs/issues/312) |
 
-**Score:** 16 resolved · 3 partial (F9, F10, F17) · 0 open. All Critical resolved; all but one High
+**Score:** 17 resolved · 2 partial (F9, F10) · 0 open. All Critical resolved; all but one High
 resolved or mitigated. Live release-readiness status (the 2026-06 and 2026-08-10 audits, and every
 open maturity/roadmap item) is tracked by the `v1.0.0` milestone and
 [issue #206](https://github.com/Akvize/reconcile-rs/issues/206); this table does not duplicate it.
