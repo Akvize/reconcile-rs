@@ -14,7 +14,7 @@ unbounded either.
 
 Five-crate Cargo workspace, dependency order `rsos → rbsr → lww-register`, `gossip` (independent
 sibling) `→ reconcile` (facade). See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §2 for the module table
-and diagram. Edition 2021, no MSRV pin.
+and diagram. Edition 2021, MSRV 1.85 (`rust-version`, all five manifests, README "MSRV").
 
 Read first, don't duplicate: [`README.md`](./README.md) (usage/API/security/deployment),
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) (module map, ports & adapters, invariants, audit history),
@@ -36,9 +36,8 @@ ln -sf ../../pre-push .git/hooks/pre-push
 In CI's order (`.github/workflows/main.yml`):
 
 ```bash
-export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint
-                                                             # is a warning locally and an error
-                                                             # in CI — run the list as CI runs it
+export RUSTFLAGS=-Dwarnings RUSTDOCFLAGS=-Dwarnings          # what CI sets; without it a lint is a
+                                                             # warning locally, an error in CI
 cargo fmt --check
 ./scripts/check-doc-budget.sh                     # AGENTS.md + CLAUDE.md ≤ 200 lines, SOTA.md ≤ 1100
 ./scripts/check-domain-purity.sh                             # hexagonal boundary + §2 graph, §9
@@ -48,6 +47,7 @@ cargo fmt --check
 cargo clippy --workspace --features internal-testing --all-targets
 cargo clippy --workspace --all-features --all-targets        # --all-targets is load-bearing
 cargo build --workspace
+cargo check --workspace --all-targets --all-features  # pinned to rust-version, CI-only (§3 table)
 cargo nextest run --workspace --features internal-testing --retries 4 --flaky-result fail
 cargo nextest run --workspace --all-features --retries 4 --flaky-result fail
 cargo test --doc --workspace --features internal-testing  # nextest doesn't run doctests
