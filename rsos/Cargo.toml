@@ -14,6 +14,15 @@ readme = "README.md"
 keywords = ["rsos", "fingerprint", "btree", "range", "blake3"]
 categories = ["data-structures"]
 
+# #330: `rsos::counters` — deterministic, machine-independent counts of the aggregate maintenance
+# the RSOS contract mandates, which `benches/contention.rs` pairs with its wall-clock throughput
+# (#455, #457) — is a test-only seam, never public API. Like `reconcile`'s `crate::testing` and
+# `rbsr`'s `RangeAggregate::for_testing`, it is reached only via `--cfg reconcile_internal_testing`
+# (AGENTS.md §6), which a dependent's build cannot set; `check-cfg` below stops that `#[cfg(...)]`
+# from tripping `unexpected_cfgs` under `-Dwarnings`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(reconcile_internal_testing)"] }
+
 [dependencies]
 arrayvec = "0.7.4"
 blake3 = "1.5"

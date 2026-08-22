@@ -432,6 +432,23 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   constraint — `rbsr` stays 0.x (#308) and `M = Fingerprint` moves no wire bytes. The rejected
   alternative (sealing `Rsos`, which keeps every option open at the cost of third-party backends) is
   argued on #298.
+- **Per-session range-boundary randomisation** — the only mechanism that decorrelates reconciliation
+  sessions ([#471](https://github.com/Akvize/reconcile-rs/issues/471)). **Undecided**, options framed.
+  Because `ϕ` is a fixed function, two peers holding equal content over a range compute equal
+  aggregates and reach the same verdict: a false SKIP is a property of the pair of *contents*, so a
+  converged fleet obtains exactly one verdict over a divergent range however many peers it has
+  ([#354](https://github.com/Akvize/reconcile-rs/issues/354)). The two candidate defences cover
+  disjoint parts of the refinement tree, which is why they are one decision:
+
+  | mechanism | covers | steady-state cost |
+  |---|---|---|
+  | random per-session cut offsets | every range **below** the outer one | none — cuts are chosen anyway on SPLIT |
+  | periodic refusal of the outer-range SKIP | the **outer** range only | `~√n / k` extra ranges per round |
+
+  Salting `ϕ` itself is **rejected up front**: it decorrelates sessions by destroying the cached
+  subtree summary, which is the `O(log n)` `Aggregate` the RSOS contract exists to provide. The
+  randomisation seam is in the driver (cut points), not in `RefinementPolicy`, so §5 invariant 12
+  is untouched; §5 invariant 10 is the one a shifted cut can break.
 - **A multidimensional (product-order) RSOS** — reconciling *boxes* in `δ > 1` dimensions instead of
   intervals in one ([#360](https://github.com/Akvize/reconcile-rs/issues/360)). **Decided: no-go**,
   and not for the reason the extension was expected to fail. The full argument was written up
@@ -521,6 +538,25 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
   larger-than-RAM and full replication are in direct tension — a node holding everything but
   spilling to disk on read destroys the crate's one unambiguous advantage (`SOTA.md` §1.6). Proposal
   and staging: #186.
+- **Defense against a correlated false SKIP** — whether to spend anything on the residual #354
+  establishes: a false SKIP is a function of the *content pair*, so a converged fleet replays one
+  verdict forever instead of resampling it
+  ([#471](https://github.com/Akvize/reconcile-rs/issues/471)). **Decided: option A ships; option B
+  is re-priced at #337's landing.** The two mechanisms cover disjoint parts of the refinement tree,
+  which is why this is one decision and not two:
+
+  | | A — per-session boundary randomisation | B — periodic root refinement |
+  |---|---|---|
+  | covers | every range **below** the outer one — the accidental collision and the slice-targeted plant | the **outer** range — the total plant, decided before any boundary is drawn |
+  | steady-state cost | none: child bounds travel anyway; wire format, comparison map and policy contract untouched | `~√n/k` extra ranges per round, paid forever (~10/round at `n` = 10⁶, `k` = 100) |
+  | verdict | **taken** — implementation tracked in [#502](https://github.com/Akvize/reconcile-rs/issues/502): injected RNG seam, invariant 10 re-asserted under shifted cuts | **not now** — its threat model changes at #337: before, the proportionate answer to a plant is keying the lift itself; after, the residual adversary is the *insider* a cluster key cannot exclude, and B is re-priced against exactly that (the reopening is recorded in #337's body, not left to memory) |
+
+  The interim residual — a total plant is Wagner-craftable without peer credentials while the lift
+  is unkeyed, and permanent per #354 — is recorded in
+  [README "Security model"](README.md#security-model). If B is ever taken it is taken **with** A,
+  never instead: B forces a descent once per `k` rounds, and A is what keeps that forced descent
+  from being cancelled against in advance — deterministic child boundaries would hand the planter
+  the next level's constraints. Collision taxonomy and full pricing: #471.
 
 ---
 

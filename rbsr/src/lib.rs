@@ -31,7 +31,10 @@
 //! The default [`FixedFanOut`] takes `b` as written (16, Negentropy's) and replaces `t` with four
 //! special cases listed on [`SqrtFanOut`], so the family's published bounds describe it. Dropping
 //! `t` is a measured choice rather than an omission: an enumerated element costs more on this wire
-//! than the refinement any threshold saves — [`EnumerateBelowThreshold`].
+//! than the refinement any threshold saves — in *total* bytes. In refinement bytes, advertised
+//! ranges and one-way messages `t` = 2b wins at every measured `(n, d)`, so the choice is
+//! conditional on the value size and the link, both crossovers measured on
+//! [`EnumerateBelowThreshold`] (#468).
 //!
 //! **The refinement policy is local and never negotiated** (`ARCHITECTURE.md` §3.1): peers running
 //! different policies converge, so swapping one is a behaviour change, never a wire break.
@@ -80,11 +83,14 @@ mod policy;
 mod protocol;
 mod rsos_view;
 
-#[cfg(reconcile_internal_testing)]
-pub use policy::FingerprintDerivedSplit;
 pub use policy::{
     Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,
     SplitStride, SqrtFanOut,
+};
+#[cfg(reconcile_internal_testing)]
+pub use policy::{
+    ConstantStrideSplit, FingerprintDerivedSplit, SpanHashedStrideSplit,
+    SpanRelativeFingerprintSplit, STRIDE_SPREAD,
 };
 pub use protocol::{
     initial_ranges, protocol_round, protocol_round_with_policy, EnumerationRange, RangeAggregate,

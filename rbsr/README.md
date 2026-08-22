@@ -22,7 +22,9 @@ fingerprints over shrinking key ranges and exchanging only the entries that actu
   `FixedFanOut` (the default), `SqrtFanOut` (fan-out `⌊√m⌋` rather than a constant `b`) and
   `EnumerateBelowThreshold` (Algorithm 1 as written, `t` *and* `b`). Both parameters were swept and
   totalled in wire bytes rather than inherited: `b` = 16 is the measured choice, and no `t` pays for
-  the values it ships — see `EnumerateBelowThreshold`'s docs for the break-even that decides it.
+  the values it ships *in total bytes* — while `t` = 2b wins the refinement and round-trip columns
+  everywhere, which is Negentropy's own cutoff. See `EnumerateBelowThreshold`'s docs for both
+  crossovers, the value size and the RTT, that decide which of the two a deployment wants.
 
 The crate-root docs carry a full correspondence table between the protocol vocabulary of
 [arXiv:2603.19820](https://arxiv.org/abs/2603.19820) (Amparore, 2026 — RBSR over any

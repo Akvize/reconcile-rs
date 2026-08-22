@@ -290,7 +290,11 @@ copy-on-write B+-tree addressed by page number.
     away entirely; comparing `(count, Σ mod 2^τ)` would keep it for the price of a varint. This
     boundary is also a **policy** signal, not only a correctness one:
     [#318](https://github.com/Akvize/reconcile-rs/issues/318)'s divergence-adaptive fan-out keys off
-    the same count delta and inherits the same blind spot, and owns what that costs the decision.
+    the same count delta and inherits the same blind spot — settling #318's frequency question by
+    the same fact: the delta reads zero on the regime "an LWW register produces continuously"
+    (above) and nonzero only on the rarer one, where the shipped default already sits within single
+    digits of `SqrtFanOut` (§2.2). **Decision: not built** — record and evidence in
+    `rbsr/src/policy.rs`'s own rustdoc, pinned by `rbsr/tests/balance_under_position_map.rs`.
 - The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
   durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
   RSOS with a secure fingerprint" — persistence is the gap that remains.**
@@ -420,21 +424,29 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   GenSync's headline reappears at this smaller scale — inside this one implementation the binding
   cost moves from local CPU at RTT ≈ 0, to round trips at 50 ms, to `reconcile_interval` under loss,
   so a ranking taken at one network point does not transfer to another.
-- **Every cost model on this page is two-party; the system is N-party.** RBSR, PSR, CPI and RIBLT
-  all state their bounds for one pair of peers, while `ReplicatedMap` runs a gossip cluster whose
-  per-write amplification is O(N) (§1.2, `benches/system.rs::gossip_fanout`). Multi-party set
-  reconciliation has its own literature (Mitzenmacher & Pagh, *Distributed Computing* 2018) that no
-  RBSR work cites. Unexamined axis, not a known-good one.
-- **Sweeping `t` lands on not having one.** The paper's enumeration threshold wins the refinement
-  column by *stopping early* — and everything it stops on is then shipped as values, almost all of
-  which the peer already holds. The two halves are one quantity, so `benches/protocol.rs` totals
-  them in bytes across value payload sizes (8 B…4 KB) and `threshold_sweep` runs `t` = 1…256 at
-  `b` = 16 against the default. The best-case saving on refinement bytes ships thousands of elements
-  the peer mostly already holds — a trade that only pays off below the cheapest price this wire
-  format can carry an element at, and is a net loss once totalled across payload sizes: worse than
-  the default at every value size but the smallest, and there only by a few percent. Numbers:
-  `benches/README.md`; decision record:
-  [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`'s own rustdoc.
+- **Every cost model on this page is two-party; the system is N-party — and a fleet *replays* a
+  collision rather than resampling one.** RBSR, PSR, CPI and RIBLT bound one pair of peers, while
+  `ReplicatedMap` runs a cluster at O(N) write amplification (§1.2, `gossip_fanout`). A fixed `lift`
+  makes a verdict a function of the *content* pair, refuting arXiv:2212.13567 §5.1 by derivation:
+
+  | fleet state | content classes over `r` | retries `N` buys |
+  |---|---|---|
+  | freshly partitioned, divergent | many | ≈ `N` |
+  | converged but for one divergence | **2** | **0** |
+
+  Redundancy buys nothing exactly when the fleet is healthy. Mechanism, scope, `N`-sweep:
+  `rbsr/tests/fleet_replays_a_false_skip.rs`. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
+- **Sweeping `t` lands on not having one *by default*.** The paper's enumeration threshold wins the
+  refinement column by *stopping early* — and everything it stops on is then shipped as values,
+  almost all of which the peer already holds. The two halves are one quantity, so
+  `benches/protocol.rs` totals them in bytes across value payload sizes (8 B…4 KB) and
+  `threshold_sweep` runs `t` = 1…256 at `b` = 16 against the default. Totalled, no `t` pays: worse
+  than the default at every value size but the smallest, and there by a few percent. Untotalled,
+  `t` = 2b — Negentropy's own cutoff, hence the whole of its shorter descent — wins refinement
+  bytes, advertised ranges *and* one-way messages at every measured `(n, d)`, so the verdict is
+  conditional on two measured crossovers, a value size and an RTT
+  ([#468](https://github.com/Akvize/reconcile-rs/issues/468)). Numbers: `benches/README.md`;
+  decisions: [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
   `usize` count — 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
   derives `Serialize` and takes `gossip::bincode`'s `DefaultOptions`, which varint-encodes each
@@ -489,27 +501,39 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    timing.
 
    **Empirical grounding for the split-boundary half of this claim**
-   ([#356](https://github.com/Akvize/reconcile-rs/issues/356),
-   `rbsr/tests/oracle_dependent_split_vs_the_union_bound.rs`): the soundness bound above requires
-   the ranges compared to be a deterministic function of the data (rank-cut, `Select`) — the same
-   property MST's `level = hash(key)` and prolly's rolling-hash chunking give up (§2.1's table).
-   A test-only policy that instead derives its split stride from the local aggregate's fingerprint
-   (`rbsr::Comparison` makes that construction unspellable outside `internal-testing`, #352) was
-   driven to a fixed point at the reduced widths `w ∈ {16, 24}`
-   [#355](https://github.com/Akvize/reconcile-rs/issues/355)'s arm A measured, against the
-   rank-cut `FixedFanOut` control. The dominant, statistically unambiguous result was not an
-   excess over the false-convergence union bound but a **liveness break**: only ~0.53 % of drives
-   (1054 and 1051 of 200,000 trials, at `w = 16` and `24` respectively) reached a fixed point
-   within 128 rounds at all, against 100 % for the rank-cut control — a content-determined stride
-   can land a range on a fixed point that never shrinks. Among the rare drives that did terminate,
-   the false-convergence rate itself was inconclusive at 99 % confidence (`w=16`: 3/1054 events,
-   CI `[7.2e-4, 1.12e-2]`, against a reported union bound of `2.3e-3` — the point estimate sits
-   slightly above the bound but the interval straddles it; `w=24`: 0/1051 events, an uninformatively
-   wide CI given the tiny surviving sample). The rank-cut control produced zero events at either
-   width (CI upper bounds `8.4e-5` and `6.6e-6`, both comfortably under their own bound). Read
-   together: making a split boundary a function of the summary oracle breaks more than the
-   union-bound argument's premise — it can break the protocol's termination guarantee outright,
-   the sharper version of the same claim.
+   ([#356](https://github.com/Akvize/reconcile-rs/issues/356), [#420](https://github.com/Akvize/reconcile-rs/issues/420);
+   `rbsr/tests/joint_progress_and_the_oracle_coupling_confound.rs` and
+   `the_union_bounds_effective_multiplier.rs`). The soundness bound above needs the
+   ranges compared to be a deterministic function of the data (rank-cut, `Select`). Refinement
+   needs a *second*, independent property RBSR's literature leaves implicit: every `SPLIT` must
+   narrow the range it cuts, or terminate because the peer cuts instead. `rbsr::oracle_probe`'s
+   policies (unspellable outside `internal-testing` since #352) separate the two — drives settling,
+   20,000 per policy, `w = 16`, `n = 512`, `d = 1`, against the **pre-#420** driver:
+
+   | stride | reads the fingerprint | ignores it |
+   |---|---|---|
+   | relative to the span | `1 + limb mod (span−1)`: **100 %** | `FixedFanOut`: **100 %** |
+   | independent of it | `1 + limb mod 32`: **0.53 %** | `1 + mix(span) mod 32`: **0.05 %**; a constant: **0 %** |
+
+   Span-relativity decides termination, not oracle-coupling: reading no fingerprint at all is the
+   worse half of each row, and non-progressing splits per drive are 6.79 fingerprint-derived
+   against 6.69 for a constant and 0.00 for both span-relative policies. Pre-#420 a *single*
+   deviant peer stalled a correct one on 91.6 % of drives, `shared_cutoffs` answering a lone local
+   element with a deliberate non-progressing `Split(ONE)`. #420's guard (`ARCHITECTURE.md` §5
+   invariant 13) keys on exactly that variable — `stride >= span` at `span > 1` becomes an
+   `Enumerate` — costing a conforming policy nothing, pricing a violating one at one forced IDLIST
+   each, and settling 200,000/200,000 drives; a guard keyed on "reads the oracle" would have caught
+   neither oracle-independent policy. Stalls are provable, not round-capped: a drive is a
+   deterministic map on `(responder parity, active family)`, so a repeated state never terminates.
+
+   Two limits on the **soundness** half, neither about termination: the bound
+   `mean(comparisons) × 2⁻ʷ` is ~49× loose (`agrees()` tests the whole `Aggregate`, so only a
+   same-size range can falsely agree — 1.07 of 52.2 comparisons), and at `d = 1` the outer range is
+   the only reliably collision-capable comparison, compared *before any split decision exists*, so
+   the rate is policy-independent by construction and a zero-event run there confirms nothing. At
+   `d = 16` the policies separate with no excess for the coupled one. What oracle-independence buys
+   is the bound's *portability across widths*: under rank-cut the index set is identical at every
+   `w`, so a multiplier measured at one transfers; under a coupled rule nothing transfers.
 
    **Scope of the MST/prolly analogy, corrected 2026-08-19**: the comparison two paragraphs up
    ("the same property MST's `level = hash(key)` and prolly's rolling-hash chunking give up") is
@@ -521,23 +545,6 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    the **iterative RBSR family with a pluggable split policy** (RBSR itself, GenSync) — that is the
    comparison class a write-up should state, not the wider Merkle-structure family §2.1 tabulates.
 
-   **Liveness fix, 2026-08-20** (#420): the liveness break above is now the *unguarded* mechanism's
-   behavior only. `protocol_round_with_policy` gained a driver-side guard (`ARCHITECTURE.md` §5
-   invariant 13): a `Split` for `span() > 1` that would not narrow the range — exactly the
-   condition this counter-example relies on — is converted to an `Enumerate` before it can hang the
-   driver, whatever policy produced it. Re-measured against the guarded driver,
-   `FingerprintDerivedSplit` now reaches a fixed point on 200,000/200,000 trials at both widths (up
-   from 1,054/200,000 and 1,051/200,000).
-
-   **Soundness comparison, correction pending** ([#473](https://github.com/Akvize/reconcile-rs/pull/473)):
-   termination was never what starved the soundness comparison — "well-powered for the first time"
-   does not follow from the liveness fix alone. The reported false-convergence bound it was measured
-   against is itself ~49× too tight (`Comparison::agrees` tests the whole `Aggregate`, so only a
-   same-size range can falsely agree at any width), and at `d = 1` the only reliably
-   collision-capable comparison runs before any split decision exists, making a
-   coupled-vs-rank-cut rate comparison there policy-independent by construction. Both flaws predate
-   #420 and were invisible while termination masked the measurement. #473 restates the comparison
-   against the corrected bound and at `d > 1`, where the policies do separate — not yet on `main`.
 2. **It is a SOTA-2026-conformant RSOS**: the `tree_hash` cache (composable summary) + `tree_size`
    (order statistic) → range-summary and rank/select queries in **O(log n)** (the arXiv:2603.19820
    contract). Core *aligned* with the most recent theory.
@@ -608,19 +615,19 @@ status, so this section never needs an edit when that status changes.
    `Aggregate(l, u)` in O(log n) requires an up-to-date summary on every node from leaf to root, so
    **every insert writes the root** — a contention point the contract creates, not an implementation
    defect. arXiv:2603.19820 §7.1 scopes its evaluation to single-machine with no concurrency, and no
-   RBSR work prices it. The prior art is outside the line: **AB-tree** maintains aggregate metadata
-   in a paginated tree under concurrent updates — but even its own code leaves the root chain
-   uncollapsed, an admission the hot spot is bounded, not eliminated (`benches/README.md`'s
+   RBSR work prices it. The prior art is outside the line: **AB-tree** ([§4.4](#44-bibliography))
+   sheds the contention by storing inexact weights, which a sound SKIP cannot (`benches/README.md`'s
    `contention` benchmark, [#359](https://github.com/Akvize/reconcile-rs/issues/359)/#445/#446).
-   **Measured, then found ambiguous** ([#454](https://github.com/Akvize/reconcile-rs/issues/454)):
-   at `N=1` (no lock contention) the root-write contract alone costs ~0.30–0.34× a no-aggregate
-   `BTreeMap`'s throughput under the same lock; from `N=2` to `N=16` the shared `RwLock` dominates
-   both arms and their ratio does not widen. Reading that flat ratio as a *bounded* tax does not
+   **Measured, then re-measured** ([#454](https://github.com/Akvize/reconcile-rs/issues/454)): at
+   `N=1` (no lock contention) the contract alone costs 0.298× a no-aggregate `BTreeMap` under the
+   same lock, and 6.8 cached-aggregate writes per insert — a count identical on any machine. #359
+   read the fp/btree *ratio*, saw it flat to `N=16`, and called the tax bounded. That does not
    follow: both arms sit behind the same lock, so `1/X = S + H(N)` for each, and a ratio of two
    terms that grow together is flat *because* they grow together, not because the root-write share
-   is capped. Correction pending in [#480](https://github.com/Akvize/reconcile-rs/pull/480), which
-   subtracts the shared lock term instead of dividing it out. Numbering starts at 10 so P0–P3's
-   existing ids stay stable.
+   is capped. **Subtracting** reciprocal throughputs cancels `H` where dividing them cannot, and
+   leaves a gap growing 1.7× to `N=4` (#455) — an upper bound, so the growth is established and its
+   attribution is not. Model, confounds and the many-core prediction: #457, #456,
+   `benches/README.md`. Numbering starts at 10 so P0–P3's existing ids stay stable.
 
 **P3 — What makes it *believed* to be SOTA:**
 8. **Property-testing + fuzzing as a foundation**: `proptest` vs `BTreeMap` oracle +
@@ -644,7 +651,6 @@ per issue, none of them a 1.0 gate; the claim and the evidence live in the issue
 | Is the refinement tree's comparison count sensitive to the *ordered shape* of the difference, and does the `(b, B)` pair matter? | [#353](https://github.com/Akvize/reconcile-rs/issues/353) |
 | What is the false-convergence rate at reduced fingerprint width, and do the two layers scale as predicted? | [#355](https://github.com/Akvize/reconcile-rs/issues/355) |
 | Post-#257 the comparison-map width is a security question, not a bandwidth one — price it in both models | [#357](https://github.com/Akvize/reconcile-rs/issues/357) |
-| Every model here is two-party. Does a fleet resample a collision, or correlate it? | [#354](https://github.com/Akvize/reconcile-rs/issues/354) |
 | Can any path fold one multiset element twice, and what does that cost the summary? | [#358](https://github.com/Akvize/reconcile-rs/issues/358) |
 | The contract writes the root on every insert (P2 item 10 above). Where does that bind? | [#359](https://github.com/Akvize/reconcile-rs/issues/359) |
 
@@ -669,6 +675,8 @@ split rule does not cleanly exceed the bound — the sharper, statistically unam
 that it breaks the protocol's termination guarantee instead, in ~99.5% of drives
 ([#356](https://github.com/Akvize/reconcile-rs/issues/356), full numbers in §2.3's "Empirical
 grounding for the split-boundary half of this claim").
+[#354](https://github.com/Akvize/reconcile-rs/issues/354) left it the other way: opened as a
+question, closed by derivation rather than the campaign it proposed (§2.2).
 
 **SOTA target by axis:**
 
@@ -919,6 +927,16 @@ pass had already ruled out. Record negative results too.
   https://aljoscha-meyer.de/assets/landing/rbsr_nonhomomorphic.pdf — RBSR over history-independent,
   clamping-invariant trees using conventional hashes. **The direct counter-argument to §2.3 #1**:
   the composable-monoid summary is one design point, not a requirement of the algorithm.
+  **Bears on §2.2 twice more**, both read from the source (2026-08-20). §IV.B states the
+  matched-range property as the *design requirement* — "if they do store the same set in a range,
+  their clamped subtrees will be equal, and hence have equal root hashes" — so §2.2's replay result
+  rests on what makes a range fingerprint work at all, not on the additive combiner, and survives
+  this paper's own construction. §II states RBSR's distinguishing claim against the field: MST
+  "can protect against malicious input only by randomizing the tree construction for each
+  reconciliation session", CPI/IBLT/RIBLT likewise, leaving RBSR "the only algorithm to handle
+  adversarial inputs without resorting to per-session randomization". That is the same property
+  §2.2 prices on the other axis — no per-session randomization is also no independent trial per
+  peer. → §2.2, §2.3, [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - L. Gong, Z. Liu, L. Liu, J. Xu, M. Ogihara, T. Yang, *Space- and computationally-efficient set
   reconciliation via Parity Bitmap Sketch (PBS)*, VLDB 14(4), 2020 — a further point on the
   communication/computation Pareto front, alongside RIBLT and minisketch (§2.2).
@@ -995,8 +1013,8 @@ sourced from abstracts and search summaries — read before quoting a number fro
   `doi:10.1007/s00446-017-0316-0` (Distributed Computing 31(6), 2018; preprint `arXiv:1311.2037`) —
   https://arxiv.org/abs/1311.2037
   **Bears on:** the only entry here that is not two-party. Every cost model on this page is stated
-  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — an
-  unexamined axis with an existing literature. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174)
+  for one pair while `ReplicatedMap` runs an N-node cluster at O(N) write amplification — the
+  literature §2.2's fleet result is answered against. → §1.2, §2.2, [#174](https://github.com/Akvize/reconcile-rs/issues/174), [#354](https://github.com/Akvize/reconcile-rs/issues/354)
 - **F. Lázaro, B. Matuz**, *A rate-compatible solution to the set reconciliation problem*,
   `arXiv:2211.05472v2` (IEEE Trans. Commun. 71(10), 2023 — v2 is the accepted revision) —
   https://arxiv.org/abs/2211.05472

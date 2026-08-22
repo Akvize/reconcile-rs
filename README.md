@@ -205,6 +205,19 @@ source of the key (an env var `String`, a file's contents, a `[u8; 32]` literal 
 in `ClusterKey::new`/`from_hex`) is the caller's to protect, and the **decrypted AEAD plaintext**
 (`encryption` feature) is never zeroized in either configuration — only the key that produced it.
 
+**Fingerprint collisions — the censorship residual.** Reconciliation compares 256-bit additive
+range fingerprints. Against an *accidental* collision that width is ample; against an adversary who
+can influence stored values it is not: the additive combiner is Wagner-breakable (#337), and a
+successful *total plant* — a crafted value set whose fingerprint delta vanishes on every range
+containing it — makes two honest replicas report convergence while genuinely differing,
+permanently and silently (#354): anti-entropy replays that verdict at every meeting rather than
+retrying it. Per-session boundary randomisation (#502, decision recorded in
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §7) defends every range below the outer one; the outer range
+has no boundaries to randomise, so this residual **stands until the fingerprint lift is keyed**
+(#337) — and once it is, crafting narrows to holders of the cluster key. Note the cluster key
+*above* does not close this: the MAC authenticates datagrams in transit, it does not make the
+fingerprint collision-resistant against a writer.
+
 ### Confidentiality (encryption)
 
 By default the keyed mode authenticates a **plaintext** payload. With the `encryption` Cargo

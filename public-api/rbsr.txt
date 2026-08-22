@@ -137,13 +137,13 @@ impl<K: core::fmt::Debug> core::fmt::Debug for rbsr::RangeAggregate<K>
 pub fn rbsr::RangeAggregate<K>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<K> serde::ser::Serialize for rbsr::RangeAggregate<K> where K: serde::ser::Serialize
 pub fn rbsr::RangeAggregate<K>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
-impl<K> core::marker::Freeze for rbsr::RangeAggregate<K> where K: core::marker::Freeze
-impl<K> core::marker::Send for rbsr::RangeAggregate<K> where K: core::marker::Send
-impl<K> core::marker::Sync for rbsr::RangeAggregate<K> where K: core::marker::Sync
-impl<K> core::marker::Unpin for rbsr::RangeAggregate<K> where K: core::marker::Unpin
-impl<K> core::marker::UnsafeUnpin for rbsr::RangeAggregate<K> where K: core::marker::UnsafeUnpin
-impl<K> core::panic::unwind_safe::RefUnwindSafe for rbsr::RangeAggregate<K> where K: core::panic::unwind_safe::RefUnwindSafe
-impl<K> core::panic::unwind_safe::UnwindSafe for rbsr::RangeAggregate<K> where K: core::panic::unwind_safe::UnwindSafe
+impl<K> core::marker::Freeze for rbsr::RangeAggregate<K> where KeyRange<K>: core::marker::Freeze
+impl<K> core::marker::Send for rbsr::RangeAggregate<K> where KeyRange<K>: core::marker::Send
+impl<K> core::marker::Sync for rbsr::RangeAggregate<K> where KeyRange<K>: core::marker::Sync
+impl<K> core::marker::Unpin for rbsr::RangeAggregate<K> where KeyRange<K>: core::marker::Unpin
+impl<K> core::marker::UnsafeUnpin for rbsr::RangeAggregate<K> where KeyRange<K>: core::marker::UnsafeUnpin
+impl<K> core::panic::unwind_safe::RefUnwindSafe for rbsr::RangeAggregate<K> where KeyRange<K>: core::panic::unwind_safe::RefUnwindSafe
+impl<K> core::panic::unwind_safe::UnwindSafe for rbsr::RangeAggregate<K> where KeyRange<K>: core::panic::unwind_safe::UnwindSafe
 pub struct rbsr::RoundOutcome
 impl rbsr::RoundOutcome
 pub const fn rbsr::RoundOutcome::children(&self) -> usize
