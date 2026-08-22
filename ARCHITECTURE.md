@@ -312,7 +312,10 @@ guarantees whose resolution history §8 tracks.
    injective byte encoding (not `std::hash::Hash`, whose byte sequences Rust does not stabilize —
    and which `HashMap`/`HashSet` don't implement), add/sub mod 2²⁵⁶. Both halves are load-bearing:
    changing the encoding is as much a wire break as changing the hash. Golden vectors in
-   `rsos/src/fingerprint.rs`.
+   `rsos/src/fingerprint.rs`. On the wire, `Serialize`/`Deserialize` go through raw `[u8; 32]` rather
+   than deriving over the four `u64` limbs — a uniformly random 256-bit value gets nothing from
+   `bincode`'s default varint integer encoding except a length byte per incompressible limb (#382,
+   decided before the wire freeze).
 2. **HLC total order** `(physical, logical, node_id)` — merge uses strict `>`. Composed of two
    derived orders, `Hlc` over `(physical, logical)` then `Timestamp` over `(hlc, node_id)`; the
    newtype declaration order *is* the conflict order, and `tests/timestamp_wire_format.rs` pins that
