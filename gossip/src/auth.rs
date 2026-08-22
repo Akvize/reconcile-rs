@@ -75,7 +75,7 @@ pub const VERSION_LEN: usize = 1;
 /// indistinguishably dropped as malformed. There is currently no accepted-version *window* — a
 /// mismatch of any kind is rejected; widening that is a policy change to make deliberately, not a
 /// side effect of the next bump.
-pub const WIRE_VERSION: u8 = 1;
+pub const WIRE_VERSION: u8 = 2;
 
 /// Length in bytes of the XChaCha20-Poly1305 nonce prepended to each encrypted datagram.
 ///
