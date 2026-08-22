@@ -9,10 +9,13 @@
 //! The wall-clock **adapter** behind the [`Clock`] port, whose types and arithmetic live in
 //! [`lww_register::clock`] and are re-exported here.
 //!
-//! `HlcClock` owns the only wall-clock read in the crate and the node's [`NodeId`], which it
-//! attaches when minting a reading into a [`Timestamp`]. `BoundedInstant` is the other thing that
-//! needs both a physical-time read and `chrono`: the tombstone-expiry instant derived from a
-//! *stored* stamp, bounded by the same [`MAX_CLOCK_DRIFT`] budget.
+//! `HlcClock` owns the crate's primary wall-clock read and the node's [`NodeId`], which it
+//! attaches when minting a reading into a [`Timestamp`]. Every other wall-clock read in `reconcile`
+//! lives in this file too, alongside it: `BoundedInstant` needs a physical-time read and `chrono`
+//! for the tombstone-expiry instant derived from a *stored* stamp, bounded by the same
+//! [`MAX_CLOCK_DRIFT`] budget; [`wall_clock_now`] is the plain `DateTime<Utc>` reading a caller
+//! like `TimeoutWheel::expired` needs for an instant of its own, supplied instead of read locally so
+//! the wheel itself never touches the wall clock.
 //!
 //! `HlcClock` is the default [`Clock`] adapter, not the only one that can be plugged in:
 //! [`ReplicatedMap::new_with_clock`](crate::ReplicatedMap::new_with_clock) accepts any `Arc<dyn
@@ -34,6 +37,14 @@ use chrono::{DateTime, Utc};
 /// Read physical time as an instant on the Unix-epoch millisecond scale.
 pub(crate) fn phys_now() -> PhysicalTime {
     PhysicalTime::from_millis(Utc::now().timestamp_millis().max(0) as u64)
+}
+
+/// Read the current wall-clock instant for a caller that needs a `DateTime<Utc>` rather than the
+/// [`PhysicalTime`] scale — e.g. `TimeoutWheel::expired`, which takes `now` as a parameter instead
+/// of reading the clock itself so the wheel stays adapter-free. Keeps that read here, alongside
+/// [`phys_now`], rather than scattered across the facade.
+pub(crate) fn wall_clock_now() -> DateTime<Utc> {
+    Utc::now()
 }
 
 /// How a [`BoundedInstant`] was arrived at. Anything but

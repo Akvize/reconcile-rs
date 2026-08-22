@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use chrono::Utc;
+
 use crate::clock::NodeId;
 use crate::{replicated_map::Config, ReplicatedMap};
 
@@ -31,7 +33,7 @@ async fn tombstones_expiration() {
     // `remove` inserts a tombstone rather than deleting the key outright.
     store.remove(&0);
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(store.tombstones.expired(), vec![0]);
+    assert_eq!(store.tombstones.expired(Utc::now()), vec![0]);
     assert_eq!(store.tombstones.remove(&0), Some(0));
     assert_eq!(store.tombstones.remove(&0), None);
 }
@@ -180,14 +182,14 @@ async fn set_tombstone_timeout_actually_retunes_the_wheel() {
         .with_tombstone_timeout(Duration::from_secs(3600)); // won't expire on its own
     store.remove(&0);
     assert!(
-        store.tombstones.expired().is_empty(),
+        store.tombstones.expired(Utc::now()).is_empty(),
         "must not be expired yet under the long initial timeout"
     );
 
     store.set_tombstone_timeout(Duration::from_millis(1));
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(
-        store.tombstones.expired(),
+        store.tombstones.expired(Utc::now()),
         vec![0],
         "retuning the timeout down must make the tombstone expire promptly"
     );

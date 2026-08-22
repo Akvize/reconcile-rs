@@ -69,10 +69,12 @@ impl<T: Clone + Hash + std::cmp::Eq> TimeoutWheel<T> {
         map.insert(e, instant);
     }
 
-    /// Entries whose timeout has elapsed, **without removing them** — causal-stability-gated GC
-    /// needs to peek candidates it may still have to retain.
-    pub fn expired(&self) -> Vec<T> {
-        let now = Utc::now();
+    /// Entries whose timeout has elapsed as of `now`, **without removing them** —
+    /// causal-stability-gated GC needs to peek candidates it may still have to retain.
+    ///
+    /// `now` is supplied by the caller rather than read here, so the wheel itself never touches
+    /// the wall clock — the caller sources it from the `Clock` adapter (`crate::clock::wall_clock_now`).
+    pub fn expired(&self, now: DateTime<Utc>) -> Vec<T> {
         let timeout = *self.timeout.read().unwrap();
         self.wheel
             .read()
@@ -129,7 +131,7 @@ mod tests {
         wheel.insert(2, shared);
         wheel.insert(3, shared);
 
-        let mut got = wheel.expired();
+        let mut got = wheel.expired(Utc::now());
         got.sort();
         assert_eq!(got, vec![1, 2, 3]);
     }
@@ -147,13 +149,13 @@ mod tests {
         // Remove 10; 20 must survive unharmed.
         assert_eq!(wheel.remove(&10), Some(10));
 
-        let mut got = wheel.expired();
+        let mut got = wheel.expired(Utc::now());
         got.sort();
         assert_eq!(got, vec![20], "20 should still be tracked");
 
         // Remove 20; wheel must be empty.
         assert_eq!(wheel.remove(&20), Some(20));
-        assert!(wheel.expired().is_empty());
+        assert!(wheel.expired(Utc::now()).is_empty());
 
         // Removing an already-gone entry is a no-op.
         assert_eq!(wheel.remove(&10), None);
@@ -173,7 +175,7 @@ mod tests {
         wheel.insert(42, new);
 
         assert!(
-            wheel.expired().is_empty(),
+            wheel.expired(Utc::now()).is_empty(),
             "old slot must be gone; only new (future) slot exists"
         );
 
@@ -229,7 +231,7 @@ mod tests {
             assert_eq!(wheel.remove(&i), Some(i));
         }
 
-        assert!(wheel.expired().is_empty());
+        assert!(wheel.expired(Utc::now()).is_empty());
         assert!(
             wheel.wheel.read().unwrap().is_empty(),
             "emptied bucket dropped"

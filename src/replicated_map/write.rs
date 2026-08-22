@@ -13,7 +13,9 @@ use std::time::Duration;
 use tracing::warn;
 
 use crate::bounds::{Key, Value};
-use crate::clock::{BoundedInstant, ClockDrift, StampBound, Timestamp, MAX_CLOCK_DRIFT};
+use crate::clock::{
+    wall_clock_now, BoundedInstant, ClockDrift, StampBound, Timestamp, MAX_CLOCK_DRIFT,
+};
 use crate::entry::Entry;
 use crate::replica::version_hash;
 
@@ -347,7 +349,7 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
     /// communicated with, or decommissioned via [`forget_peer`](Self::forget_peer).
     pub(super) async fn clear_expired_tombstones(&self) {
         loop {
-            for key in self.tombstones.expired() {
+            for key in self.tombstones.expired(wall_clock_now()) {
                 // Version token of the tombstone actually stored, matched against peer acks.
                 let version = self.engine.map.read().get(&key).map(version_hash);
                 let Some(version) = version else {
