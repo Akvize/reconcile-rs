@@ -570,12 +570,17 @@ mod imp {
     /// only one that exercises refinement rather than the outer-range mismatch `cold_sync_rtt`
     /// builds (`benches/README.md` "Pricing that end-to-end...").
     ///
-    /// Both peers load the identical `n`-entry corpus independently, before any peer is seeded:
-    /// the reconciliation fingerprint is a function of `(key, value)` alone (`version_hash` hashes
-    /// the value, not the stamp — `src/replica/gc.rs`), so two separately timestamped copies of the
-    /// same corpus already agree at the root, and nothing is broadcast in doing so (`cold_sync`'s
-    /// "no peer yet" discipline). `reconcile_interval` is set far longer than any sample, so every
-    /// round below is the one `start_reconciliation` explicitly triggers, not a background tick.
+    /// Only the initiator loads the `n`-entry corpus; the peer starts empty and pulls the whole
+    /// dataset via cold-sync, the same bootstrap `cold_sync_rtt` already exercises at this `n` ×
+    /// `NetemTransport` × RTT matrix (`benches/README.md`'s `cold_sync_rtt` section). Loading both
+    /// peers independently and assuming they already match at the root — the fingerprint being a
+    /// function of `(key, value)` alone (`version_hash` hashes the value, not the stamp —
+    /// `src/replica/gc.rs`), so two separately timestamped copies of the same corpus agree there —
+    /// was tried first and hit a genuine non-convergence at larger `n` under nonzero RTT,
+    /// specific to `NetemTransport`'s queue-and-pump delivery under high datagram volume rather
+    /// than the protocol itself (a plain transport, and even a trivially delayed one, never
+    /// reproduced it). `reconcile_interval` is set far longer than any sample, so every round
+    /// below is the one `start_reconciliation` explicitly triggers, not a background tick.
     ///
     /// Per sample: `just_remove` the `d` chosen keys on the initiator (a genuine content
     /// difference, not a timestamp race), trigger one round, poll until the responder reflects the
@@ -598,9 +603,9 @@ mod imp {
     /// outside Criterion entirely (`git log` on this file) that a round genuinely plateaus part-way
     /// (partial progress, then no further progress for 15s+) and only a *fresh* trigger resumes it,
     /// converging fully within a handful of retriggers every time tried. This matches #185's own
-    /// "N round trips" model rather than contradicting it: `[trigger_round]` below retriggers
-    /// (bounded, [`MAX_ROUND_RETRIGGERS`]) when a round does not converge on its own, and the total
-    /// elapsed time across every retrigger counts toward the sample — that total *is* the
+    /// "N round trips" model rather than contradicting it: [`trigger_and_converge`] below
+    /// retriggers (bounded, [`MAX_ROUND_RETRIGGERS`]) when a round does not converge on its own,
+    /// and the total elapsed time across every retrigger counts toward the sample — that total *is* the
     /// measurement, not an artifact of it. A *clustered* divergence of the same `d` converges in
     /// one round even at `d = 1000`, so this is specific to how many separate ranges must resolve,
     /// not to `d` alone.
@@ -661,10 +666,6 @@ mod imp {
         // scheduling, no true concurrency between the two loops), the same repro over hundreds of
         // rounds saw at most a stall in the first round or two, the known one-time warm-up cost
         // below already accounts for.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let net = "127.0.0.1/8".parse().unwrap();
         let port = 9_990;
 
@@ -685,6 +686,19 @@ mod imp {
                 .collect();
 
             for rtt in rtt_sweep() {
+                // Fresh per `(n, rtt)`, not shared across the sweep: a background task this
+                // harness does not track — `Replica::spawn_paced_send`'s detached bulk-dump
+                // sends, paced by `bulk_send_rate` and outlasting the `run()` loops this function
+                // does abort/await between pairs (below) — can still be draining when the next
+                // pair starts, and on this single-threaded runtime it competes with that pair's
+                // own tasks for the same one OS thread. Dropping the whole runtime is the only
+                // way to guarantee such orphaned work is gone rather than merely aborted-and-
+                // maybe-still-scheduled; recreating it here traded one construction per `(n,
+                // rtt)` (cheap, ~20 total) for that guarantee.
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
                 let link = Link::at(rtt);
                 let cfg = |addr: IpAddr| {
                     Config::default()
@@ -731,23 +745,26 @@ mod imp {
                             cfg(addr2),
                             Arc::new(transport2),
                         );
+                        // Only `store1` is pre-loaded; `store2` starts empty and pulls the whole
+                        // corpus via cold-sync (`cold_sync_rtt`'s own bootstrap, proven reliable
+                        // across this same `n` × `NetemTransport` × RTT matrix). Loading both
+                        // independently and assuming they already match at the root — the design
+                        // this replaced — hit a genuine non-convergence (`benches/README.md`
+                        // "service_reconcile_rtt"'s docs) at larger `n` under nonzero RTT
+                        // specifically through `NetemTransport`, not through the protocol itself
+                        // (a plain, undelayed transport and even a trivially delayed one never
+                        // reproduced it): high datagram volume against `NetemTransport`'s
+                        // queue-and-pump delivery path, not a correctness issue in the library.
                         store1.insert_bulk(&key_values);
-                        store2.insert_bulk(&key_values);
                         store1.seed_peer(addr2);
                         store2.seed_peer(addr1);
                         let tasks = [
                             tokio::spawn(store1.clone().run(CancellationToken::new())),
                             tokio::spawn(store2.clone().run(CancellationToken::new())),
                         ];
-                        // `Replica::run` fires one reconciliation round unconditionally before
-                        // entering its receive loop (`src/replica/run.rs`), so each side sends one
-                        // round to the other the instant its task starts — settle that transient
-                        // before timing anything, or the first sample below would race it.
-                        let settled = converge(|| {
-                            received1.load(Ordering::Relaxed) >= 1
-                                && received2.load(Ordering::Relaxed) >= 1
-                        })
-                        .await;
+                        let target_fingerprint = store1.fingerprint(..);
+                        let settled =
+                            converge(|| store2.fingerprint(..) == target_fingerprint).await;
                         // The first couple of content-divergence round trips a fresh pair ever
                         // exchanges — one for a tombstoning round, one for a live-value round,
                         // each the first time that *kind* of round happens on this pair — pay a
@@ -857,6 +874,7 @@ mod imp {
                 rt.block_on(async {
                     for task in tasks {
                         task.abort();
+                        let _ = task.await;
                     }
                 });
             }
