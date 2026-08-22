@@ -80,11 +80,14 @@ mod policy;
 mod protocol;
 mod rsos_view;
 
-#[cfg(reconcile_internal_testing)]
-pub use policy::FingerprintDerivedSplit;
 pub use policy::{
     Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,
     SplitStride, SqrtFanOut,
+};
+#[cfg(reconcile_internal_testing)]
+pub use policy::{
+    ConstantStrideSplit, FingerprintDerivedSplit, SpanHashedStrideSplit,
+    SpanRelativeFingerprintSplit, STRIDE_SPREAD,
 };
 pub use protocol::{
     initial_ranges, protocol_round, protocol_round_with_policy, EnumerationRange, RangeAggregate,

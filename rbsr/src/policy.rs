@@ -22,6 +22,8 @@
 use rsos::Aggregate;
 
 mod comparison;
+#[cfg(reconcile_internal_testing)]
+mod constant_stride_split;
 mod cutoffs;
 mod enumerate_below_threshold;
 #[cfg(reconcile_internal_testing)]
@@ -29,7 +31,18 @@ mod fingerprint_derived_split;
 mod fixed_fan_out;
 mod forwarding;
 mod params;
+#[cfg(reconcile_internal_testing)]
+mod span_hashed_stride_split;
+#[cfg(reconcile_internal_testing)]
+mod span_relative_fingerprint_split;
 mod sqrt_fan_out;
+
+#[cfg(reconcile_internal_testing)]
+pub use constant_stride_split::ConstantStrideSplit;
+#[cfg(reconcile_internal_testing)]
+pub use span_hashed_stride_split::{SpanHashedStrideSplit, STRIDE_SPREAD};
+#[cfg(reconcile_internal_testing)]
+pub use span_relative_fingerprint_split::SpanRelativeFingerprintSplit;
 
 /// How wide a [`Decision::Split`] cuts: elements **per child range**.
 ///
