@@ -249,9 +249,11 @@ local iteration: `--hide-instantiations --text` for a detailed missed-lines repo
 `code-quality` in `main.yml` runs `./scripts/report-code-quality.sh` on every Rust-affecting PR and
 posts its output to the job summary — cognitive complexity per function
 ([mozilla/rust-code-analysis](https://github.com/mozilla/rust-code-analysis)) and cross-file
-duplication ([jscpd](https://github.com/kucherenko/jscpd)). Deliberately not a gate and absent from
-`ci-success`'s `needs:` (main.yml): unlike every check in AGENTS.md §3, "should this function be
-simpler" has no single right threshold for a script to enforce, so it stays a number to watch, not
-one to fail the build over. Run it locally with `cargo install rust-code-analysis-cli --locked` and
-`npm install -g jscpd` on `PATH` — neither ships in `Dockerfile.dev`, since nothing else here needs
-them outside this one report.
+duplication ([jscpd](https://github.com/kucherenko/jscpd)). The numbers themselves are still not a
+gate: unlike every check in AGENTS.md §3, "should this function be simpler" has no single right
+threshold for a script to enforce, so they stay a trend to watch, not a build-failing one. The job
+itself is in `ci-success`'s `needs:` (main.yml) as of #507, though: its own pass/fail (an
+install failure, an unreadable source file) was 100% stable across every measured push, so gating
+on that costs nothing and closes the gap where a broken job silently never blocked a merge. Run it
+locally with `cargo install rust-code-analysis-cli --locked` and `npm install -g jscpd` on `PATH` —
+neither ships in `Dockerfile.dev`, since nothing else here needs them outside this one report.
