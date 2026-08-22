@@ -4,7 +4,7 @@ Four Criterion targets, all `harness = false`, none feature-gated:
 
 | Target | What it measures |
 |---|---|
-| `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill, the single-difference `ReplicatedMap` send/reconcile latency, and the injected-RTT refinement lane `service_reconcile_rtt` (below). |
+| `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill, the single-difference `ReplicatedMap` send/reconcile latency, the injected-RTT refinement lane `service_reconcile_rtt`, and the `reconcile_interval` idle-timeout lane `service_reconcile_interval` (both below). |
 | `system` | End-to-end, **public-API** system benchmarks (below), including the injected-RTT/loss lane. |
 | `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — total wire bytes at four value sizes, then messages, advertised ranges, refinement bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 | `contention` | `K`-writer write throughput vs writer count, `FingerprintTreeMap` against a `BTreeMap` no-aggregate control, both behind one shared `parking_lot::RwLock` of the exact shape `src/replica.rs` uses (below). |
@@ -475,6 +475,46 @@ irreproducible: repeated runs at a fixed `(n, rtt)` land on the same *mix* of fa
 samples, and the "past a fixed-capacity sketch" table's numbers reproduce to within a few percent
 run over run — the nondeterminism is in which of the ten Criterion samples takes the slow path
 this run, not in whether the underlying behavior recurs.
+
+## `service_reconcile_interval`: recovery through the real idle timeout
+
+```sh
+cargo bench --bench bench -- service_reconcile_interval
+```
+
+`service_reconcile_rtt` above fixes `reconcile_interval` at 3600 s specifically to disable the
+`run()` idle timeout and substitute its own manual retrigger (`trigger_and_converge`, a 15 s
+cadence) — every round timed there is one `start_reconciliation` call this benchmark makes on
+purpose. This lane does the opposite: `reconcile_interval` is the swept axis, and after the
+initial divergence nothing calls `start_reconciliation` again — recovery can only come from the
+real idle timeout (`src/replica/run.rs`, re-read every loop iteration, so
+`ReplicatedMap::set_reconcile_interval` retunes it without rebuilding the pair). Fixed at
+`n = 10_000` (RTT is not injected here — that axis is `service_reconcile_rtt`'s), two `(d,
+clustering)` cases: `d = 10` scattered, a single-round case at this `n`, against `d = 1000`
+scattered — [#516](https://github.com/Akvize/reconcile-rs/issues/516)'s own repro, a divergence
+one round does not fully resolve because a `differences` batch that loses the per-peer dump-slot
+race (`try_claim_dump_slot`, `src/replica/pacing.rs`) is silently dropped rather than requeued.
+
+### Results
+
+| `reconcile_interval` | `d=10` (one round) | `d=1000` (#516) | multiplier |
+|---:|---:|---:|---:|
+| 10 ms | 10.7 ms | 42.4 ms | **4.2×** |
+| 100 ms | 101.6 ms | 313.8 ms | **3.1×** |
+| 1000 ms | 1001.5 ms | 3018.5 ms | **3.0×** |
+
+`d = 10` costs almost exactly **one** `reconcile_interval`, at every value swept — confirming the
+idle timeout, not any per-round network cost, is what a single-round divergence waits on: nothing
+retriggers `start_reconciliation` before the timer itself fires. `d = 1000` costs **3–4×** that —
+several idle-timeout cycles, not one, converging toward 3× as `reconcile_interval` grows past the
+cost of the recovery work itself (the multiplier is highest at the shortest interval swept, where
+that per-round work is a larger fraction of the cycle). This is the real, per-mechanism cost of
+#516's dropped-batch race: not a fixed number of extra round trips, but a fixed number of *whole
+`reconcile_interval` cycles* — so **`reconcile_interval` is a multiplier on the bug's cost, not
+merely a cadence knob**. Doubling `reconcile_interval` roughly doubles how long a `d = 1000`-shaped
+divergence takes to fully heal, regardless of RTT: at every RTT `service_reconcile_rtt` sweeps
+(0–50 ms), `reconcile_interval`'s default 1 s alone dwarfs it by 20–100×, the same conclusion the
+loss lane above draws for a lost datagram.
 
 ## The `protocol` benchmark
 
