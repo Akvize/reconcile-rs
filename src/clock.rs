@@ -13,7 +13,7 @@
 //! attaches when minting a reading into a [`Timestamp`]. Every other wall-clock read in `reconcile`
 //! lives in this file too, alongside it: `BoundedInstant` needs a physical-time read and `chrono`
 //! for the tombstone-expiry instant derived from a *stored* stamp, bounded by the same
-//! [`MAX_CLOCK_DRIFT`] budget; [`wall_clock_now`] is the plain `DateTime<Utc>` reading a caller
+//! [`MAX_CLOCK_DRIFT`] budget; `wall_clock_now` is the plain `DateTime<Utc>` reading a caller
 //! like `TimeoutWheel::expired` needs for an instant of its own, supplied instead of read locally so
 //! the wheel itself never touches the wall clock.
 //!
