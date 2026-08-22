@@ -882,6 +882,186 @@ mod imp {
         group.finish();
     }
 
+    /// `Config::reconcile_interval` values this lane sweeps: production's own default (1 s) down
+    /// to a much shorter floor. `service_reconcile_rtt` fixes this at 3600 s specifically to
+    /// disable the idle timer and substitute its own manual retrigger
+    /// (`trigger_and_converge`, 15 s cadence); this lane does the opposite -- the real `run()`
+    /// idle timeout (`src/replica/run.rs`) is the *only* thing allowed to retrigger
+    /// `start_reconciliation` after the initial divergence below, so what gets timed is however
+    /// many `reconcile_interval` cycles recovery actually costs, not the RTT
+    /// `service_reconcile_rtt` already prices.
+    fn reconcile_interval_sweep() -> Vec<Duration> {
+        [10, 100, 1_000]
+            .into_iter()
+            .map(Duration::from_millis)
+            .collect()
+    }
+
+    /// `n` this lane fixes at: #516's own repro size, so a reader can cross-reference the two
+    /// directly.
+    const INTERVAL_N: usize = 10_000;
+
+    /// `(d, clustering)` cases this lane sweeps: `d = 10` scattered is a single-round case at
+    /// this `n` (`service_reconcile_rtt`'s own "clean" cell), so its cost should track
+    /// `reconcile_interval` almost exactly (one idle-timeout cycle, whatever that cycle's length
+    /// is). `d = 1000` scattered is #516's own repro -- a divergence a single round does not
+    /// fully resolve, so its cost is however many *extra* `reconcile_interval` cycles the idle
+    /// timer needs to notice and retry the batch the first round's dump-slot race dropped.
+    const INTERVAL_D_CLUSTERINGS: &[(usize, Clustering)] =
+        &[(10, Clustering::Scattered), (1_000, Clustering::Scattered)];
+
+    /// Times recovery through the real `reconcile_interval` idle-timeout path (`src/replica/
+    /// run.rs`) instead of `service_reconcile_rtt`'s manual retrigger, across a
+    /// `reconcile_interval` sweep -- motivated by #516: a `differences` batch that loses the
+    /// per-peer dump-slot race is silently dropped, so a single round does not always resolve a
+    /// large/scattered divergence, and the real repair cost in that case is however many
+    /// `reconcile_interval` cycles it takes the idle timer to notice and retry, not the RTT
+    /// `service_reconcile_rtt` already times.
+    ///
+    /// One pair, built once: unlike `service_reconcile_rtt`, RTT is fixed (this transport injects
+    /// none) and `reconcile_interval` is retunable at runtime
+    /// (`ReplicatedMap::set_reconcile_interval`, re-read every `run()` loop iteration), so
+    /// there is no per-sweep-point transport to rebuild.
+    ///
+    /// Per sample: `just_remove` the `d` chosen keys on the initiator, same as
+    /// `service_reconcile_rtt`, but poll for repair with [`converge`] alone -- no
+    /// `start_reconciliation` call after it, so recovery can only come from the idle timer.
+    /// Restoring the pair to baseline afterward is untimed and uses [`trigger_and_converge`] (the
+    /// manual-retrigger helper): resetting state between samples is not what this lane measures,
+    /// and bounding it by the idle timer too would double-count the very cost being priced.
+    fn service_reconcile_interval(c: &mut Criterion) {
+        let net = "127.0.0.1/8".parse().unwrap();
+        let port = 9_990;
+
+        let mut group = c.benchmark_group("service_reconcile_interval");
+        group.sample_size(10);
+        group.sampling_mode(SamplingMode::Flat);
+        group.warm_up_time(Duration::from_millis(500));
+        group.measurement_time(Duration::from_millis(1_000));
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let key_values: Vec<(u32, u32)> = (0..INTERVAL_N as u32)
+            .map(|k| (k, k.wrapping_mul(2_654_435_761)))
+            .collect();
+        let cfg = |addr: IpAddr| {
+            Config::default()
+                .with_port(port)
+                .with_listen_addr(addr)
+                .with_net(net)
+                .with_insecure_no_key()
+        };
+
+        let (store1, store2, tasks) = rt.block_on(async {
+            let mut attempt = 0u32;
+            loop {
+                attempt += 1;
+                let (addr1, addr2) = fresh_reconcile_rtt_pair();
+                let network = InMemoryNetwork::new();
+                let store1 = ReplicatedMap::<u32, u32>::new_with_transport(
+                    cfg(addr1),
+                    Arc::new(network.bind(SocketAddr::new(addr1, port))),
+                );
+                let store2 = ReplicatedMap::<u32, u32>::new_with_transport(
+                    cfg(addr2),
+                    Arc::new(network.bind(SocketAddr::new(addr2, port))),
+                );
+                store1.insert_bulk(&key_values);
+                store1.seed_peer(addr2);
+                store2.seed_peer(addr1);
+                let tasks = [
+                    tokio::spawn(store1.clone().run(CancellationToken::new())),
+                    tokio::spawn(store2.clone().run(CancellationToken::new())),
+                ];
+                let target_fingerprint = store1.fingerprint(..);
+                if converge(|| store2.fingerprint(..) == target_fingerprint).await {
+                    break (store1, store2, tasks);
+                }
+                for task in tasks {
+                    task.abort();
+                    let _ = task.await;
+                }
+                assert!(
+                    attempt < MAX_BUILD_ATTEMPTS,
+                    "service_reconcile_interval: cold-sync bootstrap did not converge in \
+                     {MAX_BUILD_ATTEMPTS} attempts"
+                );
+            }
+        });
+
+        for &reconcile_interval in &reconcile_interval_sweep() {
+            store1.set_reconcile_interval(reconcile_interval);
+            store2.set_reconcile_interval(reconcile_interval);
+
+            for &(d, clustering) in INTERVAL_D_CLUSTERINGS {
+                let missing = diverging_keys(INTERVAL_N, d, clustering);
+                let restored: Vec<u32> = missing
+                    .iter()
+                    .map(|&k| k.wrapping_mul(2_654_435_761))
+                    .collect();
+                let id = format!("d={d}/{}", clustering.label());
+
+                group.bench_with_input(
+                    BenchmarkId::new(&id, format!("{}ms", reconcile_interval.as_millis())),
+                    &reconcile_interval,
+                    |b, _| {
+                        b.iter_custom(|iters| {
+                            rt.block_on(async {
+                                let mut total = Duration::ZERO;
+                                for _ in 0..iters {
+                                    let start = Instant::now();
+                                    for &k in &missing {
+                                        store1.just_remove(&k);
+                                    }
+                                    // No manual start_reconciliation() call: recovery must come
+                                    // from the real reconcile_interval idle timeout alone.
+                                    let repaired = converge(|| {
+                                        missing.iter().all(|k| store2.get(k).is_none())
+                                    })
+                                    .await;
+                                    total += start.elapsed();
+                                    assert!(
+                                        repaired,
+                                        "service_reconcile_interval: {id} did not repair via \
+                                         the idle timer alone"
+                                    );
+
+                                    // Untimed restore, via the robust manual-retrigger helper.
+                                    for (&k, &v) in missing.iter().zip(restored.iter()) {
+                                        store1.just_insert(k, v);
+                                    }
+                                    trigger_and_converge(
+                                        &store1,
+                                        || {
+                                            missing
+                                                .iter()
+                                                .zip(restored.iter())
+                                                .all(|(k, &v)| store2.get_cloned(k) == Some(v))
+                                        },
+                                        format_args!("{id} restore"),
+                                    )
+                                    .await;
+                                }
+                                total
+                            })
+                        });
+                    },
+                );
+            }
+        }
+
+        rt.block_on(async {
+            for task in tasks {
+                task.abort();
+                let _ = task.await;
+            }
+        });
+        group.finish();
+    }
+
     criterion_group!(
         benches,
         fingerprint_tree_map_new,
@@ -893,6 +1073,7 @@ mod imp {
         service_send,
         service_reconcile,
         service_reconcile_rtt,
+        service_reconcile_interval,
     );
     // Equivalent to `criterion_main!(benches)`, but exposed as a named fn so the top-level `main`
     // (defined outside this feature-gated module) can drive it.
