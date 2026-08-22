@@ -30,8 +30,9 @@ mod imp {
     use tokio_util::sync::CancellationToken;
 
     use reconcile::{
-        replicated_map::Config, Entry, FingerprintTreeMap, Hlc, InMemoryNetwork, LogicalCounter,
-        NodeId, PhysicalTime, ReplicatedMap, State, Timestamp, Transport,
+        replicated_map::{Config, RunOutcome},
+        Entry, FingerprintTreeMap, Hlc, InMemoryNetwork, LogicalCounter, NodeId, PhysicalTime,
+        ReplicatedMap, State, Timestamp, Transport,
     };
 
     use super::netem::{Link, Netem, NetemTransport, Rtt, Seed};
@@ -564,25 +565,97 @@ mod imp {
         }
     }
 
-    /// Poll `condition` until it holds, periodically re-issuing `start_reconciliation` on
-    /// `initiator` — a round's opening message is, rarely, not enough on its own to drive a
-    /// multi-level chain to completion (not fully root-caused; anti-entropy's own periodic tick
-    /// is the production analogue of this retry). Panics past a generous ceiling instead of
-    /// spinning silently forever, so a genuine regression fails loudly rather than hanging CI-
-    /// adjacent tooling for tens of minutes.
-    async fn converge(initiator: &ReplicatedMap<u32, u32>, mut condition: impl FnMut() -> bool) {
+    /// Poll `condition` until it holds. A single `start_reconciliation` reliably drives a whole
+    /// multi-level chain to completion by itself (the run loop replies inline as each level's
+    /// response arrives, `src/replica/dispatch.rs`), so this does not retrigger — an earlier
+    /// version that retriggered on a fixed spin cadence made already-rare stalls *worse*,
+    /// consistent with racing the peer's own in-flight-dump gate
+    /// (`Replica::try_claim_dump_slot`) rather than resolving anything. Panics past a generous
+    /// ceiling instead of spinning silently forever, so a genuine regression fails loudly rather
+    /// than hanging CI-adjacent tooling for tens of minutes.
+    async fn converge(mut condition: impl FnMut() -> bool) {
         let mut spins: u64 = 0;
         while !condition() {
             spins += 1;
-            if spins % 500_000 == 0 {
-                initiator.start_reconciliation().await;
-            }
             assert!(
-                spins <= 100_000_000,
+                spins <= 200_000_000,
                 "service_reconcile_rtt: a round did not converge after {spins} poll spins"
             );
             tokio::task::yield_now().await;
         }
+    }
+
+    /// One `(store1, store2)` pair on a fresh `InMemoryNetwork`, wrapped in `NetemTransport` at
+    /// `link`, both loaded with the identical `n`-entry `corpus` independently: the reconciliation
+    /// fingerprint is a function of `(key, value)` alone (`version_hash` hashes the value, not the
+    /// stamp — `src/replica/gc.rs`), so two separately timestamped copies of the same corpus
+    /// already agree at the root, and nothing is broadcast in loading them (`cold_sync`'s "no peer
+    /// yet" discipline). A fresh pair per call — never reused across samples or across
+    /// `D_CLUSTERINGS` entries — deliberately costs an extra `insert_bulk` per sample: reusing one
+    /// pair across many divergence rounds was found to eventually stall a round outright at
+    /// `d = 1000` (never root-caused; `cold_sync_over`, `system.rs`, takes the same fresh-per-
+    /// sample cost for the equivalent reason).
+    async fn fresh_pair(
+        corpus: &[(u32, u32)],
+        link: Link,
+        port: u16,
+    ) -> (
+        ReplicatedMap<u32, u32>,
+        ReplicatedMap<u32, u32>,
+        [tokio::task::JoinHandle<RunOutcome>; 2],
+    ) {
+        let net = "127.0.0.1/8".parse().unwrap();
+        let (addr1, addr2) = fresh_reconcile_rtt_pair();
+        let cfg = |addr: IpAddr| {
+            Config::default()
+                .with_port(port)
+                .with_listen_addr(addr)
+                .with_net(net)
+                .with_insecure_no_key()
+                // Long enough that the periodic round never fires inside a sample: every round
+                // here is triggered explicitly by `start_reconciliation`, not a background tick.
+                .with_reconcile_interval(Duration::from_secs(3600))
+        };
+        let network = InMemoryNetwork::new();
+        let received1 = Arc::new(AtomicU64::new(0));
+        let transport1 = RecvCountingTransport {
+            inner: NetemTransport::new(
+                Arc::new(network.bind(SocketAddr::new(addr1, port))),
+                Netem::uniform(link, Seed::DEFAULT),
+            ),
+            received: Arc::clone(&received1),
+        };
+        let received2 = Arc::new(AtomicU64::new(0));
+        let transport2 = RecvCountingTransport {
+            inner: NetemTransport::new(
+                Arc::new(network.bind(SocketAddr::new(addr2, port))),
+                Netem::uniform(link, Seed::DEFAULT),
+            ),
+            received: Arc::clone(&received2),
+        };
+        let store1 =
+            ReplicatedMap::<u32, u32>::new_with_transport(cfg(addr1), Arc::new(transport1));
+        let store2 =
+            ReplicatedMap::<u32, u32>::new_with_transport(cfg(addr2), Arc::new(transport2));
+        store1.insert_bulk(corpus);
+        store2.insert_bulk(corpus);
+        store1.seed_peer(addr2);
+        store2.seed_peer(addr1);
+        let tasks = [
+            tokio::spawn(store1.clone().run(CancellationToken::new())),
+            tokio::spawn(store2.clone().run(CancellationToken::new())),
+        ];
+        // `Replica::run` fires one reconciliation round unconditionally before entering its
+        // receive loop (`src/replica/run.rs`), so each side sends one round to the other the
+        // instant its task starts. Settling that transient before returning is load-bearing, not
+        // cosmetic: racing it with the caller's own explicit `start_reconciliation` was traced to
+        // a round stalling outright (the two rounds' comparison items interleave at the
+        // receiver's dispatch loop).
+        converge(|| {
+            received1.load(Ordering::Relaxed) >= 1 && received2.load(Ordering::Relaxed) >= 1
+        })
+        .await;
+        (store1, store2, tasks)
     }
 
     /// The refinement chain, timed, over an injected-RTT link: composes
@@ -591,21 +664,14 @@ mod imp {
     /// only one that exercises refinement rather than the outer-range mismatch `cold_sync_rtt`
     /// builds (`benches/README.md` "Pricing that end-to-end...").
     ///
-    /// Both peers load the identical `n`-entry corpus independently, before any peer is seeded:
-    /// the reconciliation fingerprint is a function of `(key, value)` alone (`version_hash` hashes
-    /// the value, not the stamp — `src/replica/gc.rs`), so two separately timestamped copies of the
-    /// same corpus already agree at the root, and nothing is broadcast in doing so (`cold_sync`'s
-    /// "no peer yet" discipline). `reconcile_interval` is set far longer than any sample, so every
-    /// round below is the one `start_reconciliation` explicitly triggers, not a background tick.
-    ///
-    /// Per sample: `just_remove` the `d` chosen keys on the initiator (a genuine content
-    /// difference, not a timestamp race), trigger one round, poll until the responder reflects the
-    /// removal; then `just_insert` them back and repeat, so the pair returns to baseline for the
-    /// next sample. `d = 0` has no keys to remove — its round finds nothing to refine, so it is
-    /// timed via `RecvCountingTransport` instead (see that type's docs).
+    /// Per sample: a fresh pair ([`fresh_pair`]), `just_remove` the `d` chosen keys on the
+    /// initiator (a genuine content difference, not a timestamp race), trigger one round, poll
+    /// until the responder reflects the removal — timed from spawning the run loops, matching
+    /// `cold_sync_over`. `d = 0` has no keys to remove, so its round is timed via
+    /// `RecvCountingTransport` on a second fresh pair instead (see that type's docs): the only
+    /// sign a root-match round happened at all is that the initiator's message arrived.
     fn service_reconcile_rtt(c: &mut Criterion) {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let net = "127.0.0.1/8".parse().unwrap();
         let port = 9_990;
 
         let mut group = c.benchmark_group("service_reconcile_rtt");
@@ -620,153 +686,112 @@ mod imp {
         group.measurement_time(Duration::from_millis(1_000));
 
         for &n in RECONCILE_RTT_SIZES {
-            let key_values: Vec<(u32, u32)> = (0..n as u32)
+            let corpus: Vec<(u32, u32)> = (0..n as u32)
                 .map(|k| (k, k.wrapping_mul(2_654_435_761)))
                 .collect();
 
-            for rtt in rtt_sweep() {
-                let link = Link::at(rtt);
-                let (addr1, addr2) = fresh_reconcile_rtt_pair();
-                let cfg = |addr: IpAddr| {
-                    Config::default()
-                        .with_port(port)
-                        .with_listen_addr(addr)
-                        .with_net(net)
-                        .with_insecure_no_key()
-                        .with_reconcile_interval(Duration::from_secs(3600))
+            for &(d, clustering) in D_CLUSTERINGS {
+                let missing = diverging_keys(n, d, clustering);
+                let id = if d == 0 {
+                    format!("n={n}/d=0")
+                } else {
+                    format!("n={n}/d={d}/{}", clustering.label())
                 };
 
-                let (store1, store2, _received1, received2, tasks) = rt.block_on(async {
-                    let network = InMemoryNetwork::new();
-                    let received1 = Arc::new(AtomicU64::new(0));
-                    let transport1 = RecvCountingTransport {
-                        inner: NetemTransport::new(
-                            Arc::new(network.bind(SocketAddr::new(addr1, port))),
-                            Netem::uniform(link, Seed::DEFAULT),
-                        ),
-                        received: Arc::clone(&received1),
-                    };
-                    let received2 = Arc::new(AtomicU64::new(0));
-                    let transport2 = RecvCountingTransport {
-                        inner: NetemTransport::new(
-                            Arc::new(network.bind(SocketAddr::new(addr2, port))),
-                            Netem::uniform(link, Seed::DEFAULT),
-                        ),
-                        received: Arc::clone(&received2),
-                    };
-                    let store1 = ReplicatedMap::<u32, u32>::new_with_transport(
-                        cfg(addr1),
-                        Arc::new(transport1),
-                    );
-                    let store2 = ReplicatedMap::<u32, u32>::new_with_transport(
-                        cfg(addr2),
-                        Arc::new(transport2),
-                    );
-                    store1.insert_bulk(&key_values);
-                    store2.insert_bulk(&key_values);
-                    store1.seed_peer(addr2);
-                    store2.seed_peer(addr1);
-                    let tasks = [
-                        tokio::spawn(store1.clone().run(CancellationToken::new())),
-                        tokio::spawn(store2.clone().run(CancellationToken::new())),
-                    ];
-                    // `Replica::run` fires one reconciliation round unconditionally before
-                    // entering its receive loop (`src/replica/run.rs`), so each side sends one
-                    // round to the other the instant its task starts — settle that transient
-                    // before timing anything, or the first sample below would race it.
-                    converge(&store1, || {
-                        received1.load(Ordering::Relaxed) >= 1
-                            && received2.load(Ordering::Relaxed) >= 1
-                    })
-                    .await;
-                    // The first couple of content-divergence round trips a fresh pair ever
-                    // exchanges — one for a tombstoning round, one for a live-value round, each
-                    // the first time that *kind* of round happens on this pair — pay a one-time
-                    // warm-up cost of a few seconds, decaying to the steady-state hundreds of
-                    // microseconds every round costs after; a boundary key (one past the corpus,
-                    // becoming the tree's new rightmost entry) made it far worse still. Left in a
-                    // timed sample it would dominate that sample's mean, so pay it here, untimed,
-                    // once per `(n, rtt)` pair, removing and restoring an interior corpus key well
-                    // away from anything `D_CLUSTERINGS` touches.
-                    let warm_up_key = (n / 2 + n / 4) as u32;
-                    let warm_up_value = warm_up_key.wrapping_mul(2_654_435_761);
-                    for _ in 0..4 {
-                        store1.just_remove(&warm_up_key);
-                        store1.start_reconciliation().await;
-                        converge(&store1, || store2.get(&warm_up_key).is_none()).await;
-                        store1.just_insert(warm_up_key, warm_up_value);
-                        store1.start_reconciliation().await;
-                        converge(&store1, || {
-                            store2.get_cloned(&warm_up_key) == Some(warm_up_value)
-                        })
-                        .await;
-                    }
-                    (store1, store2, received1, received2, tasks)
-                });
-
-                for &(d, clustering) in D_CLUSTERINGS {
-                    let missing = diverging_keys(n, d, clustering);
-                    let restored: Vec<u32> = missing
-                        .iter()
-                        .map(|&k| k.wrapping_mul(2_654_435_761))
-                        .collect();
-                    let id = if d == 0 {
-                        format!("n={n}/d=0")
-                    } else {
-                        format!("n={n}/d={d}/{}", clustering.label())
-                    };
-
+                for rtt in rtt_sweep() {
+                    let link = Link::at(rtt);
+                    let corpus = &corpus;
+                    let missing = &missing;
                     group.bench_with_input(BenchmarkId::new(&id, rtt.label()), &rtt, |b, _| {
                         b.iter_custom(|iters| {
                             rt.block_on(async {
                                 let mut total = Duration::ZERO;
                                 for _ in 0..iters {
                                     if missing.is_empty() {
-                                        let before = received2.load(Ordering::Relaxed);
-                                        let start = Instant::now();
-                                        store1.start_reconciliation().await;
-                                        converge(&store1, || {
-                                            received2.load(Ordering::Relaxed) > before
+                                        let received = Arc::new(AtomicU64::new(0));
+                                        let network = InMemoryNetwork::new();
+                                        let (addr1, addr2) = fresh_reconcile_rtt_pair();
+                                        let net = "127.0.0.1/8".parse().unwrap();
+                                        let cfg = |addr: IpAddr| {
+                                            Config::default()
+                                                .with_port(port)
+                                                .with_listen_addr(addr)
+                                                .with_net(net)
+                                                .with_insecure_no_key()
+                                                .with_reconcile_interval(Duration::from_secs(3600))
+                                        };
+                                        let transport1 = NetemTransport::new(
+                                            Arc::new(network.bind(SocketAddr::new(addr1, port))),
+                                            Netem::uniform(link, Seed::DEFAULT),
+                                        );
+                                        let transport2 = RecvCountingTransport {
+                                            inner: NetemTransport::new(
+                                                Arc::new(
+                                                    network.bind(SocketAddr::new(addr2, port)),
+                                                ),
+                                                Netem::uniform(link, Seed::DEFAULT),
+                                            ),
+                                            received: Arc::clone(&received),
+                                        };
+                                        let store1 = ReplicatedMap::<u32, u32>::new_with_transport(
+                                            cfg(addr1),
+                                            Arc::new(transport1),
+                                        );
+                                        let store2 = ReplicatedMap::<u32, u32>::new_with_transport(
+                                            cfg(addr2),
+                                            Arc::new(transport2),
+                                        );
+                                        store1.insert_bulk(corpus);
+                                        store2.insert_bulk(corpus);
+                                        store1.seed_peer(addr2);
+                                        store2.seed_peer(addr1);
+                                        let tasks = [
+                                            tokio::spawn(
+                                                store1.clone().run(CancellationToken::new()),
+                                            ),
+                                            tokio::spawn(
+                                                store2.clone().run(CancellationToken::new()),
+                                            ),
+                                        ];
+                                        // Settle `run`'s own unconditional startup round
+                                        // (`src/replica/run.rs`) before timing the one we trigger.
+                                        let before_settle = received.load(Ordering::Relaxed);
+                                        converge(|| {
+                                            received.load(Ordering::Relaxed) > before_settle
                                         })
                                         .await;
+
+                                        let before = received.load(Ordering::Relaxed);
+                                        let start = Instant::now();
+                                        store1.start_reconciliation().await;
+                                        converge(|| received.load(Ordering::Relaxed) > before)
+                                            .await;
                                         total += start.elapsed();
+                                        for task in tasks {
+                                            task.abort();
+                                        }
                                         continue;
                                     }
 
-                                    let start = Instant::now();
-                                    for &k in &missing {
+                                    let (store1, store2, tasks) =
+                                        fresh_pair(corpus, link, port).await;
+                                    for &k in missing.iter() {
                                         store1.just_remove(&k);
                                     }
+                                    let start = Instant::now();
                                     store1.start_reconciliation().await;
-                                    converge(&store1, || {
-                                        missing.iter().all(|k| store2.get(k).is_none())
-                                    })
-                                    .await;
-
-                                    for (&k, &v) in missing.iter().zip(restored.iter()) {
-                                        store1.just_insert(k, v);
-                                    }
-                                    store1.start_reconciliation().await;
-                                    converge(&store1, || {
-                                        missing
-                                            .iter()
-                                            .zip(restored.iter())
-                                            .all(|(k, &v)| store2.get_cloned(k) == Some(v))
-                                    })
-                                    .await;
+                                    converge(|| missing.iter().all(|k| store2.get(k).is_none()))
+                                        .await;
                                     total += start.elapsed();
+                                    for task in tasks {
+                                        task.abort();
+                                    }
                                 }
                                 total
                             })
                         });
                     });
                 }
-
-                rt.block_on(async {
-                    for task in tasks {
-                        task.abort();
-                    }
-                });
             }
         }
         group.finish();
