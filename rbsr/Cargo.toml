@@ -18,7 +18,7 @@ categories = ["algorithms", "network-programming"]
 #
 # The `version` alongside `path` is what makes this crate publishable: cargo strips `path` at
 # publish time and resolves the requirement from crates.io (#204, AGENTS.md §11).
-rsos = { version = "0.3.0", path = "../rsos" }
+rsos = { version = "0.4.0", path = "../rsos" }
 serde = { version = "1.0.192", features = ["derive"] }
 tracing = "0.1.40"
 
