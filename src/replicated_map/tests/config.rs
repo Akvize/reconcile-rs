@@ -109,6 +109,9 @@ fn config_builders_actually_set_their_field() {
     let drift = crate::clock::ClockDrift::from_millis(123);
     let cfg = Config::default().with_max_clock_drift(drift);
     assert_eq!(cfg.max_clock_drift, drift);
+
+    let cfg = Config::default().with_coalesce_window(Duration::from_millis(7));
+    assert_eq!(cfg.coalesce_window, Duration::from_millis(7));
 }
 
 /// The new #292 fields default to the documented values: [`SNAPSHOT_INTERVAL`] (5 s) and

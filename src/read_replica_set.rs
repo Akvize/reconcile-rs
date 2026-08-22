@@ -163,6 +163,7 @@ mod read_replica_set_tests {
             max_concurrent_bulk_dumps: 4,
             snapshot_interval: Duration::from_secs(5),
             max_clock_drift: crate::clock::MAX_CLOCK_DRIFT,
+            coalesce_window: Duration::ZERO,
         }
     }
 

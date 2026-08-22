@@ -83,3 +83,64 @@ async fn insert_broadcasts_immediately_without_a_reconciliation_round() {
          so only insert's own broadcast call could have delivered it"
     );
 }
+
+/// `broadcast_update`'s push — the path `ReplicatedMap::get_mut`/`update`/`upsert` use for an
+/// in-place mutation that already wrote the map directly and only needs peers notified — must
+/// reach an already-known peer immediately, exactly like `insert`'s own broadcast above.
+#[tokio::test]
+async fn broadcast_update_pushes_immediately_without_a_reconciliation_round() {
+    let net = InMemoryNetwork::new();
+    let port = 5008u16;
+    let a_ip: IpAddr = "127.0.4.14".parse().unwrap();
+    let b_ip: IpAddr = "127.0.4.15".parse().unwrap();
+    let cfg = |ip: IpAddr| {
+        Config::default()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_secs(3600))
+            .with_insecure_no_key()
+    };
+    let a: Replica<u32, u32> = Replica::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net.bind(SocketAddr::new(a_ip, port))),
+        Arc::new(ManualClock::new(NodeId::new(1))),
+    );
+    let b: Replica<u32, u32> = Replica::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net.bind(SocketAddr::new(b_ip, port))),
+        Arc::new(ManualClock::new(NodeId::new(2))),
+    );
+
+    let ta = tokio::spawn(a.clone().run());
+    let tb = tokio::spawn(b.clone().run());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    a.peers.write().insert(b_ip, Instant::now());
+    // Mirrors `get_mut`'s shape: the map is written directly (`just_insert`, no broadcast of its
+    // own), then `broadcast_update` notifies peers with the same stamp, without re-inserting.
+    let stamp = a.clock_now();
+    a.just_insert(7, Entry::present(stamp, 42));
+    a.broadcast_update(7, Entry::present(stamp, 42));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut received = None;
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if let Some(entry) = b.map.read().get(&7) {
+            received = entry.value().copied();
+            if received.is_some() {
+                break;
+            }
+        }
+    }
+
+    ta.abort();
+    tb.abort();
+    assert_eq!(
+        received,
+        Some(42),
+        "B never received A's update via broadcast_update's immediate push path — both \
+         engines' reconcile_interval is far beyond this test's deadline, and B was never told \
+         about A, so only broadcast_update's own call could have delivered it"
+    );
+}

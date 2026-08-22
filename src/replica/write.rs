@@ -69,8 +69,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     }
 
     /// Broadcast a batch of messages to every known peer, on a detached task so the write path
-    /// does not block on the network.
-    fn broadcast(&self, messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>) {
+    /// does not block on the network. The low-level send primitive both the immediate path and
+    /// the coalescing flush ([`queue_broadcast`](Self::queue_broadcast)) reduce to.
+    pub(super) fn broadcast(&self, messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>) {
         let peers = self.get_peers();
         let port = self.port;
         let transport = Arc::clone(&self.transport);
@@ -92,9 +93,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     pub fn insert(&self, key: K, value: Entry<Timestamp, V>) -> Option<Entry<Timestamp, V>> {
         let ret = self.just_insert(key.clone(), value.clone());
-        self.broadcast(vec![Message::Update::<K, Entry<Timestamp, V>, State<V>>((
-            key, value,
-        ))]);
+        self.queue_broadcast(vec![(key, value)]);
         ret
     }
 
@@ -102,9 +101,7 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// propagation. Used by in-place mutation paths (`ReplicatedMap::get_mut`) that write the map
     /// directly and must still notify peers so the edit reconciles, without re-applying it locally.
     pub(crate) fn broadcast_update(&self, key: K, value: Entry<Timestamp, V>) {
-        self.broadcast(vec![Message::Update::<K, Entry<Timestamp, V>, State<V>>((
-            key, value,
-        ))]);
+        self.queue_broadcast(vec![(key, value)]);
     }
 
     pub fn just_insert_bulk(&self, key_values: &[(K, Entry<Timestamp, V>)]) {
@@ -125,10 +122,6 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
 
     pub fn insert_bulk(&self, key_values: &[(K, Entry<Timestamp, V>)]) {
         self.just_insert_bulk(key_values);
-        let messages: Vec<_> = key_values
-            .iter()
-            .map(|kv| Message::Update::<K, Entry<Timestamp, V>, State<V>>(kv.clone()))
-            .collect();
-        self.broadcast(messages);
+        self.queue_broadcast(key_values.to_vec());
     }
 }

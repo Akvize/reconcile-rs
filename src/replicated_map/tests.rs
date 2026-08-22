@@ -43,5 +43,6 @@ fn ephemeral_config() -> Config {
         max_concurrent_bulk_dumps: super::config::DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
         snapshot_interval: super::persistence::SNAPSHOT_INTERVAL,
         max_clock_drift: crate::clock::MAX_CLOCK_DRIFT,
+        coalesce_window: Duration::ZERO,
     }
 }

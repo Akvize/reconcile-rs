@@ -14,8 +14,8 @@ No target runs in CI — CI only *compile-checks* them (`cargo bench --no-run` w
 ## Running the system benchmarks
 
 ```sh
-# Everything (point-read, memory, bulk-load, cold-sync, gossip fan-out/propagation, the
-# injected-RTT/loss lane, durable-rejoin):
+# Everything (point-read, memory, bulk-load, cold-sync, gossip fan-out/propagation, broadcast
+# coalescing, the injected-RTT/loss lane, durable-rejoin):
 cargo bench --bench system
 
 # A single benchmark or size (Criterion treats the argument as a regex over the benchmark id):
@@ -36,10 +36,46 @@ Criterion writes HTML reports and raw CSV under `target/criterion/`; open `targe
 - **`memory_footprint`** — prints the fixed per-entry footprint of the dated cell `Entry<Timestamp, V>` vs the value-only mirror projection `State<V>` across value payload sizes; the delta is the mirror's per-entry saving (drives #170). Printed, not timed.
 - **`bulk_load`** — `insert_bulk` throughput (entries/s) filling an empty store, across sizes (drives #173).
 - **`cold_sync`** — wall time for an **empty** node to converge with a **full** one purely via anti-entropy: the full node is pre-loaded before it has any peer (nothing is broadcast eagerly), then the empty node seeds it and pulls the whole dataset through the range-diff protocol; timed until fingerprints match (drives #168). Loopback, i.e. RTT ≈ 0; `cold_sync_rtt` below prices the difference (**+1.0 × RTT**, flat in `N`).
-- **`gossip_fanout`** — bytes/datagrams *one node* sends for a single write, as peer count `N` grows (`2..128`, full-mesh-seeded, on an in-process `InMemoryNetwork` — no real sockets). `Replica::broadcast` (`src/replica.rs`) sends every local write to **all** known peers with no bound (only the separate, periodic WAN anti-entropy round is capped by `remote_fanout`), so this is expected, and confirmed, to be O(N) per node. Prints the exact datagram/byte count per write (deterministic, like `memory_footprint`) alongside the timed send-loop cost (drives #174's scaling gap).
+- **`gossip_fanout`** — bytes/datagrams *one node* sends for a single write, as peer count `N` grows (`2..128`, full-mesh-seeded, on an in-process `InMemoryNetwork` — no real sockets). `Replica::broadcast` (`src/replica.rs`) sends every local write to **all** known peers with no bound (only the separate, periodic WAN anti-entropy round is capped by `remote_fanout`), so this is expected, and confirmed, to be O(N) per node. Prints the exact datagram/byte count per write (deterministic, like `memory_footprint`) alongside the timed send-loop cost (drives #174's scaling gap). Also RTT ≈ 0; `gossip_fanout_rtt` prices that (**flat** — the send-side cost has no round trip to lengthen, unlike `gossip_propagation_rtt`; #187).
 - **`gossip_propagation`** — wall time from a write on one node to **every** other node observing it, as `N` grows (`2..32`, smaller range than `gossip_fanout` — see the caveat below). Unlike `gossip_fanout`, every node runs its real receive/reconcile loop throughout: the steady-state counterpart to `cold_sync`'s from-scratch convergence (drives #174's scaling gap). Also RTT ≈ 0; `gossip_propagation_rtt` prices that (**+0.5 × RTT** — one hop, not a chain).
-- **`netem_calibration`**, **`cold_sync_rtt`**, **`gossip_propagation_rtt`** — the injected-RTT/loss lane. Its own section below.
+- **`broadcast_coalescing`** — datagrams/bytes the origin sends for one write burst, and the burst's convergence latency, `Config::coalesce_window` disabled against enabled (below, drives #187's "soften" half).
+- **`netem_calibration`**, **`cold_sync_rtt`**, **`gossip_propagation_rtt`**, **`gossip_fanout_rtt`** — the injected-RTT/loss lane. Its own section below.
 - **`durable_rejoin`** — two parts, own section below: `load` times reloading an `N`-entry `FileSnapshot` from disk alone; `snapshot`/`cold` compare a snapshot-resumed rejoin against a cold one on reconverge time **and** wire bytes (drives #172).
+
+## Broadcast coalescing (#187)
+
+```sh
+cargo bench --bench system -- broadcast_coalescing
+```
+
+`Replica::broadcast` sends one datagram per write per peer, immediately (`gossip_fanout` above).
+`Config::coalesce_window` (default `Duration::ZERO`, disabled) batches writes made within the
+window into one flush instead, collapsing same-key writes to the latest via `Entry::merge`
+first — see `Config::coalesce_window`'s own docs for the mechanism and the ordering/anti-entropy
+guarantees. This benchmark quantifies the trade: one burst of `COALESCING_WRITES` = 64 writes over
+`COALESCING_KEYS` = 16 distinct keys (so a coalescing window collapses same-key repeats as well as
+merely batching distinct ones), `N` = 8 full-mesh-seeded nodes, disabled against a 5 ms window.
+Convergence is *awaited* before either arm reports, not assumed — the printed traffic and the timed
+latency below are both from runs that actually reached the burst's final per-key state on every
+peer:
+
+| | disabled (`Duration::ZERO`) | 5 ms window | ratio |
+|---|---:|---:|---:|
+| datagrams sent by the origin | 448 | 7 | **64× fewer** |
+| bytes sent by the origin | 11 648 B | 2 807 B | **4.1× fewer** |
+| burst → full convergence | 768 µs | 6.41 ms | +5.6 ms |
+
+Both counts are exact per run (64 writes × 7 peers = 448 datagrams disabled; one flush × 7 peers = 7
+datagrams enabled) and stable across samples once past the first (a cold first sample pays the
+window before anything has been sent yet, so it flushes early against a still-filling buffer — see
+`target/criterion/broadcast_coalescing/*/raw.csv` for every sample). The byte reduction (4.1×) tracks
+the same-key collapse ratio almost exactly (64 writes ÷ 16 keys = 4×): eliminating 441 datagrams
+saves far more in per-datagram overhead (auth framing, UDP/IP headers this harness does not model)
+than in payload, since the *values* that must reach a peer are bounded below by the number of
+distinct keys either way. The latency row is `Config::coalesce_window`'s own documented trade,
+measured rather than assumed: the enabled arm's 6.41 ms is the 5 ms window plus flush/apply
+overhead, not a multiple of it — a burst that already spans the window (a slower producer) would pay
+less added latency than this back-to-back-writes worst case.
 
 ## Gossip-scaling benchmark caveats
 
@@ -144,11 +180,16 @@ question from #172's.
 cargo bench --bench system -- netem                    # calibration report only
 cargo bench --bench system -- cold_sync_rtt
 cargo bench --bench system -- gossip_propagation_rtt
+cargo bench --bench system -- gossip_fanout_rtt
 ```
 
 Every other benchmark in this repository runs at RTT ≈ 0 and loss = 0, which prices the axis RBSR is
 good at (bytes) and zeroes the one it is worst at (`SOTA.md` §1.3: sequential round-trips). These
-three lanes are the instrument that answer [#280](https://github.com/Akvize/reconcile-rs/issues/280).
+four lanes are the instrument that answer [#280](https://github.com/Akvize/reconcile-rs/issues/280)
+and, for `gossip_fanout_rtt`, the RTT-sweep half of
+[#187](https://github.com/Akvize/reconcile-rs/issues/187)'s measurement arm (#280 shipped
+`cold_sync_rtt`/`gossip_propagation_rtt`; `gossip_fanout` itself had no RTT-swept counterpart until
+now).
 
 `benches/netem/mod.rs` is a seeded `Transport` decorator — one-way delay, jitter, loss, reordering,
 configurable per **directed** link — over the same `InMemoryNetwork` `gossip_propagation` uses. Its
@@ -218,6 +259,30 @@ Both deltas are constants in RTT, and both are integer numbers of one-way hops:
   *without* disagreeing on timestamps, which only `just_insert`/`just_remove` can build. Those are
   `reconcile_internal_testing` seams, and `system.rs` is deliberately feature-gate-free — so that
   lane belongs next to `service_reconcile` in the `bench` target, not here.
+
+### Results: `gossip_fanout_rtt` is flat, confirming there is no round trip to price ([#187](https://github.com/Akvize/reconcile-rs/issues/187))
+
+Measured on a 4-core Xeon @ 2.80 GHz (a different machine from the table above, so read this
+subsection's numbers against each other, not against `cold_sync_rtt`/`gossip_propagation_rtt`'s),
+seed `0x5eed0280`, `--quick`:
+
+| `N=8` | rtt=0ms | 0.1 ms | 1 ms | 10 ms | 50 ms | loss=0.1% | loss=1% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| datagrams / bytes sent by the origin | 7 / 196 B | 7 / 196 B | 7 / 196 B | 7 / 196 B | 7 / 196 B | 7 / 196 B | 7 / 196 B |
+| send-loop wall time | 27.0 µs | 23.9 µs | 23.9 µs | 28.9 µs | 35.5 µs | 33.6 µs | 28.5 µs |
+
+Both rows are flat: the datagram/byte count is exact and identical at every lane (as it is at RTT ≈ 0
+in plain `gossip_fanout`), and the timed row stays inside a ~12 µs band with no trend against RTT —
+in particular **no ~25 ms step at `rtt=50ms`**, the signature `gossip_propagation_rtt` shows at the
+same `N` (25.69 ms there, from the table above). That confirms the prediction stated on
+`gossip_fanout_rtt`'s own doc comment: `NetemTransport::send_to` enqueues (or drops, in the loss
+lanes) a datagram and returns immediately, before the injected delay elapses, so the origin's
+send-loop never waits on delivery — there is no round trip on this path for RTT to lengthen.
+`gossip_propagation_rtt`'s **+0.50 × RTT** is entirely a receive-side/observation cost, not a
+fan-out one; `Replica::broadcast`'s `O(N)` datagram cost (`gossip_fanout`, RTT ≈ 0 table above) and
+its RTT-independence (this table) are two separate findings, both now measured. This is the
+`gossip_fanout` half of #187's "the same across #280's RTT sweep" acceptance item; #280 shipped the
+`gossip_propagation`/`cold_sync` halves.
 
 ### Results: loss, at `rtt=1ms`
 
