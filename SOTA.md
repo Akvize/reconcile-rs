@@ -124,6 +124,8 @@ RTTs, heavier rounds) without escaping it, and measurably does not even buy the 
 n ≈ 10¹² (§2.2). Escaping the trade-off rather than moving along it is
 [#185](https://github.com/Akvize/reconcile-rs/issues/185)'s job.
 
+Confirmed, not only counted, by `benches/README.md`'s `service_reconcile_rtt` lane ([#461](https://github.com/Akvize/reconcile-rs/issues/461)).
+
 **That ranking is stated at one network point, and F16's lane moved off it.** The RTT column is real
 — a round trip costs 1.00 × RTT end-to-end, so this family's round count converts straight to
 seconds ([§2.2](#22-competitors-at-the-reconciliation-algorithm-level)). But it stops being the

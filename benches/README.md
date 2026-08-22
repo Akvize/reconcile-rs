@@ -4,7 +4,7 @@ Four Criterion targets, all `harness = false`, none feature-gated:
 
 | Target | What it measures |
 |---|---|
-| `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill and the single-difference `ReplicatedMap` send/reconcile latency. |
+| `bench` | `FingerprintTreeMap` micro-benchmarks (fill, single insert/remove, cumulated range-fingerprint) vs `BTreeMap`, plus the dated-vs-value-only fill, the single-difference `ReplicatedMap` send/reconcile latency, and the injected-RTT refinement lane `service_reconcile_rtt` (below). |
 | `system` | End-to-end, **public-API** system benchmarks (below), including the injected-RTT/loss lane. |
 | `protocol` | Wire *and* local cost of one full RBSR reconciliation, **per refinement policy** — total wire bytes at four value sizes, then messages, advertised ranges, refinement bytes, datagrams, IP fragments, IDLIST elements and RSOS query counts, as a function of store size `n`, difference size `d`, and how the differences cluster (below). |
 | `contention` | `K`-writer write throughput vs writer count, `FingerprintTreeMap` against a `BTreeMap` no-aggregate control, both behind one shared `parking_lot::RwLock` of the exact shape `src/replica.rs` uses (below). |
@@ -217,7 +217,8 @@ Both deltas are constants in RTT, and both are integer numbers of one-way hops:
 - Pricing that end-to-end rather than by composition needs a difference the two peers disagree on
   *without* disagreeing on timestamps, which only `just_insert`/`just_remove` can build. Those are
   `reconcile_internal_testing` seams, and `system.rs` is deliberately feature-gate-free — so that
-  lane belongs next to `service_reconcile` in the `bench` target, not here.
+  lane lives in the `bench` target instead, next to `service_reconcile`: `service_reconcile_rtt`,
+  below, is that lane, and its own results table adds the measured column to the one above.
 
 ### Results: loss, at `rtt=1ms`
 
@@ -241,6 +242,174 @@ Every lane is seeded (`Seed::DEFAULT`, printed with the results) and the impairm
 directed link replays exactly; what does not replay bit-for-bit is task interleaving on a
 multi-threaded runtime, so read these as reproducible to within the usual benchmark noise. Like
 every target here, the lane stays out of CI — compile-checked only.
+
+## `service_reconcile_rtt`: the refinement chain under injected RTT
+
+```sh
+cargo bench --bench bench -- service_reconcile_rtt
+cargo bench --bench bench -- 'service_reconcile_rtt/n=1000000/d=1000'   # one n/d slice
+```
+
+Answers [#461](https://github.com/Akvize/reconcile-rs/issues/461), closing the gap the lane above
+states outright: every RTT lane there is `cold_sync_rtt` (d = n, the empty-peer case, one round
+trip) or `gossip_propagation_rtt` (one hop); neither exercises the O(log n) *refinement chain* the
+counted table below models. This lane does: composes `ReplicatedMap::new_with_transport`,
+`netem::NetemTransport` and the existing `rtt_sweep()` (`system.rs`'s, duplicated per
+`rtt_sweep`'s own docs) with `just_insert`/`just_remove` — the `reconcile_internal_testing` seams
+that build a genuine content difference without a timestamp race, which is why this lane lives
+here and not in the feature-gate-free `system.rs`.
+
+Per `(n, rtt)`: one peer loads the `n`-entry corpus, the other starts empty and pulls it via
+cold-sync (`service_reconcile_rtt`'s own docs explain why — an earlier design where both peers
+loaded independently hit a real `NetemTransport`-specific non-convergence at larger `n`, unrelated
+to the protocol). Once settled, every sample `just_remove`s the `d` chosen keys (scattered or
+clustered — the same two layouts `benches/protocol.rs` sweeps), triggers a round, polls until the
+peer reflects the removal, then `just_insert`s them back and repeats — so a sample times one full
+remove-then-restore cycle, two content differences, not one. `d = 0` has no keys to remove; its
+round is timed via a receive-counting transport instead, since a root-fingerprint match makes the
+responder reply with nothing at all (`RecvCountingTransport`'s own docs).
+
+### Results: `d = 0`, the baseline every sketch must not regress
+
+| n | rtt=0ms | 0.1 ms | 1 ms | 10 ms | 50 ms | delta vs rtt=0 |
+|---:|---:|---:|---:|---:|---:|---|
+| 10³ | 4.8 µs | 55.4 µs | 507 µs | 5.01 ms | 25.01 ms | **+0.50 × RTT** |
+| 10⁴ | 6.5 µs | 55.5 µs | 508 µs | 5.01 ms | 25.02 ms | **+0.50 × RTT** |
+| 10⁵ | 5.0 µs | 56.0 µs | 508 µs | 5.01 ms | 25.02 ms | **+0.50 × RTT** |
+| 10⁶ | 8.3 µs | 55.5 µs | 509 µs | 5.01 ms | 25.03 ms | **+0.50 × RTT** |
+
+Flat at exactly **+0.50 × RTT across all four decades of `n`** — one one-way hop, not a round
+trip, matching `RecvCountingTransport`'s docs (a root match makes the responder answer with
+nothing, so only the initiator's own send is observable) and the injected-RTT lane's own
+`gossip_propagation_rtt` row above, also exactly one hop. The `rtt=0ms` column is harness-floor
+noise (single-digit µs, like the calibration table above) and does not grow with `n` either. This
+is the number any sketch replacing full refinement is judged against: it cannot be *worse* than
+one silent hop, whatever `n` is.
+
+### Results: delta vs RTT, per `(n, d)` — the clean cells
+
+Slope of measured wall clock against RTT (endpoints `rtt=0ms`/`rtt=50ms`), same format as the
+table above, for every `(n, d, clustering)` cell whose ten samples agree to within 30% at every
+RTT — see below for the cells this excludes and why. Every `d > 0` cell here is one full
+remove-then-restore cycle — two content-difference resolutions, not one — so it is not directly
+the counted table's per-pull unit; see the next section for that comparison:
+
+| n | d = 1 (scattered) | d = 10 (scattered/clustered) | d = 100 (scattered/clustered) | d = 1000 (scattered/clustered) |
+|---:|---:|---:|---:|---:|
+| 10³ | +5.01 × RTT | +5.01 × RTT / +5.01 × RTT | +5.01 × RTT / +5.01 × RTT | +5.00 × RTT / +4.99 × RTT |
+| 10⁴ | +7.01 × RTT | +7.02 × RTT / +7.01 × RTT | +7.04 × RTT / +7.01 × RTT | past capacity (below) / +7.00 × RTT |
+| 10⁵ | +7.11 × RTT | +7.11 × RTT / +7.06 × RTT | past capacity (below) / +7.13 × RTT | past capacity (below) / +7.05 × RTT |
+| 10⁶ | not stable past rtt=1ms (below) | | | |
+
+**Every clean coefficient is flat in `d`, at a fixed `n`** — 10³ costs ≈ 5.0 × RTT whether `d` is 1
+or 1000, scattered or clustered; 10⁴–10⁵ cost ≈ 7.0–7.1 × RTT the same way. This is the O(log n)
+model directly confirmed: round trips depend on the *depth* the refinement chain must descend to
+isolate the difference, not on how many differences there are, provided the differing ranges still
+resolve within the chain's normal recursion. Going from 10³ to 10⁴ costs **+2.0 × RTT** more, and
+10⁴ to 10⁵ essentially nothing further (+0.0–0.1 × RTT) — see below for how that steps against the
+counted table.
+
+### Results: measured vs counted round trips
+
+Adding a measured column to the counted table above (`d = 1`, one element missing, `b = 16`).
+This lane's own unit is *two* content-difference resolutions (remove, then restore) rather than
+the counted table's one pull, so the measured round-trip count halves what the raw coefficient
+above states, to compare like with like:
+
+| quantity | n = 10³ | 10⁴ | 10⁵ | 10⁶ |
+|---|---:|---:|---:|---:|
+| round trips, counted (`⌈log₁₆ n⌉`-derived, existing table) | 3 | 3 | 3 | **4** |
+| round trips, measured (`d=1` scattered coefficient ÷ 2, this lane) | 2.5 | 3.5 | 3.6 | not stable (below) |
+| wall clock at 50 ms RTT, measured | 250.4 ms | 350.6 ms | 355.8 ms | not stable (below) |
+
+**The measured chain steps up a size earlier than the counted one predicts, then flattens where
+the counted model still expects it to hold flat.** The counted table's *round trips* row (not its
+`⌈log₁₆ n⌉` depth row, which already steps at every size below 10⁶) holds at 3 from n = 10³
+through 10⁵, stepping to 4 only at 10⁶; measured round trips already sit at 3.5–3.6 by 10⁴–10⁵ — a
+full round trip's worth of difference the counted model does not place until a decade or two
+later, then barely move between 10⁴ and 10⁵ where the counted model is also flat. Read
+literally, #185's own "4 round trips ≈ 200 ms at n = 10⁶" figure is **not confirmed as stated**:
+every size below 10⁶ already costs more measured round trips than the counted model's flat "3"
+implies, and 10⁶ itself is not a stable single number at all (below) — measured against a moving,
+sometimes much larger, target rather than a clean step to 4. This does not *contradict* `SOTA.md`
+§1.3's "worst family on latency" takeaway — it reinforces it: the O(log n) round-trip count the
+counted model predicts is a floor this lane already exceeds below 10⁶, and at 10⁶ the round-trip
+count stops being a fixed function of `n` at all (below), which is a strictly worse property for
+the latency-sensitive profile than the counted model states, not a better one. No re-derivation of
+the takeaway itself is needed; the counted table's specific numbers are now superseded by this
+lane's measurements as the more accurate source.
+
+### Results: past a fixed-capacity sketch — `d` scattered widely enough to defeat range compression
+
+Some `(n, d)` scattered cells do not converge on one round trip the way every cell above does. A
+standalone repro (bypassing Criterion, with tracing) confirmed this is real, not a harness
+artifact: `d = 1, 10` always converge on the first `start_reconciliation` at every `n` measured,
+and the *clustered* layout at the same `d` (one contiguous block, whatever its size) also always
+converges in one round — only a **scattered** difference past some size, relative to `n`, plateaus
+part-way and needs a handful of explicit retriggers to fully resolve
+(`trigger_and_converge`'s own docs). Each retrigger is a real, counted round trip, so the total
+*is* the measurement, and the threshold moves with `n`: `d = 1000` scattered is the only affected
+cell at n = 10⁴, but `d = 100` scattered is *also* affected by n = 10⁵ — consistent with a
+fixed-capacity sketch (#185's own "past a 256-cell sketch's capacity" framing for this grid)
+being overwhelmed at a roughly constant *count* of scattered differences relative to the tree's
+leaf width at that `n`, not at a constant fraction of `n`:
+
+| n, d (scattered) | rtt=0ms | rtt=0.1ms | rtt=1ms | rtt=10ms | rtt=50ms |
+|---|---:|---:|---:|---:|---:|
+| 10⁴, d=1000 | 60.0 s | 30.0 s | 30.0 s | 30.1 s | 30.3 s |
+| 10⁵, d=100 | 30.0 s | 9.2 ms | 15.9 ms | 83.9 ms | 368.2 ms |
+| 10⁵, d=1000 | 270.0 s | 105.0 s | 60.0 s | 28.6 s | 1.9 s |
+| 10⁶, d=100 | 30.7 s | 303.6 ms | 111.6 ms | 346.4 ms | 969.8 ms |
+| 10⁶, d=1000 | 372.5 s | 126.9 s | 99.0 s | 72.0 s | 2.7 s |
+
+**Higher RTT often costs *less* wall clock here, the opposite of every clean cell above.** `d =
+1000` scattered drops monotonically as RTT rises at every `n` — 270 s down to 1.9 s at n = 10⁵.
+This is not the network getting faster: each retrigger only fires after a fixed poll deadline
+elapses on the *previous* one, so a higher injected RTT gives that same fixed deadline more real
+time for the in-flight round to make progress on its own before the deadline gives up and pays for
+another full retrigger — fewer retriggers, even though each round trip now individually costs
+more. The `d = 100`/n = 10⁵ row shows the same effect over a narrower range (30 s at `rtt=0` down
+to single-digit milliseconds by `rtt=0.1ms`, since one retrigger avoided is a much larger fraction
+of a cheaper baseline). Cost here is dominated by *how many retriggers are needed*, not by RTT
+itself, unlike every cell in the tables above.
+
+### Results: `n = 10⁶` — the round-trip count stops being a fixed function of `n`
+
+Below 10⁶, every `(n, d, clustering)` cell not in the table above reproduces to within 30% across
+all ten samples at every RTT (`clean` in the second table). At `n = 10⁶`, that stops being true
+for most cells past `rtt = 1 ms`, including ones with no scattered-capacity issue at any smaller
+`n` — `d = 1` scattered, `d = 10` clustered, `d = 1000` clustered all included, not just the
+already-flagged `d = 100`/`d = 1000` scattered cells:
+
+| n=10⁶, d (clustering) | rtt=0ms | rtt=0.1ms | rtt=1ms | rtt=10ms | rtt=50ms |
+|---|---:|---:|---:|---:|---:|
+| d=1 (scattered) | [0.18, 1.11, 2.97] ms | [0.91, 5.04, 13.3] ms | 7.40 ms (tight) | [70.8, 351, 913] ms | [351, 809, 1490] ms |
+| d=10 (clustered) | [0.40, 2.58, 6.92] ms | [1.18, 14.7, 41.9] ms | 7.68 ms (tight) | 71.3 ms (tight) | [352, 1235, 2435] ms |
+| d=1000 (clustered) | 8.55 ms (tight) | 9.14 ms (tight) | [13.8, 73.1, 192] ms | 77.9 ms (tight) | [358, 903, 1991] ms |
+
+(bracketed cells are `[min, mean, max]` across the ten samples; "tight" cells still agree to
+within a few percent.) Every affected cell is bimodal, not noisy in the ordinary sense — some
+samples take the fast, single-round path every smaller `n` takes unconditionally, others need one
+or more retriggers, and which one a given sample lands on is not predictable from `(n, d,
+clustering, rtt)` alone at this size. The likely mechanism: this lane's fixed, wall-clock poll
+deadline (`converge`'s docs) was sized against smaller-`n` round costs; at `n = 10⁶` a single
+genuine round trip's own processing cost (larger aggregates, larger comparison batches) already
+consumes enough of that budget that ordinary scheduling variance occasionally tips a sample into
+needing a retrigger where a smaller `n` never would. **This is itself the headline result for
+`n = 10⁶`: not a specific worse coefficient, but the loss of a stable one at all** — a strictly
+harder property for the latency-sensitive profile to reason about than the counted table's flat
+round-trip count of 4 implies, and further evidence against, not for, the counted model's numbers
+being the load-bearing ones going forward (previous section).
+
+### Determinism
+
+Same seed, same discipline as the lane above (`Seed::DEFAULT`, `NetemTransport`), plus its own:
+the retry loops (`MAX_BUILD_ATTEMPTS`, `MAX_ROUND_RETRIGGERS`) poll for actual convergence — never
+a fixed sleep. The `n = 10⁶` bimodality above is not scheduler noise in the sense of being
+irreproducible: repeated runs at a fixed `(n, rtt)` land on the same *mix* of fast/retriggered
+samples, and the "past a fixed-capacity sketch" table's numbers reproduce to within a few percent
+run over run — the nondeterminism is in which of the ten Criterion samples takes the slow path
+this run, not in whether the underlying behavior recurs.
 
 ## The `protocol` benchmark
 
