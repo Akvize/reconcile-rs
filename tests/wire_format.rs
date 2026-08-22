@@ -34,12 +34,13 @@ use rsos::{Aggregate, Fingerprint};
 /// point.
 ///
 /// Reading the vector: `1` = `StartBound::Included`, `7` = start key; `1` = `EndBound::Excluded`,
-/// `42` = end key; four `u64` fingerprint limbs as varints; `251, 44, 1` = `size == 300`.
+/// `42` = end key; 32 raw fingerprint bytes (#382 — no longer four varint-encoded `u64` limbs, see
+/// `rsos::Fingerprint`'s `Serialize` impl); `251, 44, 1` = `size == 300`.
 #[test]
 fn wire_format_is_unchanged_by_the_aggregate_collapse() {
     const GOLDEN: &[u8] = &[
-        1, 7, 1, 42, 253, 239, 205, 171, 137, 103, 69, 35, 1, 253, 16, 50, 84, 118, 152, 186, 220,
-        254, 1, 2, 251, 44, 1,
+        1, 7, 1, 42, 239, 205, 171, 137, 103, 69, 35, 1, 16, 50, 84, 118, 152, 186, 220, 254, 1, 0,
+        0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 251, 44, 1,
     ];
 
     let segment = RangeAggregate::new(
@@ -63,6 +64,29 @@ fn wire_format_is_unchanged_by_the_aggregate_collapse() {
     let mut deserializer = Deserializer::from_slice(GOLDEN, DefaultOptions::new());
     let decoded = RangeAggregate::<u32>::deserialize(&mut deserializer).unwrap();
     assert_eq!(decoded, segment);
+}
+
+/// #382: `Fingerprint`'s wire size is exactly 32 bytes regardless of limb value — the property the
+/// raw-bytes `Serialize`/`Deserialize` impl exists to guarantee, checked at the worst case for the
+/// varint encoding it replaced (every limb using its full 64 bits, so the old encoding would have
+/// cost 9 B/limb instead of the fixed 8).
+#[test]
+fn fingerprint_wire_size_is_32_bytes_regardless_of_limb_value() {
+    let worst_case = Fingerprint([u64::MAX; 4]);
+
+    let mut buf = Vec::new();
+    worst_case
+        .serialize(&mut Serializer::new(&mut buf, DefaultOptions::new()))
+        .unwrap();
+    assert_eq!(
+        buf.len(),
+        32,
+        "Fingerprint must cost exactly 32 bytes on the wire, not 36"
+    );
+
+    let mut deserializer = Deserializer::from_slice(&buf, DefaultOptions::new());
+    let decoded = Fingerprint::deserialize(&mut deserializer).unwrap();
+    assert_eq!(decoded, worst_case);
 }
 
 /// Golden vector for the **envelope** `gossip::auth::Authenticator::seal` produces — the wire

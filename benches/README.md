@@ -645,20 +645,23 @@ both sides.
 
 | `n` | `d` | B | ranges | msgs | B/range | Negentropy B | ranges | msgs | B/range | ratio |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10³ | 1 | 1 701 | 39 | 6 | 43.62 | 608 | 32 | 4 | 19.00 | 2.30× |
-| 10⁴ | 1 | 2 195 | 49 | 6 | 44.80 | 927 | 48 | 4 | 19.31 | 2.32× |
-| 10⁵ | 1 | 2 789 | 61 | 6 | 45.72 | 943 | 48 | 4 | 19.65 | 2.33× |
-| 10⁶ | 1 | 3 834 | 78 | 8 | 49.15 | 1 278 | 64 | 6 | 19.97 | 2.46× |
-| 10⁶ | 100 | 253 153 | 5 247 | 8 | 48.25 | 67 853 | 3 472 | 6 | 19.54 | 2.47× |
+| 10³ | 1 | 1 577 | 39 | 6 | 40.44 | 608 | 32 | 4 | 19.00 | 2.13× |
+| 10⁴ | 1 | 2 031 | 49 | 6 | 41.45 | 927 | 48 | 4 | 19.31 | 2.15× |
+| 10⁵ | 1 | 2 577 | 61 | 6 | 42.25 | 943 | 48 | 4 | 19.65 | 2.15× |
+| 10⁶ | 1 | 3 554 | 78 | 8 | 45.56 | 1 278 | 64 | 6 | 19.97 | 2.28× |
+| 10⁶ | 100 | 235 365 | 5 247 | 8 | 44.86 | 67 853 | 3 472 | 6 | 19.54 | 2.30× |
+
+(Re-measured 2026-08-22 after [#382](https://github.com/Akvize/reconcile-rs/issues/382) — `Fingerprint` moved
+from a 36 B varint-coded encoding to a raw 32 B one, 4 B/range less on this side only.)
 
 What it supersedes, and what it leaves open:
 
 | | |
 |---|---|
 | superseded | `SOTA.md`'s "44 B/range against 16 B" — both figures were payload-only, and a range does not travel without its bound and framing |
-| our per-range cost | not a constant: 43.6 B → 49.2 B as `n` grows, since `KeyRange` bounds cost more varint bytes as keys grow |
+| our per-range cost | not a constant: 40.4 B → 45.6 B as `n` grows, since `KeyRange` bounds cost more varint bytes as keys grow |
 | where the gap is | bound encoding is ~5 B here against ~4 B there, so the gap is summary width — §2.1's trade, confirmed |
-| explained | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 3.0× against 2.46× per range. It is the **enumeration cutoff**, not the fan-out: [#468](https://github.com/Akvize/reconcile-rs/issues/468), below |
+| explained | at equal `b` = 16 the two descents differ (64 ranges / 6 msgs against 78 / 8), so the total gap is 2.78× against 2.28× per range. It is the **enumeration cutoff**, not the fan-out: [#468](https://github.com/Akvize/reconcile-rs/issues/468), below |
 
 Commensurability, before summing anything against the totals above:
 
@@ -691,7 +694,7 @@ one message above) and 71–94 % of the range gap; at 10⁴ it goes past them. W
 other half of the same trade — 7, 51, 21, 21 and 3 048 enumerated elements against the default's 1,
 1, 1, 1 and 100 — which is exactly what [#315](https://github.com/Akvize/reconcile-rs/issues/315)
 priced and rejected, and what the `threshold_sweep` section above now reports in the two columns
-that trade decides. The remaining per-range 2.46× is summary width, unchanged.
+that trade decides. The remaining per-range 2.28× is summary width, unchanged.
 
 `benches/fixtures/negentropy-drive.js` parses Negentropy's emitted messages against its
 [protocol v1 spec](https://github.com/hoytech/negentropy/blob/master/docs/negentropy-protocol-v1.md)

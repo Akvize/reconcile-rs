@@ -272,7 +272,7 @@ copy-on-write B+-tree addressed by page number.
     this makes it "probabilistically sound rather than information-theoretically exact" and leaves
     the end-to-end collision analysis out of scope. `rbsr` compares the aggregate itself (full
     256-bit fingerprint + count), i.e. `f_p = id`, so Prop. 4.1's sound-skip assumption reduces to
-    the injectivity of Σ with no truncation term. The price is ~2.4× the bytes per advertised range,
+    the injectivity of Σ with no truncation term. The price is ~2.2× the bytes per advertised range,
     measured against Negentropy rather than derived
     ([#362](https://github.com/Akvize/reconcile-rs/issues/362)) — see §2.2.
     What the exact count buys, and what it does not: a range whose peers hold **different
@@ -445,22 +445,20 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   ([#468](https://github.com/Akvize/reconcile-rs/issues/468)). Numbers: `benches/README.md`;
   decisions: [#315](https://github.com/Akvize/reconcile-rs/issues/315) and `rbsr/src/policy.rs`.
 - **The wire aggregate compounds it.** `RangeAggregate` carries a full 256-bit `Fingerprint` plus a
-  `usize` count — 36 B `Fingerprint` (not the 32 B four `u64` limbs pack to: `Fingerprint`
-  derives `Serialize` and takes `gossip::bincode`'s `DefaultOptions`, which varint-encodes each
-  random 64-bit limb at up to 9 B rather than a fixed-width `[u8; 32]`) plus an 8 B count. Those
-  44 B are the aggregate alone; a range also carries its `KeyRange` bounds, so a per-range figure
+  `usize` count — 32 B `Fingerprint` (a hand-written `Serialize`/`Deserialize` through `[u8; 32]`,
+  landed on the #309 wire train per [#382](https://github.com/Akvize/reconcile-rs/issues/382): a
+  random 64-bit limb has nothing for `gossip::bincode`'s `DefaultOptions` varint mode to compress,
+  so the prior derive cost 36 B, 4 B/limb of pure length-prefix overhead) plus an 8 B count. Those
+  40 B are the aggregate alone; a range also carries its `KeyRange` bounds, so a per-range figure
   derived from the aggregate understates both sides of any comparison. Measured against the
   reference implementation instead ([#362](https://github.com/Akvize/reconcile-rs/issues/362),
-  numbers in `benches/README.md`): the cost per range is ~2.4× Negentropy's and **rises with `n`**,
+  numbers in `benches/README.md`): the cost per range is ~2.2× Negentropy's and **rises with `n`**,
   bound encoding is comparable on both sides, and the gap is therefore almost entirely summary
   width — §2.1's trade, confirmed with every one of its previous figures corrected. That is
   the right trade in isolation (see the `f_p` note in §2.1), but at √n ranges per round it dominates
   the bytes above. The two decisions are only separable if the fan-out shrinks — which, now that the
   fan-out is a swappable policy, is a one-line change to a caller rather than an edit to the protocol
-  loop. Recovering the 4 B/limb varint overhead needs a raw-bytes `Serialize` impl, which is a wire
-  break — out of scope for this doc fix, and deferred to ride the wire-version-field train
-  [#309](https://github.com/Akvize/reconcile-rs/issues/309) landed rather than costing a 2.0 on its
-  own; decision recorded there.
+  loop.
 - **Rateless IBLT** finds the diff in a **single streaming exchange**, without estimating *d*, with
   explicit adversarial robustness and linear compute → the strongest single-shot candidate on
   communication. It is not the only point on that front: **PBS** trades a few rounds for markedly

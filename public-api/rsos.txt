@@ -100,9 +100,9 @@ pub fn rsos::fingerprint::Fingerprint::sub(self, rsos::fingerprint::Fingerprint)
 impl core::ops::arith::SubAssign for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::sub_assign(&mut self, rsos::fingerprint::Fingerprint)
 impl serde::ser::Serialize for rsos::fingerprint::Fingerprint
-pub fn rsos::fingerprint::Fingerprint::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+pub fn rsos::fingerprint::Fingerprint::serialize<S: serde::ser::Serializer>(&self, S) -> core::result::Result<<S as serde::ser::Serializer>::Ok, <S as serde::ser::Serializer>::Error>
 impl<'de> serde::de::Deserialize<'de> for rsos::fingerprint::Fingerprint
-pub fn rsos::fingerprint::Fingerprint::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+pub fn rsos::fingerprint::Fingerprint::deserialize<D: serde::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde::de::Deserializer>::Error>
 impl core::marker::Freeze for rsos::fingerprint::Fingerprint
 impl core::marker::Send for rsos::fingerprint::Fingerprint
 impl core::marker::Sync for rsos::fingerprint::Fingerprint
@@ -419,9 +419,9 @@ pub fn rsos::fingerprint::Fingerprint::sub(self, rsos::fingerprint::Fingerprint)
 impl core::ops::arith::SubAssign for rsos::fingerprint::Fingerprint
 pub fn rsos::fingerprint::Fingerprint::sub_assign(&mut self, rsos::fingerprint::Fingerprint)
 impl serde::ser::Serialize for rsos::fingerprint::Fingerprint
-pub fn rsos::fingerprint::Fingerprint::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde::ser::Serializer>::Ok, <__S as serde::ser::Serializer>::Error> where __S: serde::ser::Serializer
+pub fn rsos::fingerprint::Fingerprint::serialize<S: serde::ser::Serializer>(&self, S) -> core::result::Result<<S as serde::ser::Serializer>::Ok, <S as serde::ser::Serializer>::Error>
 impl<'de> serde::de::Deserialize<'de> for rsos::fingerprint::Fingerprint
-pub fn rsos::fingerprint::Fingerprint::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde::de::Deserializer>::Error> where __D: serde::de::Deserializer<'de>
+pub fn rsos::fingerprint::Fingerprint::deserialize<D: serde::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde::de::Deserializer>::Error>
 impl core::marker::Freeze for rsos::fingerprint::Fingerprint
 impl core::marker::Send for rsos::fingerprint::Fingerprint
 impl core::marker::Sync for rsos::fingerprint::Fingerprint
