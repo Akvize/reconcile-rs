@@ -22,6 +22,7 @@ cargo bench --bench system
 cargo bench --bench system -- point_read
 cargo bench --bench system -- 'cold_sync/1000'
 cargo bench --bench system -- 'gossip_fanout/64'
+cargo bench --bench system -- 'durable_rejoin/snapshot/n=10000'
 
 # A fast pass while iterating (lower statistical confidence):
 cargo bench --bench system -- --quick
@@ -38,7 +39,7 @@ Criterion writes HTML reports and raw CSV under `target/criterion/`; open `targe
 - **`gossip_fanout`** — bytes/datagrams *one node* sends for a single write, as peer count `N` grows (`2..128`, full-mesh-seeded, on an in-process `InMemoryNetwork` — no real sockets). `Replica::broadcast` (`src/replica.rs`) sends every local write to **all** known peers with no bound (only the separate, periodic WAN anti-entropy round is capped by `remote_fanout`), so this is expected, and confirmed, to be O(N) per node. Prints the exact datagram/byte count per write (deterministic, like `memory_footprint`) alongside the timed send-loop cost (drives #174's scaling gap).
 - **`gossip_propagation`** — wall time from a write on one node to **every** other node observing it, as `N` grows (`2..32`, smaller range than `gossip_fanout` — see the caveat below). Unlike `gossip_fanout`, every node runs its real receive/reconcile loop throughout: the steady-state counterpart to `cold_sync`'s from-scratch convergence (drives #174's scaling gap). Also RTT ≈ 0; `gossip_propagation_rtt` prices that (**+0.5 × RTT** — one hop, not a chain).
 - **`netem_calibration`**, **`cold_sync_rtt`**, **`gossip_propagation_rtt`** — the injected-RTT/loss lane. Its own section below.
-- **`durable_rejoin`** — time to reload an `N`-entry `FileSnapshot` from disk, i.e. the cost a restarting node pays before rejoining (drives #172).
+- **`durable_rejoin`** — two parts, own section below: `load` times reloading an `N`-entry `FileSnapshot` from disk alone; `snapshot`/`cold` compare a snapshot-resumed rejoin against a cold one on reconverge time **and** wire bytes (drives #172).
 
 ## Gossip-scaling benchmark caveats
 
@@ -65,6 +66,77 @@ No comparable open-source gossip/SWIM library surveyed for this
 closest real precedent is HashiCorp's one-off [Consul 66k-node scale test](https://www.hashicorp.com/en/blog/consul-scale-test-report-to-observe-gossip-stability),
 a real-hardware exercise, not a runnable harness. These two benchmarks are closer to establishing a
 methodology than following one.
+
+## The `durable_rejoin` benchmark
+
+```sh
+cargo bench --bench system -- 'durable_rejoin/load'      # disk-reload time alone, n = 10..100 000
+cargo bench --bench system -- 'durable_rejoin/snapshot'  # snapshot-resumed rejoin: time + bytes
+cargo bench --bench system -- 'durable_rejoin/cold'      # cold rejoin: time + bytes, as `cold_sync`
+```
+
+Answers [#172](https://github.com/Akvize/reconcile-rs/issues/172), whose own numbers motivated
+[#174](https://github.com/Akvize/reconcile-rs/issues/174): rejoining a 51 200-key / 50 MiB grid
+with ongoing churn during downtime took 0.52 s / 0.76 MiB from a local snapshot against 4.6 s /
+56.3 MiB cold — measured once, out of repo, and therefore hearsay (#174's own framing). This target
+reproduces that comparison's *shape* with a seeded, in-repo harness instead — the magnitudes below
+are not expected to match #172's one-off numbers (different corpus, different churn model), only
+their direction.
+
+**`load`** — `Persistence::load` alone, deserializing an `N`-entry `FileSnapshot` from disk
+(`SIZES`, `10..100 000`). Isolates the local-I/O component from the network component below; the
+snapshot is written once in setup, outside the timed region.
+
+**`snapshot` vs `cold`** — the network-catchup component, at `n` = 2 000 / 10 000 / 100 000. A
+survivor `A` is loaded with `n − REJOIN_CHURN` entries, snapshotted to disk (via
+`ReplicatedMap::snapshot_now`), then given `REJOIN_CHURN` (100, fixed across `n` — the claim under
+test is that snapshot-rejoin cost tracks the *churn*, not the dataset, so holding it constant while
+`n` grows is what makes that visible) more entries **after** the snapshot — the delta a restarting
+node must catch up on. `snapshot` resumes the restarting node `B` from that on-disk snapshot via
+`ReplicatedMap::with_persistence` (disk load counted in the timed region — genuinely part of what a
+restart waits on) before `B` rejoins and catches up on the churn alone, over an in-process
+`InMemoryNetwork` as in `gossip_fanout`; `cold` starts `B` empty and pulls the whole `n`-entry
+dataset, exactly as `cold_sync`. Both report wall time (Criterion-timed) and total wire bytes (both
+peers' sends summed — nothing is lost on this transport, so that is also what was received; printed
+untimed once per size first, deterministic like `gossip_fanout`'s traffic report, then measured
+statistically by the timed groups).
+
+### Results
+
+Measured on a 4-core sandboxed VM, release profile, `Seed::DEFAULT`'s deterministic corpus:
+
+| `n` | `load` (disk only) |
+|---:|---:|
+| 10 | 1.64 µs |
+| 100 | 2.89 µs |
+| 1 000 | 13.1 µs |
+| 10 000 | 111 µs |
+| 100 000 | 1.38 ms |
+
+| `n` | snapshot time | snapshot bytes | cold time | cold bytes | bytes | time |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 000 | 3.46 ms | 5 686 B | 2.20 ms | 60 854 B | **10.7× fewer** | 1.6× slower |
+| 10 000 | 8.77 ms | 5 914 B | 11.52 ms | 308 356 B | **52.1× fewer** | 1.3× faster |
+| 100 000 | 84.6 ms | 7 516 B | 106.7 ms | 3 164 318 B | **421.0× fewer** | 1.3× faster |
+
+Bytes are flat in `n` for `snapshot` (bounded by the churn, not the dataset) and grow with it for
+`cold` — the O(1)-vs-O(n) shape #172's own numbers pointed at, now reproducible. **Wall time is not
+uniformly a win**: at `n` = 2 000 the snapshot path is *slower* despite moving 10.7× fewer bytes —
+two real synchronous disk round trips (the survivor's `snapshot_now`, the restarter's
+`with_persistence` load) cost more than the network saves at this size, and only the byte column,
+not the time column, is favorable there. The crossover sits between 2 000 and 10 000 entries on
+this hardware; past it, both columns favor the snapshot path.
+
+**Below `n` ≈ 2 000 at `REJOIN_CHURN` = 100 (churn ≥ 5% of the store), `snapshot`'s wall time
+becomes unreliable** — `n` = 1 000 was observed to consistently cost a full extra
+`Config::reconcile_interval` (≈ 1.00–1.002 s, `SyncState::rounds` one higher on one peer than the
+other) rather than converging on the first exchange. Consistent with, though not fully root-caused
+against, `try_claim_dump_slot`'s "one bulk dump in flight per peer, anything missed is picked up by
+the next round" throttle (`src/replica/pacing.rs`) — plausible when a churn this large a fraction of
+the store produces more than one dump-eligible range against the same peer in quick succession.
+Sidestepped here by keeping `n` large enough relative to `REJOIN_CHURN` rather than chased further,
+since diagnosing that throttle under small-store, large-churn-fraction rejoins is a separate
+question from #172's.
 
 ## The injected-RTT / loss lane
 

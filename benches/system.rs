@@ -9,8 +9,9 @@
 //! System-level, end-to-end benchmarks driving the **public** `ReplicatedMap` API (point-read
 //! latency vs `HashMap`/`BTreeMap`, per-entry memory footprint, bulk-load throughput, cold anti-
 //! entropy convergence between two in-process nodes, gossip fan-out and propagation latency as
-//! node count grows, convergence under injected RTT and loss, and durable-snapshot reload). Unlike
-//! the `bench` target, these reach no crate internals, so they need no feature gate.
+//! node count grows, convergence under injected RTT and loss, and durable rejoin — snapshot-load
+//! time alone, then reconverge time and wire bytes for a snapshot-resumed rejoin against a cold
+//! one). Unlike the `bench` target, these reach no crate internals, so they need no feature gate.
 //!
 //! The `*_rtt` lanes answer the round-trip question: every other benchmark here runs at RTT ≈ 0,
 //! which prices bytes and zeroes round-trips — the axis RBSR is worst on. They run over the seeded
@@ -316,9 +317,17 @@ fn full_mesh_seed(stores: &[ReplicatedMap<u32, u32>], addrs: &[IpAddr]) {
     }
 }
 
-/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded** so the measurement
-/// excludes peer-discovery time. The returned counters share index with the stores.
-fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+/// `n` in-process, [`CountingTransport`]-wrapped nodes on a fresh [`InMemoryNetwork`],
+/// **unseeded** like [`mesh_with`] — the families built on this differ on who seeds whom. The
+/// returned counters share index with the stores.
+fn counted_mesh(
+    n: usize,
+    port: u16,
+) -> (
+    Vec<ReplicatedMap<u32, u32>>,
+    Vec<IpAddr>,
+    Vec<TrafficCounters>,
+) {
     let mut counters = Vec::with_capacity(n);
     let (stores, addrs) = mesh_with(n, port, |inner| {
         let traffic = TrafficCounters::default();
@@ -330,6 +339,13 @@ fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<Traffic
         counters.push(traffic);
         transport
     });
+    (stores, addrs, counters)
+}
+
+/// `n` in-process nodes on a fresh [`InMemoryNetwork`], **full-mesh-seeded** so the measurement
+/// excludes peer-discovery time. The returned counters share index with the stores.
+fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+    let (stores, addrs, counters) = counted_mesh(n, port);
     full_mesh_seed(&stores, &addrs);
     (stores, counters)
 }
@@ -712,9 +728,11 @@ fn gossip_propagation_rtt(c: &mut Criterion) {
     group.finish();
 }
 
-/// Durable rejoin: time to reload a persisted snapshot of `N` entries from disk (the cost a
-/// restarting node pays before rejoining the cluster). The snapshot is written once in setup.
-fn durable_rejoin(c: &mut Criterion) {
+/// Durable rejoin, part 1: time to reload a persisted snapshot of `N` entries from disk alone
+/// (the local-I/O component of the cost a restarting node pays before rejoining). The snapshot
+/// is written once in setup. Part 2, below, prices the other component — the network catch-up —
+/// against a cold join.
+fn durable_rejoin_load(c: &mut Criterion) {
     let mut group = log_group(c, "durable_rejoin");
     for &size in SIZES {
         let dir = tempfile::tempdir().unwrap();
@@ -741,9 +759,130 @@ fn durable_rejoin(c: &mut Criterion) {
         Persistence::<u32, u32>::save(&snapshot, &state).expect("save");
 
         group.throughput(Throughput::Elements(size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+        group.bench_with_input(BenchmarkId::new("load", size), &size, |b, _| {
             b.iter(|| black_box(Persistence::<u32, u32>::load(&snapshot).expect("load")));
         });
+    }
+    group.finish();
+}
+
+/// Writes applied to the surviving peer while the restarting node is presumed down — the delta a
+/// snapshot rejoin must catch up on. Fixed across dataset sizes rather than scaled with them: the
+/// claim under test (#172) is that snapshot-rejoin cost tracks the *churn*, not the dataset, and
+/// holding the churn constant while `size` grows is what lets the sweep below show that.
+const REJOIN_CHURN: usize = 100;
+
+/// Port for [`durable_rejoin_network`]'s [`InMemoryNetwork`]s. Reused across calls: each call
+/// builds its own isolated network, so — as with [`build_mesh`]'s ports — collisions are only
+/// possible within one network, and [`mesh_addrs`] already keeps every call's addresses distinct.
+const REJOIN_PORT: u16 = 9_850;
+
+/// One rejoin: `prefix` is loaded into the surviving peer `A` first; when `resume_from_snapshot`,
+/// it is then snapshotted to an on-disk backend and that snapshot restored into the restarting
+/// peer `B` via [`ReplicatedMap::with_persistence`] — disk load included in the timed region,
+/// since that is genuinely part of what a restarting process waits on — before `churn` lands on
+/// `A` and `B` rejoins. When `resume_from_snapshot` is false, `B` starts empty and must pull
+/// `prefix` **and** `churn` cold, exactly as [`cold_sync`]. Returns wall time to reconverge and
+/// total wire bytes (both peers' sends summed — nothing is lost here, so that is also what was
+/// received, [`build_mesh`]'s counting convention).
+async fn rejoin_once(
+    prefix: &[(u32, u32)],
+    churn: &[(u32, u32)],
+    resume_from_snapshot: bool,
+    port: u16,
+) -> (Duration, u64) {
+    let (stores, addrs, counters) = counted_mesh(2, port);
+    let (mut a, b) = (stores[0].clone(), stores[1].clone());
+    let snapshot_dir = resume_from_snapshot.then(|| tempfile::tempdir().unwrap());
+    let snapshot_path = snapshot_dir.as_ref().map(|dir| dir.path().join("snapshot"));
+
+    if let Some(path) = &snapshot_path {
+        a = a.with_persistence(Arc::new(FileSnapshot::new(path)));
+    }
+    // A is loaded before it has any peer, so nothing is broadcast eagerly (as in `cold_sync`).
+    a.insert_bulk(prefix);
+    if snapshot_path.is_some() {
+        a.snapshot_now().expect("snapshot A's prefix state");
+    }
+    a.insert_bulk(churn);
+    let target = a.fingerprint(..);
+
+    let start = Instant::now();
+    let b = match &snapshot_path {
+        Some(path) => b.with_persistence(Arc::new(FileSnapshot::new(path))),
+        None => b,
+    };
+    // Only the restarting node seeds — the survivor initiating too would dump the dataset twice.
+    b.seed_peer(addrs[0]);
+    let shutdown = CancellationToken::new();
+    let tasks = [
+        tokio::spawn(a.clone().run(shutdown.clone())),
+        tokio::spawn(b.clone().run(shutdown.clone())),
+    ];
+    // A 1 ms sleep, not `yield_now`'s tight spin (as in `cold_sync`): this loop can wait close to
+    // a full `reconcile_interval` in the cold-join case at the largest sizes, and spinning for
+    // that long steals scheduler time from the very tasks it is waiting on.
+    while b.fingerprint(..) != target {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let elapsed = start.elapsed();
+    // Cancel and join rather than abort-and-forget: a joined task cannot linger into the next
+    // `rejoin_once` call and steal scheduler time from it on this shared, multi-threaded runtime.
+    shutdown.cancel();
+    for task in tasks {
+        let _ = task.await;
+    }
+    let bytes = counters
+        .iter()
+        .map(|c| c.bytes_sent.load(Ordering::Relaxed))
+        .sum();
+    (elapsed, bytes)
+}
+
+/// Durable rejoin, part 2: reconverge time and total wire bytes for a restarting node that
+/// resumes from an on-disk snapshot against one that rejoins cold (empty, as [`cold_sync`]).
+/// Answers #172's own out-of-repo numbers (51 200 keys / 50 MiB: 0.52 s / 0.76 MiB from snapshot
+/// vs 4.6 s / 56.3 MiB cold) with a reproducible, in-repo harness instead of a one-off external
+/// measurement.
+fn durable_rejoin_network(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = log_group(c, "durable_rejoin");
+    for &size in &[2_000usize, 10_000, 100_000] {
+        let kvs = corpus(size);
+        let (prefix, churn) = kvs.split_at(size - REJOIN_CHURN);
+
+        // Untimed report: exact wire bytes for one convergence of each scenario, like
+        // `gossip_fanout`'s traffic report — the timed groups below are the statistical read.
+        let (_, snapshot_bytes) = rt.block_on(rejoin_once(prefix, churn, true, REJOIN_PORT));
+        let (_, cold_bytes) = rt.block_on(rejoin_once(prefix, churn, false, REJOIN_PORT));
+        println!(
+            "[durable_rejoin] n={size}, churn={REJOIN_CHURN}: snapshot rejoin -> {snapshot_bytes} \
+             B total wire traffic; cold join -> {cold_bytes} B ({ratio:.1}x less)",
+            ratio = cold_bytes as f64 / snapshot_bytes.max(1) as f64,
+        );
+
+        group.sample_size(10);
+        group.sampling_mode(SamplingMode::Flat);
+        group.warm_up_time(Duration::from_millis(500));
+        let id = format!("n={size}");
+        for (label, resume_from_snapshot, elements) in
+            [("snapshot", true, REJOIN_CHURN), ("cold", false, size)]
+        {
+            group.throughput(Throughput::Elements(elements as u64));
+            group.bench_with_input(BenchmarkId::new(label, &id), &size, |b, _| {
+                b.iter_custom(|iters| {
+                    rt.block_on(async {
+                        let mut total = Duration::ZERO;
+                        for _ in 0..iters {
+                            let (elapsed, _bytes) =
+                                rejoin_once(prefix, churn, resume_from_snapshot, REJOIN_PORT).await;
+                            total += elapsed;
+                        }
+                        total
+                    })
+                })
+            });
+        }
     }
     group.finish();
 }
@@ -759,6 +898,7 @@ criterion_group!(
     netem_calibration,
     cold_sync_rtt,
     gossip_propagation_rtt,
-    durable_rejoin
+    durable_rejoin_load,
+    durable_rejoin_network
 );
 criterion_main!(benches);
