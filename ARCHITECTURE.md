@@ -312,7 +312,10 @@ guarantees whose resolution history §8 tracks.
    injective byte encoding (not `std::hash::Hash`, whose byte sequences Rust does not stabilize —
    and which `HashMap`/`HashSet` don't implement), add/sub mod 2²⁵⁶. Both halves are load-bearing:
    changing the encoding is as much a wire break as changing the hash. Golden vectors in
-   `rsos/src/fingerprint.rs`.
+   `rsos/src/fingerprint.rs`. On the wire, `Serialize`/`Deserialize` go through raw `[u8; 32]` rather
+   than deriving over the four `u64` limbs — a uniformly random 256-bit value gets nothing from
+   `bincode`'s default varint integer encoding except a length byte per incompressible limb (#382,
+   decided before the wire freeze).
 2. **HLC total order** `(physical, logical, node_id)` — merge uses strict `>`. Composed of two
    derived orders, `Hlc` over `(physical, logical)` then `Timestamp` over `(hlc, node_id)`; the
    newtype declaration order *is* the conflict order, and `tests/timestamp_wire_format.rs` pins that
@@ -378,6 +381,15 @@ guarantees whose resolution history §8 tracks.
    `rbsr/src/protocol.rs::non_progressing_split_is_converted_to_enumerate`, the `NeverNarrows`
    policy exercised through the same convergence matrix as every shipped policy, and pinned for the
    shipped policies themselves by `rbsr/tests/shipped_policies_always_progress.rs`.
+14. **A message at a reserved wire tag never blocks the rest of its datagram** (#463) —
+   `Message::Reserved5`/`Reserved6` decode as opaque `Vec<u8>` and are ignored by
+   `handle_messages`, so a peer that does not yet assign real meaning to one of these two tags
+   still processes every other message the same datagram carried, rather than dropping it whole
+   the way an unrecognized tag past 6 does. Narrow by construction: two tags, once each: consuming
+   a reservation with a real message shape, or adding a third message, still needs #309's
+   coordinated wire-version rollout. Guarded by
+   `src/replica/tests/reserved_wire_tags.rs::a_reserved_message_does_not_block_the_rest_of_the_datagram`
+   and its sibling pinning the tags' own encoding and the opaque payload's bounded decode.
 
 ---
 

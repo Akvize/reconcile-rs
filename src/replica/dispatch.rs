@@ -63,6 +63,10 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 // A dated store is authoritative and never integrates a value-only update; read replicas
                 // are the only consumers of `ValueUpdate`. Ignore it defensively.
                 Message::ValueUpdate(_) => {}
+                // #463: reserved, never sent by this version. Ignored rather than matched with a
+                // wildcard, so a future real variant added at a *new* tag cannot silently fall
+                // through this arm unhandled — only these two already-reserved tags do.
+                Message::Reserved5(_) | Message::Reserved6(_) => {}
             }
         }
         let spoke_dated = !in_comparison.is_empty() || !updates.is_empty() || !acks.is_empty();

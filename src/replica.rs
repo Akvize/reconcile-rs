@@ -173,9 +173,11 @@ pub(crate) struct Inner<K, V> {
 /// One atomic message of the reconciliation protocol.
 ///
 /// Variant order is the wire tag order: the **dated** channel is 0-2
-/// (`ComparisonItem`/`Update`/`Ack`), the **value-only** channel read replicas use is 3-4. A node
-/// that does not know the latter fails to deserialize and drops the datagram, which the receive
-/// loop tolerates.
+/// (`ComparisonItem`/`Update`/`Ack`), the **value-only** channel read replicas use is 3-4, and 5-6
+/// are [`reserved`](Message::Reserved5) skippable slots (#463). A node that does not know a tag
+/// past 6 still fails to deserialize and drops the whole datagram, which the receive loop
+/// tolerates — reservation buys forward compatibility for exactly one more message on each of
+/// these two tags, not an open-ended capability mechanism.
 ///
 /// `V` is the dated value, `P` its timestamp-less projection.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -197,6 +199,14 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     /// An individual timestamp-less update sent to a dateless read replica once the value-only diff
     /// identified a difference. Carries the projected payload only (no [`Timestamp`]).
     ValueUpdate((K, P)),
+    /// Reserved wire tag 5 (#463): never sent by this version, opaque length-prefixed bytes on
+    /// decode so a *future* version's real message at this tag still decodes on *this* one —
+    /// [`handle_messages`](Replica::handle_messages) ignores it rather than failing the whole
+    /// datagram, which is exactly what tags past 6 do today. Consumes the reservation the moment a
+    /// real message shape is assigned to it; a second reservation needs a new tag.
+    Reserved5(Vec<u8>),
+    /// The second of the two tags [`Reserved5`](Message::Reserved5) reserves; same contract.
+    Reserved6(Vec<u8>),
 }
 
 mod coalesce;
