@@ -99,13 +99,13 @@ pub fn reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated
 pub fn reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Authenticated>::verify_replay(self, &reconcile_gossip::replay::ReplayFilter, core::net::ip_addr::IpAddr) -> core::option::Option<reconcile_gossip::auth::Payload<'a, reconcile_gossip::auth::Verified>>
 impl<'a, State: core::fmt::Debug> core::fmt::Debug for reconcile_gossip::auth::Payload<'a, State>
 pub fn reconcile_gossip::auth::Payload<'a, State>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, State> core::marker::Freeze for reconcile_gossip::auth::Payload<'a, State>
-impl<'a, State> core::marker::Send for reconcile_gossip::auth::Payload<'a, State> where State: core::marker::Send
-impl<'a, State> core::marker::Sync for reconcile_gossip::auth::Payload<'a, State> where State: core::marker::Sync
-impl<'a, State> core::marker::Unpin for reconcile_gossip::auth::Payload<'a, State> where State: core::marker::Unpin
-impl<'a, State> core::marker::UnsafeUnpin for reconcile_gossip::auth::Payload<'a, State>
-impl<'a, State> core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Payload<'a, State> where State: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, State> core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Payload<'a, State> where State: core::panic::unwind_safe::UnwindSafe
+impl<'a, State> core::marker::Freeze for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::marker::Freeze
+impl<'a, State> core::marker::Send for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::marker::Send
+impl<'a, State> core::marker::Sync for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::marker::Sync
+impl<'a, State> core::marker::Unpin for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::marker::Unpin
+impl<'a, State> core::marker::UnsafeUnpin for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::marker::UnsafeUnpin
+impl<'a, State> core::panic::unwind_safe::RefUnwindSafe for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, State> core::panic::unwind_safe::UnwindSafe for reconcile_gossip::auth::Payload<'a, State> where core::marker::PhantomData<State>: core::panic::unwind_safe::UnwindSafe
 pub struct reconcile_gossip::auth::Verified
 impl core::marker::Freeze for reconcile_gossip::auth::Verified
 impl core::marker::Send for reconcile_gossip::auth::Verified

@@ -299,13 +299,13 @@ impl<T: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register
 pub fn lww_register::entry::Entry<T, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<T: core::hash::Hash, V: core::hash::Hash> core::hash::Hash for lww_register::entry::Entry<T, V>
 pub fn lww_register::entry::Entry<T, V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, V: core::marker::Freeze
-impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, V: core::marker::Send
-impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, V: core::marker::Sync
-impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, V: core::marker::Unpin
-impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, V: core::marker::UnsafeUnpin
-impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, lww_register::entry::State<V>: core::marker::Freeze
+impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, lww_register::entry::State<V>: core::marker::Send
+impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, lww_register::entry::State<V>: core::marker::Sync
+impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, lww_register::entry::State<V>: core::marker::Unpin
+impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, lww_register::entry::State<V>: core::marker::UnsafeUnpin
+impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, lww_register::entry::State<V>: core::panic::unwind_safe::RefUnwindSafe
+impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, lww_register::entry::State<V>: core::panic::unwind_safe::UnwindSafe
 pub mod lww_register::persistence
 pub struct lww_register::persistence::InMemoryPersistence<K, V>
 impl<K, V> lww_register::persistence::InMemoryPersistence<K, V>
@@ -316,12 +316,12 @@ impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persis
 pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
 pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
 impl<K, V> !core::marker::Freeze for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::panic::unwind_safe::UnwindSafe
 #[non_exhaustive] pub struct lww_register::persistence::PersistedState<K, V>
 pub lww_register::persistence::PersistedState::entries: lww_register::persistence::DatedEntries<K, V>
 pub lww_register::persistence::PersistedState::members: std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>
@@ -340,13 +340,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_re
 pub fn lww_register::persistence::PersistedState<K, V>::clone(&self) -> lww_register::persistence::PersistedState<K, V>
 impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::persistence::PersistedState<K, V>
 pub fn lww_register::persistence::PersistedState<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V>
-impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Freeze, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Freeze
+impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Send, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Sync, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Unpin, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::UnsafeUnpin, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::panic::unwind_safe::RefUnwindSafe, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::panic::unwind_safe::UnwindSafe, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::panic::unwind_safe::UnwindSafe
 pub trait lww_register::persistence::Persistence<K, V>: core::marker::Send + core::marker::Sync + 'static
 pub fn lww_register::persistence::Persistence::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
 pub fn lww_register::persistence::Persistence::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
@@ -413,13 +413,13 @@ impl<T: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register
 pub fn lww_register::entry::Entry<T, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<T: core::hash::Hash, V: core::hash::Hash> core::hash::Hash for lww_register::entry::Entry<T, V>
 pub fn lww_register::entry::Entry<T, V>::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, V: core::marker::Freeze
-impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, V: core::marker::Send
-impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, V: core::marker::Sync
-impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, V: core::marker::Unpin
-impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, V: core::marker::UnsafeUnpin
-impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<T, V> core::marker::Freeze for lww_register::entry::Entry<T, V> where T: core::marker::Freeze, lww_register::entry::State<V>: core::marker::Freeze
+impl<T, V> core::marker::Send for lww_register::entry::Entry<T, V> where T: core::marker::Send, lww_register::entry::State<V>: core::marker::Send
+impl<T, V> core::marker::Sync for lww_register::entry::Entry<T, V> where T: core::marker::Sync, lww_register::entry::State<V>: core::marker::Sync
+impl<T, V> core::marker::Unpin for lww_register::entry::Entry<T, V> where T: core::marker::Unpin, lww_register::entry::State<V>: core::marker::Unpin
+impl<T, V> core::marker::UnsafeUnpin for lww_register::entry::Entry<T, V> where T: core::marker::UnsafeUnpin, lww_register::entry::State<V>: core::marker::UnsafeUnpin
+impl<T, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::RefUnwindSafe, lww_register::entry::State<V>: core::panic::unwind_safe::RefUnwindSafe
+impl<T, V> core::panic::unwind_safe::UnwindSafe for lww_register::entry::Entry<T, V> where T: core::panic::unwind_safe::UnwindSafe, lww_register::entry::State<V>: core::panic::unwind_safe::UnwindSafe
 pub struct lww_register::InMemoryPersistence<K, V>
 impl<K, V> lww_register::persistence::InMemoryPersistence<K, V>
 pub fn lww_register::persistence::InMemoryPersistence<K, V>::new() -> Self
@@ -429,12 +429,12 @@ impl<K, V> lww_register::persistence::Persistence<K, V> for lww_register::persis
 pub fn lww_register::persistence::InMemoryPersistence<K, V>::load(&self) -> core::io::error::Result<core::option::Option<lww_register::persistence::PersistedState<K, V>>>
 pub fn lww_register::persistence::InMemoryPersistence<K, V>::save(&self, &lww_register::persistence::PersistedState<K, V>) -> core::io::error::Result<()>
 impl<K, V> !core::marker::Freeze for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
-impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V>
+impl<K, V> core::marker::Send for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::InMemoryPersistence<K, V> where std::sync::poison::mutex::Mutex<core::option::Option<lww_register::persistence::PersistedState<K, V>>>: core::panic::unwind_safe::UnwindSafe
 #[non_exhaustive] pub struct lww_register::PersistedState<K, V>
 pub lww_register::PersistedState::entries: lww_register::persistence::DatedEntries<K, V>
 pub lww_register::PersistedState::members: std::collections::hash::set::HashSet<core::net::ip_addr::IpAddr>
@@ -453,13 +453,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for lww_re
 pub fn lww_register::persistence::PersistedState<K, V>::clone(&self) -> lww_register::persistence::PersistedState<K, V>
 impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for lww_register::persistence::PersistedState<K, V>
 pub fn lww_register::persistence::PersistedState<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V>
-impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Freeze, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Freeze
+impl<K, V> core::marker::Send for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Send, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Send
+impl<K, V> core::marker::Sync for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Sync, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::Unpin, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::marker::UnsafeUnpin, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::panic::unwind_safe::RefUnwindSafe, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for lww_register::persistence::PersistedState<K, V> where alloc::vec::Vec<(K, lww_register::entry::Entry<lww_register::clock::Timestamp, V>)>: core::panic::unwind_safe::UnwindSafe, std::collections::hash::map::HashMap<K, std::collections::hash::map::HashMap<core::net::ip_addr::IpAddr, u64>>: core::panic::unwind_safe::UnwindSafe
 pub struct lww_register::Timestamp
 impl lww_register::clock::Timestamp
 pub const fn lww_register::clock::Timestamp::hlc(&self) -> lww_register::clock::Hlc

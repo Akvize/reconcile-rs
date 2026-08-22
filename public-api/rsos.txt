@@ -119,12 +119,12 @@ pub fn rsos::Entry<'a, K, V>::and_modify(self, impl core::ops::function::FnOnce(
 pub fn rsos::Entry<'a, K, V>::or_default(self) -> &'a V where V: core::default::Default
 pub fn rsos::Entry<'a, K, V>::or_insert(self, V) -> &'a V
 pub fn rsos::Entry<'a, K, V>::or_insert_with(self, impl core::ops::function::FnOnce() -> V) -> &'a V
-impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where K: core::marker::Freeze
-impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where K: core::marker::Send, V: core::marker::Send
-impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where K: core::marker::Unpin
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where K: core::marker::UnsafeUnpin
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Freeze, K: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Send, K: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Sync, K: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Unpin, K: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::UnsafeUnpin, K: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe
 impl<'a, K, V> !core::panic::unwind_safe::UnwindSafe for rsos::Entry<'a, K, V>
 pub struct rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
 impl<K, V> rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
@@ -192,13 +192,13 @@ pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank(&self, &K) -> usize
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::select(&self, usize) -> &K
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::size(&self) -> usize
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map::ItemRange<'a, K, V, R: core::ops::range::RangeBounds<K>>
 impl<'a, K, V, R: core::ops::range::RangeBounds<K> + core::clone::Clone> core::clone::Clone for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::clone(&self) -> Self
@@ -210,13 +210,13 @@ pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::size_hint(&self) -> (
 impl<'a, K: core::cmp::Ord, V, R: core::ops::range::RangeBounds<K>> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 impl<'a, K: core::fmt::Debug + core::cmp::Ord, V: core::fmt::Debug, R: core::ops::range::RangeBounds<K> + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V, R> core::marker::Freeze for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Freeze
-impl<'a, K, V, R> core::marker::Send for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Send, K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V, R> core::marker::Sync for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Sync, K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V, R> core::marker::Unpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Unpin
-impl<'a, K, V, R> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::UnsafeUnpin
-impl<'a, K, V, R> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V, R> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::UnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V, R> core::marker::Freeze for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Freeze, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Freeze
+impl<'a, K, V, R> core::marker::Send for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Send, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Send
+impl<'a, K, V, R> core::marker::Sync for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Sync, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Sync
+impl<'a, K, V, R> core::marker::Unpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Unpin, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Unpin
+impl<'a, K, V, R> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::UnsafeUnpin, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::UnsafeUnpin
+impl<'a, K, V, R> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::RefUnwindSafe, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V, R> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::UnwindSafe, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::UnwindSafe
 pub mod rsos::fingerprint_tree_map_iter
 pub struct rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
@@ -230,13 +230,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoIter<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 impl<K: core::fmt::Debug + core::clone::Clone, V: core::fmt::Debug + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoIter<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::len(&self) -> usize
@@ -249,13 +249,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 impl<K: core::fmt::Debug + core::clone::Clone, V: core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::len(&self) -> usize
@@ -268,13 +268,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 impl<K: core::clone::Clone, V: core::fmt::Debug + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Iter<'a, K, V>::Item = (&'a K, &'a V)
@@ -287,13 +287,13 @@ pub fn rsos::fingerprint_tree_map_iter::Iter<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Iter<'_, K, V>
 impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for rsos::fingerprint_tree_map_iter::Iter<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Iter<'_, K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Keys<'a, K, V>::Item = &'a K
@@ -306,13 +306,13 @@ pub fn rsos::fingerprint_tree_map_iter::Keys<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Keys<'_, K, V>
 impl<K: core::fmt::Debug, V> core::fmt::Debug for rsos::fingerprint_tree_map_iter::Keys<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Keys<'_, K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::fingerprint_tree_map_iter::Values<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Values<'a, K, V>::Item = &'a V
@@ -325,13 +325,13 @@ pub fn rsos::fingerprint_tree_map_iter::Values<'_, K, V>::clone(&self) -> Self
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::Values<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Values<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Values<'_, K, V>
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::Aggregate
 impl rsos::aggregate::Aggregate
 pub const rsos::aggregate::Aggregate::ZERO: rsos::aggregate::Aggregate
@@ -372,12 +372,12 @@ pub fn rsos::Entry<'a, K, V>::and_modify(self, impl core::ops::function::FnOnce(
 pub fn rsos::Entry<'a, K, V>::or_default(self) -> &'a V where V: core::default::Default
 pub fn rsos::Entry<'a, K, V>::or_insert(self, V) -> &'a V
 pub fn rsos::Entry<'a, K, V>::or_insert_with(self, impl core::ops::function::FnOnce() -> V) -> &'a V
-impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where K: core::marker::Freeze
-impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where K: core::marker::Send, V: core::marker::Send
-impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where K: core::marker::Unpin
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where K: core::marker::UnsafeUnpin
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Freeze, K: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Send, K: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Sync, K: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::Unpin, K: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::marker::UnsafeUnpin, K: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::Entry<'a, K, V> where &'a mut rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe
 impl<'a, K, V> !core::panic::unwind_safe::UnwindSafe for rsos::Entry<'a, K, V>
 pub struct rsos::Fingerprint(pub [u64; 4])
 impl rsos::fingerprint::Fingerprint
@@ -495,13 +495,13 @@ pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::insert(&mut self, K
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::rank(&self, &K) -> usize
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::select(&self, usize) -> &K
 pub fn rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>::size(&self) -> usize
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::FingerprintTreeMap<K, V> where alloc::boxed::Box<Node<K, V>>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::IntoIter<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoIter<K, V>::len(&self) -> usize
@@ -514,13 +514,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoIter<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 impl<K: core::fmt::Debug + core::clone::Clone, V: core::fmt::Debug + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoIter<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoIter<K, V> where alloc::vec::Vec<IntoIterLayer<K, V>>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::IntoKeys<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::len(&self) -> usize
@@ -533,13 +533,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 impl<K: core::fmt::Debug + core::clone::Clone, V: core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoKeys<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoKeys<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::IntoValues<K, V>
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::len(&self) -> usize
@@ -552,13 +552,13 @@ impl<K: core::clone::Clone, V: core::clone::Clone> core::clone::Clone for rsos::
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::clone(&self) -> rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 impl<K: core::clone::Clone, V: core::fmt::Debug + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
 pub fn rsos::fingerprint_tree_map_iter::IntoValues<K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
-impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Send, V: core::marker::Send
-impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::marker::Unpin, V: core::marker::Unpin
-impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V>
-impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where K: core::panic::unwind_safe::UnwindSafe, V: core::panic::unwind_safe::UnwindSafe
+impl<K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Freeze
+impl<K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Send
+impl<K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Sync
+impl<K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::Unpin
+impl<K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::marker::UnsafeUnpin
+impl<K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::IntoValues<K, V> where rsos::fingerprint_tree_map_iter::IntoIter<K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::ItemRange<'a, K, V, R: core::ops::range::RangeBounds<K>>
 impl<'a, K, V, R: core::ops::range::RangeBounds<K> + core::clone::Clone> core::clone::Clone for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::clone(&self) -> Self
@@ -570,13 +570,13 @@ pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::size_hint(&self) -> (
 impl<'a, K: core::cmp::Ord, V, R: core::ops::range::RangeBounds<K>> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 impl<'a, K: core::fmt::Debug + core::cmp::Ord, V: core::fmt::Debug, R: core::ops::range::RangeBounds<K> + core::clone::Clone> core::fmt::Debug for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>
 pub fn rsos::fingerprint_tree_map::ItemRange<'a, K, V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V, R> core::marker::Freeze for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Freeze
-impl<'a, K, V, R> core::marker::Send for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Send, K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V, R> core::marker::Sync for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Sync, K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V, R> core::marker::Unpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Unpin
-impl<'a, K, V, R> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::UnsafeUnpin
-impl<'a, K, V, R> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V, R> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::UnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V, R> core::marker::Freeze for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Freeze, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Freeze
+impl<'a, K, V, R> core::marker::Send for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Send, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Send
+impl<'a, K, V, R> core::marker::Sync for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Sync, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Sync
+impl<'a, K, V, R> core::marker::Unpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::Unpin, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Unpin
+impl<'a, K, V, R> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::marker::UnsafeUnpin, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::UnsafeUnpin
+impl<'a, K, V, R> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::RefUnwindSafe, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V, R> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map::ItemRange<'a, K, V, R> where R: core::panic::unwind_safe::UnwindSafe, alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::Iter<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Iter<'a, K, V>::Item = (&'a K, &'a V)
@@ -589,13 +589,13 @@ pub fn rsos::fingerprint_tree_map_iter::Iter<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Iter<'_, K, V>
 impl<K: core::fmt::Debug, V: core::fmt::Debug> core::fmt::Debug for rsos::fingerprint_tree_map_iter::Iter<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Iter<'_, K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Iter<'a, K, V> where alloc::vec::Vec<(&'a Node<K, V>, usize)>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::Keys<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Keys<'a, K, V>::Item = &'a K
@@ -608,13 +608,13 @@ pub fn rsos::fingerprint_tree_map_iter::Keys<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Keys<'_, K, V>
 impl<K: core::fmt::Debug, V> core::fmt::Debug for rsos::fingerprint_tree_map_iter::Keys<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Keys<'_, K, V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Keys<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::UnwindSafe
 pub struct rsos::Values<'a, K, V>
 impl<'a, K, V> core::iter::traits::iterator::Iterator for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
 pub type rsos::fingerprint_tree_map_iter::Values<'a, K, V>::Item = &'a V
@@ -627,13 +627,13 @@ pub fn rsos::fingerprint_tree_map_iter::Values<'_, K, V>::clone(&self) -> Self
 impl<K, V> core::iter::traits::exact_size::ExactSizeIterator for rsos::fingerprint_tree_map_iter::Values<'_, K, V>
 pub fn rsos::fingerprint_tree_map_iter::Values<'_, K, V>::len(&self) -> usize
 impl<K, V> core::iter::traits::marker::FusedIterator for rsos::fingerprint_tree_map_iter::Values<'_, K, V>
-impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::marker::Sync, V: core::marker::Sync
-impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V>
-impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
-impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where K: core::panic::unwind_safe::RefUnwindSafe, V: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::marker::Freeze for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Freeze
+impl<'a, K, V> core::marker::Send for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Send
+impl<'a, K, V> core::marker::Sync for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Sync
+impl<'a, K, V> core::marker::Unpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::Unpin
+impl<'a, K, V> core::marker::UnsafeUnpin for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::marker::UnsafeUnpin
+impl<'a, K, V> core::panic::unwind_safe::RefUnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, K, V> core::panic::unwind_safe::UnwindSafe for rsos::fingerprint_tree_map_iter::Values<'a, K, V> where rsos::fingerprint_tree_map_iter::Iter<'a, K, V>: core::panic::unwind_safe::UnwindSafe
 pub trait rsos::Rsos<K>
 pub type rsos::Rsos::Value
 pub fn rsos::Rsos::aggregate<R: core::ops::range::RangeBounds<K>>(&self, R) -> rsos::aggregate::Aggregate
