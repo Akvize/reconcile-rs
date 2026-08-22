@@ -157,7 +157,7 @@ parking_lot = "0.12.1"
 rand = "0.8.5"
 # The anti-entropy algorithm (`initial_ranges`/`protocol_round`/`RangeAggregate`), generic over any RSOS
 # backend — see `rbsr/src/lib.rs`.
-rbsr = { version = "0.1.0", path = "rbsr" }
+rbsr = { version = "0.1.1", path = "rbsr" }
 # The data-structure/fingerprint mechanism (`FingerprintTreeMap`, `Rsos<K>`, `Fingerprint`,
 # `Aggregate`) — see `rsos/src/lib.rs` for what it is.
 #

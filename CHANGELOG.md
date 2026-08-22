@@ -20,6 +20,16 @@ additive-only-until-this-point, so this is the last release either could land in
 - Wire tags 5 and 6 are now reserved, skippable message slots (#463) — additive, no `WIRE_VERSION`
   bump needed for this part; see README "Wire versioning" for exactly what it does and does not buy.
 
+### Fixed
+
+- `rbsr` bumped to `0.1.1`: its published `0.1.0` manifest still pinned `rsos = "0.3.0"`, and
+  `tags.yml` skips republishing a crate whose version is already on the registry — so bumping only
+  the dependency pin in this release's first pass left the *published* `rbsr` depending on the old
+  `rsos`, while `reconcile` now depends on the new one directly. Two incompatible copies of the
+  `Rsos`/`RsosView` traits in one dependency graph failed `reconcile`'s own `cargo publish`
+  verification build before any of it reached crates.io. `rbsr`'s own version line stays independent
+  of `reconcile`'s (#308) — this bump is solely to force a republish with the corrected pin.
+
 ## [0.3.0] - 2026-08-19
 
 `0.2.1` predates the workspace split — this is the first release of the split shape. See

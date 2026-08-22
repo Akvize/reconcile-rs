@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "rbsr"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "rand 0.8.7",
