@@ -605,19 +605,19 @@ status, so this section never needs an edit when that status changes.
    `Aggregate(l, u)` in O(log n) requires an up-to-date summary on every node from leaf to root, so
    **every insert writes the root** — a contention point the contract creates, not an implementation
    defect. arXiv:2603.19820 §7.1 scopes its evaluation to single-machine with no concurrency, and no
-   RBSR work prices it. The prior art is outside the line: **AB-tree** maintains aggregate metadata
-   in a paginated tree under concurrent updates — but even its own code leaves the root chain
-   uncollapsed, an admission the hot spot is bounded, not eliminated (`benches/README.md`'s
+   RBSR work prices it. The prior art is outside the line: **AB-tree** ([§4.4](#44-bibliography))
+   sheds the contention by storing inexact weights, which a sound SKIP cannot (`benches/README.md`'s
    `contention` benchmark, [#359](https://github.com/Akvize/reconcile-rs/issues/359)/#445/#446).
-   **Measured, then found ambiguous** ([#454](https://github.com/Akvize/reconcile-rs/issues/454)):
-   at `N=1` (no lock contention) the root-write contract alone costs ~0.30–0.34× a no-aggregate
-   `BTreeMap`'s throughput under the same lock; from `N=2` to `N=16` the shared `RwLock` dominates
-   both arms and their ratio does not widen. Reading that flat ratio as a *bounded* tax does not
+   **Measured, then re-measured** ([#454](https://github.com/Akvize/reconcile-rs/issues/454)): at
+   `N=1` (no lock contention) the contract alone costs 0.298× a no-aggregate `BTreeMap` under the
+   same lock, and 6.8 cached-aggregate writes per insert — a count identical on any machine. #359
+   read the fp/btree *ratio*, saw it flat to `N=16`, and called the tax bounded. That does not
    follow: both arms sit behind the same lock, so `1/X = S + H(N)` for each, and a ratio of two
    terms that grow together is flat *because* they grow together, not because the root-write share
-   is capped. Correction pending in [#480](https://github.com/Akvize/reconcile-rs/pull/480), which
-   subtracts the shared lock term instead of dividing it out. Numbering starts at 10 so P0–P3's
-   existing ids stay stable.
+   is capped. **Subtracting** reciprocal throughputs cancels `H` where dividing them cannot, and
+   leaves a gap growing 1.7× to `N=4` (#455) — an upper bound, so the growth is established and its
+   attribution is not. Model, confounds and the many-core prediction: #457, #456,
+   `benches/README.md`. Numbering starts at 10 so P0–P3's existing ids stay stable.
 
 **P3 — What makes it *believed* to be SOTA:**
 8. **Property-testing + fuzzing as a foundation**: `proptest` vs `BTreeMap` oracle +

@@ -108,7 +108,7 @@ impl<K, V> Default for FingerprintTreeMap<K, V> {
 /// bound on `K`/`V` is needed. Collision-resistant, not information-theoretically exact.
 impl<K, V> PartialEq for FingerprintTreeMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
-        self.root.subtree == other.root.subtree
+        self.root.subtree() == other.root.subtree()
     }
 }
 
