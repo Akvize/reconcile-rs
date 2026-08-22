@@ -406,6 +406,33 @@ pacing gap between datagrams at the configured `Config::bulk_send_rate`. Shorten
 floor does not converge faster: the mechanism, and why cold sync ends up both slower and
 re-amplified while idle chatter balloons, is documented on `Config::reconcile_interval` itself.
 
+### Broadcast coalescing
+
+Full replication broadcasts every write to every known peer immediately (issue #187): fine for
+occasional writes, but a burst — a hot key, a batch of unrelated inserts arriving close together —
+pays one datagram per write per peer, `O(writes × N)` cluster-wide. `Config::coalesce_window`
+(default `Duration::ZERO`, disabled) batches writes made within the window into one flush instead:
+
+```rust
+use std::time::Duration;
+use reconcile::replicated_map::Config;
+
+let config = Config::new(8080)
+    .with_insecure_no_key()
+    .with_coalesce_window(Duration::from_millis(5)); // batch a burst into far fewer datagrams
+```
+
+| constraint | detail |
+|---|---|
+| latency vs window | peers observe a write up to `coalesce_window` later than with immediate broadcast — a few ms buys far fewer datagrams under a burst |
+| ordering / HLC | same-key writes inside one window collapse to the greatest `Timestamp` (last-write-wins, the same total order the wire protocol already resolves conflicts with); a value's own stamp is never altered, only when it reaches the wire |
+| anti-entropy | this delays only the **eager** push; the periodic RBSR sweep (`reconcile_interval`) stays the correctness backstop, so a coalesced batch lost in transit still converges |
+
+Only the write that finds the pending batch empty spawns the detached flush task, so it needs an
+ambient Tokio runtime the same way every propagating write does (see `ReplicatedMap::insert`'s `#
+Panics`); a write that joins an already-scheduled window returns without touching the reactor.
+Retunable live via `set_coalesce_window` (below).
+
 ## Read replica (`ReadReplicaMap`)
 
 For fleets with many *passive read replicas*, the per-value `Timestamp` a dated `ReplicatedMap`
@@ -492,6 +519,7 @@ store.set_remote_interval(3);                   // retune cross-network cadence
 store.set_remote_fanout(4);                     //   and fan-out
 store.set_reconcile_interval(Duration::from_millis(500)); // retune the gossip cadence
 store.set_tombstone_timeout(Duration::from_secs(120));    // retune tombstone expiry
+store.set_coalesce_window(Duration::from_millis(5));      // retune broadcast coalescing (#187)
 ```
 
 The **local network is re-derived automatically** from the declared nets and the listen address on

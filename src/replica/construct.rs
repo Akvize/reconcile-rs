@@ -253,6 +253,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 clock,
                 node_id_is_random,
                 max_peers: PeerCap::new(config.max_peers),
+                coalesce_window: Arc::new(RwLock::new(config.coalesce_window)),
+                coalesce_pending: Arc::new(RwLock::new(HashMap::new())),
             }),
         }
     }

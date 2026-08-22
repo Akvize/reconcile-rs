@@ -221,6 +221,23 @@ pub struct Config {
     /// non-conformant implementation risks; this only bounds how far a *conformant* peer's clock
     /// may have skewed before this node stops trusting it verbatim.
     pub max_clock_drift: ClockDrift,
+    /// How long a local write waits, batched with any other writes, before the accumulated batch
+    /// is broadcast to peers as one send loop instead of one broadcast per write (#187). Default
+    /// [`Duration::ZERO`]: no coalescing — every write broadcasts immediately, the historical
+    /// behavior.
+    ///
+    /// | constraint | detail |
+    /// |---|---|
+    /// | latency vs window | peers observe a write up to `coalesce_window` later than with immediate broadcast; a few ms buys far fewer datagrams under a write burst |
+    /// | ordering / HLC | same-key writes inside one window collapse to the greatest [`Timestamp`](crate::clock::Timestamp) via [`Entry::merge`](crate::entry::Entry::merge) — the same total order the wire protocol already resolves conflicts with; a value's own stamp is never altered, only when it reaches the wire |
+    /// | anti-entropy | this delays only the **eager** push; the periodic RBSR sweep ([`reconcile_interval`](Self::reconcile_interval)) stays the correctness backstop, so a coalesced batch lost in transit still converges |
+    ///
+    /// Only the write that finds the pending batch empty spawns the detached flush task, so a
+    /// write that joins an already-scheduled window does not itself need an ambient Tokio runtime
+    /// — see [`ReplicatedMap::insert`](super::ReplicatedMap::insert)'s `# Panics` for the general
+    /// rule this refines. Retunable at runtime via
+    /// [`set_coalesce_window`](super::ReplicatedMap::set_coalesce_window).
+    pub coalesce_window: Duration,
 }
 
 impl fmt::Debug for Config {
@@ -249,6 +266,7 @@ impl fmt::Debug for Config {
             .field("max_concurrent_bulk_dumps", &self.max_concurrent_bulk_dumps)
             .field("snapshot_interval", &self.snapshot_interval)
             .field("max_clock_drift", &self.max_clock_drift)
+            .field("coalesce_window", &self.coalesce_window)
             .finish()
     }
 }
@@ -274,6 +292,7 @@ impl Default for Config {
             max_concurrent_bulk_dumps: DEFAULT_MAX_CONCURRENT_BULK_DUMPS,
             snapshot_interval: SNAPSHOT_INTERVAL,
             max_clock_drift: MAX_CLOCK_DRIFT,
+            coalesce_window: Duration::ZERO,
         }
     }
 }

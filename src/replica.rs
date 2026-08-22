@@ -159,6 +159,15 @@ pub(crate) struct Inner<K, V> {
     /// Hard cap on the number of tracked remote peers. Datagrams from unknown senders are dropped
     /// before any per-sender state is allocated when the membership set reaches this size.
     max_peers: PeerCap,
+    /// How long a write waits, batched with any other writes, before the accumulated batch is
+    /// broadcast as one send loop (#187). [`Duration::ZERO`] (the default) disables coalescing —
+    /// every write flushes immediately, see [`Replica::queue_broadcast`]. Shared so it can be
+    /// retuned at runtime.
+    coalesce_window: Arc<RwLock<Duration>>,
+    /// Writes accumulated since the coalescing buffer was last flushed, one entry per key —
+    /// same-key writes collapse via [`Entry::merge`] as they arrive. Always empty when
+    /// [`coalesce_window`](Self::coalesce_window) is zero.
+    coalesce_pending: Arc<RwLock<HashMap<K, Entry<Timestamp, V>>>>,
 }
 
 /// One atomic message of the reconciliation protocol.
@@ -190,6 +199,7 @@ pub(crate) enum Message<K: Serialize, V: Serialize, P: Serialize> {
     ValueUpdate((K, P)),
 }
 
+mod coalesce;
 mod construct;
 mod dispatch;
 mod gc;

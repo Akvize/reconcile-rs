@@ -233,16 +233,20 @@ fn cold_sync(c: &mut Criterion) {
     group.finish();
 }
 
-/// An [`InMemoryTransport`] wrapper tallying every datagram this node *sends* — fan-out is a
-/// send-side cost, so receipts are not counted.
-struct CountingTransport {
-    inner: InMemoryTransport,
+/// A [`Transport`] wrapper tallying every datagram this node *sends* — fan-out is a send-side
+/// cost, so receipts are not counted. Generic so it can wrap either a bare [`InMemoryTransport`]
+/// (the RTT-free lanes) or a [`NetemTransport`]-decorated one (the RTT-swept lanes): wrapping
+/// *outside* `NetemTransport` counts what the application handed to `send_to`, ahead of the
+/// impairment draw, so a dropped datagram still counts as sent — matching `gossip_fanout`'s own
+/// "sent" definition, unaffected by the link.
+struct CountingTransport<T: Transport> {
+    inner: T,
     datagrams_sent: Arc<AtomicU64>,
     bytes_sent: Arc<AtomicU64>,
 }
 
 #[async_trait::async_trait]
-impl Transport for CountingTransport {
+impl<T: Transport> Transport for CountingTransport<T> {
     async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.inner.recv_from(buf).await
     }
@@ -346,6 +350,67 @@ fn counted_mesh(
 /// excludes peer-discovery time. The returned counters share index with the stores.
 fn build_mesh(n: usize, port: u16) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
     let (stores, addrs, counters) = counted_mesh(n, port);
+    full_mesh_seed(&stores, &addrs);
+    (stores, counters)
+}
+
+/// As [`build_mesh`], but every node's `Config::coalesce_window` is `window` instead of the
+/// default `Duration::ZERO` — not built on [`mesh_with`], since only this benchmark needs a
+/// per-node `Config` knob beyond the shared defaults.
+fn build_mesh_coalescing(
+    n: usize,
+    port: u16,
+    window: Duration,
+) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+    let network = InMemoryNetwork::new();
+    let addrs = mesh_addrs(n);
+    let mut counters = Vec::with_capacity(n);
+    let stores = addrs
+        .iter()
+        .map(|&addr| {
+            let traffic = TrafficCounters::default();
+            let inner = network.bind(SocketAddr::new(addr, port));
+            let transport = CountingTransport {
+                inner,
+                datagrams_sent: Arc::clone(&traffic.datagrams_sent),
+                bytes_sent: Arc::clone(&traffic.bytes_sent),
+            };
+            counters.push(traffic);
+            let config = Config::default()
+                .with_port(port)
+                .with_listen_addr(addr)
+                .with_net("127.0.0.1/8".parse().unwrap())
+                .with_insecure_no_key()
+                .with_coalesce_window(window);
+            ReplicatedMap::<u32, u32>::new_with_transport(config, Arc::new(transport))
+        })
+        .collect::<Vec<_>>();
+    full_mesh_seed(&stores, &addrs);
+    (stores, counters)
+}
+
+/// As [`build_mesh`], but every outbound datagram crosses `link` first: [`CountingTransport`]
+/// wraps a [`NetemTransport`]-decorated [`InMemoryTransport`] rather than a bare one, so the
+/// count is unaffected by the link while the send-loop wall time (timed separately, by the
+/// caller) is not. Call inside a runtime, like [`netem_mesh`].
+fn build_mesh_rtt(
+    n: usize,
+    port: u16,
+    link: Link,
+    seed: Seed,
+) -> (Vec<ReplicatedMap<u32, u32>>, Vec<TrafficCounters>) {
+    let mut counters = Vec::with_capacity(n);
+    let (stores, addrs) = mesh_with(n, port, |inner| {
+        let traffic = TrafficCounters::default();
+        let netem = NetemTransport::new(Arc::new(inner), Netem::uniform(link, seed));
+        let transport = CountingTransport {
+            inner: netem,
+            datagrams_sent: Arc::clone(&traffic.datagrams_sent),
+            bytes_sent: Arc::clone(&traffic.bytes_sent),
+        };
+        counters.push(traffic);
+        transport
+    });
     full_mesh_seed(&stores, &addrs);
     (stores, counters)
 }
@@ -470,6 +535,98 @@ fn gossip_propagation(c: &mut Criterion) {
                 })
             });
         });
+
+        for task in run_tasks {
+            task.abort();
+        }
+    }
+    group.finish();
+}
+
+/// Node count for `broadcast_coalescing` — held equal to the fixed-`N` lanes above.
+const COALESCING_NODES: usize = 8;
+/// Distinct keys one write burst touches.
+const COALESCING_KEYS: u32 = 16;
+/// Writes per burst, deliberately `> COALESCING_KEYS`: a coalescing window then collapses
+/// same-key repeats (`Entry::merge`) as well as merely batching distinct keys — the two
+/// mechanisms #187 asks for, exercised together, the way a hot-key write burst would in practice.
+const COALESCING_WRITES: u32 = 64;
+/// The coalescing window measured against the uncoalesced (`Duration::ZERO`) baseline.
+const COALESCING_WINDOW: Duration = Duration::from_millis(5);
+
+/// Broadcast coalescing (#187): datagrams/bytes the origin sends for one write burst, coalesced
+/// against uncoalesced, and the wall time from the burst's first write to every peer converging on
+/// its final per-key state (last write per key — `HlcClock`'s monotonic `now()` makes that
+/// unambiguous for a single origin, the same closed-form target
+/// `src/replica/tests/coalescing.rs`'s proptest checks). Convergence is *awaited*, not assumed, so
+/// this also demonstrates the "at equal convergence" half of #187's acceptance criterion: a run
+/// that failed to collapse and re-deliver every key correctly would simply never finish.
+fn broadcast_coalescing(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = log_group(c, "broadcast_coalescing");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.throughput(Throughput::Elements(COALESCING_WRITES as u64));
+
+    for (label, window) in [
+        ("uncoalesced", Duration::ZERO),
+        ("coalesced", COALESCING_WINDOW),
+    ] {
+        let (stores, counters) = build_mesh_coalescing(COALESCING_NODES, 9_580, window);
+        let origin = &stores[0];
+        let origin_counters = &counters[0];
+        let run_tasks: Vec<_> = rt.block_on(async {
+            stores
+                .iter()
+                .cloned()
+                .map(|store| tokio::spawn(store.run(CancellationToken::new())))
+                .collect::<Vec<_>>()
+        });
+
+        // A fresh key range per burst, like `gossip_propagation`'s never-repeating key: a repeat
+        // would already be satisfied on every peer and complete instantly, understating the cost.
+        let mut base = 0u32;
+        group.bench_with_input(
+            BenchmarkId::new(label, COALESCING_WRITES),
+            &label,
+            |b, _| {
+                b.iter_custom(|iters| {
+                    rt.block_on(async {
+                        let mut total = Duration::ZERO;
+                        for _ in 0..iters {
+                            let before_d = origin_counters.datagrams_sent.load(Ordering::Relaxed);
+                            let before_b = origin_counters.bytes_sent.load(Ordering::Relaxed);
+                            let mut want = BTreeMap::new();
+                            let start = Instant::now();
+                            for i in 0..COALESCING_WRITES {
+                                let key = base + (i % COALESCING_KEYS);
+                                origin.insert(black_box(key), i);
+                                want.insert(key, i);
+                            }
+                            while !stores[1..].iter().all(|store| {
+                                want.iter()
+                                    .all(|(k, v)| store.get(k).map(|g| *g) == Some(*v))
+                            }) {
+                                tokio::task::yield_now().await;
+                            }
+                            total += start.elapsed();
+                            let datagrams =
+                                origin_counters.datagrams_sent.load(Ordering::Relaxed) - before_d;
+                            let bytes =
+                                origin_counters.bytes_sent.load(Ordering::Relaxed) - before_b;
+                            println!(
+                                "[broadcast_coalescing] {label}: {COALESCING_WRITES} writes over \
+                             {COALESCING_KEYS} keys -> {datagrams} datagrams / {bytes} B sent by \
+                             the origin alone (N={COALESCING_NODES}), converged in {:?}",
+                                start.elapsed(),
+                            );
+                            base += COALESCING_KEYS;
+                        }
+                        total
+                    })
+                });
+            },
+        );
 
         for task in run_tasks {
             task.abort();
@@ -728,6 +885,84 @@ fn gossip_propagation_rtt(c: &mut Criterion) {
     group.finish();
 }
 
+/// Node count for the fan-out RTT lane: held equal to [`PROPAGATION_RTT_NODES`] so the two lanes
+/// are directly comparable at the same `N` (#187 asked for both `gossip_fanout` and
+/// `gossip_propagation` to get an RTT-swept counterpart; #280 shipped only the latter).
+const FANOUT_RTT_NODES: usize = PROPAGATION_RTT_NODES;
+
+/// `gossip_fanout` across the RTT sweep and a loss lane: whether the origin's send-side fan-out
+/// cost — datagrams/bytes handed to the transport, and the send-loop wall time — depends on RTT.
+/// Unlike [`gossip_propagation_rtt`], expected and confirmed **flat**:
+/// [`NetemTransport::send_to`](netem::NetemTransport::send_to) queues (or drops) a datagram and
+/// returns immediately, before the injected delay elapses — the origin never waits on delivery, so
+/// there is no round trip for RTT to lengthen. [`CountingTransport`] wraps *outside* the decorator
+/// for exactly this reason: it counts what `Replica::broadcast` handed to `send_to`, matching
+/// `gossip_fanout`'s own "sent" definition, unaffected by whether the link later drops or delays
+/// the datagram.
+fn gossip_fanout_rtt(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = log_group(c, "gossip_fanout_rtt");
+    group.sample_size(10);
+    let id = format!("N={FANOUT_RTT_NODES}");
+
+    let mut lanes: Vec<(String, Link)> = rtt_sweep()
+        .into_iter()
+        .map(|rtt| (rtt.label(), Link::at(rtt)))
+        .collect();
+    lanes.extend(loss_sweep().into_iter().map(|loss| {
+        (
+            loss.label(),
+            Link::at(Rtt::from_millis(LOSS_LANE_RTT)).with_loss(loss),
+        )
+    }));
+
+    for (label, link) in lanes {
+        let (stores, counters) =
+            rt.block_on(async { build_mesh_rtt(FANOUT_RTT_NODES, 9_890, link, Seed::DEFAULT) });
+        let origin = &stores[0];
+        let origin_counters = &counters[0];
+
+        rt.block_on(async {
+            let before = origin_counters.datagrams_sent.load(Ordering::Relaxed);
+            origin.insert(u32::MAX, 0);
+            wait_for(
+                &origin_counters.datagrams_sent,
+                before + (FANOUT_RTT_NODES as u64 - 1),
+            )
+            .await;
+            let datagrams = origin_counters.datagrams_sent.load(Ordering::Relaxed) - before;
+            let bytes = origin_counters.bytes_sent.load(Ordering::Relaxed);
+            println!(
+                "[gossip_fanout_rtt] {label}: one write -> {datagrams} datagrams / {bytes} B \
+                 sent by the origin node alone"
+            );
+        });
+
+        let mut key = 0u32;
+        group.bench_with_input(BenchmarkId::new(&id, &label), &label, |b, _| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        key = key.wrapping_add(1);
+                        let before = origin_counters.datagrams_sent.load(Ordering::Relaxed);
+                        let start = Instant::now();
+                        origin.insert(black_box(key), key);
+                        wait_for(
+                            &origin_counters.datagrams_sent,
+                            before + (FANOUT_RTT_NODES as u64 - 1),
+                        )
+                        .await;
+                        total += start.elapsed();
+                    }
+                    total
+                })
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Durable rejoin, part 1: time to reload a persisted snapshot of `N` entries from disk alone
 /// (the local-I/O component of the cost a restarting node pays before rejoining). The snapshot
 /// is written once in setup. Part 2, below, prices the other component — the network catch-up —
@@ -895,9 +1130,11 @@ criterion_group!(
     cold_sync,
     gossip_fanout,
     gossip_propagation,
+    broadcast_coalescing,
     netem_calibration,
     cold_sync_rtt,
     gossip_propagation_rtt,
+    gossip_fanout_rtt,
     durable_rejoin_load,
     durable_rejoin_network
 );

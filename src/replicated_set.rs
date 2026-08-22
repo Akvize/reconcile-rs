@@ -293,6 +293,12 @@ impl<K: Key + Hash> ReplicatedSet<K> {
         self.0.set_reconcile_interval(interval);
     }
 
+    /// (runtime) Retune the broadcast-coalescing window. See
+    /// [`ReplicatedMap::set_coalesce_window`].
+    pub fn set_coalesce_window(&self, window: Duration) {
+        self.0.set_coalesce_window(window);
+    }
+
     /// Run the reconciliation loop until `shutdown` fires. See [`ReplicatedMap::run`].
     pub async fn run(self, shutdown: CancellationToken) -> RunOutcome {
         self.0.run(shutdown).await
@@ -326,6 +332,7 @@ mod replicated_set_tests {
             max_concurrent_bulk_dumps: 4,
             snapshot_interval: Duration::from_secs(5),
             max_clock_drift: crate::clock::MAX_CLOCK_DRIFT,
+            coalesce_window: Duration::ZERO,
         }
     }
 
@@ -375,5 +382,18 @@ mod replicated_set_tests {
             Err(crate::replicated_map::ConfigError::TooManyNets),
             "MAX_NETS + 1 networks should be rejected"
         );
+    }
+
+    /// `ReplicatedSet::set_coalesce_window` is a thin delegate to
+    /// `ReplicatedMap::set_coalesce_window` — assert the delegation actually happens, not just
+    /// that calling it doesn't panic (same rationale as `set_nets_enforces_max_nets_at_runtime`
+    /// above).
+    #[tokio::test]
+    async fn set_coalesce_window_actually_retunes_the_engine() {
+        let set = ReplicatedSet::<i32>::new(ephemeral_config()).await.unwrap();
+        assert_eq!(set.0.coalesce_window(), Duration::ZERO);
+
+        set.set_coalesce_window(Duration::from_millis(123));
+        assert_eq!(set.0.coalesce_window(), Duration::from_millis(123));
     }
 }

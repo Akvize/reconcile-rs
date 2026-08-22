@@ -112,6 +112,18 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         *self.reconcile_interval.write() = interval;
     }
 
+    /// See [`Config::coalesce_window`](crate::replicated_map::Config::coalesce_window).
+    pub(crate) fn set_coalesce_window(&self, window: Duration) {
+        *self.coalesce_window.write() = window;
+    }
+
+    /// The currently configured coalescing window. Exposed for integration-test assertions
+    /// under `cfg(reconcile_internal_testing)`, matching e.g. `peers_map_len`.
+    #[cfg(any(test, reconcile_internal_testing))]
+    pub(crate) fn coalesce_window(&self) -> Duration {
+        *self.coalesce_window.read()
+    }
+
     /// Permanently remove a peer from membership, clearing its recorded acks, so tombstones stop
     /// waiting for it.
     ///

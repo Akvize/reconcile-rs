@@ -223,6 +223,15 @@ impl Config {
         self
     }
 
+    /// Set [`coalesce_window`](Config::coalesce_window) (default [`Duration::ZERO`], i.e. no
+    /// coalescing). Retunable at runtime via
+    /// [`ReplicatedMap::set_coalesce_window`](crate::ReplicatedMap::set_coalesce_window).
+    #[must_use]
+    pub fn with_coalesce_window(mut self, window: Duration) -> Self {
+        self.coalesce_window = window;
+        self
+    }
+
     /// Encrypt datagram payloads with XChaCha20-Poly1305, reusing
     /// [`cluster_key`](Self::cluster_key) as the AEAD key — so
     /// [`with_cluster_key`](Self::with_cluster_key) is required on every node.

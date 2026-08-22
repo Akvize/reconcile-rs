@@ -184,6 +184,20 @@ impl<K: Key + Hash, V: Value> ReplicatedMap<K, V> {
         self.engine.set_reconcile_interval(interval);
     }
 
+    /// (runtime) Retune the broadcast-coalescing window in place. See
+    /// [`Config::coalesce_window`](super::Config::coalesce_window).
+    pub fn set_coalesce_window(&self, window: Duration) {
+        self.engine.set_coalesce_window(window);
+    }
+
+    /// The currently configured coalescing window.
+    ///
+    /// Exposed for integration-test assertions under `cfg(reconcile_internal_testing)`.
+    #[cfg(any(test, reconcile_internal_testing))]
+    pub fn coalesce_window(&self) -> Duration {
+        self.engine.coalesce_window()
+    }
+
     /// A snapshot of liveness for a caller building its own readiness signal — see [`SyncState`].
     pub fn sync_state(&self) -> SyncState {
         SyncState {

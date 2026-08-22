@@ -487,3 +487,58 @@ async fn set_reconcile_interval_actually_retunes_the_round_cadence() {
          quickly, not wait out the original 3600s interval"
     );
 }
+
+/// `set_coalesce_window` must actually retune the running engine's coalescing window, not be a
+/// no-op setter. Starves the reconciliation fallback (`reconcile_interval` far beyond this
+/// test's deadline, B never told about A) exactly like `set_reconcile_interval`'s own test
+/// above, so B observing nothing within the window is attributable only to a real, in-effect
+/// window on A's write path.
+#[tokio::test]
+async fn set_coalesce_window_actually_delays_the_broadcast() {
+    use std::net::SocketAddr;
+
+    use crate::transport::InMemoryNetwork;
+
+    let net_fabric = InMemoryNetwork::new();
+    let port = 5105u16;
+    let a_ip: IpAddr = "127.0.4.7".parse().unwrap();
+    let b_ip: IpAddr = "127.0.4.8".parse().unwrap();
+    let cfg = |ip: IpAddr| {
+        ephemeral_config()
+            .with_listen_addr(ip)
+            .with_port(port)
+            .with_reconcile_interval(Duration::from_secs(3600))
+    };
+    let a = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(a_ip),
+        Arc::new(net_fabric.bind(SocketAddr::new(a_ip, port))),
+    );
+    let b = ReplicatedMap::<i32, i32>::new_with_transport(
+        cfg(b_ip),
+        Arc::new(net_fabric.bind(SocketAddr::new(b_ip, port))),
+    );
+
+    let task_a = tokio::spawn(a.clone().run(CancellationToken::new()));
+    let task_b = tokio::spawn(b.clone().run(CancellationToken::new()));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.engine
+        .peers
+        .write()
+        .insert(b_ip, std::time::Instant::now());
+
+    // Far longer than this test's deadline: only a real (non-no-op) setter suppresses the
+    // otherwise-immediate broadcast for this long.
+    a.set_coalesce_window(Duration::from_secs(3600));
+    a.insert(7, 42);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let not_yet_delivered = b.get(&7).is_none();
+
+    task_a.abort();
+    task_b.abort();
+    assert!(
+        not_yet_delivered,
+        "set_coalesce_window must actually delay the broadcast — B observed A's write \
+         immediately, as if the window were still the zero default"
+    );
+}

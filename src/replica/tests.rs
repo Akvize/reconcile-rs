@@ -29,6 +29,7 @@ mod auth_attack;
 mod causal_stability;
 mod clock_drift;
 mod clock_port;
+mod coalescing;
 mod deadlock_regressions;
 mod dump_budget;
 mod equal_stamp_redelivery;
