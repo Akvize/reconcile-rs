@@ -38,6 +38,7 @@ jobs:
       claims: ${{ steps.filter.outputs.claims }}
       rustdoc: ${{ steps.filter.outputs.rustdoc }}
       triage: ${{ steps.filter.outputs.triage }}
+      decisions: ${{ steps.filter.outputs.decisions }}
     steps:
       - uses: actions/checkout@v4
       # Pull-request-only, for the reason spelled out in `main.yml`'s `changes` job: a throw here
@@ -62,6 +63,12 @@ jobs:
               - '.github/workflows/issue-integrity.yml'
             triage:
               - 'scripts/check-issue-triage.sh'
+              - '.github/labels.tsv'
+              - '.github/workflows/issue-integrity.yml'
+            decisions:
+              - 'scripts/check-decision-issues-recorded.sh'
+              - 'ARCHITECTURE.md'
+              - 'AGENTS.md'
               - '.github/labels.tsv'
               - '.github/workflows/issue-integrity.yml'
 
@@ -126,3 +133,15 @@ jobs:
           # run for reasons nobody chose. Set it once the backlog is labelled.
           TRIAGE_SLA_DAYS: ''
         run: ./scripts/check-issue-triage.sh
+
+  # Needs no history, hence the default shallow checkout.
+  decision-issues-recorded:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.decisions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Closed C-decision issues must be cited in ARCHITECTURE.md or AGENTS.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/check-decision-issues-recorded.sh
