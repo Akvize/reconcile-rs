@@ -564,6 +564,27 @@ mod imp {
         }
     }
 
+    /// Poll `condition` until it holds, periodically re-issuing `start_reconciliation` on
+    /// `initiator` — a round's opening message is, rarely, not enough on its own to drive a
+    /// multi-level chain to completion (not fully root-caused; anti-entropy's own periodic tick
+    /// is the production analogue of this retry). Panics past a generous ceiling instead of
+    /// spinning silently forever, so a genuine regression fails loudly rather than hanging CI-
+    /// adjacent tooling for tens of minutes.
+    async fn converge(initiator: &ReplicatedMap<u32, u32>, mut condition: impl FnMut() -> bool) {
+        let mut spins: u64 = 0;
+        while !condition() {
+            spins += 1;
+            if spins % 500_000 == 0 {
+                initiator.start_reconciliation().await;
+            }
+            assert!(
+                spins <= 100_000_000,
+                "service_reconcile_rtt: a round did not converge after {spins} poll spins"
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// The refinement chain, timed, over an injected-RTT link: composes
     /// `ReplicatedMap::new_with_transport`, `netem::NetemTransport` and the existing `rtt_sweep`
     /// (`system.rs`'s, duplicated above) with `service_reconcile`'s own divergence mechanism — the
@@ -653,11 +674,11 @@ mod imp {
                     // entering its receive loop (`src/replica/run.rs`), so each side sends one
                     // round to the other the instant its task starts — settle that transient
                     // before timing anything, or the first sample below would race it.
-                    while received1.load(Ordering::Relaxed) < 1
-                        || received2.load(Ordering::Relaxed) < 1
-                    {
-                        tokio::task::yield_now().await;
-                    }
+                    converge(&store1, || {
+                        received1.load(Ordering::Relaxed) >= 1
+                            && received2.load(Ordering::Relaxed) >= 1
+                    })
+                    .await;
                     // The first couple of content-divergence round trips a fresh pair ever
                     // exchanges — one for a tombstoning round, one for a live-value round, each
                     // the first time that *kind* of round happens on this pair — pay a one-time
@@ -672,14 +693,13 @@ mod imp {
                     for _ in 0..4 {
                         store1.just_remove(&warm_up_key);
                         store1.start_reconciliation().await;
-                        while store2.get(&warm_up_key).is_some() {
-                            tokio::task::yield_now().await;
-                        }
+                        converge(&store1, || store2.get(&warm_up_key).is_none()).await;
                         store1.just_insert(warm_up_key, warm_up_value);
                         store1.start_reconciliation().await;
-                        while store2.get_cloned(&warm_up_key) != Some(warm_up_value) {
-                            tokio::task::yield_now().await;
-                        }
+                        converge(&store1, || {
+                            store2.get_cloned(&warm_up_key) == Some(warm_up_value)
+                        })
+                        .await;
                     }
                     (store1, store2, received1, received2, tasks)
                 });
@@ -704,15 +724,12 @@ mod imp {
                                     if missing.is_empty() {
                                         let before = received2.load(Ordering::Relaxed);
                                         let start = Instant::now();
-                                        let clone = store1.clone();
-                                        let task = tokio::spawn(async move {
-                                            clone.start_reconciliation().await
-                                        });
-                                        while received2.load(Ordering::Relaxed) <= before {
-                                            tokio::task::yield_now().await;
-                                        }
+                                        store1.start_reconciliation().await;
+                                        converge(&store1, || {
+                                            received2.load(Ordering::Relaxed) > before
+                                        })
+                                        .await;
                                         total += start.elapsed();
-                                        task.abort();
                                         continue;
                                     }
 
@@ -720,32 +737,23 @@ mod imp {
                                     for &k in &missing {
                                         store1.just_remove(&k);
                                     }
-                                    let clone = store1.clone();
-                                    let task =
-                                        tokio::spawn(
-                                            async move { clone.start_reconciliation().await },
-                                        );
-                                    while missing.iter().any(|k| store2.get(k).is_some()) {
-                                        tokio::task::yield_now().await;
-                                    }
-                                    task.abort();
+                                    store1.start_reconciliation().await;
+                                    converge(&store1, || {
+                                        missing.iter().all(|k| store2.get(k).is_none())
+                                    })
+                                    .await;
 
                                     for (&k, &v) in missing.iter().zip(restored.iter()) {
                                         store1.just_insert(k, v);
                                     }
-                                    let clone = store1.clone();
-                                    let task =
-                                        tokio::spawn(
-                                            async move { clone.start_reconciliation().await },
-                                        );
-                                    while missing
-                                        .iter()
-                                        .zip(restored.iter())
-                                        .any(|(k, &v)| store2.get_cloned(k) != Some(v))
-                                    {
-                                        tokio::task::yield_now().await;
-                                    }
-                                    task.abort();
+                                    store1.start_reconciliation().await;
+                                    converge(&store1, || {
+                                        missing
+                                            .iter()
+                                            .zip(restored.iter())
+                                            .all(|(k, &v)| store2.get_cloned(k) == Some(v))
+                                    })
+                                    .await;
                                     total += start.elapsed();
                                 }
                                 total
