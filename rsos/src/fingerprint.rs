@@ -35,7 +35,7 @@
 
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::encoding;
 
@@ -59,8 +59,28 @@ use crate::encoding;
 /// assert_eq!(combined.remove(b), a);
 /// assert_eq!(combined.remove(a).remove(b), Fingerprint::ZERO);
 /// ```
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Fingerprint(pub [u64; 4]);
+
+// #382: a uniformly random 256-bit value gets nothing from bincode's default varint integer
+// encoding except a length byte on every incompressible limb (36 B on the wire instead of 32).
+// Serializing through `[u8; 32]` instead of `[u64; 4]` sidesteps that per-field choice entirely —
+// bytes are never varint-compressed, in any `serde` backend — so this is the raw 32-byte encoding
+// regardless of which `Serializer`/`Deserializer` processes it. Deliberately a wire break: see
+// `tests/wire_format.rs`'s golden vector, and the `rsos::encoding` canonical (BLAKE3 input) format
+// this does not touch — that Serializer already encodes every integer at fixed width, so this
+// change is observable only in the codecs (bincode) that didn't already do that.
+impl Serialize for Fingerprint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_le_bytes().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Fingerprint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <[u8; 32]>::deserialize(deserializer).map(|bytes| Fingerprint::from_le_bytes(&bytes))
+    }
+}
 
 impl Fingerprint {
     /// The fingerprint of the empty range and the additive identity.
