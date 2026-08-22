@@ -116,10 +116,14 @@ jobs:
       env:
         RUSTFLAGS: ${{ env.RUSTFLAGS }} --cfg reconcile_internal_testing
 
-  # Cognitive-complexity and duplication trend, informational only (CONTRIBUTING.md "Code quality
-  # trend"). Deliberately absent from ci-success's `needs:` below -- it can never block a merge.
-  # Neither tool has a taiki-e/install-action entry (public-api's job comment below explains that
-  # check for cargo-public-api); jscpd is an npm package, and Node ships on ubuntu-latest already.
+  # Cognitive-complexity and duplication trend (CONTRIBUTING.md "Code quality trend"): the numbers
+  # themselves are never a gate -- "should this function be simpler" has no single right threshold
+  # for a script to enforce. Still in `ci-success`'s `needs:` below: #507 characterized this job's
+  # own pass/fail across every push and found 100% success (or a path-filtered skip) whenever it
+  # ran, so gating on *that* costs nothing today and catches an install/script failure that an
+  # ungated job would otherwise hide from `ci-success` entirely. Neither tool has a
+  # taiki-e/install-action entry (public-api's job comment below explains that check for
+  # cargo-public-api); jscpd is an npm package, and Node ships on ubuntu-latest already.
   code-quality:
     needs: changes
     if: github.event_name == 'merge_group' || needs.changes.outputs.rust == 'true'
@@ -393,6 +397,7 @@ jobs:
       - fmt
       - repo-gates
       - clippy
+      - code-quality
       - test
       - test-all-features
       - test-mac-hmac
