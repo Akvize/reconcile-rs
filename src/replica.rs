@@ -27,7 +27,7 @@ use crate::transport::Transport;
 use crate::FingerprintTreeMap;
 use gossip::auth;
 use gossip::replay;
-use rbsr::RangeAggregate;
+use rbsr::{EnumerationRange, RangeAggregate};
 
 const BUFFER_SIZE: usize = 65507;
 /// Upper bound on protocol messages decoded from a single datagram. A datagram is at most
@@ -110,6 +110,17 @@ pub(crate) struct Inner<K, V> {
     bulk_dumps_in_flight: Arc<AtomicUsize>,
     /// Global cap on the number of concurrently active paced bulk dumps.
     max_concurrent_bulk_dumps: usize,
+    /// Dated-channel [`EnumerationRange`](rbsr::EnumerationRange)s a round found still diverging
+    /// but whose peer already had a dump in flight (#516): stashed here instead of silently
+    /// dropped. Drained by the task already holding that peer's [`bulk_in_flight`](Self::bulk_in_flight)
+    /// slot once it finishes its current send (`spawn_paced_send`'s own loop) — recovery from a
+    /// lost dump-slot race never depends on a new incoming datagram or the idle
+    /// [`reconcile_interval`](Self::reconcile_interval) timeout.
+    pending_dumps: Arc<RwLock<HashMap<SocketAddr, Vec<EnumerationRange<K>>>>>,
+    /// Same as [`pending_dumps`](Self::pending_dumps), for the value-only channel a read replica
+    /// pulls from (`self.projection`, `Message::ValueUpdate`) — a separate stash since the two
+    /// channels share one per-peer dump slot but resolve ranges against different trees.
+    pending_value_dumps: Arc<RwLock<HashMap<SocketAddr, Vec<EnumerationRange<K>>>>>,
     /// Monotonic reconciliation-round counter, shared across clones, gating the cross-network cadence.
     round: Arc<AtomicU32>,
     /// When the most recently completed reconciliation round started — `None` before the first.
