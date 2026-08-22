@@ -587,27 +587,71 @@ mod imp {
     /// stuck — traced to the two `run()` loops' genuine concurrency under a multi-threaded
     /// runtime; pinning this benchmark's own runtime to `current_thread` (below) cuts the rate
     /// sharply but not to zero, and the one-time settle/warm-up step below retries wholesale
-    /// ([`MAX_BUILD_ATTEMPTS`]) rather than assuming `current_thread` alone is enough. A stall
-    /// inside an actual timed sample still fails loudly (an `assert!` at that call site) rather
-    /// than retrying — retrying *there* was tried first and, by creating a fresh pair (and its
-    /// `NetemTransport` pump tasks) on every Criterion sample rather than once per `(n, rtt)`,
-    /// made the underlying stall more frequent, not less; see this function's docs.
+    /// ([`MAX_BUILD_ATTEMPTS`]) rather than assuming `current_thread` alone is enough. Rebuilding
+    /// the whole pair *inside* a timed sample was tried too and made things worse — accumulating a
+    /// fresh `NetemTransport` pair's pump tasks on every Criterion sample, rather than once per
+    /// `(n, rtt)`, made the underlying stall more frequent, not less.
+    ///
+    /// Separately, and unrelated to that stall: a single `start_reconciliation` does **not**
+    /// reliably drive a large *scattered* divergence (many separate leaf-level differences, e.g.
+    /// `d = 1000` at `n = 10_000`) to completion by itself — confirmed by a standalone repro
+    /// outside Criterion entirely (`git log` on this file) that a round genuinely plateaus part-way
+    /// (partial progress, then no further progress for 15s+) and only a *fresh* trigger resumes it,
+    /// converging fully within a handful of retriggers every time tried. This matches #185's own
+    /// "N round trips" model rather than contradicting it: `[trigger_round]` below retriggers
+    /// (bounded, [`MAX_ROUND_RETRIGGERS`]) when a round does not converge on its own, and the total
+    /// elapsed time across every retrigger counts toward the sample — that total *is* the
+    /// measurement, not an artifact of it. A *clustered* divergence of the same `d` converges in
+    /// one round even at `d = 1000`, so this is specific to how many separate ranges must resolve,
+    /// not to `d` alone.
     const MAX_BUILD_ATTEMPTS: u32 = 20;
 
-    /// Poll `condition` until it holds or a generous spin ceiling is reached, returning whether it
-    /// held. A single `start_reconciliation` reliably drives a whole multi-level chain to
-    /// completion by itself (the run loop replies inline as each level's response arrives,
-    /// `src/replica/dispatch.rs`), so this does not retrigger.
+    /// Poll `condition` until it holds or a generous wall-clock deadline passes, returning
+    /// whether it held. Does not retrigger — [`trigger_and_converge`] is the retriggering wrapper
+    /// most callers below actually want; this is the single-round primitive it builds on.
+    ///
+    /// Bounded by elapsed time, not a spin count: some callers' `condition` is O(d) (checking up
+    /// to 1000 keys), and a fixed spin ceiling costs that much more real time per spin the more
+    /// expensive `condition` is — at `d = 1000` a ceiling sized for an O(1) check turned a
+    /// genuine non-convergence into an effectively unbounded stall instead of a prompt failure.
+    /// Checking the deadline every iteration keeps the give-up time predictable regardless of
+    /// `condition`'s cost, while the tight `yield_now` spin (no added sleep) keeps the
+    /// microsecond-scale convergent path exactly as fast as before.
     async fn converge(mut condition: impl FnMut() -> bool) -> bool {
-        let mut spins: u64 = 0;
+        let deadline = Instant::now() + Duration::from_secs(15);
         while !condition() {
-            spins += 1;
-            if spins > 200_000_000 {
+            if Instant::now() >= deadline {
                 return false;
             }
             tokio::task::yield_now().await;
         }
         true
+    }
+
+    /// Extra `start_reconciliation` triggers [`trigger_and_converge`] allows past the first, for a
+    /// round that does not converge on its own — see `service_reconcile_rtt`'s docs for why a
+    /// large scattered divergence genuinely needs this.
+    const MAX_ROUND_RETRIGGERS: u32 = 20;
+
+    /// Trigger a reconciliation round on `store1` and poll `condition`, retriggering (up to
+    /// [`MAX_ROUND_RETRIGGERS`] more times) if it does not converge on its own. Panics — loud, not
+    /// silent — if even that many retriggers do not converge, since at that point it is a genuine
+    /// stall (`service_reconcile_rtt`'s docs), not merely a large divergence needing more rounds.
+    async fn trigger_and_converge(
+        store1: &ReplicatedMap<u32, u32>,
+        mut condition: impl FnMut() -> bool,
+        what: impl std::fmt::Display,
+    ) {
+        for _ in 0..=MAX_ROUND_RETRIGGERS {
+            store1.start_reconciliation().await;
+            if converge(&mut condition).await {
+                return;
+            }
+        }
+        panic!(
+            "service_reconcile_rtt: {what} did not converge after {} triggers",
+            MAX_ROUND_RETRIGGERS + 1
+        );
     }
 
     fn service_reconcile_rtt(c: &mut Criterion) {
@@ -767,19 +811,13 @@ mod imp {
                                     if missing.is_empty() {
                                         let before = received2.load(Ordering::Relaxed);
                                         let start = Instant::now();
-                                        let clone = store1.clone();
-                                        let task = tokio::spawn(async move {
-                                            clone.start_reconciliation().await
-                                        });
-                                        assert!(
-                                            converge(|| {
-                                                received2.load(Ordering::Relaxed) > before
-                                            })
-                                            .await,
-                                            "service_reconcile_rtt: d=0 round did not converge"
-                                        );
+                                        trigger_and_converge(
+                                            &store1,
+                                            || received2.load(Ordering::Relaxed) > before,
+                                            "d=0 round",
+                                        )
+                                        .await;
                                         total += start.elapsed();
-                                        task.abort();
                                         continue;
                                     }
 
@@ -787,43 +825,27 @@ mod imp {
                                     for &k in &missing {
                                         store1.just_remove(&k);
                                     }
-                                    let clone = store1.clone();
-                                    let task =
-                                        tokio::spawn(
-                                            async move { clone.start_reconciliation().await },
-                                        );
-                                    assert!(
-                                        converge(|| missing
-                                            .iter()
-                                            .all(|k| store2.get(k).is_none()))
-                                        .await,
-                                        "service_reconcile_rtt: d={} remove round did not \
-                                         converge",
-                                        missing.len()
-                                    );
-                                    task.abort();
+                                    trigger_and_converge(
+                                        &store1,
+                                        || missing.iter().all(|k| store2.get(k).is_none()),
+                                        format_args!("d={} remove round", missing.len()),
+                                    )
+                                    .await;
 
                                     for (&k, &v) in missing.iter().zip(restored.iter()) {
                                         store1.just_insert(k, v);
                                     }
-                                    let clone = store1.clone();
-                                    let task =
-                                        tokio::spawn(
-                                            async move { clone.start_reconciliation().await },
-                                        );
-                                    assert!(
-                                        converge(|| {
+                                    trigger_and_converge(
+                                        &store1,
+                                        || {
                                             missing
                                                 .iter()
                                                 .zip(restored.iter())
                                                 .all(|(k, &v)| store2.get_cloned(k) == Some(v))
-                                        })
-                                        .await,
-                                        "service_reconcile_rtt: d={} insert round did not \
-                                         converge",
-                                        missing.len()
-                                    );
-                                    task.abort();
+                                        },
+                                        format_args!("d={} insert round", missing.len()),
+                                    )
+                                    .await;
                                     total += start.elapsed();
                                 }
                                 total
