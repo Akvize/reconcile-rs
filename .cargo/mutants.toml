@@ -80,7 +80,7 @@ exclude_globs = ["benches/**", "examples/**"]
 # VM rather than just the subprocess -- matching three consecutive "runner has received a shutdown
 # signal" failures of `pr-diff`'s shard 0, each stopped at nearly this same mutant.
 #
-# `policy/params.rs:35:9` (`SplitStride::get`, replaced with a hardcoded `0`) is the same defect
+# `policy/params.rs:70:9` (`SplitStride::get`, replaced with a hardcoded `0`) is the same defect
 # shape as `range.rs:28:56` above, but via unbounded memory growth instead of a CPU spin:
 # `protocol.rs`'s SPLIT loop advances `cur_index` using this exact accessor, and its `span > 1`
 # progress-law guard (`ARCHITECTURE.md` §5 invariant 13) only fires above `span == 1` -- a
@@ -157,7 +157,7 @@ exclude_re = [
     "fingerprint_tree_map/range\\.rs:59:32: replace <= with >",
     "fingerprint_tree_map/range\\.rs:60:51: replace \\+ with \\*",
     "replay/bitmap\\.rs:75:32: replace \\| with \\^",
-    "params\\.rs:35:9: replace SplitStride::get -> usize with 0",
+    "params\\.rs:70:9: replace SplitStride::get -> usize with 0",
     "protocol/rank\\.rs:117:30: replace != with ==",
     "protocol/rank\\.rs:117:43: replace \\|\\| with &&",
     "protocol/rank\\.rs:117:62: replace != with ==",
