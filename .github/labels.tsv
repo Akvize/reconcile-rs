@@ -82,7 +82,7 @@ C-cleanup	1d76db	Internal quality, hygiene or metadata; no observable behaviour 
 C-docs	1d76db	Documentation only — no code change closes it
 C-investigation	1d76db	Closes with evidence: a measurement, a reproduction, an instrument
 C-design	1d76db	Closes with a written design or RFC. The solution space is what is missing
-C-decision	1d76db	Closes with a recorded call, in ARCHITECTURE.md §7. The options are already framed
+C-decision	1d76db	Closes with a recorded call, in ARCHITECTURE.md or AGENTS.md. The options are already framed
 C-tracking-issue	1d76db	Umbrella over sub-issues. Carries no work of its own
 
 # ---------------------------------------------------------------------------------------
