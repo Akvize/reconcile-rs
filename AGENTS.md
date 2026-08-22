@@ -70,11 +70,11 @@ budget it fits, and if it fits none of them it is CI-only by design:
 | [`main.yml`](./.github/workflows/main.yml) | everything else | minutes |
 | [`mutants.yml`](./.github/workflows/mutants.yml) `pr-diff` | `./scripts/check-mutation-gate.sh` — in-diff mutation coverage (`.claude/rules/tests.md`); required via `mutants-success`, same as `ci-success` | 2–8 min |
 
-`git commit` triggers tier 1, `git push` triggers tier 2 and — via `main.yml`/`mutants.yml` — tier 3:
-hand-running any of this replays a check a gate already owns. Both hooks check a materialized tree —
-the index, then the commit being pushed — so what gets recorded or published is what has to be
-green, not whatever is half-finished on disk. `git push --no-verify` skips tier 2 on purpose; CI
-stays the authority. `main.yml`/this list are kept in sync by hand — change one, change both.
+`git commit` triggers tier 1, `git push` triggers tier 2 and — via `main.yml`/`mutants.yml` — tier 3: never
+hand-run any of this to verify a change (`.claude/rules/gated-checks.md`) — it replays a check a gate already
+owns. Both hooks check a materialized tree — the index, then the commit being pushed — so what gets recorded or
+published is what has to be green, not whatever is half-finished on disk. `git push --no-verify` skips tier 2 on
+purpose; CI stays the authority. `main.yml`/this list are kept in sync by hand — change one, change both.
 
 A gate also never runs on a change nothing in it can affect, at any tier:
 [`./scripts/lib-changed-paths.sh`](./scripts/lib-changed-paths.sh) categorizes every changed path as
