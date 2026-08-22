@@ -261,8 +261,16 @@ distinguishable, countable reason (`reconcile_datagrams_dropped_total{reason="ve
 forged datagram. A mixed-version cluster (a rolling upgrade, for instance) does not converge for
 the pairs that disagree until every node is rebuilt against the same wire version — plan upgrades
 as a coordinated rollout, not a rolling one. #309 landed the version byte itself and deliberately
-did not build an accepted-version window; whether one is worth building later is undecided, tracked
-by #463 for the one wire change (a reserved, skippable tag) that would need it before the 1.0 freeze.
+did not build an accepted-version window; whether one is worth building later is undecided.
+
+Wire tags 5 and 6 are reserved, skippable message slots (#463): a datagram carrying a message at
+one of these tags decodes on this version even though nothing here sends one today, and a future
+version's real message at either tag decodes here too, ignored rather than failing the whole
+datagram. What this buys is narrow and does not extend past the two tags themselves — it is not a
+capability-negotiation mechanism, not a version window, and not a way to add a *third* message type
+without another coordinated rollout: once a tag's real shape ships, that tag's reservation is
+consumed, and the wire version byte above still governs everything the message shape itself
+changes.
 
 ### Metrics endpoint exposure
 

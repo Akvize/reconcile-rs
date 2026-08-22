@@ -146,6 +146,8 @@ impl<K: Key, V: Value> ReadReplicaMap<K, V> {
                 // The dated channel is meaningless to a read replica (it cannot store dated values
                 // nor participate in causal stability). Ignore it.
                 Message::ComparisonItem(_) | Message::Update(_) | Message::Ack(_) => {}
+                // #463: reserved, never sent by this version.
+                Message::Reserved5(_) | Message::Reserved6(_) => {}
             }
         }
 
