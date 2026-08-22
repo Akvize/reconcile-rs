@@ -180,8 +180,8 @@ the last release before the workspace split (it vendored the four siblings direc
 `MIGRATING.md`. Publishing in dependency order (`rsos` → `rbsr`,`lww-register` → `gossip` →
 `reconcile`) is implemented in `.github/workflows/tags.yml` (its comments are the source of truth
 for the mechanics: tag/manifest version check, publish order, idempotent skip-if-published, the
-stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Next-version
-decisions live at the `v1.0.0` milestone and issue #206.
+stale-registry-cache gotcha) and fires on a `v*` tag; never hand-run `cargo publish`. Version to cut
+(#206 §5): `0.3.0` first, `1.0.0` from it — the path taken, per #410 (no durable citation existed).
 
 `gossip` publishes as `reconcile-gossip` (name taken); every dependent renames it back
 (`gossip = { package = "reconcile-gossip", ... }`) so source everywhere still says `use gossip::…`.
