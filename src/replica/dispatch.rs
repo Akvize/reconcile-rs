@@ -17,6 +17,7 @@ use crate::entry::{Entry, State};
 use crate::observability;
 use gossip::auth;
 
+use super::pacing::DumpChannel;
 use super::{send_messages_to, version_hash, Message, Replica, MAX_MESSAGES_PER_DATAGRAM};
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
@@ -119,8 +120,9 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 debug!("returning {} diff_ranges", differences.len());
                 trace!("diff_ranges: {differences:?}");
                 // Claim both slots (per-peer + global budget) *before* snapshotting the range
-                // into a Vec. A skipped dump allocates nothing; the peer re-initiates on its
-                // next diff round once a slot is free.
+                // into a Vec. A skipped dump allocates nothing here; the task already holding
+                // `peer`'s slot drains this batch itself once it finishes its current send
+                // (`stash_pending_dump`/`spawn_paced_send`, #516) — never a silent drop.
                 if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
                     let updates: Vec<Message<K, Entry<Timestamp, V>, State<V>>> = {
                         let guard = self.map.read();
@@ -133,9 +135,17 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         updates
                     };
                     if !updates.is_empty() {
-                        self.spawn_paced_send(updates, peer, peer_guard, global_guard);
+                        self.spawn_paced_send(
+                            updates,
+                            peer,
+                            peer_guard,
+                            global_guard,
+                            DumpChannel::Dated,
+                        );
                     }
                     // If updates is empty the guards drop here, releasing both slots.
+                } else {
+                    self.stash_pending_dump(DumpChannel::Dated, peer, differences);
                 }
             }
         }
@@ -230,7 +240,8 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 send_messages_to(&messages, &self.send_ports(), &peer, send_buf).await;
             }
             // Bulk value-only payload — a dateless read replica pulling the dataset. Rate-pace it on a
-            // background task, exactly like the dated bulk path.
+            // background task, exactly like the dated bulk path -- including #516's requeue: a
+            // batch that loses the slot race is stashed, not dropped.
             if !differences.is_empty() {
                 if let Some((peer_guard, global_guard)) = self.try_claim_dump_slot(peer) {
                     let updates: Vec<Message<K, Entry<Timestamp, V>, State<V>>> = {
@@ -244,8 +255,16 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                         updates
                     };
                     if !updates.is_empty() {
-                        self.spawn_paced_send(updates, peer, peer_guard, global_guard);
+                        self.spawn_paced_send(
+                            updates,
+                            peer,
+                            peer_guard,
+                            global_guard,
+                            DumpChannel::ValueOnly,
+                        );
                     }
+                } else {
+                    self.stash_pending_dump(DumpChannel::ValueOnly, peer, differences);
                 }
             }
         }

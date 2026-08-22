@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
+use rbsr::EnumerationRange;
 use serde::Serialize;
 use tokio::time::sleep;
 use tracing::{debug, error, instrument, trace, warn};
@@ -27,6 +28,17 @@ use gossip::auth;
 use gossip::replay;
 
 use super::{Message, Replica, BUFFER_SIZE, MAX_SENDTO_RETRIES};
+
+/// Which channel a paced bulk dump resolves ranges against (#516): a `differences` batch that
+/// loses the per-peer dump-slot race is stashed by channel, since the dated and value-only
+/// channels share one slot but resolve ranges against different trees and message variants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DumpChannel {
+    /// `self.map`, resolves to [`Message::Update`].
+    Dated,
+    /// `self.projection`, resolves to [`Message::ValueUpdate`].
+    ValueOnly,
+}
 
 impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// Bundle this engine's outbound ports and send state for the batched-message helpers
@@ -81,6 +93,23 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
         ))
     }
 
+    /// Stash a `differences` batch that lost the per-peer dump-slot race (#516) instead of
+    /// letting the caller drop it. Drained by whichever task is currently holding `peer`'s slot,
+    /// via [`spawn_paced_send`](Self::spawn_paced_send)'s own loop — never dependent on a new
+    /// incoming datagram or the idle `reconcile_interval` timeout.
+    pub(super) fn stash_pending_dump(
+        &self,
+        channel: DumpChannel,
+        peer: SocketAddr,
+        ranges: Vec<EnumerationRange<K>>,
+    ) {
+        let stash = match channel {
+            DumpChannel::Dated => &self.pending_dumps,
+            DumpChannel::ValueOnly => &self.pending_value_dumps,
+        };
+        stash.write().entry(peer).or_default().extend(ranges);
+    }
+
     /// Send a bulk batch of differing values to one peer on a detached, **rate-paced** task —
     /// the cold-sync path.
     ///
@@ -88,22 +117,31 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
     /// [`bulk_send_rate`](Inner::bulk_send_rate) off the receive loop, one dump per peer (an
     /// `Update` triggers no reply, so the holder's reconcile timer would otherwise re-dump ranges
     /// in transit), and a global [`try_claim_dump_slot`](Self::try_claim_dump_slot) budget
-    /// bounding total in-flight snapshot memory. Anything genuinely missed is picked up by the
-    /// next round.
+    /// bounding total in-flight snapshot memory.
+    ///
+    /// Before releasing `peer`'s slot, drains [`stash_pending_dump`](Self::stash_pending_dump)'s
+    /// stash for `channel`/`peer` and sends that too, looping until nothing more is pending
+    /// (#516): a `differences` batch discovered while this task was already sending must not wait
+    /// for a fresh round to be noticed.
     pub(super) fn spawn_paced_send(
         &self,
         messages: Vec<Message<K, Entry<Timestamp, V>, State<V>>>,
         peer: SocketAddr,
         peer_guard: BulkInFlightGuard,
         global_guard: BulkDumpCountGuard,
+        channel: DumpChannel,
     ) {
         let transport = Arc::clone(&self.transport);
         let authenticator = self.authenticator.clone();
         let sender_counter = Arc::clone(&self.sender_counter);
         let rate = self.bulk_send_rate;
+        let map = Arc::clone(&self.map);
+        let projection = Arc::clone(&self.projection);
+        let pending_dumps = Arc::clone(&self.pending_dumps);
+        let pending_value_dumps = Arc::clone(&self.pending_value_dumps);
         tokio::spawn(async move {
-            // Hold both RAII guards for the lifetime of the task: they release their respective
-            // slots on drop, even if this task is aborted or panics.
+            // Hold both RAII guards for the lifetime of this task, releasing them only once
+            // nothing more is pending for `peer` on `channel` — even if aborted or panicking.
             let _peer_guard = peer_guard;
             let _global_guard = global_guard;
             let ports = SendPorts {
@@ -112,7 +150,39 @@ impl<K: Key + Hash, V: Value> Replica<K, V> {
                 sender_counter: &sender_counter,
             };
             let mut send_buf = Vec::new();
-            send_messages_paced(&messages, &ports, &peer, &mut send_buf, rate).await;
+            let mut messages = messages;
+            loop {
+                send_messages_paced(&messages, &ports, &peer, &mut send_buf, rate).await;
+                let stash = match channel {
+                    DumpChannel::Dated => &pending_dumps,
+                    DumpChannel::ValueOnly => &pending_value_dumps,
+                };
+                let Some(ranges) = stash.write().remove(&peer).filter(|r| !r.is_empty()) else {
+                    break;
+                };
+                messages = Vec::new();
+                match channel {
+                    DumpChannel::Dated => {
+                        let guard = map.read();
+                        for range in ranges {
+                            for (k, v) in guard.range(range) {
+                                messages.push(Message::Update((k.clone(), v.clone())));
+                            }
+                        }
+                    }
+                    DumpChannel::ValueOnly => {
+                        let guard = projection.read();
+                        for range in ranges {
+                            for (k, v) in guard.range(range) {
+                                messages.push(Message::ValueUpdate((k.clone(), v.clone())));
+                            }
+                        }
+                    }
+                }
+                if messages.is_empty() {
+                    break;
+                }
+            }
         });
     }
 }

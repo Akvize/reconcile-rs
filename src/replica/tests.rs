@@ -37,6 +37,7 @@ mod handle_messages_return_value;
 mod immediate_broadcast;
 mod in_memory_convergence;
 mod pacing;
+mod pending_dump_requeue;
 mod reserved_wire_tags;
 mod socket_buffers;
 mod tombstone_ack_bounds;
