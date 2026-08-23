@@ -291,7 +291,7 @@ copy-on-write B+-tree addressed by page number.
     the same fact: the delta reads zero on the regime "an LWW register produces continuously"
     (above) and nonzero only on the rarer one, where the shipped default already sits within single
     digits of `SqrtFanOut` (§2.2). **Decision: not built** — record in `rbsr/src/policy.rs`'s own
-    rustdoc; evidence in the private research companion repository's position-map experiment.
+    rustdoc.
 - The remaining delta the other way is **persistence**: AELMDB is LMDB-backed (memory-mapped,
   durable); FingerprintTreeMap is in-memory only. **The structure's SOTA in this niche = "persistent
   RSOS with a secure fingerprint" — persistence is the gap that remains.**
@@ -431,8 +431,7 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
   | freshly partitioned, divergent | many | ≈ `N` |
   | converged but for one divergence | **2** | **0** |
 
-  Redundancy buys nothing exactly when the fleet is healthy. Mechanism, scope, `N`-sweep: the
-  private research companion repository's fleet-replay experiment. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
+  Redundancy buys nothing exactly when the fleet is healthy. → [#354](https://github.com/Akvize/reconcile-rs/issues/354), [#471](https://github.com/Akvize/reconcile-rs/issues/471)
 - **Sweeping `t` lands on not having one *by default*.** The paper's enumeration threshold wins the
   refinement column by *stopping early* — and everything it stops on is then shipped as values,
   almost all of which the peer already holds. The two halves are one quantity, so
@@ -496,8 +495,8 @@ The FingerprintTreeMap implements **RBSR**; its competitors are not tree structu
    timing.
 
    **Empirical grounding for the split-boundary half of this claim**
-   ([#356](https://github.com/Akvize/reconcile-rs/issues/356), [#420](https://github.com/Akvize/reconcile-rs/issues/420)),
-   run in the private research companion repository; this repository keeps only the driver guard
+   ([#356](https://github.com/Akvize/reconcile-rs/issues/356), [#420](https://github.com/Akvize/reconcile-rs/issues/420));
+   this repository keeps only the driver guard
    it motivated ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §5 inv. 13). The soundness bound needs the
    ranges compared to be a deterministic function of the data (rank-cut, `Select`). Refinement
    needs a *second*, independent property RBSR's literature leaves implicit: every `SPLIT` must
@@ -653,7 +652,7 @@ Five results landed with this index rather than as open issues, because they clo
 a question: a divergence-adaptive policy is confined to the count, and the count is blind exactly
 where the exact-count guarantee has already run out (folded into
 [#318](https://github.com/Akvize/reconcile-rs/issues/318)); re-ordering the store does not rescue
-that signal — the private research companion repository's position-map experiment shows only a
+that signal — a position-map experiment shows only a
 leading-component reorder makes a divergence visible, so "make `π` injective" is the wrong
 rule, relocation is; the multidimensional extension is settled on paper as a **no-go**, read against
 `arXiv:2603.19820v1` itself — its §8 asks for a theory of *balancing **and** summarization* beyond

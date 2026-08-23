@@ -524,7 +524,7 @@ points: `BYOTransport` (realized — `Transport`, §3.2), `BYOLiftingMonoid`, `B
 
   **And the cheap alternative is not one.** A lexicographic composite key keeps the store
   1-dimensional and every operation at `Θ(lg n)` — but a lex interval is not a box, so it answers no
-  `δ > 1` query at all. The private research companion repository's position-map experiment (arm 2)
+  `δ > 1` query at all. A position-map experiment (arm 2)
   is that same fact seen from the protocol side: `π = (key, version)` *is* that order, and the exact count sees nothing under it
   that it did not already see under `π = (key)`. Its corollary — "make `π` injective" is the wrong
   rule, **relocation** is — is recorded in [`SOTA.md`](./SOTA.md) §2.4.1.
